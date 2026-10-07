@@ -88,11 +88,20 @@ export async function fetchMetricsWindow(params: {
   windowStart: string;
   windowEnd: string;
   filterScope?: string;
+  teamContextKey?: string;
+  scopeContextKey?: string;
 }): Promise<MetricsWindow> {
   const query = new URLSearchParams({
     window_start: params.windowStart,
     window_end: params.windowEnd,
   });
   if (params.filterScope) query.set("filter_scope", params.filterScope);
+  // C13: the metrics read carries the same supported history filters as the
+  // audit read. The factory metrics contract accepts team_context_key and
+  // scope_context_key (backend/app/api/v1/factory.py:448-469).
+  if (params.teamContextKey) query.set("team_context_key", params.teamContextKey);
+  if (params.scopeContextKey) query.set("scope_context_key", params.scopeContextKey);
+  // The metrics route accepts no pagination parameters. Audit pagination is
+  // separate and supported on factory/audit-events.
   return apiClient<MetricsWindow>(`factory/metrics?${query.toString()}`);
 }

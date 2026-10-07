@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AuditEventRead, MetricsWindow } from "./auditApi";
 import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
@@ -6,6 +6,27 @@ import { OperatorTokenDialog } from "@/features/agent-teams/AutonomyPanel";
 import { getOperatorToken } from "@/features/agent-teams/operatorAuth";
 
 const labelClass = "block text-sm font-medium";
+const PAGE_SIZE = 25;
+// C13: a client-side named safe-field allowlist. The response snapshot_labels
+// list is only observed keys, never a client allowlist. Only fields named here
+// render their stored values, and primitives only.
+const SAFE_SNAPSHOT_FIELDS = [
+  "team_display_name",
+  "repo_owner",
+  "repo_name",
+  "issue_number",
+  "pr_number",
+  "issue_type",
+] as const;
+
+type AppliedFilters = { teamKey: string; scopeKey: string };
+
+// C15: window bounds are computed at invocation time, never during render.
+function windowBounds() {
+  const windowEnd = new Date().toISOString();
+  const windowStart = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  return { windowStart, windowEnd };
+}
 
 /**
  * P05 audit coverage and delivery metrics view.
@@ -20,19 +41,32 @@ export function AuditMetricsPage() {
   const [events, setEvents] = useState<AuditEventRead[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [teamKey, setTeamKey] = useState("");
   const [scopeKey, setScopeKey] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState<AppliedFilters>({ teamKey: "", scopeKey: "" });
   const [status, setStatus] = useState("No audit data loaded yet.");
   const [error, setError] = useState("");
+  const [metricsStale, setMetricsStale] = useState(false);
+  const [eventsStale, setEventsStale] = useState(false);
+  const [metricsObservedAt, setMetricsObservedAt] = useState<string | null>(null);
+  const [eventsObservedAt, setEventsObservedAt] = useState<string | null>(null);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenError, setTokenError] = useState("");
   const [operatorToken, setOperatorToken] = useState("");
-  const tokenResolverRef = { current: null as ((value: string | null) => void) | null };
-
-  const windowEnd = new Date().toISOString();
-  const windowStart = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  // C15: a stable ref, not a per-render object.
+  const tokenResolverRef = useRef<((value: string | null) => void) | null>(null);
+  // C13: per-invocation epochs. A response publishes only when its invocation
+  // epoch is still current. Filter equality alone is insufficient: an old A
+  // response after an A-to-B-to-A sequence must be rejected by epoch.
+  const metricsEpochRef = useRef(0);
+  const auditEpochRef = useRef(0);
+  // C13: one Apply invocation identity is captured before any await. A newer
+  // Apply invalidates older metric and audit publications, including audits
+  // still waiting behind an old metrics completion.
+  const applyEpochRef = useRef(0);
 
   function requestOperatorToken(): Promise<string | null> {
     setTokenError("");
@@ -53,53 +87,114 @@ export function AuditMetricsPage() {
 
   // C01: safe metrics load independently and remain usable when protected
   // audit access is refused.
-  async function loadMetrics() {
+  async function loadMetrics(filters: AppliedFilters, applyId: number = applyEpochRef.current) {
+    const epoch = ++metricsEpochRef.current;
+    // Root2976: every read invocation captures the current Apply identity and
+    // always compares it. A newer Apply invalidates standalone reads too.
+    const current = () => epoch === metricsEpochRef.current && applyId === applyEpochRef.current;
+    const { windowStart, windowEnd } = windowBounds();
     try {
-      const windowData = await fetchMetricsWindow({ windowStart, windowEnd, filterScope: "all" });
+      const windowData = await fetchMetricsWindow({
+        windowStart,
+        windowEnd,
+        filterScope: "all",
+        teamContextKey: filters.teamKey || undefined,
+        scopeContextKey: filters.scopeKey || undefined,
+      });
+      if (!current()) return;
       setMetrics(windowData);
+      setMetricsStale(false);
+      setMetricsObservedAt(new Date().toISOString());
       setStatus("Safe metrics loaded.");
     } catch (cause) {
+      if (!current()) return;
+      // C13: retained data is labelled stale, never presented as a fresh read.
+      setMetricsStale(true);
       setError(cause instanceof Error ? cause.message : "Could not load safe metrics.");
     }
   }
 
   // C01: audit reads use the per-tab operator workflow with the operator
   // credential header. Exact 503 and 401 refusals surface to the operator.
-  async function loadAudit() {
+  async function loadAudit(filters: AppliedFilters, requestedPage: number, applyId: number = applyEpochRef.current) {
+    const epoch = ++auditEpochRef.current;
+    // Root2976: pagination, reload and token flows share the Apply identity
+    // gate while keeping their independent read epochs.
+    const current = () => epoch === auditEpochRef.current && applyId === applyEpochRef.current;
     const token = getOperatorToken() || operatorToken || await requestOperatorToken();
+    if (!current()) return;
     if (!token) {
       setStatus("Audit read cancelled. Safe metrics remain available.");
       return;
     }
     try {
-      const page = await fetchAuditEvents({
-        page: 1,
-        pageSize: 25,
-        teamContextKey: teamKey || undefined,
-        scopeContextKey: scopeKey || undefined,
+      const result = await fetchAuditEvents({
+        page: requestedPage,
+        pageSize: PAGE_SIZE,
+        teamContextKey: filters.teamKey || undefined,
+        scopeContextKey: filters.scopeKey || undefined,
         operatorToken: token,
       });
-      setEvents(page.items);
-      setLabels(page.snapshot_labels);
-      setTotal(page.total);
-      setStatus(`Loaded ${page.items.length} of ${page.total} audit events.`);
+      if (!current()) return;
+      setEvents(result.items);
+      setLabels(result.snapshot_labels);
+      setTotal(result.total);
+      setPage(requestedPage);
+      setEventsStale(false);
+      setEventsObservedAt(new Date().toISOString());
+      setStatus(`Loaded ${result.items.length} of ${result.total} audit events.`);
     } catch (cause) {
+      if (!current()) return;
+      setEventsStale(true);
       setError(cause instanceof Error ? cause.message : "Audit read refused.");
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
     }
   }
 
-  async function loadAll() {
+  // One applied identity drives both reads so the filters always match.
+  async function applyReads(filters: AppliedFilters, requestedPage: number) {
+    const applyId = ++applyEpochRef.current;
+    await Promise.resolve();
+    if (applyId !== applyEpochRef.current) return;
     setError("");
-    await loadMetrics();
-    await loadAudit();
+    setAppliedFilters(filters);
+    await loadMetrics(filters, applyId);
+    // A delayed old metrics completion must never start an old audit epoch.
+    if (applyId !== applyEpochRef.current) return;
+    await loadAudit(filters, requestedPage, applyId);
   }
 
   useEffect(() => {
-    void loadAll();
-    // Mount-only load; filters apply through the explicit button below.
+    void applyReads({ teamKey: "", scopeKey: "" }, 1);
+    // Mount-only load; filters apply through the explicit controls below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // C13: unmount invalidation is explicit. Late responses after unmount can
+  // never publish state, and a newer Apply supersedes older publications.
+  useEffect(() => () => {
+    applyEpochRef.current += 1;
+    metricsEpochRef.current += 1;
+    auditEpochRef.current += 1;
+  }, []);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // C13: only fields named in the client safe-field allowlist render stored
+  // values, and only primitive values render. Arbitrary snapshot objects and
+  // observed-but-unnamed keys are never rendered.
+  function namedSnapshotValues(event: AuditEventRead) {
+    const snapshot = event.context_snapshot ?? {};
+    return (SAFE_SNAPSHOT_FIELDS as readonly string[])
+      .filter((name) => name in snapshot)
+      .map((name) => {
+        const value = snapshot[name];
+        const text = typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+          ? String(value)
+          : "unavailable";
+        return { name, text };
+      });
+  }
 
   return (
     <section className="space-y-6 p-4">
@@ -147,6 +242,11 @@ export function AuditMetricsPage() {
         ) : (
           <p className="text-sm">No window loaded.</p>
         )}
+        {metricsStale && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Stale metrics retained from {metricsObservedAt ?? "an earlier read"}. The latest metrics read failed.
+          </p>
+        )}
       </section>
 
       <section aria-labelledby="metrics" className="space-y-2 rounded border p-3">
@@ -192,7 +292,7 @@ export function AuditMetricsPage() {
         <h3 id="filters" className="font-semibold">Historical filters</h3>
         <p className="text-sm">
           Context keys address retained history after deletion. Current-id filters resolve the current
-          resource context key.
+          resource context key. Both reads use the same applied filters.
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-sm">
@@ -205,8 +305,8 @@ export function AuditMetricsPage() {
             <input className="mt-1 w-64 rounded-md border bg-background px-3 py-2"
               value={scopeKey} onChange={(event) => setScopeKey(event.target.value)} />
           </label>
-          <Button onClick={() => void loadAll()}>Apply filters</Button>
-          <Button variant="outline" onClick={() => void loadMetrics()}>Reload safe metrics</Button>
+          <Button onClick={() => void applyReads({ teamKey: teamKey.trim(), scopeKey: scopeKey.trim() }, 1)}>Apply filters</Button>
+          <Button variant="outline" onClick={() => void loadMetrics(appliedFilters)}>Reload safe metrics</Button>
         </div>
         {labels.length > 0 && (
           <p className="text-xs text-muted-foreground">Snapshot labels in page: {labels.join(", ")}</p>
@@ -215,6 +315,11 @@ export function AuditMetricsPage() {
 
       <section aria-labelledby="events" className="space-y-2 rounded border p-3">
         <h3 id="events" className="font-semibold">Audit events</h3>
+        {eventsStale && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Stale event list retained from {eventsObservedAt ?? "an earlier read"}. The latest audit read failed.
+          </p>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -230,8 +335,8 @@ export function AuditMetricsPage() {
             </thead>
             <tbody>
               {events.map((event) => (
-                <>
-                <tr key={event.id} className="border-t align-top">
+                <Fragment key={event.id}>
+                <tr className="border-t align-top">
                   <td className="p-2">{event.occurred_at}</td>
                   <td className="p-2 break-words">{event.event_kind}</td>
                   <td className="p-2 break-words">{event.actor_kind}</td>
@@ -261,6 +366,14 @@ export function AuditMetricsPage() {
                             item {event.item_context_key ?? "none"}
                           </div>
                           <div className="sm:col-span-2">
+                            <span className={labelClass}>Stored snapshot labels</span>
+                            {namedSnapshotValues(event).length
+                              ? namedSnapshotValues(event).map(({ name, text }) => (
+                                  <div key={name}>{name}: {text}</div>
+                                ))
+                              : "none named in this page"}
+                          </div>
+                          <div className="sm:col-span-2">
                             <span className={labelClass}>Before / after (allowlisted)</span>
                             {JSON.stringify(event.before_values ?? {})} → {JSON.stringify(event.after_values ?? {})}
                           </div>
@@ -268,10 +381,17 @@ export function AuditMetricsPage() {
                       </td>
                     </tr>
                 )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" disabled={page <= 1}
+            onClick={() => void loadAudit(appliedFilters, page - 1)}>Previous page</Button>
+          <p className="text-sm">Page {page} of {pageCount}</p>
+          <Button variant="outline" disabled={page >= pageCount}
+            onClick={() => void loadAudit(appliedFilters, page + 1)}>Next page</Button>
         </div>
       </section>
 

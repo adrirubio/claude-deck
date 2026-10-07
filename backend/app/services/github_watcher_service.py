@@ -227,9 +227,9 @@ class GithubWatcherService:
                 logger.info(
                     "Work item %s (issue #%s) has a closed issue but an unresolved "
                     "PR #%s; leaving it for the verification path",
-                    item.id,
-                    item.issue_number,
-                    item.pr_number,
+                    _cid,
+                    issue_number,
+                    pr_number,
                 )
                 continue
             await self._complete_and_notify(db, scope, stalled_by_id[captured_id])
@@ -264,10 +264,15 @@ class GithubWatcherService:
             ).limit(1)
         )).first()
         from sqlalchemy import text as _sql_text
+        transitioned_at = datetime.utcnow()
         await db.execute(_sql_text(
             "UPDATE github_work_items SET dispatch_status = 'completed',"
             " escalation_reason = NULL, updated_at = :ts WHERE id = :item_id"),
-            {"ts": datetime.utcnow(), "item_id": captured_item_id})
+            {"ts": transitioned_at, "item_id": captured_item_id})
+        # Keep any live ORM view consistent for callers.
+        item.dispatch_status = "completed"
+        item.escalation_reason = None
+        item.updated_at = transitioned_at
         await db.commit()
         try:
             slots = (

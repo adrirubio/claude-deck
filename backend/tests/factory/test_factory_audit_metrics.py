@@ -1258,7 +1258,8 @@ async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
                         AsyncMock(side_effect=RuntimeError("low-level transport failure")))
     maker = db.info["session_maker"]
     # The fresh observer session binds to the disposable action database.
-    _watcher.github_watcher_service.observer_session_factory = lambda: maker()
+    monkeypatch.setattr(_watcher.github_watcher_service, "observer_session_factory",
+                        lambda: maker(), raising=False)
     scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
     # Replay models a fresh production poll: the scope is re-read

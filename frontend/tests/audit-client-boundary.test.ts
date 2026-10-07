@@ -64,4 +64,46 @@ describe("audit browser clients at the HTTP boundary", () => {
     await expect(fetchAuditEvents({ operatorToken: "bad", page: 1, pageSize: 25 }))
       .rejects.toThrow();
   });
+
+  // C13: both reads carry the same supported history filters.
+  it("sends matching team and scope context filters on both reads", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(String(url));
+      if (String(url).includes("audit-events")) {
+        return jsonResponse({ items: [], total: 0, page: 1, page_size: 25, snapshot_labels: [] });
+      }
+      return jsonResponse({
+        window_start: "s", window_end: "e", filter_scope: "all",
+        counting_unit_note: "n", missing_intervals: [], metrics: [],
+      });
+    }) as unknown as typeof fetch;
+
+    await fetchMetricsWindow({
+      windowStart: "s", windowEnd: "e",
+      teamContextKey: "team:9:z", scopeContextKey: "scope:7:y",
+    });
+    await fetchAuditEvents({
+      operatorToken: "synthetic-operator", page: 1, pageSize: 25,
+      teamContextKey: "team:9:z", scopeContextKey: "scope:7:y",
+    });
+
+    expect(calls[0]).toContain("team_context_key=team%3A9%3Az");
+    expect(calls[0]).toContain("scope_context_key=scope%3A7%3Ay");
+    expect(calls[1]).toContain("team_context_key=team%3A9%3Az");
+    expect(calls[1]).toContain("scope_context_key=scope%3A7%3Ay");
+  });
+
+  // C13: audit reads carry pagination parameters.
+  it("sends pagination parameters on audit reads", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(String(url));
+      return jsonResponse({ items: [], total: 30, page: 2, page_size: 25, snapshot_labels: [] });
+    }) as unknown as typeof fetch;
+
+    await fetchAuditEvents({ operatorToken: "synthetic-operator", page: 2, pageSize: 25 });
+    expect(calls[0]).toContain("page=2");
+    expect(calls[0]).toContain("page_size=25");
+  });
 });

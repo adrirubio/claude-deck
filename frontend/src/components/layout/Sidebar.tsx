@@ -1,12 +1,12 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, FolderGit2, UsersRound, MonitorPlay, Settings, Mail, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, FolderGit2, UsersRound, MonitorPlay, Settings, Mail, FolderOpen, ScrollText, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebar } from '@/contexts/SidebarContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import { ProjectSwitcher } from '@/features/projects/ProjectSwitcher'
 import type { AgentProviderId } from '@/types/providers'
 const entries = [
-  ['Overview', '/', LayoutDashboard], ['Work', '/work', ClipboardList], ['Repositories', '/repositories', FolderGit2], ['Teams', '/teams', UsersRound], ['Live sessions', '/agent-bridge', MonitorPlay], ['Harnesses', '/harnesses', Settings], ['Agent Mail', '/agent-mail', Mail], ['Local projects', '/projects', FolderOpen],
+  ['Overview', '/', LayoutDashboard], ['Work', '/work', ClipboardList], ['Repositories', '/repositories', FolderGit2], ['Teams', '/teams', UsersRound], ['Live sessions', '/agent-bridge', MonitorPlay], ['Harnesses', '/harnesses', Settings], ['Agent Mail', '/agent-mail', Mail], ['Audit', '/audit', ScrollText], ['Local projects', '/projects', FolderOpen],
 ] as const
 export function Sidebar() {
   const { collapsed, setCollapsed } = useSidebar()
