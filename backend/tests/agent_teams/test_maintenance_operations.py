@@ -122,6 +122,7 @@ class StoredIntegrationFixture(IntegrationFixture):
 
     def __init__(self, p, path, tip, baseline, mode):
         super().__init__(p, path, tip, mode)
+        Path(p.state_dir).mkdir()
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
         from app.database import Base
