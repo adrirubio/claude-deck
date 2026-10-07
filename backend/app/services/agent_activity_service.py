@@ -29,6 +29,7 @@ from app.models.database import (
 )
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
 from app.services.pi_activity_service import observe_pi
+from app.services.claude_activity_service import observe_claude
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
@@ -257,12 +258,24 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             if provenance is not None and provenance.get("session_id"):
                 provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
-        if provider != "codex-cli":
+        if provider not in {"codex-cli", "claude-code"}:
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
             return result("unknown", "duplicate_native_identity")
         if not session_id or _canonical_session_id(session_id) != session_id:
             return result("unknown", "session_identity_unavailable")
+        if provider == "claude-code":
+            options = {"provenance": provenance} if provenance is not None else {}
+            state, reason, observed_at = observe_claude(
+                pid, session_id, cwd, now, _process_started_at(start), **options)
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            if provenance is not None and provenance.get("session_id"):
+                provenance.update(pane_pid=pid, pane_start=start, provider=provider)
+            return result(state, reason, observed_at)
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
         if (Path(os.fsdecode(argv[0])).name != "codex" or b"resume" not in argv
@@ -302,7 +315,7 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
     # so another harness cannot supply a false Working event for this owner.
     native_identity_counts: dict[str, int] = {}
     for (options,) in await rows(select(AgentTeamSlot.launch_options).where(
-            AgentTeamSlot.provider == "codex-cli")):
+            AgentTeamSlot.provider.in_(["codex-cli", "claude-code"]))):
         session_id = _canonical_session_id((options or {}).get("session_id"))
         if session_id is not None:
             native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
@@ -388,7 +401,7 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
                     "provider", "session_id", "pane_pid", "pane_start", "native_pid", "native_start",
                 )}, sort_keys=True).encode()).hexdigest()
             settled = (observed.state == "idle" and observed.reason == "native_turn_completed"
-                       and metadata.get("event_source") in {"agent_settled", "task_complete"}
+                       and metadata.get("event_source") in {"agent_settled", "task_complete", "claude_end_turn"}
                        and observed.observed_at is not None
                        and 0 <= (now - observed.observed_at).total_seconds() <= _WORK_FRESHNESS_SECONDS)
             values[entry[0]] = PrivateActivity(observed.state, observed.reason, observed.observed_at,
