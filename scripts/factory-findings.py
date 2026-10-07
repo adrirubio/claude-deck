@@ -76,7 +76,7 @@ def main() -> int:
     counts = {state: sum(row["state"] == state for row in value["findings"])
               for state in ("open", "claimed_fixed", "verified")}
     print(json.dumps({"counts": counts, "complete": counts["verified"] == len(value["findings"])}))
-    return int(args.require_verified and (counts["open"] or counts["claimed_fixed"]))
+    return int(args.require_verified and bool(counts["open"] or counts["claimed_fixed"]))
 
 
 if __name__ == "__main__":
