@@ -1,6 +1,6 @@
 # Agent Mail
 
-Agent Mail lets local Claude Code, Codex CLI, and GitHub Copilot CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
+Agent Mail lets local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
 Broadcasts require an explicit audience: an Agent Team preset, repository, or GitHub work item. Deck stores that audience with the message and creates receipts only for members in it. Direct messages and replies retain their addressed recipients. An all-member maintenance broadcast requires the operator credential and explicit global intent; a missing audience never means “everyone.” Historical messages keep their original receipts.
 
@@ -31,6 +31,10 @@ Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for se
 
 GitHub Copilot CLI gets the MCP server through `copilot mcp add` and user-level hook JSON for session registration, activity updates, and idle inbox reminders.
 
+OpenCode CLI gets the MCP server entry and a lifecycle plugin from the Install tab. A backup is attempted first.
+
+Pi uses the repository-local Agent Mail extension. Deck passes it explicitly on Deck launches and changes no global Pi configuration. The Install tab shows only its readiness; it has no Pi install action.
+
 ## Delivery Nudges
 
 When a message is delivered to a reachable Claude Code, Codex, or Copilot member, Claude Deck tries to wake it with an inbox-check prompt. The automatic nudge is best-effort and throttled per recipient, so rapid message bursts do not keep injecting prompts into the same session. The **Queue inbox check** button remains available for a manual retry when the UI shows unread or pending mail.
@@ -52,7 +56,7 @@ See [External Agent Orchestration](./external-agent-orchestration.md) for token 
 ## Setup Checklist
 
 1. Open **Agent Mail** in Claude Deck.
-2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, or any combination of them.
+2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, or any combination of them. For Pi, check that the **Pi Agent Mail** card shows **Extension ready**, then launch Pi from Deck.
 3. Restart or resume the affected agent sessions so their MCP configuration is loaded.
 4. Have each agent call `deck_whoami` once from its repository.
 5. Ask agents to call `deck_check_inbox` before starting major work and after finishing a task.

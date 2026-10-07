@@ -33,9 +33,11 @@ Use [Harnesses](/features/harnesses) for guarded native pages. Local projects sc
 
 ## Connect a backlog with the current flow
 
-Create or inspect a team roster, verify Agent Mail bindings and launch prerequisites, then add an existing primary checkout in Teams > Autonomy. Put the desired Leader first among enabled slots; Role text is descriptive. Configure GitHub polling access on the host and dispatch/design/area labels on GitHub. Choose merge policy and finite budgets; review the enable confirmation only when ready.
+Open Repositories and select **Set up a repository** for [guided configuration](/features/repositories#guided-configuration). It checks access and labels without changes, then saves an inactive team or uses an existing team, with a disabled scope. Launch and activation are separate, reviewed steps. You can also add an existing primary checkout in Teams > Autonomy.
 
-The operator credential uses the existing per-tab flow, separately from GitHub polling access and authenticated agent sessions. No cookie login or guided wizard is included. Team/scope pause controls intake; inspect existing attempts separately rather than assuming processes stopped.
+The Leader is the team's explicit `leader_slot_id`. Guided setup names it for a new team; for an existing team, use **Set Leader** in the roster while automation is off. Slot order and Role text do not select it. Configure GitHub polling access on the host and dispatch/design/area labels on GitHub, as described in [Autonomous GitHub dispatch](/autonomy). Choose merge policy and finite budgets; review the enable confirmation only when ready.
+
+The operator credential uses the existing per-tab flow, separately from GitHub polling access and authenticated agent sessions. No cookie login is included. Team/scope pause controls intake; inspect existing attempts separately rather than assuming processes stopped.
 
 ## Identify the Backend Instance
 

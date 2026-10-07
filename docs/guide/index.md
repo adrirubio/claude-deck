@@ -26,7 +26,7 @@ Configuration checks do not verify model access. Credential readiness remains un
 
 Feature pages describe the capabilities in the integrated source. A source update does not grant milestone or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
-Repository setup uses a guided, observation-only access and label check. Leader authority uses the preset's explicit `leader_slot_id`; slot order and descriptive Role text do not select it.
+Repository setup uses a guided, observation-only access and label check. Leader authority uses the preset's explicit `leader_slot_id`; slot order and descriptive Role text do not select it. [Guided configuration](/features/repositories#guided-configuration) keeps the saved configuration, the reviewed launch and the activation as separate steps.
 
 ## Tech Stack
 

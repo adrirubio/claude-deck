@@ -15,6 +15,7 @@ The new Overview/Work navigation described here belongs to the product integrati
   - Codex CLI
   - GitHub Copilot CLI
   - OpenCode CLI
+  - Pi
 
 ### Steps
 
@@ -59,7 +60,7 @@ Claude Deck starts the backend at `http://localhost:8000` and the frontend dev s
 
 ## Configuration
 
-Claude Deck requires no configuration files — all settings have sensible defaults defined in `backend/app/config.py`. The SQLite database is created automatically on first run at `backend/claude_registry.db`.
+The dashboard and native pages start with the code defaults in `backend/app/config.py`. Settings can also come from environment variables or `backend/.env`. Factory polling (`github_token`) and operator-protected actions (`operator_token`) need host settings; see [Autonomous GitHub dispatch](/autonomy). The SQLite database is created automatically on first run at `backend/claude_registry.db`.
 
 ## Remote Use
 

@@ -27,14 +27,14 @@ Claude Deck is a full-stack application with a Python backend and React frontend
 backend/
 ├── app/
 │   ├── main.py          # FastAPI app, CORS, lifespan
-│   ├── config.py        # Settings (defaults in code, no .env needed)
-│   ├── database.py      # Async SQLAlchemy engine + session
-│   ├── api/v1/          # 17 route modules
+│   ├── config.py        # Settings (code defaults; environment or backend/.env)
+│   ├── database.py      # Async SQLAlchemy engine, session, compatibility steps
+│   ├── api/v1/          # Route modules
 │   │   └── router.py    # Aggregates all routes
 │   ├── models/
 │   │   ├── database.py  # SQLAlchemy ORM models
 │   │   └── schemas.py   # Pydantic request/response models
-│   ├── services/        # 18 service files (business logic)
+│   ├── services/        # Business logic services
 │   └── utils/           # Path and file utilities
 ```
 
@@ -42,7 +42,11 @@ backend/
 
 All routes live under `/api/v1/`. The frontend's Vite dev server proxies `/api` requests to the backend at `http://localhost:8000`.
 
-Route modules: `health`, `config`, `codex-config`, `providers`, `projects`, `cli`, `mcp`, `commands`, `plugins`, `hooks`, `permissions`, `agents`, `backup`, `output-styles`, `statusline`, `sessions`, `agent-bridge`, `cc-bridge`, `usage`, `memory`
+`router.py` defines `/health` and includes these route modules:
+
+- Native and configuration modules: `config`, `codex_config`, `providers`, `projects`, `cli`, `mcp` (`/mcp`), `commands`, `plugins`, `hooks`, `permissions`, `agents`, `backup`, `output_styles`, `statusline`, `sessions`, `usage`, `memory`, `context`, `plans`, `status`
+- Coordination modules: `agent_mail` (`/agent-mail`), `external_agent_mail` (`/external/agent-mail`), `agent_bridge` (`/agent-bridge`), `cc_bridge` (`/cc-bridge`)
+- Team and factory modules: `agent_teams` (`/agent-teams`, which also includes the `factory_delivery` routes), `github_coordination`, `github_work_progress` and `factory_maintenance` (all under `/agent-teams`), and `factory` (`/factory`)
 
 ### Provider Boundaries
 
@@ -52,7 +56,7 @@ Codex diagnostics are intentionally privacy-conservative. History, model cache, 
 
 ### Database
 
-SQLite at `backend/claude_registry.db`, auto-created on first run via `create_all()`. No migration system — schema changes require deleting the database.
+SQLite at `backend/claude_registry.db`, auto-created on first run via `create_all()`. There is no general migration framework. At startup, Deck then runs SQLite compatibility steps that add listed missing columns and indexes in place, and records named one-time data migrations in the `deck_compat_migrations` table. Do not delete the database to upgrade; existing data stays in place. Back up the database before an upgrade. The compatibility steps do not support downgrade or rollback, and a repair step stops when it finds duplicate constrained rows.
 
 ## Frontend
 
@@ -60,8 +64,8 @@ SQLite at `backend/claude_registry.db`, auto-created on first run via `create_al
 
 ```
 frontend/src/
-├── App.tsx              # Routes (17 pages)
-├── features/            # Feature modules (16 directories)
+├── App.tsx              # Routes
+├── features/            # Feature modules
 │   └── <feature>/
 │       ├── *Page.tsx    # Main page component
 │       ├── components/  # Feature-specific components
@@ -72,7 +76,7 @@ frontend/src/
 │   ├── shared/          # Reusable components
 │   └── ui/              # shadcn/ui primitives
 ├── hooks/               # Custom React hooks
-├── contexts/            # React contexts (Project, Theme, Dashboard)
+├── contexts/            # React contexts (Dashboard, Project, Provider, Sidebar, Theme)
 ├── types/               # Shared TypeScript types
 └── lib/                 # API client, constants, utilities
 ```
@@ -93,7 +97,7 @@ Each feature is self-contained in `frontend/src/features/<name>/` with its own p
 | Decision | Rationale |
 |----------|-----------|
 | SQLite over Postgres | Simple deployment, no external database needed |
-| No `.env` file | All defaults in code, zero-config startup |
+| Code defaults for settings | The dashboard starts without a `.env` file; factory polling and operator-protected actions need host settings |
 | Feature modules | Isolate each feature's code for maintainability |
 | shadcn/ui | Copy-paste components, full control over styling |
 | Async SQLAlchemy | Non-blocking database access in FastAPI |

@@ -8,6 +8,7 @@ export default defineConfig({
   srcExclude: [
     'plans/**',
     'superpowers/**',
+    'deploy/**',
   ],
   head: [
     ['link', { rel: 'icon', href: '/docs/favicon.ico' }],
@@ -35,10 +36,12 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
+            { text: 'Autonomous GitHub Dispatch', link: '/autonomy' },
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
             { text: 'Factory Audit & Metrics', link: '/guide/factory-audit-and-metrics' },
             { text: 'Contributing', link: '/guide/contributing' },
+            { text: 'Changelog', link: '/changelog' },
           ],
         },
       ],

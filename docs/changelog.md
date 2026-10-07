@@ -6,6 +6,10 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 
 ### Added
 
+- Overview, Work and Repositories show factory work counts, owners, waiting reasons, PR context and watched-scope intake, polling and overlap observations across teams.
+- Harnesses shows the versioned operations and readiness catalog for all five harnesses, with guarded native pages.
+- Guided repository configuration (`/repositories/new`) keeps the draft, the saved configuration, the reviewed launch and the activation as separate steps. Teams sets the Leader explicitly through the team's `leader_slot_id`.
+- The factory audit ledger and delivery metrics record observed actions and outcomes. See [Factory audit and metrics](/guide/factory-audit-and-metrics).
 - Agent Bridge can launch Codex CLI sessions on Amazon Bedrock with a provider-aware platform selector, a per-session Codex `model_provider = "amazon-bedrock"` override, and optional AWS region/profile/model fields.
 
 ### Fixed

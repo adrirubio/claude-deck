@@ -1,6 +1,6 @@
 # Agent Teams
 
-Agent Teams are saved rosters of local Claude Code, Codex, and Copilot sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
+Agent Teams are saved rosters of local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
 
 ## Teams inside the work flow
 
@@ -22,7 +22,7 @@ Normal reuse requires a live pane already bound to its intended slot. Unbound pa
 
 Retry is confirmed and can discard attempt markers; a leased workspace can defer re-dispatch until normal owner release. A response is not proof of a new dispatch. Remedies depend on current state/principal and finite policy. Enabling recovery while autonomy is live requires explicit live-effect confirmation.
 
-Deletion refuses enabled autonomy, nonterminal/unknown work, residual workspace authority, nonterminal approvals/revisions and affected or unavailable recovery protection. Inspect bounded safe blockers and resolve through normal controls; pausing, a stopped process or an empty-looking table does not establish safe deletion. Quiescent deletion is not a promise of retained delivery audit history.
+Deletion refuses enabled autonomy, nonterminal/unknown work, residual workspace authority, nonterminal approvals/revisions and affected or unavailable recovery protection. Inspect bounded safe blockers and resolve through normal controls; pausing, a stopped process or an empty-looking table does not establish safe deletion. After a valid deletion, the [audit ledger](/guide/factory-audit-and-metrics#filters) keeps its recorded facts under their context keys, with their historical attribution; live links to the deleted records become unavailable.
 
 See [Work](/features/work), [Repositories](/features/repositories), [Live sessions](/features/agent-bridge) and [Agent Mail](/features/agent-mail).
 
