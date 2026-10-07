@@ -289,3 +289,33 @@ def test_claude_file_change_during_lookback_is_unknown(native, monkeypatch):
     reads = _track_reads(monkeypatch, change_on_second_read)
     assert native["observe"]().reason == "binding_changed"
     assert len(reads) > 1
+
+
+@pytest.mark.parametrize("completed,state", [(False, "working"), (True, "idle")])
+def test_claude_prior_turn_order_does_not_poison_new_turn(native, completed, state):
+    earlier_prompt = native["row"]("user", -8,
+        message={"role": "user", "content": "Earlier fixture."})
+    earlier_tool = native["row"]("assistant", -6,
+        message={"role": "assistant", "stop_reason": "tool_use"})
+    earlier_result = native["row"]("user", -7,
+        message={"role": "user", "content": [{"type": "tool_result"}]})
+    earlier_end = native["row"]("assistant", -5,
+        message={"role": "assistant", "stop_reason": "end_turn"})
+    current = native["records"] if completed else native["records"][:3]
+    native["write"]([earlier_prompt, earlier_tool, earlier_result, earlier_end] + current)
+    assert native["observe"]().state == state
+
+
+def test_claude_current_turn_order_still_refuses(native):
+    native["result"]["timestamp"] = native["user"]["timestamp"]
+    native["write"]()
+    assert native["observe"]().reason == "observation_invalid"
+
+
+def test_claude_latest_mismatched_prompt_does_not_reuse_prior_turn(native):
+    prompt = native["row"]("user", 0, sessionId=str(uuid4()),
+        message={"role": "user", "content": "Other fixture."})
+    native["write"](native["records"] + [prompt])
+    metadata = {}
+    assert native["observe"](provenance=metadata).reason == "session_mismatch"
+    assert metadata.get("event_source") is None
