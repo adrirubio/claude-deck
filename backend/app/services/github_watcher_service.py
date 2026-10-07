@@ -33,6 +33,10 @@ def _parse_gh_ts(value: str) -> datetime:
 _WATCHER_SCHEDULER = "github_watcher"
 _NOTIFICATION_SOURCE = "github_watcher_service.notify_blocker_merged"
 
+# A30/T01: revision states that no longer continue an attempt.
+_TERMINAL_REVISION_STATUSES = (
+    "completed", "cancelled", "rejected", "exhausted", "expired", "superseded")
+
 # A34: at most this many unresolved attempts are read per poll.
 _PROVISIONAL_BATCH = 20
 _ARTIFACT_PR = re.compile(r"^(.+)/pull/(\d+)$")
@@ -311,16 +315,16 @@ class GithubWatcherService:
                 or (item.pr_number is not None and proof is None)
             ):
                 continue
-            if proof is not None and (
-                    _attempt_identity(item) != proof["identity"]
-                    or await self._attempt_continues(db, item_id)):
-                # A30: the guarded write rechecks the captured attempt and the
-                # absence of any continuation after the network reads.
+            if (proof is not None and _attempt_identity(item) != proof["identity"]) or (
+                    await self._attempt_continues(db, item_id)):
+                # A30/T01: a changed attempt or any continuation keeps the item.
+                # The terminal claim below rechecks the same conditions at write.
                 continue
             await self._complete_and_notify(
                 db, scope, item,
                 fact_source="github_watcher_service._reconcile_closed_issues", issue=issue,
-                closed_unmerged=proof is not None, pull_proof=proof)
+                closed_unmerged=proof is not None, pull_proof=proof,
+                guard_continuation=True)
 
     async def _prove_closed_unmerged(
         self,
@@ -504,10 +508,61 @@ class GithubWatcherService:
         ).limit(1))).first()
         live_revision = (await db.scalars(select(GithubAttemptScopeRevision.id).where(
             GithubAttemptScopeRevision.work_item_id == item_id,
-            GithubAttemptScopeRevision.status.not_in(
-                ("completed", "cancelled", "rejected", "exhausted", "expired", "superseded")),
+            GithubAttemptScopeRevision.status.not_in(_TERMINAL_REVISION_STATUSES),
         ).limit(1))).first()
         return pending_request is not None or live_revision is not None
+
+    async def _claim_terminal(
+        self,
+        db: AsyncSession,
+        item_id: int,
+        *,
+        status: str,
+        nonce: str | None,
+        launch_id: int | None,
+        revision: int | None,
+        pr_number: int | None,
+        guard_continuation: bool,
+    ) -> bool:
+        """T01: claim the terminal transition atomically; True when it holds.
+
+        One conditional UPDATE applies the captured status and attempt
+        identity. With ``guard_continuation`` it also requires no requested
+        retry, no pending approval request and no live revision, evaluated
+        at the write. The claim leaves the transaction open, so the caller's
+        result fact commits with it or not at all.
+        """
+        from sqlalchemy import exists, update
+
+        from app.models.database import GithubApprovalRequest
+
+        def same(column, value):
+            return column.is_(None) if value is None else column == value
+
+        conditions = [
+            GithubWorkItem.id == item_id,
+            GithubWorkItem.dispatch_status == status,
+            same(GithubWorkItem.dispatch_nonce, nonce),
+            same(GithubWorkItem.launch_id, launch_id),
+            same(GithubWorkItem.active_scope_revision, revision),
+            same(GithubWorkItem.pr_number, pr_number),
+        ]
+        if guard_continuation:
+            conditions += [
+                GithubWorkItem.retry_requested_at.is_(None),
+                ~exists().where(
+                    GithubApprovalRequest.work_item_id == item_id,
+                    GithubApprovalRequest.status == "pending"),
+                ~exists().where(
+                    GithubAttemptScopeRevision.work_item_id == item_id,
+                    GithubAttemptScopeRevision.status.not_in(_TERMINAL_REVISION_STATUSES)),
+            ]
+        result = await db.execute(
+            update(GithubWorkItem).where(*conditions).values(
+                dispatch_status="completed", escalation_reason=None,
+                updated_at=datetime.utcnow(),
+            ).execution_options(synchronize_session=False))
+        return result.rowcount == 1
 
     async def _complete_and_notify(
         self,
@@ -519,6 +574,7 @@ class GithubWatcherService:
         issue: dict | None = None,
         closed_unmerged: bool = False,
         pull_proof: dict | None = None,
+        guard_continuation: bool = False,
     ) -> None:
         """Complete a closed-issue item and notify its team.
 
@@ -539,6 +595,8 @@ class GithubWatcherService:
         captured_launch_id = item.launch_id
         captured_active_revision = item.active_scope_revision
         captured_nonce = item.dispatch_nonce
+        captured_status = item.dispatch_status
+        captured_pr_number = item.pr_number
         # The original attempt is the revision row of this item, dispatch
         # attempt and active revision number. The newest row for the item
         # alone could belong to a different attempt.
@@ -553,6 +611,23 @@ class GithubWatcherService:
             )).first()
         captured_attempt = attempt_key(
             captured_item_id, captured_launch_id, captured_revision_id)
+        # T01: one atomic guarded terminal claim. The conditional UPDATE takes
+        # the SQLite writer and evaluates the captured attempt identity and,
+        # for reconciled items, the absence of any continuing authority at
+        # the write itself. A lost claim records no result fact and completes
+        # nothing; counters, leases and notices are unchanged.
+        if not await self._claim_terminal(
+                db, captured_item_id, status=captured_status, nonce=captured_nonce,
+                launch_id=captured_launch_id, revision=captured_active_revision,
+                pr_number=captured_pr_number, guard_continuation=guard_continuation):
+            await db.rollback()
+            logger.info("Terminal claim lost for work item %s; nothing recorded",
+                        captured_item_id)
+            try:
+                await db.refresh(scope)
+            except Exception:
+                pass
+            return
         # A28-A35/C02: the terminal transition records its sourced outcome
         # fact in the same transaction. Issue closure alone is terminal
         # tracking: neither closure nor a non-null PR number proves a merge,
@@ -596,10 +671,10 @@ class GithubWatcherService:
             snapshot=snapshot or None,
             source=fact_source,
         )
-        item.dispatch_status = "completed"
-        item.escalation_reason = None
-        item.updated_at = datetime.utcnow()
+        # The claim already wrote the transition; the fact and the claim
+        # commit together, and an audit failure rolls both back.
         await db.commit()
+        await db.refresh(item)
         try:
             slots = (
                 await db.execute(

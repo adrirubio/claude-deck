@@ -978,8 +978,11 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
         " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
         " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
         " delivery_attempt_count, approval_request_id, created_at)"
+        # T01: a superseded revision row still identifies the original
+        # attempt; an active one would be continuing authority and keep the
+        # item open.
         " VALUES (1, 1, 'n', 0, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
-        " 'a', 'b', 'r', 1, 'h', 2, 0, 'active', 0, NULL, CURRENT_TIMESTAMP)"))
+        " 'a', 'b', 'r', 1, 'h', 2, 0, 'superseded', 0, NULL, CURRENT_TIMESTAMP)"))
     await db.commit()
 
     class FakeClient:
@@ -1027,7 +1030,7 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     revision_row = (await db.execute(text(
         "SELECT status, failed_head_count, delivery_attempt_count"
         " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
-    assert tuple(revision_row) == ("active", 0, 0)
+    assert tuple(revision_row) == ("superseded", 0, 0)
     item_after = (await db.execute(text(
         "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count"
         " FROM github_work_items WHERE id = 1"))).first()
@@ -1065,8 +1068,9 @@ async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
         " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
         " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
         " delivery_attempt_count, approval_request_id, created_at)"
+        # T01: superseded, so the escalated item has no continuing authority.
         " VALUES (1, 1, 'n', 0, 5, 8, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
-        " 'a', 'b', 'r', 1, 'h', 2, 1, 'active', 1, NULL, CURRENT_TIMESTAMP)"))
+        " 'a', 'b', 'r', 1, 'h', 2, 1, 'superseded', 1, NULL, CURRENT_TIMESTAMP)"))
     await db.execute(text(
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce,"
         " approval_round, owner_member_id, leader_member_id, request_fingerprint, status,"
@@ -3451,6 +3455,111 @@ async def test_a30_closed_unmerged_terminal_consumer_keeps_continuation_guards(
     public = await _public_metrics(client, datetime(2026, 10, 6), datetime.utcnow() + timedelta(hours=1))
     assert (public["closed_without_delivery"]["value"], public["delivered_in_window"]["value"]) == (
         1.0, 0.0)
+
+
+@pytest.mark.parametrize("case", [
+    "pending_request", "live_revision", "retry_requested",
+    "late_acquisition_no_pr", "late_acquisition_pr", "terminal_no_pr"])
+async def test_t01_terminal_claim_refuses_continuing_authority_on_both_paths(
+    store, monkeypatch, case
+):
+    """T01 (Astra F01, P1): the terminal claim and its result fact share one
+    transaction. On the no-PR path, a pending request, a live revision or a
+    requested retry keeps the item: no result fact, no completion and exact
+    authority. A continuation committed by an independent session after the
+    watcher's last read, before the write, also makes the claim refuse, on
+    the no-PR and the PR path. A free no-PR closure still completes."""
+    from app.models.database import (
+        GithubApprovalRequest, GithubAttemptScopeRevision, TeamGithubScope,
+    )
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import GithubWatcherService, github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    with_pr = case == "late_acquisition_pr"
+    await _seed_work(
+        store, item_id=160, status="escalated", pr_number=73 if with_pr else None,
+        escalation_reason="plan_blocked",
+        retry_requested_at=_FIXED_LEASE if case == "retry_requested" else None)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE github_work_items SET dispatch_head_ref = :ref WHERE id = 160"),
+            {"ref": _A30_HEAD_REF})
+        if case == "live_revision":
+            await db.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
+                " created_at, updated_at) VALUES (160, 5, '/tmp/ws-160', 'worktree', 1, 1,"
+                " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            db.add(GithubAttemptScopeRevision(
+                work_item_id=160, dispatch_nonce=_NONCE, revision=1,
+                owner_slot_id=_OWNER["slot"], owner_member_id=_OWNER["member"],
+                phase="implementation", execution_target="workspace", summary="Live",
+                allowed_paths=["src/a.py"], allowed_actions=["edit_production"],
+                allowed_commands=[], prohibited_actions=[], tool_fallbacks={},
+                baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+                originating_escalation_reason="plan_blocked",
+                expected_workspace_id=160, expected_lease_token_hash="h" * 64,
+                max_failed_heads=2, status="proposed"))
+        if case == "pending_request":
+            db.add(GithubApprovalRequest(
+                work_item_id=160, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                approval_round=3, owner_member_id=_OWNER["member"],
+                leader_member_id=_LEADER["member"], request_fingerprint="f" * 64,
+                status="pending"))
+        await db.commit()
+    before = await _authority(store, 160)
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+    _a30_patch_reads(monkeypatch)
+
+    # The late acquisition commits from an independent session immediately
+    # after the watcher's last continuation read returned "no continuation".
+    original = GithubWatcherService._attempt_continues
+    last_read = 2 if with_pr else 1
+    calls = {"n": 0}
+
+    async def read_then_acquire(self, db, item_id):
+        result = await original(self, db, item_id)
+        calls["n"] += 1
+        if case.startswith("late_acquisition") and calls["n"] == last_read:
+            async with store() as other:
+                other.add(GithubApprovalRequest(
+                    work_item_id=160, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                    approval_round=4, owner_member_id=_OWNER["member"],
+                    leader_member_id=_LEADER["member"], request_fingerprint="e" * 64,
+                    status="pending"))
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(GithubWatcherService, "_attempt_continues", read_then_acquire)
+
+    class ClosedNotPlanned(_A30Client):
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "state_reason": "not_planned",
+                             "closed_at": "2026-10-06T11:40:00Z", "labels": []}
+                    for number in numbers}
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._reconcile_closed_issues(db, scope, ClosedNotPlanned())
+
+    facts = await _facts(store, event_kind="delivery_evidence")
+    after = await _authority(store, 160)
+    if case == "terminal_no_pr":
+        assert len(facts) == 1
+        assert after["item"]["dispatch_status"] == "completed"
+        return
+    assert facts == []
+    if case.startswith("late_acquisition"):
+        assert calls["n"] == last_read
+        # Only the independent session's own request was added.
+        assert after["item"] == before["item"]
+    else:
+        assert after == before
 
 
 def _native_process(argv0: str, *args: str, executable: str = "/bin/sleep"):
