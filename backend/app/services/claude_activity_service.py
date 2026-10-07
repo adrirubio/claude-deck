@@ -38,6 +38,8 @@ def _identity(pid: int, session_id: str) -> bool:
         return False
     values = []
     for index, arg in enumerate(argv):
+        if arg == b"--":
+            break
         if arg in {b"--resume", b"--session-id"}:
             if index + 1 >= len(argv):
                 return False

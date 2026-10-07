@@ -69,7 +69,7 @@ def test_claude_invalid_record_is_unknown(native, field, value):
     assert native["observe"]().state == "unknown"
 
 
-@pytest.mark.parametrize("argv", [b"claude\0prompt UUID\0",b"node\0--resume\0UUID\0",b"claude\0--resume\0other\0"])
+@pytest.mark.parametrize("argv", [b"claude\0prompt UUID\0",b"node\0--resume\0UUID\0",b"claude\0--resume\0other\0",b"claude\0--\0--resume\0UUID\0"])
 def test_claude_uuid_must_be_bound_as_an_option(native, argv):
     (native["proc"] / "50" / "cmdline").write_bytes(argv.replace(b"UUID",native["session"].encode()))
     assert native["observe"]().reason == "session_mismatch"
