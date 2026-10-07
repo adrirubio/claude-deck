@@ -1,4 +1,6 @@
 """Recorded maintenance recovery requires operator authentication."""
+import asyncio
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -7,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import require_operator
 from app.database import get_db
-from app.models.database import GithubMaintenanceEvent, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
+from app.models.database import GithubAcceptedSourceImport, GithubMaintenanceEvent, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
+from app.services.accepted_source_imports import SourceImportRequest, register_source_import
+from app.services.github_client import GithubClientResponseError
+from app.services.github_check_observation import GithubCheckObservationError
 from app.services.owner_observation_pause import resume_observation_pause
 from app.services.maintenance_operations import digest
 from typing import Literal
@@ -36,6 +41,48 @@ async def context(db, preset_id, item_id):
     if scope is None or scope.preset_id != preset_id:
         raise HTTPException(status_code=404, detail="Work item not found")
     return item, scope
+
+
+@router.post("/presets/{preset_id}/work-items/{item_id}/accepted-source-imports")
+async def accepted_source_import(preset_id: int, item_id: int, request: SourceImportRequest,
+                                response: Response, _operator=Depends(require_operator),
+                                db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item, scope = await context(db, preset_id, item_id)
+    try:
+        async with asyncio.timeout(45):
+            return await register_source_import(db, item, scope, request)
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except (TimeoutError, GithubClientResponseError, GithubCheckObservationError, httpx.HTTPError):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="source_import_evidence_inconclusive") from None
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="source_import_context_changed") from None
+
+
+@router.get("/presets/{preset_id}/work-items/{item_id}/accepted-source-imports")
+async def accepted_source_imports(preset_id: int, item_id: int, response: Response,
+                                 _operator=Depends(require_operator),
+                                 db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item, _scope = await context(db, preset_id, item_id)
+    rows = (await db.scalars(select(GithubAcceptedSourceImport).where(
+        GithubAcceptedSourceImport.work_item_id == item.id
+    ).order_by(GithubAcceptedSourceImport.id.desc()).limit(65))).all()
+    return {"work_item_id": item.id, "truncated": len(rows) > 64,
+            "imports": [{"import_id": row.id, "operation_id": row.operation_id,
+                         "scope_revision_id": row.scope_revision_id,
+                         "accepted_repository": row.accepted_repository,
+                         "accepted_pull_number": row.accepted_pull_number,
+                         "accepted_source_sha": row.accepted_source_sha,
+                         "accepted_merge_sha": row.accepted_merge_sha,
+                         "observed_head_sha": row.observed_head_sha,
+                         "paths": sorted(row.path_snapshots), "created_at": row.created_at}
+                        for row in rows[:64]],
+            "limits": "Exact accepted contents only. The original owner scope, baseline and budgets remain."}
 
 
 @router.get("/presets/{preset_id}/work-items/{item_id}/observation-pauses")
