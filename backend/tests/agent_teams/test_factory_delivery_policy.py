@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from app.models.database import (
     AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, GithubAttemptScopeRevision,
@@ -42,6 +42,25 @@ async def scope_and_item(db, name="one", **kwargs):
     db.add(item)
     await db.commit()
     return scope, item
+
+
+@pytest.mark.asyncio
+async def test_direct_scope_insert_uses_database_policy_defaults(db):
+    scope, _ = await scope_and_item(db)
+    await db.execute(text(
+        "INSERT INTO team_github_scopes (preset_id, repo_owner, repo_name, repo_path, "
+        "dispatch_label, design_label, merge_policy, github_auth_mode, base_ref, "
+        "max_approval_rounds, max_concurrent_dispatched, max_verification_retries, "
+        "max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree, "
+        "continuation_enabled, max_continuation_revisions, max_continuation_failed_heads, "
+        "max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled, "
+        "created_at, updated_at) VALUES (:preset, 'fixture', 'direct', '/tmp/direct', "
+        "'ready', 'design', 'human', 'ambient', 'origin/main', 3, 1, 1, 0, 1, 0, "
+        "0, 6, 8, 2, 32, 16, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    ), {"preset": scope.preset_id})
+    row = (await db.execute(select(TeamGithubScope).where(
+        TeamGithubScope.repo_name == "direct"))).scalar_one()
+    assert row.delivery_policy == {} and row.delivery_policy_revision == 1
 
 
 @pytest.mark.asyncio
