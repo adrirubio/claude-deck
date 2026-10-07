@@ -957,3 +957,18 @@ class FactoryAuditEvent(Base):
     delivery_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     completion_kind: Mapped[str | None] = mapped_column(String, nullable=True)
     human_review_evidence: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+
+class FactoryResultCursor(Base):
+    """A34: the fair round-robin position of later-result reconciliation.
+
+    One row per scope. It holds only the last read ledger event ID; it is
+    not a fact and never changes an attempt's identity or result.
+    """
+
+    __tablename__ = "factory_result_cursors"
+
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), primary_key=True)
+    last_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

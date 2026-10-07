@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 
 from sqlalchemy import select
@@ -31,6 +32,27 @@ def _parse_gh_ts(value: str) -> datetime:
 
 _WATCHER_SCHEDULER = "github_watcher"
 _NOTIFICATION_SOURCE = "github_watcher_service.notify_blocker_merged"
+
+# A34: at most this many unresolved attempts are read per poll.
+_PROVISIONAL_BATCH = 20
+_ARTIFACT_PR = re.compile(r"^(.+)/pull/(\d+)$")
+_ATTEMPT_KEY = re.compile(r"^item:(\d+):launch:(\d+|None):revision:(\d+|None)$")
+
+
+def _attempt_identity(item: GithubWorkItem) -> tuple:
+    """A30: the in-memory identity that a guarded terminal write rechecks."""
+    return (item.id, item.dispatch_nonce, item.launch_id, item.active_scope_revision,
+            item.pr_number, item.dispatch_head_ref)
+
+
+def _pull_in_repository(pull: dict, repository: str) -> bool:
+    """A34: the pull's base and head both belong to the scope repository."""
+    for side in ("base", "head"):
+        part = pull.get(side)
+        repo = part.get("repo") if isinstance(part, dict) else None
+        if not isinstance(repo, dict) or repo.get("full_name") != repository:
+            return False
+    return True
 
 
 def attempt_key(item_id: int, launch_id: int | None, revision_id: int | None) -> str:
@@ -129,6 +151,16 @@ class GithubWatcherService:
         await github_dispatch_service.promote_deferred_retries(db, scope)
         scope.last_polled_at = datetime.utcnow()
         await db.commit()
+        try:
+            await self._reconcile_provisional_results(db, scope, client)
+        except Exception:
+            # A34: a later-result read never blocks the poll. It runs after the
+            # poll commit, so a failure here discards nothing else; its
+            # results stay unresolved until a later poll.
+            logger.info("Later-result reconciliation unavailable for scope %s", scope.id,
+                        exc_info=True)
+            await db.rollback()
+            await db.refresh(scope)
 
     async def _upsert_item(self, db: AsyncSession, scope: TeamGithubScope, issue: dict) -> None:
         label_names = {label["name"] for label in issue.get("labels", [])}
@@ -251,22 +283,20 @@ class GithubWatcherService:
             scope.repo_name,
             [issue_number for _item_id, issue_number, _pr_number, _reason in pending],
         )
-        for item_id, issue_number, pr_number, escalation_reason in pending:
+        for item_id, issue_number, pr_number, _escalation_reason in pending:
             issue = current.get(issue_number)
             if issue is None or issue.get("state") != "closed":
                 continue
-            closed_unmerged = False
+            proof = None
             if pr_number is not None:
-                # R02/A30: an escalated attempt whose PR verification proved
-                # closed without merge, and whose issue is now closed, ends
-                # without delivery when no attempt continues.
-                if escalation_reason == "pr_closed_unmerged" and not await self._attempt_continues(
-                        db, item_id):
-                    closed_unmerged = True
-                else:
+                # A30: a cached escalation reason is an old observation and
+                # proves nothing now. Only fresh scoped proof that every pull
+                # of this attempt is closed unmerged ends it without delivery.
+                proof = await self._prove_closed_unmerged(db, scope, client, item_id)
+                if proof is None:
                     logger.info(
-                        "Work item %s (issue #%s) has a closed issue but an unresolved "
-                        "PR #%s; leaving it for the verification path",
+                        "Work item %s (issue #%s) has a closed issue but PR #%s has no "
+                        "current closed-unmerged proof; leaving it for the verification path",
                         item_id,
                         issue_number,
                         pr_number,
@@ -278,16 +308,188 @@ class GithubWatcherService:
             if (
                 item is None
                 or item.dispatch_status not in _CLOSED_ISSUE_RECONCILABLE_STATUSES
-                or (item.pr_number is not None and not closed_unmerged)
-                or (closed_unmerged and (
-                    item.dispatch_status != "escalated"
-                    or item.escalation_reason != "pr_closed_unmerged"))
+                or (item.pr_number is not None and proof is None)
             ):
+                continue
+            if proof is not None and (
+                    _attempt_identity(item) != proof["identity"]
+                    or await self._attempt_continues(db, item_id)):
+                # A30: the guarded write rechecks the captured attempt and the
+                # absence of any continuation after the network reads.
                 continue
             await self._complete_and_notify(
                 db, scope, item,
                 fact_source="github_watcher_service._reconcile_closed_issues", issue=issue,
-                closed_unmerged=closed_unmerged)
+                closed_unmerged=proof is not None, pull_proof=proof)
+
+    async def _prove_closed_unmerged(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        client: GithubClient,
+        item_id: int,
+    ) -> dict | None:
+        """A30: fresh scoped proof that an attempt's pulls are all closed unmerged.
+
+        The attempt identity is captured before any network read. The
+        attempt's pull inventory is read through the scoped client and checked
+        with the verification identity contracts. Any merged or open pull, an
+        identity failure, an unclassifiable pull, a read error or an empty
+        inventory returns None, so no non-delivery is recorded. Merged
+        evidence stays with the verification merge paths.
+        """
+        from app.services.github_approval_service import github_approval_service
+        from app.services.github_verification_service import (
+            GithubVerificationService,
+            github_verification_service,
+        )
+
+        item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+        if (item is None or item.pr_number is None or item.dispatch_head_ref is None
+                or item.dispatch_status not in _CLOSED_ISSUE_RECONCILABLE_STATUSES):
+            return None
+        identity = _attempt_identity(item)
+        pr_number = item.pr_number
+        if await self._attempt_continues(db, item_id):
+            return None
+        try:
+            token = await github_approval_service.github_read_token(scope)
+            base = await github_verification_service.normalize_base_ref(
+                scope, client, token=token, base_ref=item.dispatch_base_ref)
+            pulls = await github_verification_service._list_attempt_pulls(
+                scope, client, head_ref=item.dispatch_head_ref, base=base, token=token)
+            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+            if item is None or _attempt_identity(item) != identity:
+                return None
+            numbers: dict[int, dict] = {}
+            for pull in pulls or []:
+                number = GithubVerificationService._pull_number(pull)
+                if number in numbers and numbers[number] != pull:
+                    return None
+                numbers[number] = pull
+                if GithubVerificationService._classify_pull(pull) != "closed_unmerged":
+                    return None
+                GithubVerificationService._verify_pull_identity(
+                    pull, scope, item, expected_base=base, verify_author=True)
+        except Exception:
+            logger.info("Closed-unmerged proof unavailable for work item %s", item_id,
+                        exc_info=True)
+            return None
+        if pr_number not in numbers:
+            return None
+        return {
+            "identity": identity,
+            "pull_numbers": sorted(numbers),
+            "pull_closed_at": numbers[pr_number].get("closed_at"),
+            "observed_at": datetime.utcnow(),
+        }
+
+    async def _reconcile_provisional_results(
+        self, db: AsyncSession, scope: TeamGithubScope, client: GithubClient
+    ) -> int:
+        """A34: a bounded, fair later-result reconciliation; returns attempts read.
+
+        Candidates are retained attempts of this scope with no delivered
+        fact, whose result is unknown or closed without delivery, on a work
+        item that still exists. No age limit applies. A persisted round-robin
+        cursor reads at most _PROVISIONAL_BATCH attempts per poll, so every
+        candidate is read within ceil(N / batch) polls. A verified merged pull
+        records delivery on the original attempt; nothing else is written and
+        no work item field changes.
+        """
+        from app.models.database import FactoryAuditEvent, FactoryResultCursor
+        from app.services import factory_audit_service as _audit
+        from app.services.github_verification_service import GithubVerificationService
+
+        rows = (await db.execute(
+            select(FactoryAuditEvent.id, FactoryAuditEvent.item_id,
+                   FactoryAuditEvent.item_context_key, FactoryAuditEvent.delivery_outcome,
+                   FactoryAuditEvent.context_snapshot)
+            .where(FactoryAuditEvent.scope_id == scope.id,
+                   FactoryAuditEvent.event_kind == "delivery_evidence",
+                   FactoryAuditEvent.item_id.is_not(None))
+            .order_by(FactoryAuditEvent.id))).all()
+        attempts: dict[str, dict] = {}
+        for row in rows:
+            snapshot = row.context_snapshot if isinstance(row.context_snapshot, dict) else {}
+            attempt = snapshot.get("attempt")
+            if not attempt:
+                continue
+            state = attempts.setdefault(f"{row.item_context_key}|{attempt}", {
+                "attempt": attempt, "item_id": row.item_id, "delivered": False})
+            state["delivered"] = state["delivered"] or row.delivery_outcome == "delivered"
+            state["latest_id"] = row.id
+            state["snapshot"] = snapshot
+            state["outcome"] = row.delivery_outcome
+        candidates = sorted(
+            (state for state in attempts.values()
+             if not state["delivered"]
+             and state["outcome"] in ("unknown", "closed_without_delivery")),
+            key=lambda state: state["latest_id"])
+        if not candidates:
+            return 0
+        cursor = await db.get(FactoryResultCursor, scope.id)
+        after = cursor.last_event_id if cursor is not None and cursor.last_event_id else 0
+        ordered = ([state for state in candidates if state["latest_id"] > after]
+                   + [state for state in candidates if state["latest_id"] <= after])
+        batch = ordered[:_PROVISIONAL_BATCH]
+        if cursor is None:
+            cursor = FactoryResultCursor(scope_id=scope.id)
+            db.add(cursor)
+        cursor.last_event_id = batch[-1]["latest_id"]
+        cursor.updated_at = datetime.utcnow()
+        await db.commit()
+        repository = f"{scope.repo_owner}/{scope.repo_name}"
+        captured_scope = (scope.id, scope.repo_owner, scope.repo_name)
+        for state in batch:
+            snapshot = state["snapshot"]
+            match = _ARTIFACT_PR.match(snapshot.get("artifact") or "")
+            proven_artifact = match is not None and match.group(1) == repository
+            pr_number = int(match.group(2)) if proven_artifact else snapshot.get("pr_number")
+            if not isinstance(pr_number, int) or pr_number <= 0:
+                continue
+            try:
+                item = await db.get(GithubWorkItem, state["item_id"], populate_existing=True)
+                if item is None or item.scope_id != captured_scope[0]:
+                    continue
+                current_attempt, _, _ = await _audit.item_attempt(db, item)
+                is_current = current_attempt == state["attempt"] and item.pr_number == pr_number
+                if not proven_artifact and not is_current:
+                    # Without a proven artifact only the current attempt's own
+                    # head can bind a pull to this attempt.
+                    continue
+                pull = await client.get_pull(captured_scope[1], captured_scope[2], pr_number)
+                if (GithubVerificationService._classify_pull(pull) != "merged"
+                        or GithubVerificationService._pull_number(pull) != pr_number
+                        or not _pull_in_repository(pull, repository)):
+                    continue
+                item = await db.get(GithubWorkItem, state["item_id"], populate_existing=True)
+                if item is None:
+                    continue
+                head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
+                if is_current and (item.dispatch_head_ref is None
+                                   or head.get("ref") != item.dispatch_head_ref):
+                    continue
+                key = _ATTEMPT_KEY.match(state["attempt"])
+                if key is None:
+                    continue
+                revision_id = None if key.group(3) == "None" else int(key.group(3))
+                launch = snapshot.get("launch_attempt") or _audit.launch_attempt_key(
+                    item.id, None if key.group(2) == "None" else int(key.group(2)))
+                await _audit.record_merged_delivery(
+                    db, item, pull,
+                    source="github_watcher_service._reconcile_provisional_results",
+                    attempt_identity=(state["attempt"], revision_id, launch))
+                await db.commit()
+            except Exception:
+                logger.info("Later result unavailable for attempt %s", state["attempt"],
+                            exc_info=True)
+                try:
+                    await db.rollback()
+                    await db.refresh(scope)
+                except Exception:
+                    pass
+        return len(batch)
 
     async def _attempt_continues(self, db: AsyncSession, item_id: int) -> bool:
         """R02/A30: a pending approval, live revision or requested retry continues it."""
@@ -316,14 +518,18 @@ class GithubWatcherService:
         fact_source: str = "github_watcher_service._complete_and_notify",
         issue: dict | None = None,
         closed_unmerged: bool = False,
+        pull_proof: dict | None = None,
     ) -> None:
         """Complete a closed-issue item and notify its team.
 
-        ``fact_source`` names the actual watcher caller. The watcher reads no
-        pull request state, so it never has merge evidence: a non-null PR
-        number on a closed issue does not prove delivery. R02: an issue that
-        GitHub closed as not planned or duplicate, with no PR, is sourced
-        terminal non-delivery.
+        ``fact_source`` names the actual watcher caller. Closure alone never
+        proves a merge: a non-null PR number on a closed issue does not prove
+        delivery. R02: an issue that GitHub closed as not planned or
+        duplicate, with no PR, is sourced terminal non-delivery at the issue
+        closure time. A30: ``pull_proof`` is fresh scoped proof that every
+        pull of the attempt is closed unmerged. That result is a conjunction of
+        current conditions, so its result time stays unknown; the pull and
+        issue closure times are kept as separate source times.
         """
         # Immutable scalars are captured before any await or commit so the
         # failure path never touches expired ORM state.
@@ -357,17 +563,22 @@ class GithubWatcherService:
         state_reason = issue.get("state_reason")
         closed_at = _audit._parse_time(issue.get("closed_at"))
         artifact = None
-        if closed_unmerged:
-            # The PR closure without merge was read by verification (its
-            # escalation reason); the closed issue ends the attempt.
+        fact_time = None
+        snapshot: dict = {}
+        if isinstance(issue.get("closed_at"), str):
+            snapshot["issue_closed_at"] = issue["closed_at"]
+        if closed_unmerged and pull_proof is not None:
             outcome, completion, source_of_fact = (
                 "closed_without_delivery", "pr_closed_unmerged",
                 "github_pull_request_closed_unmerged")
             artifact = f"{scope.repo_owner}/{scope.repo_name}/pull/{item.pr_number}"
+            if isinstance(pull_proof.get("pull_closed_at"), str):
+                snapshot["pull_closed_at"] = pull_proof["pull_closed_at"]
         elif state_reason in ("not_planned", "duplicate") and item.pr_number is None:
             outcome, completion, source_of_fact = (
                 "closed_without_delivery", f"issue_closed_{state_reason}",
                 "github_issue_state_reason")
+            fact_time = closed_at
         else:
             outcome, completion, source_of_fact = "unknown", "closed_unproven", fact_source
         await _audit.record_delivery_fact(
@@ -378,10 +589,11 @@ class GithubWatcherService:
             delivery_outcome=outcome,
             completion_kind=completion,
             fact_source=source_of_fact,
-            fact_time=closed_at,
+            fact_time=fact_time,
             artifact=artifact,
             attempt=captured_attempt,
             launch_attempt=_audit.launch_attempt_key(captured_item_id, captured_launch_id),
+            snapshot=snapshot or None,
             source=fact_source,
         )
         item.dispatch_status = "completed"

@@ -701,7 +701,8 @@ async def test_closed_issue_skips_item_with_open_pr(db, caplog):
         (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
         for message in messages
     )
-    assert "unresolved PR #865" in caplog.text
+    # A30: without fresh scoped closed-unmerged proof the item stays escalated.
+    assert "PR #865 has no current closed-unmerged proof" in caplog.text
 
 
 @pytest.mark.asyncio

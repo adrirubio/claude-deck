@@ -2873,3 +2873,51 @@ class FactoryMetricsWindow(BaseModel):
     missing_intervals: list[str] = []
     instrumentation_start: datetime | None = None
     metrics: list[FactoryMetricSample] = []
+
+
+class FactoryReviewAcceptanceDeclaration(BaseModel):
+    """A32: one trusted review acceptance declaration, recorded by the operator.
+
+    The trusted source declares the reviewer, human kind and independence.
+    The server never derives them from a credential or an account type.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    declaration_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9._:\-]+$")
+    work_item_id: int = Field(gt=0)
+    attempt: str = Field(
+        max_length=128, pattern=r"^item:\d+:launch:(\d+|None):revision:(\d+|None)$")
+    artifact: str = Field(max_length=200, pattern=r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/pull/\d+$")
+    version: str = Field(pattern=r"^[0-9a-f]{40}$")
+    reviewer: str = Field(min_length=1, max_length=128)
+    reviewer_kind: Literal["human"]
+    independent: bool
+    decision: Literal["accepted", "rejected"]
+    occurred_at: datetime
+    source_kind: Literal["github_review", "signed_record", "operator_attested"]
+    source_ref: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _check_declaration(self) -> "FactoryReviewAcceptanceDeclaration":
+        from datetime import timezone
+
+        reviewer = self.reviewer.strip()
+        if (not reviewer or reviewer in {"operator", "shared-operator-credential"}
+                or reviewer.startswith("member:")):
+            raise ValueError("reviewer_not_attributable")
+        if self.occurred_at.tzinfo is None:
+            raise ValueError("occurred_at_requires_timezone")
+        if self.occurred_at.astimezone(timezone.utc) > datetime.now(timezone.utc):
+            raise ValueError("occurred_at_in_future")
+        return self
+
+
+class FactoryReviewAcceptanceRead(BaseModel):
+    """A32: the recorded declaration result."""
+
+    event_id: int | None = None
+    operation_id: str
+    counted: bool = False
+    delivery_established: bool = False
+    refusal: str | None = None

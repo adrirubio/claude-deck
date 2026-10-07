@@ -1,6 +1,6 @@
 # Factory API
 
-These five observational routes return versioned factory work and repository observations. Availability depends on the installed version. Two more routes read the audit ledger and the delivery metrics; see [Audit events and delivery metrics](#audit-events-and-delivery-metrics).
+These five observational routes return versioned factory work and repository observations. Availability depends on the installed version. Two more routes read the audit ledger and the delivery metrics, and one protected route records review acceptance declarations; see [Audit events and delivery metrics](#audit-events-and-delivery-metrics).
 
 All paths below begin with `/api/v1/factory`. These GET routes read local factory records and a bounded scheduler observation. They do not dispatch, claim a lease, send or acknowledge Mail, launch a provider, change the active project, or fetch GitHub issues. They have no operator/session authentication dependency in this source. Protected recovery reads and mutations have their own authentication and state checks.
 
@@ -146,3 +146,30 @@ An audit page has `items`, `total`, `page`, `page_size`, the applied keys and `s
 A current-ID filter (`team_id`, `scope_id`, `item_id`) resolves the active context key of the current resource lifetime, without writing. An ID with no recorded lifetime returns no events. A context key also addresses its own history after deletion; a reused numeric ID has a new key.
 
 A metrics window has `window_start`, `window_end`, `filter_scope`, `counting_unit_note`, `instrumentation_start`, `available_interval_start`, `available_interval_end`, `missing_intervals` and `metrics`. `instrumentation_start` is the installed coverage marker, not the first event. A `scoped` request without a key returns no metrics. Each sample has `name`, `counting_unit`, `value` (null when unknown), `sample_count`, `unknown_count`, `excluded_count`, `unknown_reasons`, `source` and `coverage`. Ledger samples say `full`, `partial` or `unavailable` coverage. Outcome samples count one current result per tracked attempt. Present-state samples name their population. A key without a current resource gives unknown present-state values.
+
+### Review acceptance declarations
+
+POST `/review-acceptances` records one review acceptance from a trusted source. It needs the operator token header `X-Deck-Operator-Token`. It is observational: it never changes work state, approvals, merges, retries, leases or counters.
+
+| Field | Rule |
+| --- | --- |
+| `declaration_id` | 8–64 characters (`A-Z a-z 0-9 . _ : -`). The idempotency key. |
+| `work_item_id` | An existing work item. |
+| `attempt` | The attempt key `item:{id}:launch:{launch}:revision:{revision}` of that item. |
+| `artifact` | `owner/repo/pull/N` in the item's repository. |
+| `version` | The 40-character lowercase commit SHA that was reviewed. |
+| `reviewer` | The attributed reviewer. `operator`, `shared-operator-credential` and `member:` references are refused. |
+| `reviewer_kind` | `human`, as declared by the source. |
+| `independent` | As declared by the source. |
+| `decision` | `accepted` or `rejected`. |
+| `occurred_at` | The review time, with a timezone, not in the future. |
+| `source_kind`, `source_ref` | `github_review`, `signed_record` or `operator_attested`, and a safe source reference. |
+
+Responses:
+
+- 201 with `event_id`, `operation_id`, `counted` and `delivery_established` when the declaration is recorded.
+- 200 with the stored result for an exact replay.
+- 409 with `refusal` when the declaration does not bind: `attempt_unrelated`, `artifact_unrelated`, `version_changed`, `version_unrelated`, `work_item_not_found` or `replay_conflict`. The refusal is recorded as a rejected event.
+- 422 for a field that breaks the contract, and 401 or 503 for the operator token, with no write.
+
+An accepted, independent, human declaration for a design item also records delivery of that exact version. The recording credential is stored as the recording actor, separate from the reviewer.

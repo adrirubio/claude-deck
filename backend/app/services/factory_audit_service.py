@@ -52,11 +52,15 @@ SAFE_SNAPSHOT_FIELDS = {
     "event_time_labels",
     # C06/C12: stable non-secret attempt identities and the retry class.
     "attempt", "launch_attempt", "retry_class",
+    # A20: native runtime observation results; no argument value is stored.
+    "runtime_provider_evidence", "runtime_session_id", "claimed_runtime_provider",
+    # A30/A32: the exact artifact version and separate source times.
+    "artifact_version", "pull_closed_at", "issue_closed_at",
 }
 
 # C10/C03: the typed fields of a human review evidence record.
 SAFE_REVIEW_FIELDS = {"fact_kind", "artifact", "version", "actor", "source",
-                      "actor_kind", "independent"}
+                      "actor_kind", "independent", "decision", "declared_by"}
 
 _MAX_TEXT = 200
 _MAX_REASON = 500
@@ -365,24 +369,165 @@ async def event_time_snapshot(
         if slot is not None:
             snapshot.update({
                 "slot_display_name": slot.display_name, "configured_provider": slot.provider})
-    if item_id is not None and slot_id is not None:
-        # A20: the observed runtime harness is the provider of the owner
-        # slot's open, connected Mail session with a kernel-verified pane
-        # binding. Without such a session the runtime stays unknown.
-        from app.models.database import MailAgentSession
-        runtime = (await db.scalars(select(MailAgentSession.provider).where(
-            MailAgentSession.team_slot_id == slot_id,
-            MailAgentSession.closed_at.is_(None),
-            MailAgentSession.mailbox_status == "connected",
-            MailAgentSession.bound_pane_pid.is_not(None),
-            MailAgentSession.bound_pane_proc_start.is_not(None),
-        ).order_by(MailAgentSession.id.desc()).limit(1))).first()
-        snapshot["observed_runtime_provider"] = runtime
+    if slot_id is not None:
+        # A20: the observed runtime harness comes only from the native
+        # process of the event-time slot's current authenticated MCP
+        # generation (the item owner, or the team Leader for team and scope
+        # facts). A registered provider is a claim and only corroborates it.
+        observation = await observe_runtime_provider(db, slot_id)
+        snapshot["observed_runtime_provider"] = observation.provider
+        snapshot["runtime_provider_evidence"] = observation.evidence
+        snapshot["runtime_session_id"] = observation.session_id
+        snapshot["claimed_runtime_provider"] = observation.claimed_provider
     if snapshot:
         snapshot.setdefault("observed_runtime_provider", None)
         snapshot["event_time_labels"] = sorted(
-            key for key in snapshot if key != "observed_runtime_provider")
+            key for key in snapshot if key not in _RUNTIME_OBSERVATION_FIELDS)
     return snapshot
+
+
+# A20: the runtime observation fields. They are observations, not labels.
+_RUNTIME_OBSERVATION_FIELDS = {
+    "observed_runtime_provider", "runtime_provider_evidence", "runtime_session_id",
+    "claimed_runtime_provider",
+}
+
+# A20: the supported agent executables, from the process matchers of the
+# provider modules in app.services.providers. Only the executable name is
+# read. Server and helper executables (codex-exec-server, codex-cli,
+# copilot-language-server, opencode-server) are not in the table.
+_AGENT_EXECUTABLES = {
+    "claude": "claude-code",
+    "codex": "codex-cli",
+    "copilot": "copilot-cli",
+    "opencode": "opencode-cli",
+}
+# The pi-cli matcher accepts a case-sensitive "pi" executable, or node with
+# this bundle as its first argument.
+_PI_NODE_BUNDLE = "/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+
+
+def classify_agent_argv(argv: list[str] | None) -> str | None:
+    """A20: the provider proven by one native argument vector, or None.
+
+    Argument boundaries are kept. Only argv[0] is classified, plus argv[1]
+    for the pi node bundle form. Other arguments are never searched, so an
+    unrelated argument named like a provider proves nothing. A wrapper form
+    that the provider modules prove only through child processes stays
+    unsupported.
+    """
+    if not argv or not isinstance(argv[0], str) or not argv[0]:
+        return None
+    name = argv[0].rsplit("/", 1)[-1]
+    if name == "pi":
+        return "pi-cli"
+    provider = _AGENT_EXECUTABLES.get(name.lower())
+    if provider is not None:
+        return provider
+    if (name.lower() == "node" and len(argv) > 1 and isinstance(argv[1], str)
+            and argv[1].endswith(_PI_NODE_BUNDLE)):
+        return "pi-cli"
+    return None
+
+
+class RuntimeObservation:
+    """A20: one native runtime observation; no argument value is kept."""
+
+    __slots__ = ("provider", "evidence", "session_id", "claimed_provider")
+
+    def __init__(self, provider: str | None, evidence: str,
+                 session_id: int | None = None, claimed_provider: str | None = None):
+        self.provider = provider
+        self.evidence = evidence
+        self.session_id = session_id
+        self.claimed_provider = claimed_provider
+
+
+async def _current_generation(db: AsyncSession, slot_id: int) -> tuple[str, Any]:
+    """A20: the slot's current authenticated MCP generation.
+
+    No generation counter exists, so the generation is the one session row
+    that is an open, connected, token-holding MCP session of the slot's
+    current member, bound to the slot's current pane binding on a pane that
+    is not retired. Observed-only, hook, old and unbound sessions never
+    qualify. Returns ("ok", row) or (reason, None).
+    """
+    from app.models.database import (
+        AgentPaneBinding, MailAgentSession, MailPaneLifecycle, MailTeamMember)
+
+    members = (await db.scalars(select(MailTeamMember.id).where(
+        MailTeamMember.team_slot_id == slot_id,
+        MailTeamMember.participant_kind == "team_slot",
+    ).execution_options(populate_existing=True))).all()
+    if not members:
+        return "absent", None
+    if len(members) > 1:
+        return "ambiguous", None
+    binding = (await db.execute(select(
+        AgentPaneBinding.id, AgentPaneBinding.pane_pid, AgentPaneBinding.pane_proc_start,
+    ).where(AgentPaneBinding.slot_id == slot_id).order_by(
+        AgentPaneBinding.id.desc()).limit(1))).first()
+    if binding is None:
+        return "absent", None
+    sessions = (await db.execute(select(
+        MailAgentSession.id, MailAgentSession.session_key, MailAgentSession.member_id,
+        MailAgentSession.provider, MailAgentSession.bound_pane_pid,
+        MailAgentSession.bound_pane_proc_start,
+    ).where(
+        MailAgentSession.member_id == members[0],
+        MailAgentSession.team_slot_id == slot_id,
+        MailAgentSession.source == "mcp",
+        MailAgentSession.closed_at.is_(None),
+        MailAgentSession.mailbox_status == "connected",
+        MailAgentSession.capability_token_hash.is_not(None),
+        MailAgentSession.bound_pane_pid == binding.pane_pid,
+        MailAgentSession.bound_pane_proc_start == binding.pane_proc_start,
+    ))).all()
+    if not sessions:
+        return "absent", None
+    if len(sessions) > 1:
+        return "ambiguous", None
+    retired = (await db.execute(select(MailPaneLifecycle.retired_at).where(
+        MailPaneLifecycle.pane_pid == binding.pane_pid,
+        MailPaneLifecycle.pane_proc_start == binding.pane_proc_start,
+    ))).first()
+    if retired is None or retired.retired_at is not None:
+        return "absent", None
+    return "ok", (sessions[0], binding.id)
+
+
+async def observe_runtime_provider(db: AsyncSession, slot_id: int) -> RuntimeObservation:
+    """A20: observe the runtime provider of a slot from native identity.
+
+    The generation is captured, the bound pane's argument vector is read
+    with lifetime checks before and after the read, and the generation,
+    member, binding and pane lifetime are rechecked afterward. Absent,
+    ambiguous, unavailable, unsupported or changed evidence stays unknown.
+    """
+    import asyncio
+
+    from app.utils import peer_process
+
+    reason, current = await _current_generation(db, slot_id)
+    if current is None:
+        return RuntimeObservation(None, reason)
+    session, binding_id = current
+    pid, start = session.bound_pane_pid, session.bound_pane_proc_start
+    argv = await asyncio.to_thread(peer_process.pane_agent_argv, pid, start)
+    if argv is None:
+        return RuntimeObservation(None, "unavailable", session.id, session.provider)
+    provider = classify_agent_argv(argv)
+    del argv
+    reason, after = await _current_generation(db, slot_id)
+    alive = await asyncio.to_thread(peer_process.pane_is_alive_strict, pid, start)
+    if (after is None or after[1] != binding_id or alive is not True
+            or (after[0].id, after[0].session_key, after[0].member_id,
+                after[0].bound_pane_pid, after[0].bound_pane_proc_start)
+            != (session.id, session.session_key, session.member_id, pid, start)):
+        return RuntimeObservation(None, "lifetime_changed", session.id, session.provider)
+    if provider is None:
+        return RuntimeObservation(None, "unsupported_form", session.id, session.provider)
+    return RuntimeObservation(provider, "native_argv", session.id, session.provider)
 
 
 async def item_attempt(db: AsyncSession, item: Any) -> tuple[str, int | None, str]:
@@ -417,17 +562,23 @@ def _parse_time(value: Any) -> datetime | None:
 
 
 async def record_merged_delivery(
-    db: AsyncSession, item: Any, pull: dict | None, *, source: str
+    db: AsyncSession, item: Any, pull: dict | None, *, source: str,
+    attempt_identity: tuple[str, int | None, str] | None = None,
 ) -> FactoryAuditEvent:
     """R02: the sourced delivery fact of a merged pull request.
 
     Called by the verification merge paths in the merge transaction. The
     PR's own merge time is the fact time; an absent time stays unknown.
-    Independent human review is not inferred from a merge.
+    Independent human review is not inferred from a merge. A34: a later
+    reconciliation passes the original ``attempt_identity`` (attempt key,
+    revision ID, launch key) so that the fact stays on its original attempt.
     """
     from app.models.database import TeamGithubScope
 
-    attempt, revision_id, launch = await item_attempt(db, item)
+    if attempt_identity is not None:
+        attempt, revision_id, launch = attempt_identity
+    else:
+        attempt, revision_id, launch = await item_attempt(db, item)
     pull = pull if isinstance(pull, dict) else {}
     pr_number = pull.get("number") or item.pr_number
     scope = await db.get(TeamGithubScope, item.scope_id)
@@ -437,6 +588,11 @@ async def record_merged_delivery(
     if pr_number:
         repository = f"{scope.repo_owner}/{scope.repo_name}" if scope is not None else "unknown"
         artifact = f"{repository}/pull/{pr_number}"
+    # A32: the exact delivered version is the verified pull head; an absent
+    # head stays unknown and is never taken from mutable item state.
+    head = pull.get("head")
+    version = head.get("sha") if isinstance(head, dict) else None
+    snapshot = {"artifact_version": version} if isinstance(version, str) and version else None
     return await record_delivery_fact(
         db, item_id=item.id, revision_id=revision_id, scope_id=item.scope_id,
         delivery_outcome="delivered",
@@ -445,7 +601,7 @@ async def record_merged_delivery(
         fact_time=_parse_time(pull.get("merged_at")),
         artifact=artifact,
         actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
-        attempt=attempt, launch_attempt=launch, source=source)
+        attempt=attempt, launch_attempt=launch, snapshot=snapshot, source=source)
 
 
 async def record_revision_outcome(
@@ -861,7 +1017,155 @@ def validated_review_evidence(evidence: dict | None) -> bool:
         return False
     if not evidence.get("source"):
         return False
+    # A32: a declared rejection is stored but never counts. Older evidence
+    # without a decision field is an acceptance record by its fact kind.
+    if evidence.get("decision", "accepted") != "accepted":
+        return False
     return True
+
+
+class ReviewDeclarationRefused(ValueError):
+    """A32: a declaration does not bind to a recorded attempt and version."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+_ATTEMPT_KEY = re.compile(r"^item:(\d+):launch:(\d+|None):revision:(\d+|None)$")
+_ARTIFACT = re.compile(r"^([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/pull/(\d+)$")
+
+
+def _optional_int(value: str) -> int | None:
+    return None if value == "None" else int(value)
+
+
+async def record_review_acceptance(
+    db: AsyncSession, declaration: Any, *, recording_actor: dict[str, Any]
+) -> tuple[FactoryAuditEvent, bool, bool]:
+    """A32: record one protected acceptance declaration in the caller's transaction.
+
+    The declaration binds to an immutable attempt of the item, to the pull
+    request that attempt recorded, and to a head version that the server
+    recorded for that attempt. A changed or unrelated version is refused.
+    The recording actor (the operator credential) stays separate from the
+    attributed reviewer; human identity and independence are recorded only
+    as declared by the trusted source, never derived from a credential or
+    account type. For a design item, an accepted, independent, human
+    declaration also establishes delivery of that exact version, before or
+    after a merge. It never changes work state, approvals or merges.
+
+    Returns (review event, counted, delivery established). Raises
+    ReviewDeclarationRefused or ReplayConflictError.
+    """
+    from app.models.database import GithubWorkItem, TeamGithubScope
+
+    item = await db.get(GithubWorkItem, declaration.work_item_id)
+    if item is None:
+        raise ReviewDeclarationRefused("work_item_not_found")
+    attempt_match = _ATTEMPT_KEY.match(declaration.attempt)
+    if attempt_match is None or int(attempt_match.group(1)) != item.id:
+        raise ReviewDeclarationRefused("attempt_unrelated")
+    artifact_match = _ARTIFACT.match(declaration.artifact)
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if (artifact_match is None or scope is None
+            or (artifact_match.group(1), artifact_match.group(2))
+            != (scope.repo_owner, scope.repo_name)):
+        raise ReviewDeclarationRefused("artifact_unrelated")
+    pr_number = int(artifact_match.group(3))
+    launch_id = _optional_int(attempt_match.group(2))
+    revision_id = _optional_int(attempt_match.group(3))
+
+    def _bindings() -> tuple[bool, bool, str | None]:
+        current = current_attempt == declaration.attempt
+        return (current, current and item.pr_number == pr_number,
+                item.verification_head_sha if current else None)
+
+    current_attempt, _, _ = await item_attempt(db, item)
+    facts = (await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.item_id == item.id))).all()
+    attempt_facts = [
+        fact for fact in facts
+        if isinstance(fact.context_snapshot, dict)
+        and fact.context_snapshot.get("attempt") == declaration.attempt]
+    is_current, current_artifact, current_head = _bindings()
+    if not is_current and not attempt_facts:
+        raise ReviewDeclarationRefused("attempt_unrelated")
+    artifact_facts = [
+        fact for fact in attempt_facts
+        if fact.context_snapshot.get("artifact") == declaration.artifact]
+    if not current_artifact and not artifact_facts:
+        raise ReviewDeclarationRefused("artifact_unrelated")
+    recorded = {fact.context_snapshot.get("artifact_version") for fact in artifact_facts}
+    if declaration.version not in recorded and current_head != declaration.version:
+        if current_artifact and current_head is not None:
+            raise ReviewDeclarationRefused("version_changed")
+        raise ReviewDeclarationRefused("version_unrelated")
+
+    # Recheck the current binding at write time when it was used.
+    if declaration.version not in recorded:
+        refreshed = (await db.scalars(select(GithubWorkItem).where(
+            GithubWorkItem.id == item.id).execution_options(populate_existing=True))).first()
+        if refreshed is None:
+            raise ReviewDeclarationRefused("version_changed")
+        item = refreshed
+        current_attempt, _, _ = await item_attempt(db, item)
+        _, current_artifact, current_head = _bindings()
+        if not current_artifact or current_head != declaration.version:
+            raise ReviewDeclarationRefused("version_changed")
+
+    occurred_at = declaration.occurred_at
+    if occurred_at.tzinfo is not None:
+        occurred_at = occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
+    fact_source = sanitize_text(f"{declaration.source_kind}:{declaration.source_ref}")
+    evidence = project_review_evidence({
+        "fact_kind": "human_review_acceptance",
+        "artifact": declaration.artifact,
+        "version": declaration.version,
+        "actor": declaration.reviewer,
+        "actor_kind": declaration.reviewer_kind,
+        "independent": declaration.independent,
+        "decision": declaration.decision,
+        "source": fact_source,
+        "declared_by": recording_actor.get("actor_reference"),
+    })
+    operation_id = f"review_acceptance:{declaration.declaration_id}"
+    snapshot = {"attempt": declaration.attempt, "artifact": declaration.artifact,
+                "artifact_version": declaration.version,
+                "launch_attempt": launch_attempt_key(item.id, launch_id)}
+    existing = (await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.operation_id == operation_id,
+        FactoryAuditEvent.event_kind == "review_acceptance_declared",
+    ).limit(1))).first()
+    if existing is not None:
+        same = (existing.item_id == item.id
+                and existing.human_review_evidence == evidence
+                and existing.fact_time == occurred_at
+                and (existing.context_snapshot or {}).get("attempt") == declaration.attempt)
+        if not same:
+            raise ReplayConflictError("replay conflict for review_acceptance_declared")
+        counted = validated_review_evidence(existing.human_review_evidence)
+        return existing, counted, counted and item.issue_type == "design"
+    event = await record_event(
+        db, event_kind="review_acceptance_declared", source="operator_declaration",
+        occurred_at=datetime.utcnow(), actor=recording_actor, record_kind="declared",
+        fact_source=fact_source, fact_time=occurred_at, item_id=item.id,
+        revision_id=revision_id, context_snapshot=snapshot, action_outcome="applied",
+        operation_id=operation_id, correlation_id=operation_id,
+        sanitized_reason=f"review declaration: {declaration.decision}",
+        human_review_evidence=evidence)
+    counted = validated_review_evidence(evidence)
+    delivered = counted and item.issue_type == "design"
+    if delivered:
+        await record_delivery_fact(
+            db, item_id=item.id, revision_id=revision_id, scope_id=item.scope_id,
+            delivery_outcome="delivered", completion_kind="design_artifact_accepted",
+            fact_source=fact_source, fact_time=occurred_at, artifact=declaration.artifact,
+            actor=recording_actor, attempt=declaration.attempt,
+            launch_attempt=launch_attempt_key(item.id, launch_id),
+            snapshot={"artifact_version": declaration.version},
+            source="operator_declaration")
+    return event, counted, delivered
 
 
 async def record_delivery_fact(

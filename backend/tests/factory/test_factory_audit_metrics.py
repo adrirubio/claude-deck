@@ -529,11 +529,11 @@ async def test_c03_absent_review_evidence_never_counts(db):
     await audit.record_delivery_fact(
         db, item_id=31, delivery_outcome="delivered", completion_kind="merged_design",
         fact_source="github_pull_request_merged", fact_time=_now(), artifact="pr:31",
-        attempt="item:31:launch:None:revision:None")
+        attempt="item:31:launch:None:revision:None", snapshot={"artifact_version": "a" * 40})
     await audit.record_delivery_fact(
         db, item_id=32, delivery_outcome="delivered", completion_kind="merged_code",
         fact_source="github_pull_request_merged", fact_time=_now(), artifact="pr:32",
-        attempt="item:32:launch:None:revision:None")
+        attempt="item:32:launch:None:revision:None", snapshot={"artifact_version": "c" * 40})
     await db.commit()
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
@@ -541,7 +541,7 @@ async def test_c03_absent_review_evidence_never_counts(db):
     assert (review.value, review.sample_count, review.unknown_count) == (0.0, 1, 1)
 
     def evidence(**overrides):
-        base = {"fact_kind": "human_review_acceptance", "artifact": "pr:31", "version": "v2",
+        base = {"fact_kind": "human_review_acceptance", "artifact": "pr:31", "version": "a" * 40,
                 "actor": "reviewer-external", "actor_kind": "human", "independent": True,
                 "source": "review-record"}
         return {**base, **overrides}
@@ -552,11 +552,19 @@ async def test_c03_absent_review_evidence_never_counts(db):
         evidence(actor="member:22"),                      # an agent member
         evidence(artifact="pr:99"),                       # another artifact
         evidence(artifact="pr:32"),                       # a code delivery
+        evidence(version="b" * 40),                       # A32: another version
+        evidence(decision="rejected"),                    # A32: a declared rejection
     ]
     for payload in rejected + [evidence(), evidence()]:  # valid evidence twice
         await audit.record_event(
             db, event_kind="design_review", source="test", occurred_at=_now(),
-            actor=launch_actor, action_outcome="applied", human_review_evidence=payload)
+            actor=launch_actor, action_outcome="applied", human_review_evidence=payload,
+            item_id=31, context_snapshot={"attempt": "item:31:launch:None:revision:None"})
+    # A32: valid evidence bound to another attempt of the same item never counts.
+    await audit.record_event(
+        db, event_kind="design_review", source="test", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied", human_review_evidence=evidence(),
+        item_id=31, context_snapshot={"attempt": "item:31:launch:7:revision:None"})
     await db.commit()
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
@@ -3120,11 +3128,39 @@ async def _install_marker(maker) -> None:
         await db.commit()
 
 
+async def _public_metrics(client, start: datetime, end: datetime) -> dict:
+    """F01: the public metrics response, through the real read route."""
+    response = await client.get("/api/v1/factory/metrics", params={
+        "window_start": start.isoformat(), "window_end": end.isoformat()})
+    assert response.status_code == 200, response.text
+    return {sample["name"]: sample for sample in response.json()["metrics"]}
+
+
+async def _outcome_rows(store) -> list[dict]:
+    """F01: the retained scope, attempt, version and provenance of outcome facts."""
+    async with store() as db:
+        rows = (await db.execute(text(
+            "SELECT scope_id, item_id, scope_context_key, item_context_key, delivery_outcome,"
+            " completion_kind, fact_source, fact_time, source,"
+            " json_extract(context_snapshot, '$.attempt') AS attempt,"
+            " json_extract(context_snapshot, '$.launch_attempt') AS launch_attempt,"
+            " json_extract(context_snapshot, '$.artifact') AS artifact,"
+            " json_extract(context_snapshot, '$.artifact_version') AS artifact_version"
+            " FROM factory_audit_events WHERE delivery_outcome IS NOT NULL ORDER BY id"
+        ))).mappings().all()
+    return [dict(row) for row in rows]
+
+
 @pytest.mark.parametrize(("issue_type", "kind"), [("code", "merged_code"), ("design", "merged_design")])
-async def test_r02_real_merge_consumer_records_sourced_delivery(store, monkeypatch, issue_type, kind):
-    """R02 (B4 F02/F09, Astra F01): the real verification merge path records a
-    delivered fact for the attempt, with the PR merge time as the dedicated
-    fact time and the merge as the dedicated fact source."""
+async def test_r02_real_merge_consumer_records_sourced_delivery(
+    store, client, monkeypatch, issue_type, kind
+):
+    """R02/F01 cases 1-2 (B4 F02/F09, Astra F01, Root 3643): the real
+    verification merge path records a delivered fact for the attempt, with
+    the PR merge time as the fact time, the merge as the fact source and the
+    verified head as the exact version. The public metrics response shows
+    one delivered attempt; design review coverage stays separate and
+    unknown, because a merge is never review evidence."""
     from app.models.database import GithubWorkItem, TeamGithubScope
     from app.services.github_verification_service import github_verification_service
 
@@ -3163,18 +3199,36 @@ async def test_r02_real_merge_consumer_records_sourced_delivery(store, monkeypat
     # Independent human review is never inferred from a merge.
     review = by_name["independently_human_reviewed_design"]
     assert (review.value, review.unknown_count) == ((0.0, 1) if issue_type == "design" else (0.0, 0))
+    # F01: retained scope, attempt, version and provenance.
+    (fact,) = await _outcome_rows(store)
+    assert (fact["scope_id"], fact["item_id"]) == (5, 120)
+    assert fact["scope_context_key"] and fact["item_context_key"]
+    assert fact["attempt"].startswith("item:120:launch:")
+    assert fact["launch_attempt"].startswith("item:120:launch:")
+    assert fact["artifact_version"] == "a" * 40
+    # F01: the public metrics response.
+    public = await _public_metrics(client, _now() - timedelta(days=1), _now() + timedelta(hours=1))
+    assert (public["delivered_in_window"]["value"], public["delivered_in_window"]["sample_count"]) == (1.0, 1)
+    reviewed = public["independently_human_reviewed_design"]
+    assert (reviewed["value"], reviewed["sample_count"], reviewed["unknown_count"]) == (
+        (0.0, 1, 1) if issue_type == "design" else (0.0, 0, 0))
 
 
 @pytest.mark.parametrize(("state_reason", "expected"), [
     ("not_planned", "closed_without_delivery"), ("duplicate", "closed_without_delivery"),
     ("completed", "unknown")])
-async def test_r02_watcher_records_sourced_terminal_non_delivery(store, monkeypatch, state_reason, expected):
-    """R02: GitHub's not-planned or duplicate closure, with no PR, is sourced
-    terminal non-delivery; an ordinary closure stays unknown."""
+async def test_r02_watcher_records_sourced_terminal_non_delivery(
+    store, client, monkeypatch, state_reason, expected
+):
+    """R02/F01 case 3 (Root 3643): GitHub's confirmed not-planned or
+    duplicate closure, with no PR, is sourced terminal non-delivery through
+    the real watcher; an ordinary closure stays unknown. The public metrics
+    response reports the matching terminal outcome and no delivery."""
     from app.models.database import TeamGithubScope
     from app.services.github_dispatch_service import github_dispatch_service
     from app.services.github_watcher_service import github_watcher_service
 
+    await _install_marker(store)
     await _seed_team(store)
     await _seed_work(store, item_id=121, status="escalated", escalation_reason="plan_blocked")
 
@@ -3197,20 +3251,94 @@ async def test_r02_watcher_records_sourced_terminal_non_delivery(store, monkeypa
             "SELECT delivery_outcome, fact_source, fact_time FROM factory_audit_events"
             " WHERE event_kind = 'delivery_evidence'"))).first()
     assert row[0] == expected
-    assert datetime.fromisoformat(str(row[2])) == datetime(2026, 10, 6, 11, 30)
     if expected == "closed_without_delivery":
+        # The issue closure is this fact, so its closure time is the fact time.
         assert row[1] == "github_issue_state_reason"
+        assert datetime.fromisoformat(str(row[2])) == datetime(2026, 10, 6, 11, 30)
+    else:
+        # A30: an ordinary closure proves no result; its result time stays unknown.
+        assert row[2] is None
+    (fact,) = await _outcome_rows(store)
+    assert (fact["scope_id"], fact["item_id"], fact["source"]) == (
+        5, 121, "github_watcher_service._reconcile_closed_issues")
+    assert fact["attempt"].startswith("item:121:launch:") and fact["item_context_key"]
+    public = await _public_metrics(client, datetime(2026, 10, 6), datetime.utcnow() + timedelta(hours=1))
+    assert public["delivered_in_window"]["value"] == 0.0
+    assert public["closed_without_delivery"]["value"] == (
+        1.0 if expected == "closed_without_delivery" else 0.0)
+    assert public["unknown_outcomes"]["value"] == (1.0 if expected == "unknown" else 0.0)
+
+
+_A30_HEAD_REF = "deck/slot-1/issue-130-a30"
+
+
+def _a30_pull(number: int, *, state: str = "closed", merged_at: str | None = None,
+              base: str = "main", repo: str = "matrix-owner/matrix-repo",
+              head_ref: str = _A30_HEAD_REF) -> dict:
+    """A GitHub pull representation at the client-method boundary."""
+    from app.config import settings
+
+    return {
+        "number": number, "state": state, "merged_at": merged_at, "merged": merged_at is not None,
+        "closed_at": "2026-10-06T11:35:00Z" if state == "closed" else None,
+        "head": {"ref": head_ref, "sha": "d" * 40, "repo": {"full_name": repo}},
+        "base": {"ref": base, "repo": {"full_name": repo}},
+        "user": {"login": settings.github_app_bot_login},
+    }
+
+
+class _A30Client:
+    """Fake client: fixed issue state and an attempt pull inventory."""
+
+    def __init__(self, pulls=None, *, error: bool = False, on_list=None):
+        self.pulls = pulls if pulls is not None else [_a30_pull(73)]
+        self.error = error
+        self.on_list = on_list
+        self.list_calls = 0
+
+    async def get_issues_by_number(self, owner, repo, numbers):
+        return {number: {"state": "closed", "state_reason": "completed",
+                         "closed_at": "2026-10-06T11:40:00Z", "labels": []}
+                for number in numbers}
+
+    async def list_pulls_for_head(self, owner, repo, *, head, base, state, token=None):
+        self.list_calls += 1
+        if self.on_list is not None:
+            await self.on_list()
+        if self.error:
+            raise RuntimeError("GitHub unavailable")
+        assert head == f"{owner}:{_A30_HEAD_REF}" and state == "all"
+        return list(self.pulls)
+
+
+def _a30_patch_reads(monkeypatch) -> None:
+    """Keep the scoped token and base read local; the inventory read is real."""
+    from app.services.github_approval_service import github_approval_service
+    from app.services.github_verification_service import github_verification_service
+
+    async def read_token(_scope):
+        return "scoped-read"
+
+    async def base_ref(_scope, _client, *, token, base_ref):
+        return "main"
+
+    monkeypatch.setattr(github_approval_service, "github_read_token", read_token)
+    monkeypatch.setattr(github_verification_service, "normalize_base_ref", base_ref)
 
 
 @pytest.mark.parametrize("case", [
-    "terminal", "pending_request", "live_revision", "retry_requested", "other_escalation"])
+    "terminal", "other_escalation", "pending_request", "live_revision", "retry_requested",
+    "merged_now", "reopened", "read_error", "empty_inventory", "wrong_base", "wrong_repo",
+    "pr_missing", "approval_during_read", "nonce_changed_during_read"])
 async def test_a30_closed_unmerged_terminal_consumer_keeps_continuation_guards(
-    store, monkeypatch, case
+    store, client, monkeypatch, case
 ):
-    """A30 (Root 3525): an escalated attempt whose PR verification proved
-    closed without merge, with its issue closed and no continuing attempt,
-    ends as sourced terminal non-delivery. A pending request, a live
-    revision, a requested retry or another escalation keeps it untouched."""
+    """A30/A34 (Root 3599): a cached escalation reason is not proof. Only fresh
+    scoped proof that every pull of the attempt is closed unmerged, with the
+    issue closed and no continuing attempt, ends the attempt as sourced
+    non-delivery with an unknown result time. A merged or reopened pull, a
+    read error, an empty inventory, an identity failure, a continuation, or
+    a change during the read records nothing and keeps all state."""
     from app.models.database import (
         GithubApprovalRequest, GithubAttemptScopeRevision, TeamGithubScope,
     )
@@ -3223,6 +3351,11 @@ async def test_a30_closed_unmerged_terminal_consumer_keeps_continuation_guards(
         store, item_id=130, status="escalated", pr_number=73,
         escalation_reason="plan_blocked" if case == "other_escalation" else "pr_closed_unmerged",
         retry_requested_at=_FIXED_LEASE if case == "retry_requested" else None)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE github_work_items SET dispatch_head_ref = :ref WHERE id = 130"),
+            {"ref": _A30_HEAD_REF})
+        await db.commit()
     async with store() as db:
         if case == "pending_request":
             db.add(GithubApprovalRequest(
@@ -3252,71 +3385,618 @@ async def test_a30_closed_unmerged_terminal_consumer_keeps_continuation_guards(
         return None
 
     monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+    _a30_patch_reads(monkeypatch)
 
-    class ClosedIssue:
-        async def get_issues_by_number(self, owner, repo, numbers):
-            return {number: {"state": "closed", "state_reason": "completed",
-                             "closed_at": "2026-10-06T11:40:00Z", "labels": []}
-                    for number in numbers}
+    async def add_pending_approval():
+        async with store() as other:
+            other.add(GithubApprovalRequest(
+                work_item_id=130, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                approval_round=4, owner_member_id=_OWNER["member"],
+                leader_member_id=_LEADER["member"], request_fingerprint="e" * 64,
+                status="pending"))
+            await other.commit()
 
+    async def change_nonce():
+        async with store() as other:
+            await other.execute(text(
+                "UPDATE github_work_items SET dispatch_nonce = 'changed-nonce' WHERE id = 130"))
+            await other.commit()
+
+    pulls = {
+        "merged_now": [_a30_pull(73, merged_at="2026-10-06T11:20:00Z")],
+        "reopened": [_a30_pull(73, state="open")],
+        "empty_inventory": [],
+        "wrong_base": [_a30_pull(73, base="release")],
+        "wrong_repo": [_a30_pull(73, repo="other-owner/matrix-repo")],
+        "pr_missing": [_a30_pull(74)],
+    }.get(case)
+    github = _A30Client(
+        pulls, error=case == "read_error",
+        on_list={"approval_during_read": add_pending_approval,
+                 "nonce_changed_during_read": change_nonce}.get(case))
     async with store() as db:
         scope = await db.get(TeamGithubScope, 5)
-        await github_watcher_service._reconcile_closed_issues(db, scope, ClosedIssue())
+        await github_watcher_service._reconcile_closed_issues(db, scope, github)
 
     facts = await _facts(store, event_kind="delivery_evidence")
     after = await _authority(store, 130)
-    if case != "terminal":
+    if case not in ("terminal", "other_escalation"):
         assert facts == []
-        assert after == before
+        if case in ("approval_during_read", "nonce_changed_during_read"):
+            assert after["item"]["dispatch_status"] == "escalated"
+        else:
+            assert after == before
         return
+    assert github.list_calls == 1
     async with store() as db:
         row = (await db.execute(text(
             "SELECT delivery_outcome, completion_kind, fact_source, fact_time,"
-            " json_extract(context_snapshot, '$.artifact') FROM factory_audit_events"
+            " json_extract(context_snapshot, '$.artifact'),"
+            " json_extract(context_snapshot, '$.pull_closed_at'),"
+            " json_extract(context_snapshot, '$.issue_closed_at') FROM factory_audit_events"
             " WHERE event_kind = 'delivery_evidence'"))).first()
     assert row[:3] == ("closed_without_delivery", "pr_closed_unmerged",
                        "github_pull_request_closed_unmerged")
-    assert datetime.fromisoformat(str(row[3])) == datetime(2026, 10, 6, 11, 40)
+    # The conjunction of current conditions has no reliable result time; the
+    # pull and issue closure times stay separate source times.
+    assert row[3] is None
     assert row[4] == "matrix-owner/matrix-repo/pull/73"
+    assert (row[5], row[6]) == ("2026-10-06T11:35:00Z", "2026-10-06T11:40:00Z")
     assert after["item"]["dispatch_status"] == "completed"
+    # F01 case 4: retained scope, attempt and provenance; public metrics.
+    (fact,) = await _outcome_rows(store)
+    assert (fact["scope_id"], fact["item_id"], fact["source"]) == (
+        5, 130, "github_watcher_service._reconcile_closed_issues")
+    assert fact["attempt"].startswith("item:130:launch:") and fact["item_context_key"]
+    public = await _public_metrics(client, datetime(2026, 10, 6), datetime.utcnow() + timedelta(hours=1))
+    assert (public["closed_without_delivery"]["value"], public["delivered_in_window"]["value"]) == (
+        1.0, 0.0)
 
 
-async def test_a20_real_caller_records_configured_and_bound_runtime_providers(store):
-    """A20 (Root 3525): the real lifecycle writer records the configured slot
-    harness and, separately, the runtime harness of the owner's bound live
-    session. Without a bound live session the runtime stays unknown."""
-    from app.models.database import GithubWorkItem
-    from app.services.github_dispatch_service import observe_work_lifecycle
+def _native_process(argv0: str, *args: str, executable: str = "/bin/sleep"):
+    """A synthetic native fixture: a real process whose argv[0] is argv0.
 
-    await _seed_team(store)
-    await _seed_work(store, item_id=131, status="pending")
+    It runs /bin/sleep (or a shell), so it claims no real model or provider
+    trial.
+    """
+    import subprocess
+
+    from app.utils import peer_process
+
+    process = subprocess.Popen([argv0, *(args or ("30",))], executable=executable)
+    for _ in range(100):
+        stat = peer_process.read_proc_stat(process.pid)
+        if stat is not None:
+            break
+    return process, stat[1]
+
+
+async def _bind_native(store, who: dict, pid: int, start: str, *, claimed: str = "claude-code",
+                       source: str = "mcp", token: bool = True) -> None:
+    """Make ``who``'s Mail session the slot's current authenticated MCP generation."""
     async with store() as db:
         await db.execute(text(
-            "UPDATE agent_team_slots SET provider = 'claude-code' WHERE id = :id"),
-            {"id": _OWNER["slot"]})
-        await db.commit()
-
-    async def record(to_status: str) -> None:
-        async with store() as db:
-            item = await db.get(GithubWorkItem, 131)
-            await observe_work_lifecycle(db, item=item, from_status=None, to_status=to_status,
-                                         source="github_dispatch_service.launch")
-            await db.commit()
-
-    await record("dispatched")
-    async with store() as db:
+            "UPDATE mail_team_members SET participant_kind = 'team_slot', team_slot_id = :slot"
+            " WHERE id = :member"), {"slot": who["slot"], "member": who["member"]})
         await db.execute(text(
-            "UPDATE mail_agent_sessions SET closed_at = CURRENT_TIMESTAMP WHERE id = :id"),
-            {"id": _OWNER["session"]})
+            "UPDATE mail_agent_sessions SET source = :source, closed_at = NULL,"
+            " mailbox_status = 'connected', capability_token_hash = :token,"
+            " bound_pane_pid = :pid, bound_pane_proc_start = :start, team_slot_id = :slot,"
+            " member_id = :member, provider = :claimed WHERE id = :session"),
+            {"source": source, "token": "h" * 64 if token else None, "pid": pid,
+             "start": start, "slot": who["slot"], "member": who["member"],
+             "claimed": claimed, "session": who["session"]})
+        await db.execute(text(
+            "INSERT INTO agent_pane_bindings (pane_pid, pane_proc_start, slot_id, preset_id,"
+            " created_at) VALUES (:pid, :start, :slot, 7, CURRENT_TIMESTAMP)"),
+            {"pid": pid, "start": start, "slot": who["slot"]})
+        await db.execute(text(
+            "INSERT OR IGNORE INTO mail_pane_lifecycles (pane_pid, pane_proc_start, retired_at)"
+            " VALUES (:pid, :start, NULL)"), {"pid": pid, "start": start})
+        await db.execute(text(
+            "UPDATE agent_team_slots SET provider = 'claude-code' WHERE id = :slot"),
+            {"slot": who["slot"]})
         await db.commit()
-    await record("failed")
 
+
+async def _runtime_rows(store, event_kind: str) -> list[tuple]:
     async with store() as db:
         rows = (await db.execute(text(
             "SELECT json_extract(context_snapshot, '$.configured_provider'),"
-            " json_extract(context_snapshot, '$.observed_runtime_provider')"
-            " FROM factory_audit_events WHERE event_kind = 'work_lifecycle' ORDER BY id"))).fetchall()
-    assert [tuple(row) for row in rows] == [("claude-code", "codex-cli"), ("claude-code", None)]
+            " json_extract(context_snapshot, '$.observed_runtime_provider'),"
+            " json_extract(context_snapshot, '$.runtime_provider_evidence'),"
+            " json_extract(context_snapshot, '$.claimed_runtime_provider')"
+            " FROM factory_audit_events WHERE event_kind = :kind ORDER BY id"),
+            {"kind": event_kind})).fetchall()
+    return [tuple(row) for row in rows]
+
+
+async def test_a20_real_consumers_record_native_runtime_apart_from_configuration(store, client):
+    """A20 (Root 3599): real policy (Leader slot), dispatch and workspace
+    consumers record the configured slot provider and, separately, the
+    provider proven by the native process of the slot's current
+    authenticated MCP generation. The registered provider is only a claim.
+    Renaming or reassigning afterward leaves the stored snapshots unchanged.
+    The native processes are synthetic fixtures; no model trial is claimed."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+    from app.services.github_workspace_service import github_workspace_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=131, status="pending")
+    await _seed_work(store, item_id=132, status="merged", workspace_id=133,
+                     lease_token="synthetic-lease-132")
+    owner_process, owner_start = _native_process("codex")
+    leader_process, leader_start = _native_process("codex")
+    try:
+        await _bind_native(store, _OWNER, owner_process.pid, owner_start)
+        await _bind_native(store, _LEADER, leader_process.pid, leader_start)
+
+        # Policy: the real preset route records a team fact on the Leader slot.
+        response = await client.patch(
+            "/api/v1/agent-teams/presets/7", headers=_OPERATOR_HEADERS,
+            json={"autonomy_enabled": True})
+        assert response.status_code == 200
+        # Dispatch: the real lifecycle writer.
+        async with store() as db:
+            item = await db.get(GithubWorkItem, 131)
+            await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
+                                         source="github_dispatch_service.launch")
+            await db.commit()
+        # Workspace: the real release writer.
+        async with store() as db:
+            assert await github_workspace_service.release(db, 132) is True
+
+        expected = ("claude-code", "codex-cli", "native_argv", "claude-code")
+        assert (await _runtime_rows(store, "policy_change"))[-1] == expected
+        assert (await _runtime_rows(store, "work_lifecycle"))[-1] == expected
+        assert (await _runtime_rows(store, "workspace_release"))[-1] == expected
+
+        # Rename and reassign afterward: the stored snapshots never change.
+        async with store() as db:
+            await db.execute(text(
+                "UPDATE agent_team_slots SET provider = 'pi-cli', display_name = 'Renamed'"
+                " WHERE id = :slot"), {"slot": _OWNER["slot"]})
+            await db.execute(text(
+                "UPDATE mail_agent_sessions SET closed_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                {"id": _OWNER["session"]})
+            await db.commit()
+        assert (await _runtime_rows(store, "work_lifecycle"))[-1] == expected
+    finally:
+        for process in (owner_process, leader_process):
+            process.kill()
+            process.wait()
+
+
+@pytest.mark.parametrize("case", [
+    "absent_closed", "observed_only", "no_token", "unbound_binding", "ambiguous_sessions",
+    "changed_lifetime", "lifetime_changed_after_read", "unrelated_argument",
+    "helper_executable"])
+async def test_a20_runtime_stays_unknown_without_current_native_proof(store, monkeypatch, case):
+    """A20 (Root 3599): an old, observed-only, unauthenticated, unbound or
+    ambiguous session, a changed process lifetime, a change after the native
+    read, an unrelated argument or a helper executable proves nothing; the
+    runtime stays unknown with its evidence label."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+    from app.utils import peer_process
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=134, status="pending")
+    if case == "unrelated_argument":
+        # A shell whose later argument is named like a provider.
+        process, start = _native_process(
+            "sh", "-c", "sleep 30; :", "claude", executable="/bin/sh")
+    else:
+        process, start = _native_process(
+            "codex-exec-server" if case == "helper_executable" else "codex")
+    try:
+        await _bind_native(
+            store, _OWNER, process.pid,
+            "1" if case == "changed_lifetime" else start,
+            source="observed" if case == "observed_only" else "mcp",
+            token=case != "no_token")
+        async with store() as db:
+            if case == "absent_closed":
+                await db.execute(text(
+                    "UPDATE mail_agent_sessions SET closed_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                    {"id": _OWNER["session"]})
+            if case == "unbound_binding":
+                # A newer launch binding for the slot; the session is old.
+                await db.execute(text(
+                    "INSERT INTO agent_pane_bindings (pane_pid, pane_proc_start, slot_id,"
+                    " preset_id, created_at) VALUES (1, '1', :slot, 7, CURRENT_TIMESTAMP)"),
+                    {"slot": _OWNER["slot"]})
+            if case == "ambiguous_sessions":
+                await db.execute(text(
+                    "INSERT INTO mail_agent_sessions (member_id, provider, source, session_key,"
+                    " team_slot_id, capability_token_hash, bound_pane_pid, bound_pane_proc_start,"
+                    " wake_enabled, mailbox_status, last_seen_at, created_at) VALUES"
+                    " (:member, 'codex-cli', 'mcp', 'mcp:a20-second', :slot, :token, :pid, :start,"
+                    " 0, 'connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+                    {"member": _OWNER["member"], "slot": _OWNER["slot"], "token": "h" * 64,
+                     "pid": process.pid, "start": start})
+            await db.commit()
+        if case == "lifetime_changed_after_read":
+            # The process lifetime check after the native read fails, as for
+            # a pane process that ended or was replaced during the read.
+            original_alive = peer_process.pane_is_alive_strict
+            monkeypatch.setattr(peer_process, "pane_is_alive_strict",
+                                lambda pid, proc_start: False if pid == process.pid
+                                else original_alive(pid, proc_start))
+        async with store() as db:
+            item = await db.get(GithubWorkItem, 134)
+            await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
+                                         source="github_dispatch_service.launch")
+            await db.commit()
+    finally:
+        process.kill()
+        process.wait()
+
+    expected = {
+        "absent_closed": "absent", "observed_only": "absent", "no_token": "absent",
+        "unbound_binding": "absent", "ambiguous_sessions": "ambiguous",
+        "changed_lifetime": "unavailable", "lifetime_changed_after_read": "lifetime_changed",
+        "unrelated_argument": "unsupported_form", "helper_executable": "unsupported_form",
+    }[case]
+    row = (await _runtime_rows(store, "work_lifecycle"))[-1]
+    assert row[:3] == ("claude-code", None, expected)
+
+
+_A32_HEAD = "d" * 40
+
+
+async def _a32_item(store, item_id: int, *, issue_type: str = "design",
+                    head: str | None = _A32_HEAD) -> str:
+    """Seed an item at a verified PR head; return its current attempt key."""
+    from app.models.database import GithubWorkItem
+    from app.services import factory_audit_service as _audit
+
+    await _seed_work(store, item_id=item_id, status="awaiting_human_review", pr_number=73)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE github_work_items SET issue_type = :kind, verification_head_sha = :head"
+            " WHERE id = :id"), {"kind": issue_type, "head": head, "id": item_id})
+        await db.commit()
+    async with store() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        attempt, _revision, _launch = await _audit.item_attempt(db, item)
+    return attempt
+
+
+def _a32_body(item_id: int, current_attempt: str, /, **overrides) -> dict:
+    body = {
+        "declaration_id": f"synthetic-decl-{item_id}", "work_item_id": item_id,
+        "attempt": current_attempt, "artifact": "matrix-owner/matrix-repo/pull/73",
+        "version": _A32_HEAD, "reviewer": "synthetic-external-reviewer",
+        "reviewer_kind": "human", "independent": True, "decision": "accepted",
+        "occurred_at": "2026-10-06T10:00:00+00:00", "source_kind": "operator_attested",
+        "source_ref": "synthetic-review-record-1",
+    }
+    body.update(overrides)
+    return body
+
+
+async def _review_rows(store) -> list[dict]:
+    async with store() as db:
+        rows = (await db.execute(text(
+            "SELECT id, actor_kind, actor_reference, action_outcome, record_kind, fact_time,"
+            " json_extract(human_review_evidence, '$.actor') AS reviewer,"
+            " json_extract(human_review_evidence, '$.declared_by') AS declared_by"
+            " FROM factory_audit_events WHERE human_review_evidence IS NOT NULL ORDER BY id"
+        ))).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def _metric(window, name):
+    return {sample.name: sample for sample in window.metrics}[name]
+
+
+async def test_a32_declaration_before_merge_establishes_exact_design_delivery(store, client):
+    """A32 (Root 3599): a trusted, independent, exact-version acceptance of a
+    design PR records review evidence and establishes delivery before any
+    merge. The recording actor stays separate from the declared reviewer.
+    A later merge of the same version adds no second delivery or review.
+    Exact replay returns the record; a changed body conflicts. No work
+    state, approval or counter changes. The declaration is synthetic; no
+    human trial is claimed."""
+    from app.models.database import GithubWorkItem
+    from app.services import factory_audit_service as _audit
+    from app.services import factory_metrics_service as metrics
+
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 140)
+    before = await _authority(store, 140)
+
+    created = await client.post("/api/v1/factory/review-acceptances",
+                                headers=_OPERATOR_HEADERS, json=_a32_body(140, attempt))
+    assert created.status_code == 201, created.text
+    assert (created.json()["counted"], created.json()["delivery_established"]) == (True, True)
+
+    rows = await _review_rows(store)
+    assert len(rows) == 1
+    assert (rows[0]["actor_kind"], rows[0]["actor_reference"], rows[0]["record_kind"]) == (
+        "operator", "shared-operator-credential", "declared")
+    assert (rows[0]["reviewer"], rows[0]["declared_by"]) == (
+        "synthetic-external-reviewer", "shared-operator-credential")
+    assert datetime.fromisoformat(str(rows[0]["fact_time"])) == datetime(2026, 10, 6, 10, 0)
+    async with store() as db:
+        delivery = (await db.execute(text(
+            "SELECT delivery_outcome, completion_kind, json_extract(context_snapshot, '$.attempt'),"
+            " json_extract(context_snapshot, '$.artifact_version') FROM factory_audit_events"
+            " WHERE event_kind = 'delivery_evidence'"))).fetchall()
+    assert [tuple(row) for row in delivery] == [
+        ("delivered", "design_artifact_accepted", attempt, _A32_HEAD)]
+    assert await _authority(store, 140) == before
+
+    window_args = dict(window_start=datetime(2026, 10, 6, 9), window_end=_now() + timedelta(hours=1))
+    async with store() as db:
+        window = await metrics.build_metrics_window(db, **window_args)
+    assert _metric(window, "delivered_in_window").value == 1.0
+    reviewed = _metric(window, "independently_human_reviewed_design")
+    assert (reviewed.value, reviewed.sample_count, reviewed.unknown_count) == (1.0, 1, 0)
+    # F01 case 5: retained scope, attempt, version and provenance; public metrics.
+    (fact,) = await _outcome_rows(store)
+    assert (fact["scope_id"], fact["item_id"], fact["source"], fact["fact_source"]) == (
+        5, 140, "operator_declaration", "operator_attested:synthetic-review-record-1")
+    assert (fact["attempt"], fact["artifact"], fact["artifact_version"]) == (
+        attempt, "matrix-owner/matrix-repo/pull/73", _A32_HEAD)
+    public = await _public_metrics(client, window_args["window_start"], window_args["window_end"])
+    assert public["delivered_in_window"]["value"] == 1.0
+    assert (public["independently_human_reviewed_design"]["value"],
+            public["independently_human_reviewed_design"]["unknown_count"]) == (1.0, 0)
+
+    replay = await client.post("/api/v1/factory/review-acceptances",
+                               headers=_OPERATOR_HEADERS, json=_a32_body(140, attempt))
+    assert replay.status_code == 200
+    conflict = await client.post(
+        "/api/v1/factory/review-acceptances", headers=_OPERATOR_HEADERS,
+        json=_a32_body(140, attempt, reviewer="another-synthetic-reviewer"))
+    assert conflict.status_code == 409
+    assert conflict.json()["refusal"] == "replay_conflict"
+    assert len(await _review_rows(store)) == 1
+
+    # A later merge of the same version: one delivered attempt, one review.
+    async with store() as db:
+        item = await db.get(GithubWorkItem, 140)
+        await _audit.record_merged_delivery(
+            db, item, {"number": 73, "merged_at": "2026-10-06T10:30:00Z",
+                       "head": {"sha": _A32_HEAD}}, source="test.merge")
+        await db.commit()
+    async with store() as db:
+        window = await metrics.build_metrics_window(db, **window_args)
+    assert _metric(window, "delivered_in_window").value == 1.0
+    reviewed = _metric(window, "independently_human_reviewed_design")
+    assert (reviewed.value, reviewed.sample_count) == (1.0, 1)
+
+
+@pytest.mark.parametrize("case", [
+    "version_changed", "version_unrelated", "artifact_unrelated", "attempt_unrelated",
+    "other_item_attempt", "work_item_not_found"])
+async def test_a32_declaration_refuses_changed_or_unrelated_bindings(store, client, case):
+    """A32: a changed head, a version never recorded for the attempt, another
+    artifact or attempt, or an unknown item is refused with 409 and one
+    rejected observation; no review evidence or delivery is recorded."""
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 141, head=None if case == "version_unrelated" else _A32_HEAD)
+    other_attempt = await _a32_item(store, 142)
+    if case == "version_changed":
+        async with store() as db:
+            await db.execute(text(
+                "UPDATE github_work_items SET verification_head_sha = :head WHERE id = 141"),
+                {"head": "e" * 40})
+            await db.commit()
+    body = _a32_body(141, attempt, **{
+        "artifact_unrelated": {"artifact": "matrix-owner/matrix-repo/pull/74"},
+        "attempt_unrelated": {"attempt": "item:141:launch:999:revision:None"},
+        "other_item_attempt": {"attempt": other_attempt},
+        "work_item_not_found": {"work_item_id": 999,
+                                "attempt": "item:999:launch:None:revision:None"},
+    }.get(case, {}))
+    before = await _authority(store, 141)
+
+    response = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=body)
+
+    expected = {"other_item_attempt": "attempt_unrelated"}.get(case, case)
+    assert response.status_code == 409, response.text
+    assert response.json()["refusal"] == expected
+    assert await _review_rows(store) == []
+    assert await _facts(store, event_kind="delivery_evidence") == []
+    rejected = await _facts(store, event_kind="review_acceptance_declared")
+    assert [(f["action_outcome"], f["actor_kind"]) for f in rejected] == [("rejected", "operator")]
+    assert await _authority(store, 141) == before
+
+
+@pytest.mark.parametrize("override", [
+    {"reviewer": "member:3"}, {"reviewer": "operator"},
+    {"reviewer": "shared-operator-credential"}, {"reviewer_kind": "agent"},
+    {"occurred_at": "2099-01-01T00:00:00+00:00"}, {"occurred_at": "2026-10-06T10:00:00"},
+    {"version": "short"}, {"unexpected": "field"}])
+async def test_a32_declaration_schema_refusals_write_nothing(store, client, override):
+    """A32: an unattributable reviewer, a non-human kind, a future or
+    timezone-less time, a malformed version or an unknown field is refused
+    by the typed contract before any write."""
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 143)
+
+    response = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=_a32_body(143, attempt, **override))
+
+    assert response.status_code == 422
+    assert await _facts(store) == []
+
+
+async def test_a32_declaration_route_requires_the_operator_credential(store, client, monkeypatch):
+    """A32: no credential is 401 and an unconfigured credential is 503; neither writes."""
+    from app.config import settings
+
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 144)
+
+    missing = await client.post("/api/v1/factory/review-acceptances", json=_a32_body(144, attempt))
+    assert missing.status_code == 401
+    monkeypatch.setattr(settings, "operator_token", "")
+    unconfigured = await client.post("/api/v1/factory/review-acceptances",
+                                     headers=_OPERATOR_HEADERS, json=_a32_body(144, attempt))
+    assert unconfigured.status_code == 503
+    assert await _facts(store) == []
+
+
+@pytest.mark.parametrize("case", ["code_item", "not_independent", "rejected_decision"])
+async def test_a32_nonqualifying_declarations_never_establish_delivery(store, client, case):
+    """A32: a code item's acceptance, a non-independent declaration or a
+    declared rejection is stored as declared and never establishes delivery
+    or counts as independent human review."""
+    from app.services import factory_audit_service as _audit
+
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 145, issue_type="code" if case == "code_item" else "design")
+    body = _a32_body(145, attempt, **{"not_independent": {"independent": False},
+                                      "rejected_decision": {"decision": "rejected"}}.get(case, {}))
+
+    response = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=body)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["delivery_established"] is False
+    assert response.json()["counted"] is (case == "code_item")
+    assert await _facts(store, event_kind="delivery_evidence") == []
+    rows = await _review_rows(store)
+    assert len(rows) == 1
+    async with store() as db:
+        evidence = (await db.execute(text(
+            "SELECT human_review_evidence FROM factory_audit_events WHERE id = :id"),
+            {"id": rows[0]["id"]})).scalar_one()
+    import json as _json
+    assert _audit.validated_review_evidence(_json.loads(evidence)) is (case == "code_item")
+
+
+class _A34Client:
+    """Fake client at the get_pull boundary; records each pull read."""
+
+    def __init__(self, merged: set[int] | None = None):
+        self.merged = merged or set()
+        self.reads: list[int] = []
+
+    async def get_pull(self, owner, repo, number, *, token=None):
+        self.reads.append(number)
+        return _a30_pull(number, merged_at="2026-10-07T09:00:00Z" if number in self.merged else None)
+
+
+async def _a34_non_delivery(store, item_id: int, attempt: str, pr_number: int) -> None:
+    from app.services import factory_audit_service as _audit
+
+    async with store() as db:
+        await _audit.record_delivery_fact(
+            db, item_id=item_id, scope_id=5, delivery_outcome="closed_without_delivery",
+            completion_kind="pr_closed_unmerged", fact_source="github_pull_request_closed_unmerged",
+            fact_time=None, artifact=f"matrix-owner/matrix-repo/pull/{pr_number}",
+            attempt=attempt, launch_attempt=f"item:{item_id}:launch:None")
+        await db.commit()
+
+
+async def test_a34_later_merge_is_recorded_on_the_original_attempt_once(store, client):
+    """A34 (Root 3599): a completed attempt recorded as closed without
+    delivery, whose pull later merges, receives one delivered fact on its
+    original attempt identity. A second poll adds nothing; the current
+    attempt and every work item field stay unchanged."""
+    from app.models.database import TeamGithubScope
+    from app.services import factory_metrics_service as metrics
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=150, status="completed", pr_number=80)
+    original = "item:150:launch:None:revision:None"
+    await _a34_non_delivery(store, 150, original, 73)
+    async with store() as db:
+        # A new attempt of the same item now uses another pull.
+        await db.execute(text("UPDATE github_work_items SET pr_number = 80, launch_id = NULL"
+                              " WHERE id = 150"))
+        await db.commit()
+    before = await _authority(store, 150)
+    github = _A34Client(merged={73})
+
+    for _ in range(2):
+        async with store() as db:
+            scope = await db.get(TeamGithubScope, 5)
+            await github_watcher_service._reconcile_provisional_results(db, scope, github)
+
+    async with store() as db:
+        rows = (await db.execute(text(
+            "SELECT delivery_outcome, completion_kind, json_extract(context_snapshot, '$.attempt'),"
+            " fact_time FROM factory_audit_events WHERE event_kind = 'delivery_evidence'"
+            " ORDER BY id"))).fetchall()
+        window = await metrics.build_metrics_window(
+            db, window_start=_now() - timedelta(days=2), window_end=datetime(2026, 10, 8))
+    assert [tuple(row[:3]) for row in rows] == [
+        ("closed_without_delivery", "pr_closed_unmerged", original),
+        ("delivered", "merged_code", original)]
+    assert datetime.fromisoformat(str(rows[1][3])) == datetime(2026, 10, 7, 9, 0)
+    assert github.reads == [73]  # the resolved attempt is not read again
+    assert _metric(window, "delivered_in_window").value == 1.0
+    assert _metric(window, "closed_without_delivery").value == 0.0
+    assert await _authority(store, 150) == before
+    # F02 late resolution: the public response reports one delivered attempt.
+    public = await _public_metrics(client, _now() - timedelta(days=2), datetime(2026, 10, 8))
+    assert (public["delivered_in_window"]["value"], public["closed_without_delivery"]["value"]) == (
+        1.0, 0.0)
+    outcomes = await _outcome_rows(store)
+    assert outcomes[1]["source"] == "github_watcher_service._reconcile_provisional_results"
+    assert outcomes[1]["artifact_version"] == "d" * 40
+
+
+async def test_a34_fair_cursor_reads_every_unresolved_attempt_without_age_limit(store):
+    """A34 (Root 3599): 45 unresolved attempts, one of them 60 days old, are
+    each read within three polls; no poll reads more than 20; no write
+    follows unmerged results."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=151, status="completed")
+    for number in range(1, 46):
+        await _a34_non_delivery(store, 151, f"item:151:launch:{number}:revision:None", number)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE factory_audit_events SET occurred_at = '2026-08-08 00:00:00'"
+            " WHERE json_extract(context_snapshot, '$.attempt') = 'item:151:launch:1:revision:None'"))
+        await db.commit()
+    client = _A34Client()
+    per_poll = []
+    for _ in range(3):
+        start = len(client.reads)
+        async with store() as db:
+            scope = await db.get(TeamGithubScope, 5)
+            await github_watcher_service._reconcile_provisional_results(db, scope, client)
+        per_poll.append(len(client.reads) - start)
+
+    assert per_poll == [20, 20, 20]
+    assert set(client.reads) == set(range(1, 46))
+    assert 1 in client.reads
+    assert len(await _facts(store, event_kind="delivery_evidence")) == 45
+
+
+def test_a20_classifier_labels_match_the_provider_registry():
+    """A20: every provider label the classifier can return is a registered provider."""
+    from app.services import factory_audit_service as _audit
+    from app.services import providers
+
+    labels = set(_audit._AGENT_EXECUTABLES.values()) | {"pi-cli"}
+    for label in labels:
+        assert providers.get_provider(label) is not None
+    assert _audit.classify_agent_argv(["/usr/local/bin/claude", "--resume"]) == "claude-code"
+    assert _audit.classify_agent_argv(["node", "/x/@earendil-works/pi-coding-agent/dist/bundle/cli.js"]) == "pi-cli"
+    assert _audit.classify_agent_argv(["node", "/x/claude/cli.js"]) is None
+    assert _audit.classify_agent_argv(["bash", "-c", "codex"]) is None
+    assert _audit.classify_agent_argv(["codex-cli"]) is None
 
 
 async def test_r03_one_result_per_attempt_survives_late_evidence_and_deletion(store):

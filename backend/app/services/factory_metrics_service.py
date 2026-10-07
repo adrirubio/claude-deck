@@ -176,7 +176,7 @@ async def build_metrics_window(
         select(FactoryAuditEvent.id, FactoryAuditEvent.human_review_evidence,
                FactoryAuditEvent.context_snapshot, FactoryAuditEvent.item_context_key)
         .where(FactoryAuditEvent.human_review_evidence.is_not(None),
-               FactoryAuditEvent.occurred_at <= window_end)))).all()
+               effective_time <= window_end)))).all()
     eligible_design = [state for state in in_window
                        if state["outcome"] == _DELIVERED and state["design"]]
     reviewed_design = _reviewed_design_attempts(eligible_design, review_rows, _audit)
@@ -355,7 +355,7 @@ def _reconcile_attempts(rows, window_start: datetime, window_end: datetime) -> d
         identity = _attempt_identity(row.item_context_key, snapshot, row.id)
         state = attempts.setdefault(identity, {
             "identity": identity, "outcome": None, "in_window": False,
-            "design": False, "artifacts": set()})
+            "design": False, "artifacts": set(), "versions": set()})
         if row.delivery_outcome in _OUTCOME_RANK and (
                 state["outcome"] is None
                 or _OUTCOME_RANK[row.delivery_outcome] > _OUTCOME_RANK[state["outcome"]]):
@@ -370,28 +370,31 @@ def _reconcile_attempts(rows, window_start: datetime, window_end: datetime) -> d
             state["design"] = True
         if snapshot.get("artifact"):
             state["artifacts"].add(snapshot["artifact"])
+            # A32: the exact delivered version of the artifact, when known.
+            if row.delivery_outcome == _DELIVERED and snapshot.get("artifact_version"):
+                state["versions"].add((snapshot["artifact"], snapshot["artifact_version"]))
     return attempts
 
 
 def _reviewed_design_attempts(eligible: list[dict], review_rows, audit) -> int:
-    """R06: eligible design attempts with a validated exact-artifact review.
+    """R06/A32: eligible design attempts with a validated exact-version review.
 
-    Each attempt counts once, however many times its review is repeated.
+    A review counts only for the attempt it is bound to and only for an
+    artifact version that the attempt delivered. A merge alone, a changed
+    head or a review of another version never counts. Each attempt counts
+    once, however many times its review is repeated.
     """
-    reviews: list[tuple[str, str]] = []
+    reviews: list[tuple[str, str, str]] = []
     for row in review_rows:
         evidence = row.human_review_evidence
         if not audit.validated_review_evidence(evidence):
             continue
         identity = _attempt_identity(row.item_context_key, _snapshot(row.context_snapshot), row.id)
-        reviews.append((identity, evidence["artifact"]))
+        reviews.append((identity, evidence["artifact"], evidence["version"]))
     count = 0
     for state in eligible:
-        # The review names this attempt's exact artifact, or it is recorded on
-        # the attempt's own fact for the artifact it names.
-        if any(artifact in state["artifacts"]
-               or (identity == state["identity"] and not state["artifacts"])
-               for identity, artifact in reviews):
+        if any(identity == state["identity"] and (artifact, version) in state["versions"]
+               for identity, artifact, version in reviews):
             count += 1
     return count
 

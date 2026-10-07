@@ -16,7 +16,10 @@ from app.database import get_db
 from app.api.v1.deps import require_operator
 from app.config import settings
 from app.models import factory_schemas as wire
-from app.models.schemas import SetupPreflightRequest, SetupPreflightResponse, SetupPreflightCheck
+from app.models.schemas import (
+    FactoryReviewAcceptanceDeclaration, SetupPreflightRequest, SetupPreflightResponse,
+    SetupPreflightCheck,
+)
 from app.services.github_client import github_client, GithubClientResponseError
 from app.services.github_app_auth_service import GithubAppAuthError, github_app_auth_service
 from app.services import factory_projection_service as projections
@@ -460,6 +463,52 @@ async def list_factory_audit_events(
         items=items, total=total, page=page, page_size=page_size,
         team_context_key=team_context_key, scope_context_key=scope_context_key,
         event_kind=event_kind, snapshot_labels=sorted(labels))
+
+
+@router.post("/review-acceptances", status_code=201)
+async def declare_review_acceptance(
+    declaration: FactoryReviewAcceptanceDeclaration,
+    _operator: None = Depends(require_operator),
+    db=Depends(get_db),
+):
+    """A32: record one trusted review acceptance declaration.
+
+    Operator-protected and observational. The operator credential
+    authenticates the recording action only; the declared reviewer stays a
+    separate field. The route never changes work state, approvals, merges,
+    retries, leases or counters. A binding refusal or replay conflict is
+    recorded as one rejected observation and returns 409.
+    """
+    from app.models.schemas import FactoryReviewAcceptanceRead
+    from app.services import factory_audit_service as audit
+
+    operation_id = f"review_acceptance:{declaration.declaration_id}"
+    recording_actor = audit.derive_actor(actor_kind="operator")
+    replay = (await db.execute(text(
+        "SELECT id FROM factory_audit_events WHERE operation_id = :op"
+        " AND event_kind = 'review_acceptance_declared' LIMIT 1"),
+        {"op": operation_id})).first()
+    try:
+        event, counted, delivered = await audit.record_review_acceptance(
+            db, declaration, recording_actor=recording_actor)
+        await db.commit()
+    except (audit.ReviewDeclarationRefused, audit.ReplayConflictError) as exc:
+        refusal = exc.code if isinstance(exc, audit.ReviewDeclarationRefused) else "replay_conflict"
+        await db.rollback()
+        await audit.record_observation(
+            db, event_kind="review_acceptance_declared", source="operator_declaration",
+            occurred_at=datetime.utcnow(), actor=recording_actor,
+            action_outcome="rejected",
+            item_id=None if refusal == "work_item_not_found" else declaration.work_item_id,
+            correlation_id=operation_id, sanitized_reason=f"declaration refused: {refusal}")
+        return JSONResponse(status_code=409, content=FactoryReviewAcceptanceRead(
+            operation_id=operation_id, refusal=refusal).model_dump())
+    body = FactoryReviewAcceptanceRead(
+        event_id=event.id, operation_id=operation_id, counted=counted,
+        delivery_established=delivered)
+    if replay is not None:
+        return JSONResponse(status_code=200, content=body.model_dump())
+    return body
 
 
 @router.get("/metrics")
