@@ -383,6 +383,15 @@ class PrivateActivity:
     settlement_id: str | None
     cursor: str | None = None
     current_settlement_id: str | None = None
+    binding_identity: str | None = None
+
+
+def private_binding_identity(provider: str, pane_pid: int, pane_start: str, cwd: str,
+                             native_pid: int | None = None, native_start: str | None = None) -> str:
+    return hashlib.sha256(json.dumps(
+        [provider, pane_pid, pane_start, str(Path(cwd).resolve()), native_pid, native_start],
+        separators=(",", ":"),
+    ).encode()).hexdigest()
 
 
 async def observe_private_team(db: AsyncSession, preset_id: int,
@@ -396,10 +405,18 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
             metadata = {}
             observed = _observe(*entry, now, provenance=metadata)
             identity = None
+            binding_identity = None
             if metadata.get("session_id") and metadata.get("pane_pid"):
                 identity = hashlib.sha256(json.dumps({key: metadata.get(key) for key in (
                     "provider", "session_id", "pane_pid", "pane_start", "native_pid", "native_start",
                 )}, sort_keys=True).encode()).hexdigest()
+                matching = [binding for binding in entry[3]
+                            if binding.pane_pid == metadata["pane_pid"] and binding.pane_start == metadata["pane_start"]
+                            and binding.native_pid == metadata.get("native_pid")]
+                if matching:
+                    binding_identity = private_binding_identity(
+                        entry[1], metadata["pane_pid"], metadata["pane_start"], matching[0].cwd,
+                        metadata.get("native_pid"), metadata.get("native_start"))
             settled = (observed.state == "idle" and observed.reason == "native_turn_completed"
                        and metadata.get("event_source") in {"agent_settled", "task_complete", "claude_end_turn"}
                        and observed.observed_at is not None
@@ -407,7 +424,8 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
             values[entry[0]] = PrivateActivity(observed.state, observed.reason, observed.observed_at,
                                                identity, metadata.get("event_id") if settled else None,
                                                metadata.get("event_id"),
-                                               metadata.get("current_settlement_id") if observed.state == "idle" else None)
+                                               metadata.get("current_settlement_id") if observed.state == "idle" else None,
+                                               binding_identity)
         return values
 
     if max_input_rows is None:

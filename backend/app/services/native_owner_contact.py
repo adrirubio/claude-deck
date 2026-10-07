@@ -1,6 +1,8 @@
 """Fresh native work renews contact only for an unchanged, unexpired owner."""
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +18,35 @@ from app.models.database import (
 from app.services import agent_activity_service as activity
 from app.services.factory_delivery_policy import effective_policy
 from app.services.github_approval_service import github_approval_service
+
+_NATIVE_RESPONSE_SECONDS = 2.0
+
+
+def contact_context(item: GithubWorkItem, workspace: GithubWorkspace | None,
+                     revision: GithubAttemptScopeRevision | None = None) -> tuple:
+    return (
+        item.dispatch_nonce, item.owner_slot_id, item.active_scope_revision, item.attempt_phase,
+        item.dispatch_status, item.pr_number, item.ack_received_at,
+        item.delivery_policy_revision, deepcopy(item.delivery_policy),
+        (workspace.id, workspace.leased_item_id, workspace.lease_token, workspace.leased_at,
+         workspace.path, workspace.leased_owner_pid, workspace.leased_owner_proc_start, workspace.enabled)
+        if workspace is not None else None,
+        (revision.id, revision.status, revision.dispatch_nonce, revision.revision, revision.phase,
+         revision.owner_member_id, revision.owner_slot_id, revision.expected_workspace_id,
+         revision.expected_lease_token_hash, revision.acknowledged_at) if revision is not None else None,
+    )
+
+
+async def refresh_contact_context(db: AsyncSession, item: GithubWorkItem,
+                                  workspace: GithubWorkspace | None,
+                                  revision: GithubAttemptScopeRevision | None,
+                                  expected: tuple) -> bool:
+    await db.refresh(item)
+    if workspace is not None:
+        await db.refresh(workspace)
+    if revision is not None:
+        await db.refresh(revision)
+    return contact_context(item, workspace, revision) == expected
 
 
 async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
@@ -79,6 +110,17 @@ async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
             or session.bound_pane_proc_start != workspace.leased_owner_proc_start
             or not session.cwd or Path(session.cwd).resolve() != Path(workspace.path).resolve()):
         return False
+    if session.pid is None:
+        return False
+    try:
+        auxiliary_state, auxiliary_start = activity._process(session.pid)
+        registered = session.created_at.replace(tzinfo=timezone.utc) if session.created_at.tzinfo is None else session.created_at
+        if (auxiliary_state in activity._STOPPED_STATES
+                or activity._process_started_at(auxiliary_start) > registered
+                or registered > datetime.now(timezone.utc) + timedelta(seconds=5)):
+            return False
+    except (OSError, ValueError):
+        return False
     # Copy mutable ORM values before awaiting native observation.
     slot_options = dict(slot.launch_options or {})
     context = (item.dispatch_nonce, item.owner_slot_id, item.active_scope_revision,
@@ -90,10 +132,18 @@ async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
     ack = revision.acknowledged_at if revision is not None else item.ack_received_at
     revision_hash = revision.expected_lease_token_hash if revision is not None else None
     member_id, session_id, provider, cwd = owner.id, session.id, slot.provider, session.cwd
+    auxiliary_pid, registered_at = session.pid, session.created_at
+    expected_binding = activity.private_binding_identity(
+        provider, lease[3], lease[4], cwd,
+        auxiliary_pid if provider == "pi-cli" else None,
+        auxiliary_start if provider == "pi-cli" else None,
+    )
     try:
-        observations = await activity.observe_private_team(db, scope.preset_id, max_input_rows=256)
+        observations = await asyncio.wait_for(
+            activity.observe_private_team(db, scope.preset_id, max_input_rows=256), timeout=_NATIVE_RESPONSE_SECONDS)
         observed = observations.get(slot.id)
         if (observed is None or observed.state != "working" or not observed.identity
+                or observed.binding_identity != expected_binding
                 or observed.observed_at is None):
             return False
         when = observed.observed_at
@@ -106,6 +156,9 @@ async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
             return False
         process_state, process_start = activity._process(lease[3])
         if process_start != lease[4] or process_state in activity._STOPPED_STATES:
+            return False
+        auxiliary_state, current_auxiliary_start = activity._process(auxiliary_pid)
+        if auxiliary_state in activity._STOPPED_STATES or current_auxiliary_start != auxiliary_start:
             return False
     except (OSError, ValueError, TimeoutError):
         return False
@@ -129,6 +182,7 @@ async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
         MailAgentSession.id == session_id, MailAgentSession.member_id == member_id,
         MailAgentSession.team_preset_id == scope.preset_id, MailAgentSession.team_slot_id == slot.id,
         MailAgentSession.provider == provider, MailAgentSession.source == "mcp",
+        MailAgentSession.pid == auxiliary_pid, MailAgentSession.created_at == registered_at,
         MailAgentSession.bound_pane_pid == lease[3], MailAgentSession.bound_pane_proc_start == lease[4],
         MailAgentSession.cwd == cwd, MailAgentSession.closed_at.is_(None),
         MailAgentSession.mailbox_status == "connected", MailAgentSession.capability_token_hash.is_not(None),

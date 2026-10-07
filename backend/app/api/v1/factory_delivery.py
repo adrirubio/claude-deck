@@ -36,7 +36,14 @@ async def set_attempt_policy(item_id: int, request: GithubAttemptDeliveryPolicyU
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(404, "GitHub scope not found")
-    if not await adopt_attempt_policy(db, item, scope, **request.model_dump()):
+    if not await adopt_attempt_policy(
+        db, item, scope,
+        expected_dispatch_nonce=request.expected_dispatch_nonce,
+        expected_scope_revision=request.expected_scope_revision,
+        expected_policy_revision=request.expected_policy_revision,
+        target_policy_revision=request.target_policy_revision,
+        reason=request.reason,
+    ):
         raise HTTPException(409, "attempt_delivery_policy_context_changed")
     return {"work_item_id": item.id, "scope_id": scope.id,
             "revision": item.delivery_policy_revision, "policy": effective_policy(item, scope)}

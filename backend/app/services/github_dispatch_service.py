@@ -2145,10 +2145,14 @@ class GithubDispatchService:
                     await self.escalate(db, item, "leader_ack_timeout")
                 continue
             from app.services.factory_delivery_policy import effective_policy
-            from app.services.native_owner_contact import renew_native_owner_contact
+            from app.services.native_owner_contact import contact_context, refresh_contact_context, renew_native_owner_contact
             policy = effective_policy(item, scope)
             workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            expected_contact = contact_context(item, workspace)
             await renew_native_owner_contact(db, scope, item, workspace)
+            if not await refresh_contact_context(db, item, workspace, None, expected_contact):
+                continue
+            policy = effective_policy(item, scope)
             idle_anchor = max(value for value in (
                 item.updated_at or item.created_at,
                 workspace.lease_last_owner_contact_at if workspace is not None else None,
@@ -2290,11 +2294,17 @@ class GithubDispatchService:
                 continue
             workspace = await github_workspace_service.get_leased_workspace(db, item.id)
             from app.services.factory_delivery_policy import effective_policy
-            from app.services.native_owner_contact import renew_native_owner_contact
+            from app.services.native_owner_contact import contact_context, refresh_contact_context, renew_native_owner_contact
             policy = effective_policy(item, scope)
             idle_timeout = timedelta(seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds)
             nudge_grace = timedelta(seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds)
+            expected_contact = contact_context(item, workspace, revision)
             await renew_native_owner_contact(db, scope, item, workspace, revision)
+            if not await refresh_contact_context(db, item, workspace, revision, expected_contact):
+                continue
+            policy = effective_policy(item, scope)
+            idle_timeout = timedelta(seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds)
+            nudge_grace = timedelta(seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds)
             now = datetime.utcnow()
             anchors = [
                 value

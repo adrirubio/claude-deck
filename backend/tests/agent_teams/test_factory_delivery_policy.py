@@ -1,3 +1,6 @@
+import asyncio
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -11,7 +14,6 @@ from app.models.database import (
     MailPaneLifecycle, MailTeamMember, TeamGithubScope,
 )
 from app.models.schemas import FactoryDeliveryPolicy
-from app.services.agent_activity_service import PrivateActivity
 from app.services.factory_delivery_policy import (
     adopt_attempt_policy, effective_policy, required_check_blockers, update_scope_policy,
 )
@@ -19,6 +21,11 @@ from app.services.github_approval_service import github_approval_service
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_verification_service import github_verification_service
 from app.services import native_owner_contact as native
+
+
+def observed_work(state, reason, observed_at, identity, settlement_id, *, binding_identity=None):
+    return SimpleNamespace(state=state, reason=reason, observed_at=observed_at,
+                           identity=identity, settlement_id=settlement_id, binding_identity=binding_identity)
 
 
 async def scope_and_item(db, name="one", **kwargs):
@@ -137,6 +144,7 @@ async def native_fixture(db, monkeypatch, tmp_path):
     now = datetime.utcnow()
     scope, item = await scope_and_item(db, dispatch_nonce="active", active_scope_revision=2,
                                        dispatch_status="dispatched", retry_count=3,
+                                       pr_number=5,
                                        continuation_activated_at=now - timedelta(minutes=2))
     slot = AgentTeamSlot(preset_id=scope.preset_id, position=0, display_name="Owner",
                          provider="claude-code", repo_id="fixture", repo_path=str(tmp_path),
@@ -149,6 +157,7 @@ async def native_fixture(db, monkeypatch, tmp_path):
     db.add(member)
     await db.flush()
     session = MailAgentSession(member_id=member.id, provider=slot.provider, source="mcp", session_key="fixture-session",
+                               pid=10010,
                                cwd=str(tmp_path), team_slot_id=slot.id, team_preset_id=scope.preset_id,
                                bound_pane_pid=10000, bound_pane_proc_start="1000", capability_token_hash="fixture-hash")
     binding = AgentPaneBinding(preset_id=scope.preset_id, slot_id=slot.id, pane_pid=10000, pane_proc_start="1000")
@@ -171,12 +180,17 @@ async def native_fixture(db, monkeypatch, tmp_path):
     item.delivery_policy = FactoryDeliveryPolicy(owner_contact="native").model_dump()
     item.delivery_policy_revision = 2
     await db.commit()
-    observed = PrivateActivity("working", "native_progress", datetime.now(timezone.utc) - timedelta(seconds=1),
-                               "fixture-private-identity", None)
+    expected_binding = hashlib.sha256(json.dumps(
+        [slot.provider, 10000, "1000", str(tmp_path.resolve()), None, None], separators=(",", ":")
+    ).encode()).hexdigest()
+    observed = observed_work("working", "native_progress", datetime.now(timezone.utc) - timedelta(seconds=1),
+                               "fixture-private-identity", None,
+                               binding_identity=expected_binding)
     async def observe(*_args, **_kwargs):
         return {slot.id: observed}
     monkeypatch.setattr(native.activity, "observe_private_team", observe)
     monkeypatch.setattr(native.activity, "_process", lambda _pid: ("S", "1000"))
+    monkeypatch.setattr(native.activity, "_process_started_at", lambda _start: datetime.now(timezone.utc) - timedelta(minutes=2))
     return scope, item, workspace, revision, slot, member, session, observed
 
 
@@ -204,8 +218,9 @@ async def test_unproven_native_work_does_not_renew(db, monkeypatch, tmp_path, st
         when = datetime.now(timezone.utc) - timedelta(minutes=4)
     elif state == "future":
         when = datetime.now(timezone.utc) + timedelta(minutes=1)
-    value = PrivateActivity(state if state in {"unknown", "idle", "stopped"} else "working", "fixture", when,
-                            None if state == "missing_identity" else observed.identity, None)
+    value = observed_work(state if state in {"unknown", "idle", "stopped"} else "working", "fixture", when,
+                            None if state == "missing_identity" else observed.identity, None,
+                            binding_identity=observed.binding_identity)
     async def observe(*_args, **_kwargs):
         return {slot.id: value}
     monkeypatch.setattr(native.activity, "observe_private_team", observe)
@@ -243,7 +258,7 @@ async def test_wrong_or_expired_owner_context_does_not_renew(db, monkeypatch, tm
     assert workspace.lease_last_owner_contact_at == before
 
 
-@pytest.mark.parametrize("race", ["release", "generation", "owner", "revision", "conversation"])
+@pytest.mark.parametrize("race", ["release", "generation", "owner", "revision", "conversation", "auxiliary_rebind", "registered_at"])
 @pytest.mark.asyncio
 async def test_contact_update_rechecks_identity_after_native_observation(db, monkeypatch, tmp_path, race):
     scope, item, workspace, revision, slot, _member, session, observed = await native_fixture(db, monkeypatch, tmp_path)
@@ -260,9 +275,15 @@ async def test_contact_update_rechecks_identity_after_native_observation(db, mon
         elif race == "revision":
             await db.execute(update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id).values(
                 status="superseded").execution_options(synchronize_session=False))
-        else:
+        elif race == "conversation":
             await db.execute(update(AgentTeamSlot).where(AgentTeamSlot.id == slot.id).values(
                 launch_options={"session_id": "different-native"}).execution_options(synchronize_session=False))
+        elif race == "auxiliary_rebind":
+            await db.execute(update(MailAgentSession).where(MailAgentSession.id == session.id).values(
+                pid=10020).execution_options(synchronize_session=False))
+        else:
+            await db.execute(update(MailAgentSession).where(MailAgentSession.id == session.id).values(
+                created_at=datetime.utcnow()).execution_options(synchronize_session=False))
         await db.commit()
         return {slot.id: observed}
     monkeypatch.setattr(native.activity, "observe_private_team", observe)
@@ -270,3 +291,109 @@ async def test_contact_update_rechecks_identity_after_native_observation(db, mon
     assert not await native.renew_native_owner_contact(db, scope, item, workspace, revision)
     await db.refresh(workspace)
     assert workspace.lease_last_owner_contact_at == before
+
+
+@pytest.mark.asyncio
+async def test_dead_newest_auxiliary_cannot_use_older_live_work(db, monkeypatch, tmp_path):
+    scope, item, workspace, revision, slot, member, session, observed = await native_fixture(db, monkeypatch, tmp_path)
+    dead = MailAgentSession(member_id=member.id, provider=slot.provider, source="mcp", session_key="new-dead-session",
+        pid=10020, cwd=session.cwd, team_slot_id=slot.id, team_preset_id=scope.preset_id,
+        bound_pane_pid=10000, bound_pane_proc_start="1000", capability_token_hash="fixture-new-hash")
+    db.add(dead)
+    await db.commit()
+    def process(pid):
+        if pid == 10020:
+            raise FileNotFoundError("Fixture dead auxiliary")
+        return "S", "1000"
+    monkeypatch.setattr(native.activity, "_process", process)
+    assert not await native.renew_native_owner_contact(db, scope, item, workspace, revision)
+
+
+@pytest.mark.asyncio
+async def test_private_evidence_must_match_selected_native_lifetime(db, monkeypatch, tmp_path):
+    scope, item, workspace, revision, slot, _member, _session, observed = await native_fixture(db, monkeypatch, tmp_path)
+    wrong = observed_work("working", "native_progress", observed.observed_at, observed.identity, None,
+                             binding_identity="different-native-lifetime")
+    async def observe(*_args, **_kwargs):
+        return {slot.id: wrong}
+    monkeypatch.setattr(native.activity, "observe_private_team", observe)
+    assert not await native.renew_native_owner_contact(db, scope, item, workspace, revision)
+
+
+@pytest.mark.asyncio
+async def test_native_read_has_a_response_deadline(db, monkeypatch, tmp_path):
+    scope, item, workspace, revision, *_rest = await native_fixture(db, monkeypatch, tmp_path)
+    async def observe(*_args, **_kwargs):
+        await asyncio.sleep(5)
+    monkeypatch.setattr(native, "_NATIVE_RESPONSE_SECONDS", .02, raising=False)
+    monkeypatch.setattr(native.activity, "observe_private_team", observe)
+    before = workspace.lease_last_owner_contact_at
+    try:
+        result = await asyncio.wait_for(native.renew_native_owner_contact(db, scope, item, workspace, revision), .3)
+    except TimeoutError:
+        result = "native_read_has_no_response_deadline"
+    assert result is False
+    assert workspace.lease_last_owner_contact_at == before
+
+
+@pytest.mark.parametrize("race", ["policy", "terminal", "revision"])
+@pytest.mark.asyncio
+async def test_continuation_monitor_discards_changed_context_after_native_await(db, monkeypatch, tmp_path, race):
+    scope, item, workspace, revision, slot, _member, _session, _observed = await native_fixture(db, monkeypatch, tmp_path)
+    old = datetime.utcnow() - timedelta(minutes=16)
+    item.continuation_activated_at = old
+    workspace.lease_last_owner_contact_at = old
+    await db.commit()
+    async def renew(*_args, **_kwargs):
+        if race == "policy":
+            value = FactoryDeliveryPolicy(owner_contact="native", owner_idle_seconds=3600).model_dump()
+            await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(
+                delivery_policy=value, delivery_policy_revision=3).execution_options(synchronize_session=False))
+        elif race == "terminal":
+            await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(
+                dispatch_status="completed").execution_options(synchronize_session=False))
+        else:
+            await db.execute(update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id).values(
+                status="superseded").execution_options(synchronize_session=False))
+        await db.commit()
+        return False
+    notices = []
+    async def notice(*_args, **_kwargs):
+        notices.append(True)
+    monkeypatch.setattr(native, "renew_native_owner_contact", renew)
+    monkeypatch.setattr(github_dispatch_service, "notify_owner", notice)
+    await github_dispatch_service.monitor_continuation(db, scope, [slot])
+    await db.refresh(item)
+    assert notices == [] and item.continuation_nudged_at is None
+    assert item.dispatch_status != "escalated" and item.retry_count == 3
+
+
+@pytest.mark.parametrize("race", ["policy", "terminal"])
+@pytest.mark.asyncio
+async def test_initial_monitor_discards_changed_context_after_native_await(db, monkeypatch, tmp_path, race):
+    scope, item, workspace, _revision, slot, *_rest = await native_fixture(db, monkeypatch, tmp_path)
+    item.active_scope_revision = 0
+    item.pr_number = None
+    item.dispatched_at = datetime.utcnow() - timedelta(minutes=16)
+    item.updated_at = item.dispatched_at
+    item.ack_received_at = item.dispatched_at
+    workspace.lease_last_owner_contact_at = item.dispatched_at
+    await db.commit()
+    async def brief(*_args):
+        return True
+    async def renew(*_args, **_kwargs):
+        values = ({"delivery_policy": FactoryDeliveryPolicy(owner_contact="native", owner_idle_seconds=3600).model_dump(),
+                   "delivery_policy_revision": 3} if race == "policy" else {"dispatch_status": "completed"})
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(**values)
+                         .execution_options(synchronize_session=False))
+        await db.commit()
+        return False
+    notices = []
+    async def notice(*_args, **_kwargs):
+        notices.append(True)
+    monkeypatch.setattr(native, "renew_native_owner_contact", renew)
+    monkeypatch.setattr(github_dispatch_service, "_brief_delivered", brief)
+    monkeypatch.setattr(github_dispatch_service, "_nudge_owner_for_progress", notice)
+    await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id: "ready"})
+    await db.refresh(item)
+    assert notices == [] and item.last_nudge_at is None and item.dispatch_status != "escalated"
