@@ -912,7 +912,7 @@ async def test_c09_commit_and_send_boundaries_record_actual_results(db, monkeypa
     assert uncertain.action_outcome == "uncertain"
     replay = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events"
-        " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
+        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
     assert replay == 1
 
     # CAS refusal records a rejected outcome; no authority replay follows.
@@ -1048,13 +1048,6 @@ def _workspace_service():
     return github_workspace_service
 
 
-@pytest.mark.xfail(
-    reason="C08 item 4 in progress: fixture uses a real workspace directory "
-           "and typed lease values; the remaining refusal is at the "
-           "worktree-config guard (_worktree_config_unavailable) in "
-           "github_workspace_service; guard diagnosis continues without "
-           "relaxing production guards",
-    strict=False)
 async def test_c08_owner_release_records_exact_actor_identity(db, tmp_path):
     """C08 item 2/4: the real owner release consumer records the exact
     authenticated member and session references and an exact outcome;
@@ -1067,11 +1060,13 @@ async def test_c08_owner_release_records_exact_actor_identity(db, tmp_path):
     (tmp_path / "ws").mkdir()
     await _seed_item(db, 1)
     await db.execute(text(
-        "UPDATE github_work_items SET dispatch_status = 'dispatched', owner_slot_id = 5, retry_count = 2,"
+        "UPDATE github_work_items SET dispatch_status = 'merged', owner_slot_id = 5, retry_count = 2,"
         " approval_round_count = 3, diagnostic_retry_count = 1 WHERE id = 1"))
-    await db.execute(text(
-        "UPDATE github_workspaces SET leased_item_id = 1, lease_token = 'synthetic-token',"
-        " leased_at = CURRENT_TIMESTAMP WHERE id = 1"))
+    from app.models.database import GithubWorkspace as _W
+    ws_row = await db.get(_W, 1)
+    ws_row.leased_item_id = 1
+    ws_row.lease_token = "synthetic-token"
+    ws_row.leased_at = datetime(2026, 10, 6, 12, 0, 0)
     await db.commit()
 
     before = (await db.execute(text(
