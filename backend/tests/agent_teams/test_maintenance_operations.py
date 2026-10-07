@@ -79,11 +79,11 @@ def git(path,*args):
 
 class IntegrationFixture(Maintenance):
     def __init__(self,p,path,tip,mode):
-        super().__init__(p);self.path=path;self.tip=tip;self.mode=mode;self.notices=[];self.safety_calls=0
+        super().__init__(p);self.path=path;self.tip=tip;self.mode=mode;self.notices=[];self.safety_calls=0;self.required=[]
     def safety(self): self.safety_calls+=1
     def accepted(self,_pull): return self.tip
     def rows(self,query,values=()):
-        if 'github_work_items' in query: return [{'id':1,'scope_id':1,'owner_slot_id':2,'dispatch_status':'dispatched','dispatch_nonce':'fixture','active_scope_revision':4,'delivery_policy':json.dumps({'accepted_base_update':self.mode})}]
+        if 'github_work_items' in query: return [{'id':1,'scope_id':1,'owner_slot_id':2,'dispatch_status':'dispatched','dispatch_nonce':'fixture','active_scope_revision':4,'delivery_policy':json.dumps({'accepted_base_update':self.mode,'required_checks':self.required})}]
         if 'team_github_scopes' in query: return [{'repo_owner':'fixture','repo_name':'repo','base_ref':'origin/integration','preset_id':1}]
         if 'github_workspaces' in query: return [{'path':str(self.path),'enabled':True}]
         raise AssertionError(query)
@@ -130,11 +130,12 @@ def test_real_integration_update_preserves_commits_supervision_and_conflicts(tmp
         assert (workspace/'source.txt').read_text().startswith('<<<<<<<')
 
 
-@pytest.mark.parametrize('problem',['disabled','dirty','wrong_head','wrong_branch'])
+@pytest.mark.parametrize('problem',['disabled','dirty','wrong_head','wrong_branch','configured_check'])
 def test_integration_preflight_does_not_change_source_or_record_success(tmp_path,problem):
     workspace,before,tip=repository(tmp_path)
     service=IntegrationFixture(profile(tmp_path),workspace,tip,'disabled' if problem=='disabled' else 'fast_forward')
     if problem=='dirty': (workspace/'untracked.txt').write_text('Preserve this work')
+    if problem=='configured_check': service.required=[{'name':'Required missing job','app_slug':'github-actions'}]
     request=IntegrationRequest(operation_id='integration-1',work_item_id=1,expected_head='c'*40 if problem=='wrong_head' else before,
         accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='main' if problem=='wrong_branch' else 'integration',checks=['Tests']),
         accepted_tip=tip,checkpoint_message=1)

@@ -326,6 +326,10 @@ class Maintenance:
         policy=json.loads(item["delivery_policy"] or "{}")
         mode=policy.get("accepted_base_update","disabled")
         if mode not in {"fast_forward","merge"}: raise ValueError("accepted_base_updates_disabled")
+        required=policy.get('required_checks',[])
+        if (any(check.get('app_slug','github-actions')!='github-actions' for check in required)
+                or not {check['name'] for check in required}.issubset(request.accepted_pull.checks)):
+            raise ValueError('configured_integration_checks_missing')
         if request.accepted_pull.repository != scope["repo_owner"]+"/"+scope["repo_name"]: raise ValueError("integration_repository_changed")
         if scope["base_ref"] != "origin/"+request.accepted_pull.base: raise ValueError("integration_branch_changed")
         tip=self.accepted(request.accepted_pull)
