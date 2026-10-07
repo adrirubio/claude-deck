@@ -3300,7 +3300,7 @@ async def test_source_import_refuses_foreign_malformed_or_incomplete_evidence(cl
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["nonce", "policy", "scope", "workspace", "revision", "approval", "capacity"])
+@pytest.mark.parametrize("change", ["nonce", "policy", "scope", "workspace", "revision", "approval", "ACK", "capacity"])
 async def test_source_import_registration_refuses_late_authority_change(client, db, tmp_path, monkeypatch, change):
     scope, item, workspace, revision, _session, request = await _accepted_import_context(db, tmp_path, monkeypatch)
     original = github_client.get_pull
@@ -3317,10 +3317,13 @@ async def test_source_import_registration_refuses_late_authority_change(client, 
                 elif change == "workspace": query = update(GithubWorkspace).where(GithubWorkspace.id == workspace.id).values(path="/other")
                 elif change == "revision": query = update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id).values(allowed_paths=["other.py"])
                 elif change == "approval": query = update(GithubApprovalRequest).where(GithubApprovalRequest.id == revision.approval_request_id).values(owner_member_id=999)
+                elif change == "ACK": query = update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id).values(acknowledged_at=None)
                 else:
+                    from app.services.accepted_source_imports import source_import_context
+                    context = source_import_context(item, revision, workspace, scope)
                     for i in range(64):
                         db.add(GithubAcceptedSourceImport(operation_id=f"capacity-{i}", work_item_id=item.id,
-                            scope_revision_id=revision.id, context_sha256="0" * 64, request_sha256="0" * 64,
+                            scope_revision_id=revision.id, context_sha256=context, request_sha256="0" * 64,
                             accepted_repository="owner/repo", accepted_pull_number=1, accepted_source_sha="8" * 40,
                             accepted_merge_sha="7" * 40, observed_head_sha="d" * 40, path_snapshots={}))
                     await db.flush()

@@ -57,6 +57,8 @@ def fields(value, names):
     result = {}
     for name in names:
         field = value.get(name) if isinstance(value, Mapping) else getattr(value, name)
+        if name == "acknowledged_at" and isinstance(field, str):
+            field = datetime.fromisoformat(field)
         if isinstance(field, datetime):
             field = field.isoformat()
         if name == "enabled":
@@ -77,7 +79,7 @@ def source_import_context(item, revision, workspace, scope):
         "revision": fields(revision, ("id", "work_item_id", "dispatch_nonce", "revision",
             "owner_slot_id", "owner_member_id", "phase", "execution_target", "allowed_paths",
             "allowed_actions", "allowed_commands", "prohibited_actions", "tool_fallbacks",
-            "baseline_head_sha", "baseline_tree_sha", "expected_workspace_id",
+            "baseline_head_sha", "baseline_tree_sha", "acknowledged_at", "expected_workspace_id",
             "expected_lease_token_hash", "max_failed_heads", "approval_request_id")),
         "workspace": fields(workspace, ("id", "path", "leased_item_id", "enabled",
                                       "leased_owner_pid", "leased_owner_proc_start")),
@@ -145,7 +147,7 @@ def source_import_claim_conditions(item, revision, workspace, scope):
         (GithubAttemptScopeRevision, revision, ("id", "work_item_id", "dispatch_nonce", "revision",
             "owner_slot_id", "owner_member_id", "phase", "execution_target", "allowed_paths",
             "allowed_actions", "allowed_commands", "prohibited_actions", "tool_fallbacks",
-            "baseline_head_sha", "baseline_tree_sha", "expected_workspace_id",
+            "baseline_head_sha", "baseline_tree_sha", "acknowledged_at", "expected_workspace_id",
             "expected_lease_token_hash", "max_failed_heads", "approval_request_id")),
         (GithubWorkspace, workspace, ("id", "path", "leased_item_id", "enabled",
                                       "leased_owner_pid", "leased_owner_proc_start")),
@@ -153,7 +155,8 @@ def source_import_claim_conditions(item, revision, workspace, scope):
     ]
     result = []
     for model, row, names in context_rows:
-        predicates = [getattr(model, key) == value for key, value in fields(row, names).items()]
+        predicates = [getattr(model, key) == (getattr(row, key) if key == "acknowledged_at" else value)
+                      for key, value in fields(row, names).items()]
         if model is GithubWorkspace:
             predicates.append(GithubWorkspace.lease_token == workspace.lease_token)
         if model is GithubWorkItem:
@@ -166,13 +169,14 @@ def source_import_claim_conditions(item, revision, workspace, scope):
 
 async def matching_imported_paths(db: AsyncSession, item, revision, workspace, scope,
                                  current, changed_paths, current_head_sha, *, client, token):
+    identity = source_import_context(item, revision, workspace, scope)
     records = (await db.scalars(select(GithubAcceptedSourceImport).where(
         GithubAcceptedSourceImport.work_item_id == item.id,
         GithubAcceptedSourceImport.scope_revision_id == revision.id,
+        GithubAcceptedSourceImport.context_sha256 == identity,
     ).limit(65))).all()
     if len(records) > 64:
         raise ValueError("source_import_read_limit")
-    identity = source_import_context(item, revision, workspace, scope)
     matched = set()
     checked = {}
     for record in records:
@@ -229,7 +233,9 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
             raise ValueError("source_import_replay_conflict")
         return {"status": "already_recorded", "import_id": old.id}
     count = (await db.scalars(select(GithubAcceptedSourceImport.id).where(
-        GithubAcceptedSourceImport.scope_revision_id == revision.id).limit(64))).all()
+        GithubAcceptedSourceImport.work_item_id == item.id,
+        GithubAcceptedSourceImport.scope_revision_id == revision.id,
+        GithubAcceptedSourceImport.context_sha256 == context_hash).limit(64))).all()
     if len(count) >= 64:
         raise ValueError("source_import_read_limit")
     frozen_revision = fields(revision, ("id", "status", "work_item_id", "dispatch_nonce", "revision",
@@ -237,6 +243,7 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
         "allowed_paths", "allowed_actions", "allowed_commands", "prohibited_actions", "tool_fallbacks",
         "owner_slot_id", "owner_member_id", "expected_workspace_id", "expected_lease_token_hash",
         "approval_request_id", "max_failed_heads"))
+    frozen_revision["acknowledged_at"] = revision.acknowledged_at
     frozen_policy = policy_context(item)
     frozen_item = fields(item, ("id", "scope_id", "dispatch_nonce", "owner_slot_id",
                                "active_scope_revision", "pr_number"))
@@ -287,7 +294,9 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
         GithubWorkItem.dispatch_status == "dispatched",
         *policy_context_conditions(frozen_policy),
         select(func.count(GithubAcceptedSourceImport.id)).where(
-            GithubAcceptedSourceImport.scope_revision_id == revision.id).scalar_subquery() < 64,
+            GithubAcceptedSourceImport.work_item_id == item.id,
+            GithubAcceptedSourceImport.scope_revision_id == revision.id,
+            GithubAcceptedSourceImport.context_sha256 == context_hash).scalar_subquery() < 64,
         exists(select(GithubAttemptScopeRevision.id).where(*revision_guard)),
         exists(select(GithubApprovalRequest.id).where(
             *(getattr(GithubApprovalRequest, key) == value for key, value in frozen_approval.items()))),

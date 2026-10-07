@@ -179,6 +179,14 @@ def test_source_import_integration_records_exact_storage_without_changing_approv
     assert imported['context_sha256']==source_import_context(
         original['github_work_items'][0],original['github_attempt_scope_revisions'][0],
         original['github_workspaces'][0],service.rows('SELECT * FROM team_github_scopes')[0])
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.models.database import GithubWorkItem, GithubAttemptScopeRevision, GithubWorkspace, TeamGithubScope
+    engine = create_engine('sqlite:///' + service.profile.database)
+    with Session(engine) as db:
+        assert imported['context_sha256'] == source_import_context(db.get(GithubWorkItem,1),
+            db.get(GithubAttemptScopeRevision,1),db.get(GithubWorkspace,1),db.get(TeamGithubScope,1))
+    engine.dispose()
     assert {table:service.rows('SELECT * FROM '+table) for table in original}==original
     assert service.authority(1) != original_authority
     git(workspace,'merge-base','--is-ancestor',before,'HEAD')
@@ -226,6 +234,53 @@ def test_source_import_reservation_commits_and_rolls_back_real_records(tmp_path)
     assert first['status']=='recorded' and replay['status']=='already_recorded'
     assert first['import_id']==replay['import_id']
     assert len(service.rows('SELECT * FROM github_accepted_source_imports'))==1
+
+
+def test_source_import_initial_attempt_integration_has_no_continuation_boundary(tmp_path):
+    workspace, baseline, tip = repository(tmp_path)
+    service = StoredIntegrationFixture(profile(tmp_path),workspace,tip,baseline,'fast_forward')
+    with sqlite3.connect(service.profile.database) as db:
+        db.execute('DELETE FROM github_attempt_scope_revisions')
+        db.execute('UPDATE github_work_items SET active_scope_revision=0')
+    original = service.authority(1)
+    request = IntegrationRequest(operation_id='initial-integration',work_item_id=1,expected_head=baseline,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    try:
+        service.integration_update(request)
+    except ValueError:
+        pass  # Read the durable outcome to expose the old post-Git refusal.
+    record = read_json(tmp_path/'state/maintenance/initial-integration.json')
+    assert record['status']=='completed' and record['source_import']['status']=='not_applicable'
+    assert git(workspace,'rev-parse','HEAD')==tip and service.authority(1)==original
+    assert service.rows('SELECT * FROM github_accepted_source_imports')==[]
+
+
+def test_source_import_empty_table_creation_does_not_change_upgrade_authority(tmp_path):
+    from sqlalchemy import create_engine
+    from app.models.database import GithubAcceptedSourceImport
+    service = Maintenance(profile(tmp_path));sqlite3.connect(service.profile.database).close()
+    before = service.authority()
+    engine = create_engine('sqlite:///' + service.profile.database)
+    GithubAcceptedSourceImport.__table__.create(engine)
+    engine.dispose()
+    assert service.authority()==before
+
+
+def test_source_import_history_survives_parent_deletion_with_foreign_keys_enabled(tmp_path):
+    workspace, baseline, tip = repository(tmp_path)
+    service = StoredIntegrationFixture(profile(tmp_path),workspace,tip,baseline,'fast_forward')
+    request = IntegrationRequest(operation_id='history-integration',work_item_id=1,expected_head=baseline,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    service.integration_update(request)
+    history = service.rows('SELECT * FROM github_accepted_source_imports')
+    with sqlite3.connect(service.profile.database) as db:
+        db.execute('PRAGMA foreign_keys=ON')
+        assert db.execute('PRAGMA foreign_keys').fetchone()[0]==1
+        db.execute('DELETE FROM github_work_items WHERE id=1')
+        assert db.execute('SELECT COUNT(*) FROM github_attempt_scope_revisions').fetchone()[0]==0
+    assert service.rows('SELECT * FROM github_accepted_source_imports')==history
 
 
 @pytest.mark.parametrize('mode,diverged,result',[('fast_forward',False,'completed'),('fast_forward',True,'needs_coordination'),('merge',True,'needs_coordination')])
