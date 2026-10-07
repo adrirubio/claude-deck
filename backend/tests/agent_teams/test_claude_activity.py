@@ -159,3 +159,133 @@ def test_claude_subdirectory_symlink_outside_workspace_is_unknown(native):
     native["end"]["cwd"] = str(link)
     native["write"]()
     assert native["observe"]().state == "unknown"
+
+
+def _long_turn(native, *, completed=False):
+    result = dict(native["result"])
+    result["message"] = {"role": "user", "content": [
+        {"type": "tool_result", "content": "x" * (2 * claude._TAIL_BYTES)},
+    ]}
+    rows = [native["user"], native["tool"], result]
+    if completed:
+        rows += [native["end"], native["duration"]]
+    else:
+        rows.append(native["row"]("assistant", -1,
+                    message={"role": "assistant", "stop_reason": "tool_use"}))
+    native["write"](rows)
+    return rows
+
+
+@pytest.mark.parametrize("completed,state", [(False, "working"), (True, "idle")])
+def test_claude_long_turn_keeps_proven_start(native, completed, state):
+    _long_turn(native, completed=completed)
+    assert native["log"].stat().st_size > claude._TAIL_BYTES
+    metadata = {}
+    result = native["observe"](provenance=metadata)
+    assert result.state == state
+    if completed:
+        assert result.reason == "native_turn_completed"
+        assert metadata["event_source"] == "claude_end_turn"
+    else:
+        assert result.reason == "native_progress"
+        assert metadata.get("event_source") is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("sessionId", str(uuid4())), ("cwd", "/different"),
+    ("timestamp", "2099-01-01T00:00:00Z"),
+])
+def test_claude_lookback_start_must_keep_its_binding(native, field, value):
+    native["user"][field] = value
+    _long_turn(native)
+    assert native["observe"]().state == "unknown"
+
+
+@pytest.mark.parametrize("flag", ["isSidechain", "isReplay"])
+def test_claude_lookback_cannot_use_other_turn_start(native, flag):
+    native["user"][flag] = True
+    _long_turn(native, completed=True)
+    metadata = {}
+    assert native["observe"](provenance=metadata).state == "unknown"
+    assert metadata.get("event_source") is None
+
+
+def test_claude_lookback_does_not_cross_unsupported_event(native):
+    rows = _long_turn(native)
+    rows.insert(1, native["row"]("system", -3.5, subtype="input_requested"))
+    native["write"](rows)
+    assert native["observe"]().state == "unknown"
+
+
+def test_claude_lookback_does_not_accept_stale_progress(native, monkeypatch):
+    rows = _long_turn(native)
+    for row in rows:
+        row["timestamp"] = (native["now"] - timedelta(seconds=200)).isoformat()
+    native["write"](rows)
+    monkeypatch.setattr(activity, "_process_started_at",
+                        lambda start: native["now"] - timedelta(seconds=300))
+    assert native["observe"]().reason == "native_event_stale"
+
+
+def _track_reads(monkeypatch, callback=None):
+    original = claude.os.fdopen
+    reads = []
+
+    class TrackedStream:
+        def __init__(self, *args, **kwargs):
+            self.stream = original(*args, **kwargs)
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def seek(self, offset):
+            return self.stream.seek(offset)
+
+        def read(self, size):
+            value = self.stream.read(size)
+            reads.append(len(value))
+            if callback:
+                callback(len(reads))
+            return value
+
+    monkeypatch.setattr(claude.os, "fdopen", TrackedStream)
+    return reads
+
+
+def test_claude_lookback_byte_budget_stays_unknown(native, monkeypatch):
+    monkeypatch.setattr(claude, "_TAIL_BYTES", 512)
+    monkeypatch.setattr(claude, "_MAX_HISTORY_BYTES", 4096)
+    result = dict(native["result"])
+    result["message"] = {"role": "user", "content": [
+        {"type": "tool_result", "content": "x" * 8192},
+    ]}
+    native["write"]([native["user"], native["tool"], result,
+                     native["end"], native["duration"]])
+    reads = _track_reads(monkeypatch)
+    metadata = {}
+    observed = native["observe"](provenance=metadata)
+    assert observed.state == "unknown" and observed.reason == "native_history_limit"
+    assert sum(reads) == claude._MAX_HISTORY_BYTES
+    assert len(reads) <= 8
+    assert metadata.get("event_source") is None
+
+
+def test_claude_file_change_during_lookback_is_unknown(native, monkeypatch):
+    _long_turn(native)
+
+    def change_on_second_read(count):
+        if count == 2:
+            with native["log"].open("a") as stream:
+                stream.write(json.dumps(native["row"]("user", 0,
+                    message={"role": "user", "content": "Next fixture."})) + "\n")
+
+    reads = _track_reads(monkeypatch, change_on_second_read)
+    assert native["observe"]().reason == "binding_changed"
+    assert len(reads) > 1

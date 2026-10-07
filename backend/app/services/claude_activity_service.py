@@ -12,6 +12,7 @@ import stat
 from app.utils.path_utils import convert_path_to_folder_name
 
 _TAIL_BYTES = 1_048_576
+_MAX_HISTORY_BYTES = 8 * _TAIL_BYTES
 _PROC = Path("/proc")
 
 
@@ -49,6 +50,37 @@ def _identity(pid: int, session_id: str) -> bool:
     return values == [session_id]
 
 
+def _has_current_prompt(data: bytes, offset: int, started_at: datetime) -> bool:
+    """Find a main-turn start; the ordered parser validates its full binding."""
+    lines = data.splitlines()
+    if offset:
+        lines = lines[1:]
+    for line in reversed(lines):
+        row = json.loads(line)
+        if (row.get("type") != "user" or row.get("isSidechain") is True
+                or row.get("isReplay") is True):
+            continue
+        timestamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("Native timestamp has no timezone")
+        if timestamp < started_at:
+            continue
+        message = row.get("message")
+        if not isinstance(message, dict) or message.get("role") != "user":
+            raise ValueError("Invalid native user message")
+        content = message.get("content")
+        if isinstance(content, str) and content in {
+            "[Request interrupted by user]", "[Request interrupted by user for tool use]",
+        }:
+            continue
+        tool_result = (isinstance(content, list) and bool(content)
+                       and all(isinstance(part, dict) and part.get("type") == "tool_result"
+                               for part in content))
+        if not tool_result:
+            return True
+    return False
+
+
 def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
            started_at: datetime, provenance: dict | None) -> tuple[str, str, datetime | None]:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -60,6 +92,21 @@ def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
         offset = max(0, before.st_size - _TAIL_BYTES)
         stream.seek(offset)
         data = stream.read(_TAIL_BYTES)
+        # A long turn can push its prompt out of the initial tail. Read adjacent
+        # earlier chunks through the same descriptor. Never infer a turn start
+        # from progress alone, and never read an unbounded conversation history.
+        if data.endswith(b"\n"):
+            while offset and not _has_current_prompt(data, offset, started_at):
+                remaining = _MAX_HISTORY_BYTES - len(data)
+                if remaining <= 0:
+                    break
+                previous = max(0, offset - min(_TAIL_BYTES, remaining))
+                stream.seek(previous)
+                prefix = stream.read(offset - previous)
+                if len(prefix) != offset - previous:
+                    return "unknown", "binding_changed", None
+                data = prefix + data
+                offset = previous
         after = os.fstat(stream.fileno())
     current = path.stat(follow_symlinks=False)
     binding = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
@@ -145,6 +192,10 @@ def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
                 f"{session_id}:{terminal}:claude_end_turn".encode()).hexdigest())
     if state == "working" and observed_at and (now - observed_at).total_seconds() > 180:
         return "unknown", "native_event_stale", observed_at
+    if offset and len(data) >= _MAX_HISTORY_BYTES and reason in {
+        "native_progress_without_start", "completion_unconfirmed", "no_native_event",
+    }:
+        return "unknown", "native_history_limit", observed_at
     return state, reason, observed_at
 
 
