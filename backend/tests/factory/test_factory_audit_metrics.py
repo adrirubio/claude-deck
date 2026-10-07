@@ -4419,6 +4419,172 @@ async def test_t07_interventions_count_resource_bound_actions_only(store, client
     assert public["operator_interventions"]["value"] == 3.0
 
 
+async def test_b4f01_replacement_after_final_context_read_gets_no_late_fact(store, monkeypatch):
+    """B4 F01 (7d38 review, owner copy of its probe): an independent session
+    deletes the item and reuses its numeric ID right after the consumer's
+    final context check. The fact insert holds the writer and validates the
+    original context again; the replacement receives no late fact."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_watcher_service import GithubWatcherService
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=173, status="completed")
+    await _a34_non_delivery(store, 173, "item:173:launch:None:revision:None", 73)
+    original = GithubWatcherService._original_context_holds
+    calls = []
+
+    async def read_then_replace(self, db, item, state, captured_scope):
+        result = await original(self, db, item, state, captured_scope)
+        calls.append(result)
+        if len(calls) == 2:
+            assert result is True
+            async with store() as other:
+                await other.execute(text("DELETE FROM github_work_items WHERE id = 173"))
+                await other.commit()
+            await _seed_work(store, item_id=173, status="completed", issue_type="design")
+        return result
+
+    monkeypatch.setattr(GithubWatcherService, "_original_context_holds", read_then_replace)
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await GithubWatcherService()._reconcile_provisional_results(
+            db, scope, _A34Client(merged={73}))
+    assert calls == [True, True]
+    rows = await _outcome_rows(store)
+    assert [row["delivery_outcome"] for row in rows] == ["closed_without_delivery"], rows
+
+
+async def test_b4f02_later_closure_does_not_recount_terminal_duration(db):
+    """B4 F02 (writer probe): a delivered end at +60 s and a routine closure a
+    day later. The first window has the 60-second duration; the later window
+    has no terminal tracking and no duration sample."""
+    from app.services import factory_metrics_service as metrics
+
+    start = datetime(2026, 10, 6, 10)
+    await _seed_item(db, 1)
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="github_dispatch_service.launch",
+        occurred_at=start, actor=audit.derive_actor(
+            actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=1, scope_id=1, after_values={"dispatch_status": "dispatched"},
+        context_snapshot={"launch_attempt": "item:1:launch:1"})
+    common = dict(item_id=1, scope_id=1, attempt="item:1:launch:1:revision:None",
+                  launch_attempt="item:1:launch:1", artifact="owner-1/owner-1/pull/1")
+    await audit.record_delivery_fact(
+        db, **common, delivery_outcome="delivered", completion_kind="merged_code",
+        fact_source="github_pull_request_merged", fact_time=start + timedelta(seconds=60))
+    await audit.record_delivery_fact(
+        db, **common, delivery_outcome="unknown", completion_kind="closed_unproven",
+        fact_source="github_issue_closure", fact_time=start + timedelta(days=1))
+    await db.commit()
+    first = await metrics.build_metrics_window(
+        db, window_start=start, window_end=start + timedelta(hours=1))
+    assert {m.name: m for m in first.metrics}["elapsed_attempt_duration"].value == 60
+    later = await metrics.build_metrics_window(
+        db, window_start=start + timedelta(hours=23), window_end=start + timedelta(hours=25))
+    values = {m.name: m for m in later.metrics}
+    assert values["terminal_tracking_in_window"].value == 0
+    assert values["elapsed_attempt_duration"].sample_count == 0
+    assert values["elapsed_attempt_duration"].value is None
+
+
+async def test_b4f02_public_duration_after_real_declaration_and_routine_closure(
+    store, client, monkeypatch
+):
+    """B4 F02 (consumer probe): the protected declaration, then the real
+    watcher's routine closure. The public duration is 60 seconds in the
+    acceptance window and absent in the closure window."""
+    from app.models.database import AgentTeamLaunch, GithubWorkItem, TeamGithubScope
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import GithubWatcherService
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _a32_item(store, 179)
+    start = datetime(2026, 10, 6, 9, 59)
+    async with store() as db:
+        db.add(AgentTeamLaunch(id=179, preset_id=7, plan_hash="synthetic", status="completed"))
+        await db.flush()
+        await db.execute(text("UPDATE github_work_items SET launch_id = 179 WHERE id = 179"))
+        await db.commit()
+    async with store() as db:
+        item = await db.get(GithubWorkItem, 179)
+        attempt, _revision, launch = await audit.item_attempt(db, item)
+        await audit.record_event(
+            db, event_kind="work_lifecycle", source="github_dispatch_service.launch",
+            occurred_at=start, actor=audit.derive_actor(
+                actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+            item_id=179, after_values={"dispatch_status": "dispatched"},
+            context_snapshot={"launch_attempt": launch})
+        await db.commit()
+    response = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=_a32_body(179, attempt))
+    assert response.status_code == 201, response.text
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+
+    class Closed:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {n: {"state": "closed", "state_reason": "completed", "labels": []}
+                    for n in numbers}
+
+    async with store() as db:
+        await GithubWatcherService()._recheck_active_items(
+            db, await db.get(TeamGithubScope, 5), Closed())
+    first = await _public_metrics(client, start, start + timedelta(hours=1))
+    assert first["elapsed_attempt_duration"]["value"] == 60
+    now = datetime.utcnow()
+    later = await _public_metrics(client, now - timedelta(minutes=5), now + timedelta(minutes=5))
+    assert later["terminal_tracking_in_window"]["value"] == 0
+    assert later["delivered_in_window"]["value"] == 0
+    assert later["elapsed_attempt_duration"]["sample_count"] == 0
+
+
+async def test_b4f03_recovery_result_count_survives_live_revision_deletion(db):
+    """B4 F03 (production revision writer): two call sites record one revision
+    result. Recovery counts one result before and after the live revision is
+    deleted and its reference is set to null."""
+    from app.services import factory_metrics_service as metrics
+
+    await _seed_item(db, 40)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions"
+        " (id, work_item_id, dispatch_nonce, revision, owner_slot_id, owner_member_id, phase,"
+        " execution_target, summary, allowed_paths, allowed_actions, allowed_commands,"
+        " prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha,"
+        " originating_escalation_reason, expected_workspace_id, expected_lease_token_hash,"
+        " max_failed_heads, failed_head_count, status, delivery_attempt_count, created_at)"
+        " VALUES (40, 40, 'n', 1, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]',"
+        " '{}', 'a', 'b', 'r', 1, 'h', 2, 0, 'completed', 0, CURRENT_TIMESTAMP)"))
+    await db.execute(text("UPDATE github_work_items SET dispatch_status = 'completed' WHERE id = 40"))
+    await db.commit()
+    for source in ("github_dispatch_service", "github_verification_service"):
+        await audit.record_revision_outcome(
+            db, item_id=40, revision_id=40, status="completed", source=source)
+    await db.commit()
+
+    async def sample():
+        now = datetime.utcnow()
+        result = await metrics.build_metrics_window(
+            db, window_start=now - timedelta(hours=1), window_end=now + timedelta(hours=1))
+        return next(s for s in result.metrics if s.name == "recovery_success")
+
+    first = await sample()
+    assert (first.value, first.sample_count) == (1.0, 1)
+    await db.execute(text("DELETE FROM github_work_items WHERE id = 40"))
+    await db.commit()
+    remaining = (await db.execute(text("SELECT revision_id FROM factory_audit_events"))).scalars().all()
+    assert remaining == [None, None]
+    retained = await sample()
+    assert (retained.value, retained.sample_count) == (1.0, 1)
+
+
 class _A34Client:
     """Fake client at the get_pull boundary; records each pull read."""
 

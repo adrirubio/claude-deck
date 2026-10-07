@@ -10,6 +10,7 @@ review; unknown and explicit non-delivery stay separate from successes.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from statistics import median
 
@@ -192,14 +193,13 @@ async def build_metrics_window(
     # T02: one result per revision, however many call sites observed it.
     recovery_rows = (await db.execute(ledger_scoped(
         select(FactoryAuditEvent.id, FactoryAuditEvent.revision_id,
+               FactoryAuditEvent.operation_id,
                func.json_extract(FactoryAuditEvent.after_values, '$.status').label("status"))
         .select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind == "revision_outcome")))).all()
     revision_results: dict[str, set] = {}
     for row in recovery_rows:
-        revision_results.setdefault(
-            f"revision:{row.revision_id}" if row.revision_id is not None else f"event:{row.id}",
-            set()).add(row.status)
+        revision_results.setdefault(_revision_result_identity(row), set()).add(row.status)
     recovery_applied = sum(1 for statuses in revision_results.values() if "completed" in statuses)
     recovery_total = len(revision_results)
     recovery_uncertain = await _count(db, ledger_scoped(
@@ -352,6 +352,21 @@ async def build_metrics_window(
 _OUTCOME_RANK = {_UNKNOWN: 1, _NON_DELIVERY: 2, _DELIVERED: 3}
 # T07: facts derived from an action's evidence, never actions themselves.
 _DERIVED_EVIDENCE_KINDS = ("delivery_evidence",)
+_REVISION_RESULT_OPERATION = re.compile(r"^revision_outcome:(\d+):")
+
+
+def _revision_result_identity(row) -> str:
+    """B4 F03: the immutable revision of a result fact.
+
+    The retained operation identity names the revision, so deleting the live
+    revision (which nulls revision_id) never splits one result into two.
+    """
+    match = _REVISION_RESULT_OPERATION.match(row.operation_id or "")
+    if match is not None:
+        return f"revision:{match.group(1)}"
+    if row.revision_id is not None:
+        return f"revision:{row.revision_id}"
+    return f"event:{row.id}"
 _DESIGN_COMPLETION_KINDS = ("merged_design", "design_artifact_accepted")
 
 
@@ -503,22 +518,29 @@ async def _same_attempt_durations(
             starts[key] = occurred_at
     ends: dict[str, datetime] = {}
     unbound: set[str] = set()
-    # The terminal boundary is the sourced fact time when known.
+    # The terminal boundary is the sourced fact time when known. B4 F02: the
+    # canonical boundary of each lifetime launch is its first terminal fact,
+    # chosen before window filtering; the duration counts once, in the
+    # window that contains that boundary. A later closure adds nothing.
     effective_time = func.coalesce(FactoryAuditEvent.fact_time, FactoryAuditEvent.occurred_at)
+    start_bound = _naive_utc(window_start)
     for event_id, item_id, item_key, occurred_at, fact_time, snapshot in (await db.execute(
         ledger_keyed(
             select(FactoryAuditEvent.id, FactoryAuditEvent.item_id,
                    FactoryAuditEvent.item_context_key, FactoryAuditEvent.occurred_at,
                    FactoryAuditEvent.fact_time, FactoryAuditEvent.context_snapshot)
             .where(FactoryAuditEvent.event_kind == "delivery_evidence",
-                   effective_time >= window_start, effective_time <= window_end)
+                   effective_time <= window_end)
     ))).all():
         key = _lifetime_launch_key(item_key, snapshot)
         end = fact_time or occurred_at
         if key is None:
-            unbound.add(str((snapshot or {}).get("attempt") or f"item:{item_id}:event:{event_id}"))
+            if end is not None and end >= start_bound:
+                unbound.add(str((snapshot or {}).get("attempt")
+                                or f"item:{item_id}:event:{event_id}"))
         elif key not in ends or end < ends[key]:
             ends[key] = end
+    ends = {key: end for key, end in ends.items() if end >= start_bound}
     durations = [
         (end - starts[key]).total_seconds()
         for key, end in ends.items() if key in starts and starts[key] <= end

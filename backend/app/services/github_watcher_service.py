@@ -49,6 +49,33 @@ def _attempt_identity(item: GithubWorkItem) -> tuple:
             item.pr_number, item.dispatch_head_ref)
 
 
+async def _context_still_original(
+    db: AsyncSession, item_id: int, state: dict, captured_scope: tuple
+) -> bool:
+    """T04/B4 F01: the work item row is the original lifetime, scope and repository.
+
+    It reads only current committed rows. Called before and after the external
+    read, and again after the fact insert while the writer is held.
+    """
+    from app.services import factory_audit_service as _audit
+
+    row = (await db.execute(select(GithubWorkItem.scope_id).where(
+        GithubWorkItem.id == item_id))).first()
+    if row is None or row.scope_id != captured_scope[0]:
+        return False
+    scope_row = (await db.execute(select(
+        TeamGithubScope.repo_owner, TeamGithubScope.repo_name,
+    ).where(TeamGithubScope.id == row.scope_id))).first()
+    if scope_row is None or (scope_row.repo_owner, scope_row.repo_name) != captured_scope[1:]:
+        return False
+    if await _audit.current_context_key(db, "item", item_id) != state["item_context_key"]:
+        return False
+    if state["scope_context_key"] is not None and await _audit.current_context_key(
+            db, "scope", row.scope_id) != state["scope_context_key"]:
+        return False
+    return True
+
+
 def _pull_in_repository(pull: dict, repository: str) -> bool:
     """A34: the pull's base and head both belong to the scope repository."""
     for side in ("base", "head"):
@@ -505,6 +532,15 @@ class GithubWatcherService:
                         "scope_context_key": state["scope_context_key"],
                         "team_context_key": state["team_context_key"],
                         "issue_type": state["issue_type"]})
+                # B4 F01: the insert holds the SQLite writer, so no other
+                # session can commit a deletion or reuse until this commit.
+                # Validate the original context again under that writer; a
+                # replacement that won before the insert rolls the fact back.
+                if not await _context_still_original(
+                        db, state["item_id"], state, captured_scope):
+                    await db.rollback()
+                    await db.refresh(scope)
+                    continue
                 await db.commit()
             except Exception:
                 logger.info("Later result unavailable for attempt %s", state["attempt"],
@@ -520,19 +556,7 @@ class GithubWatcherService:
         self, db: AsyncSession, item: GithubWorkItem, state: dict, captured_scope: tuple
     ) -> bool:
         """T04: the item is still the original lifetime, scope and repository."""
-        from app.services import factory_audit_service as _audit
-
-        if item.scope_id != captured_scope[0]:
-            return False
-        scope_row = await db.get(TeamGithubScope, item.scope_id, populate_existing=True)
-        if scope_row is None or (scope_row.repo_owner, scope_row.repo_name) != captured_scope[1:]:
-            return False
-        if await _audit.current_context_key(db, "item", item.id) != state["item_context_key"]:
-            return False
-        if state["scope_context_key"] is not None and await _audit.current_context_key(
-                db, "scope", item.scope_id) != state["scope_context_key"]:
-            return False
-        return True
+        return await _context_still_original(db, item.id, state, captured_scope)
 
     async def _attempt_continues(self, db: AsyncSession, item_id: int) -> bool:
         """R02/A30: a pending approval, live revision or requested retry continues it."""
