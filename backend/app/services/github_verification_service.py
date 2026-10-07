@@ -1475,6 +1475,13 @@ class GithubVerificationService:
             revision.failed_head_count += 1
             revision.last_failed_head_sha = head_sha
             item.diagnostic_retry_count += 1
+            # C12: diagnostic retry evidence, in the charge's transaction.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_retry_charge(
+                db, item_id=item.id, scope_id=item.scope_id, revision_id=revision.id,
+                retry_class="diagnostic", counter_value=item.diagnostic_retry_count,
+                reason_code="diagnostic_failed_head",
+                source="github_verification_service._record_diagnostic_failure")
             item.diagnostic_last_verified_sha = head_sha
             item.status_note = "Diagnostic checks produced failure evidence."
             item.updated_at = datetime.utcnow()
@@ -2067,6 +2074,13 @@ class GithubVerificationService:
         note: str,
     ) -> None:
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=None,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="transient_merge_failure",
+            source="github_verification_service._record_transient_merge_failure")
         if item.retry_count > scope.max_verification_retries:
             await self._fallback_to_human_merge(
                 db,
@@ -2489,6 +2503,13 @@ class GithubVerificationService:
         revision.failed_head_count += 1
         revision.last_failed_head_sha = head_sha
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=revision.id,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="product_verification_failure",
+            source="github_verification_service._record_product_verification_failure")
         item.last_verified_sha = head_sha
         self._set_failure_note(item, note)
         revision_exhausted = revision.failed_head_count >= revision.max_failed_heads
@@ -2558,6 +2579,13 @@ class GithubVerificationService:
 
         item.last_verified_sha = head_sha
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=None,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="failed_verification_attempt",
+            source="github_verification_service._record_failed_verification_attempt")
         self._set_failure_note(item, note)
         await github_dispatch_service.notify_owner(
             db,

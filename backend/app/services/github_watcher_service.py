@@ -328,6 +328,7 @@ class GithubWatcherService:
             fact_source=fact_source,
             fact_time=datetime.utcnow(),
             attempt=captured_attempt,
+            launch_attempt=_audit.launch_attempt_key(captured_item_id, captured_launch_id),
         )
         item.dispatch_status = "completed"
         item.escalation_reason = None

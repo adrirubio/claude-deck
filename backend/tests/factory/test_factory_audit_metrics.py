@@ -21,6 +21,10 @@ from app.services import factory_metrics_service as metrics
 
 pytestmark = pytest.mark.asyncio
 
+# C12: the forward-coverage marker of the disposable fixture database. It
+# precedes every fixture fact, so fixture windows are fully covered.
+_COVERAGE_START = datetime(2026, 1, 1, 0, 0, 0)
+
 
 @pytest_asyncio.fixture
 async def db():
@@ -34,6 +38,7 @@ async def db():
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await audit.install_forward_coverage(conn, installed_at=_COVERAGE_START)
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:
         session.info["async_engine"] = engine
@@ -381,15 +386,19 @@ async def test_a22_metrics_need_no_live_operational_rows(db):
 
 
 async def test_a24_a27_duration_and_retry_boundaries(db):
-    """A24-A27: duration is named by its boundaries; retries stay separate;
-    budget counters are authoritative."""
+    """A24-A27/C12: with no boundaries the duration is unavailable and named
+    by its boundaries; evidenced retry classes and authoritative counters
+    are separate samples."""
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
     by_name = {sample.name: sample for sample in window.metrics}
     assert by_name["elapsed_attempt_duration"].value is None
+    assert by_name["elapsed_attempt_duration"].sample_count == 0
     assert "not execution time" in by_name["elapsed_attempt_duration"].unknown_reasons[0]
-    assert by_name["diagnostic_retries"].value is None
-    assert "budget counters" in by_name["diagnostic_retries"].unknown_reasons[0]
+    assert by_name["diagnostic_retries"].value == 0.0
+    assert by_name["implementation_retries"].value == 0.0
+    assert by_name["diagnostic_retry_counters"].source == "live_persisted_state"
+    assert "authoritative counters" in by_name["implementation_retry_counters"].coverage
 
 
 async def test_c04_metric_predicates_match_labels_and_filters(db):
@@ -511,6 +520,7 @@ async def test_c03_absent_review_evidence_never_counts(db):
     by_name = {sample.name: sample for sample in window.metrics}
     assert by_name["independently_human_reviewed_design"].value == 0.0
     assert by_name["independently_human_reviewed_design"].unknown_count == 1
+    assert by_name["independently_human_reviewed_design"].coverage == "full"
 
     # Invalid evidence (operator actor), then valid and repeated evidence.
     await audit.record_event(
@@ -2145,9 +2155,8 @@ async def test_c09_continuation_ack_records_lifecycle_fact_or_refusal(
     else:
         assert response.status_code == 403
         assert facts[0]["action_outcome"] == "rejected"
-        # C10 limit: the current sanitizer redacts the credential keywords in
-        # the refusal code "lease_token_mismatch".
-        assert facts[0]["sanitized_reason"].endswith("_mismatch")
+        # C10: a controlled refusal code is stored exactly.
+        assert facts[0]["sanitized_reason"] == "lease_token_mismatch"
         assert after == before
 
 
@@ -2209,11 +2218,10 @@ async def test_c09_release_remedy_refusals_record_actor_and_keep_guards(store, c
 
     assert (not_leased.status_code, not_releasable.status_code) == (409, 409)
     facts = await _facts(store, event_kind="workspace_release")
-    # C10 limit: the current sanitizer also alters the "leased" keyword, so
-    # the stored reason is compared with its own sanitized code.
+    # C10: controlled refusal codes are stored exactly.
     assert [(f["action_outcome"], f["actor_kind"], f["actor_member_id"], f["item_id"],
              f["sanitized_reason"]) for f in facts] == [
-        ("rejected", "operator", None, None, audit.sanitize_reason("workspace_not_leased")),
+        ("rejected", "operator", None, None, "workspace_not_leased"),
         ("rejected", "member", _OWNER["member"], 93, "status_not_releasable"),
     ]
     assert await _authority(store, 93) == before
@@ -2817,3 +2825,478 @@ async def test_c09_recovery_holds_and_checkpoint_releases_record_real_actors(
     assert after[0] == before[0]
     assert after[1] == before[1]
     assert after[2] == [(revision_id, "approved", 0, "ack_open")]
+
+
+# ---------------------------------------------------------------------------
+# C10 safe writer. Every marker is synthetic and contains "SYNTHC10" or the
+# hex run "c10c10c10c10". No private value is used.
+# ---------------------------------------------------------------------------
+
+_PUBLIC_SHA = "946b540076af5ca0d1ea220bb73a112ab5e49d3a"
+
+
+async def _raw_ledger_text(maker) -> str:
+    """Every stored ledger column, as text, from a fresh session."""
+    async with maker() as db:
+        rows = (await db.execute(text("SELECT * FROM factory_audit_events"))).fetchall()
+    return "\n".join(repr(tuple(row)) for row in rows)
+
+
+async def test_c10_leader_route_reason_and_slot_snapshot_markers_never_stored(store, client):
+    """C10: credential-shaped markers in the actual Leader reason and in the
+    slot label captured by its snapshot are absent from the stored row and
+    from the protected audit read. Ordinary words and a commit SHA stay."""
+    await _seed_team(store)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE agent_team_slots SET display_name = :name WHERE id = :id"),
+            {"name": "Slot secret=SYNTHC10SLOT", "id": _OTHER["slot"]})
+        updated_at = (await db.execute(text(
+            "SELECT updated_at FROM agent_team_presets WHERE id = 7"))).scalar_one()
+        await db.commit()
+    reason = (
+        f"release rotation at {_PUBLIC_SHA} token=SYNTHC10EQ password: SYNTHC10COLON"
+        " Authorization: Bearer SYNTHC10HDR https://fixture:SYNTHC10URL@example.invalid/x"
+        " ghp_SYNTHC10GHPmarker0000001 c10c10c10c10c10c10ab")
+
+    response = await client.put(
+        "/api/v1/agent-teams/presets/7/leader", headers=_OPERATOR_HEADERS,
+        json={"leader_slot_id": _OTHER["slot"], "expected_leader_slot_id": _LEADER["slot"],
+              "expected_updated_at": str(updated_at), "reason": reason})
+    assert response.status_code == 200, response.text
+
+    stored = await _raw_ledger_text(store)
+    read = await client.get("/api/v1/factory/audit-events", headers=_OPERATOR_HEADERS)
+    assert read.status_code == 200
+    for evidence in (stored, read.text):
+        assert "SYNTHC10" not in evidence
+        assert "c10c10c10c10" not in evidence
+    event = read.json()["items"][0]
+    assert event["event_kind"] == "leader_assignment"
+    assert event["sanitized_reason"] == (
+        f"release rotation at {_PUBLIC_SHA} token=[redacted] password: [redacted]"
+        " Authorization: [redacted] https://[redacted]@example.invalid/x [redacted] [redacted]")
+    assert event["context_snapshot"]["slot_display_name"] == "Slot secret=[redacted]"
+    assert event["after_values"] == {"leader_slot_id": _OTHER["slot"]}
+
+
+async def test_c10_writer_projects_nested_and_allowed_key_values(db):
+    """C10: allowed keys keep only sanitized primitives; nested objects,
+    unknown snapshot fields and extra review fields are never stored."""
+    await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=audit.derive_actor(actor_kind="operator"), action_outcome="applied",
+        sanitized_reason='{"secret": "SYNTHC10JSON", "note": "kept"}',
+        before_values={"status_note": "plain note"},
+        after_values={"status_note": "api_key=SYNTHC10ALLOWED",
+                      "status": {"nested": "SYNTHC10NESTED"},
+                      "lease_token": "SYNTHC10KEY"},
+        context_snapshot={"slot_display_name": "X-Api-Key: SYNTHC10SNAP",
+                          "diagnostics": {"command": "SYNTHC10DIAG"},
+                          "repo_name": ["SYNTHC10LIST"],
+                          "event_time_labels": ["slot_display_name", "SYNTHC10LABEL"]},
+        human_review_evidence={"fact_kind": "human_review_acceptance", "artifact": "design-1",
+                               "version": "v1", "actor": "reviewer-external",
+                               "source": "Bearer SYNTHC10BEARERVALUE",
+                               "raw": {"token": "SYNTHC10RAW"}})
+    await db.commit()
+
+    rows = (await db.execute(text("SELECT * FROM factory_audit_events"))).fetchall()
+    assert len(rows) == 1
+    assert "SYNTHC10" not in repr(tuple(rows[0]))
+    event = (await db.execute(select(FactoryAuditEvent))).scalars().one()
+    assert event.sanitized_reason == '{"secret": [redacted]", "note": "kept"}'
+    assert event.before_values == {"status_note": "plain note"}
+    assert event.after_values == {"status_note": "api_key=[redacted]"}
+    assert event.context_snapshot == {"slot_display_name": "X-Api-Key: [redacted]",
+                                      "event_time_labels": ["slot_display_name"]}
+    assert event.human_review_evidence == {
+        "fact_kind": "human_review_acceptance", "artifact": "design-1", "version": "v1",
+        "actor": "reviewer-external", "source": "Bearer [redacted]"}
+    assert audit.validated_review_evidence(event.human_review_evidence) is True
+
+
+async def test_c09_initial_decision_notice_send_failure_keeps_committed_decision(
+    store, client, monkeypatch
+):
+    """C09: the real Leader decision commits, then its notice send fails. The
+    applied decision stays once, the notice is uncertain, and a retry sends
+    one notice and records it settled without a second decision fact."""
+    from app.services.agent_mail_service import agent_mail_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=94, status="dispatched", nonce=_NONCE)
+    created = await client.post(
+        "/api/v1/agent-mail/approval-requests", headers=_session_headers(_OWNER),
+        json={"work_item_id": 94, "dispatch_nonce": _NONCE, "summary": "Initial plan"})
+    assert created.status_code == 200, created.text
+    request_id = created.json()["id"]
+    body = {"work_item_id": 94, "dispatch_nonce": _NONCE, "approval_request_id": request_id,
+            "decision": "approved", "reason": "bounded plan"}
+    original_send = agent_mail_service.send_authoritative_decision
+
+    async def failing_send(*_args, **_kwargs):
+        raise RuntimeError("synthetic low-level send failure")
+
+    monkeypatch.setattr(agent_mail_service, "send_authoritative_decision", failing_send)
+    failed = await client.post("/api/v1/agent-mail/decisions",
+                               headers=_session_headers(_LEADER), json=body)
+    assert failed.status_code == 500
+    async with store() as db:
+        status = (await db.execute(text(
+            "SELECT status FROM github_approval_requests WHERE id = :id"),
+            {"id": request_id})).scalar_one()
+    assert status == "approved"
+    notices = await _facts(store, event_kind="approval_decision_notification")
+    assert [(f["action_outcome"], f["request_id"], f["actor_session_id"]) for f in notices] == [
+        ("uncertain", request_id, _LEADER["session"])]
+
+    monkeypatch.setattr(agent_mail_service, "send_authoritative_decision", original_send)
+    retried = await client.post("/api/v1/agent-mail/decisions",
+                                headers=_session_headers(_LEADER), json=body)
+    assert retried.status_code == 200, retried.text
+    decisions = await _facts(store, event_kind="approval_decision")
+    assert [(f["action_outcome"], f["actor_member_id"]) for f in decisions] == [
+        ("applied", _LEADER["member"])]
+    notices = await _facts(store, event_kind="approval_decision_notification")
+    assert [f["action_outcome"] for f in notices] == ["uncertain", "applied"]
+    assert await _messages_with_key(store, f"github-approval:{request_id}:decision") == 1
+
+
+async def test_c09_continuation_decision_notice_send_failure_keeps_committed_decision(
+    store, client, monkeypatch
+):
+    """C09: the real continuation decision commits, then its notice send
+    fails. The decision stays once, the notice is uncertain for the exact
+    revision, and a retry records the settled notice once."""
+    from app.services.agent_mail_service import agent_mail_service
+    from app.services.github_client import (
+        GithubCommitSnapshot, GithubTreeEntry, github_client,
+    )
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=95, status="escalated", workspace_id=105,
+                     workspace_kind="worktree", lease_token="synthetic-lease-95",
+                     escalation_reason="retry_count_exhausted", pr_number=73,
+                     dispatch_head_ref=_HEAD_REF)
+    _stub_open_pull(monkeypatch)
+
+    async def snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    async def tree(*_args, **_kwargs):
+        return [GithubTreeEntry(path="src/a.py", mode="100644", object_type="blob",
+                                sha="c" * 40)]
+
+    monkeypatch.setattr(github_client, "get_commit_snapshot", snapshot)
+    monkeypatch.setattr(github_client, "get_recursive_tree", tree)
+    proposal = await client.post(
+        "/api/v1/agent-teams/github-work-items/95/continuation-requests",
+        headers=_session_headers(_OWNER),
+        json={"dispatch_nonce": _NONCE, "phase": "implementation",
+              "execution_target": "workspace", "summary": "Bounded matrix correction",
+              "allowed_paths": ["src/a.py"],
+              "allowed_actions": ["edit_production", "push_pr_head", "request_verification"],
+              "allowed_commands": ["pytest -q"], "prohibited_actions": ["Do not edit CI"],
+              "max_failed_heads": 1, "tool_fallbacks": {},
+              "lease_token": "synthetic-lease-95"})
+    assert proposal.status_code == 200, proposal.text
+    revision_id = proposal.json()["revision"]["id"]
+    request_id = proposal.json()["approval"]["id"]
+    body = {"approval_request_id": request_id, "work_item_id": 95,
+            "dispatch_nonce": _NONCE, "decision": "approved", "reason": "bounded"}
+    originals = (agent_mail_service.send_authoritative_decision,
+                 agent_mail_service.send_direct_message)
+
+    async def failing_send(*_args, **_kwargs):
+        raise RuntimeError("synthetic low-level send failure")
+
+    # Mail boundary: every send path fails after the decision commit.
+    monkeypatch.setattr(agent_mail_service, "send_authoritative_decision", failing_send)
+    monkeypatch.setattr(agent_mail_service, "send_direct_message", failing_send)
+    failed = await client.post("/api/v1/agent-mail/continuation-decisions",
+                               headers=_session_headers(_LEADER), json=body)
+    assert failed.status_code == 500
+    async with store() as db:
+        status = (await db.execute(text(
+            "SELECT status FROM github_approval_requests WHERE id = :id"),
+            {"id": request_id})).scalar_one()
+    assert status == "approved"
+    notices = await _facts(store, event_kind="continuation_decision_notification")
+    assert [(f["action_outcome"], f["request_id"], f["revision_id"], f["actor_session_id"])
+            for f in notices] == [("uncertain", request_id, revision_id, _LEADER["session"])]
+
+    monkeypatch.setattr(agent_mail_service, "send_authoritative_decision", originals[0])
+    monkeypatch.setattr(agent_mail_service, "send_direct_message", originals[1])
+    retried = await client.post("/api/v1/agent-mail/continuation-decisions",
+                                headers=_session_headers(_LEADER), json=body)
+    assert retried.status_code == 200, retried.text
+    decisions = await _facts(store, event_kind="continuation_decision")
+    assert [(f["action_outcome"], f["actor_member_id"], f["revision_id"]) for f in decisions] == [
+        ("applied", _LEADER["member"], revision_id)]
+    notices = await _facts(store, event_kind="continuation_decision_notification")
+    assert [f["action_outcome"] for f in notices] == ["uncertain", "applied"]
+
+
+# ---------------------------------------------------------------------------
+# C12 coverage, import, durations and retry classes.
+# ---------------------------------------------------------------------------
+
+
+async def test_c12_migration_installs_marker_and_imports_populated_state_once(store):
+    """C12: the real compatibility migration installs one stable marker and
+    imports the populated persisted state once. Repeated runs change neither
+    the marker nor the import; authority is unchanged; no fact time is
+    inferred from row timestamps."""
+    import json as _json
+
+    import app.database as _database
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=60, status="escalated", escalation_reason="plan_blocked")
+    await _seed_work(store, item_id=61, status="completed", retry_count=0)
+    before = [await _authority(store, 60), await _authority(store, 61)]
+    engine = store.kw["bind"]
+
+    async with engine.connect() as conn:
+        await _database._run_sqlite_compat_migrations(conn)
+    async with store() as db:
+        marker = await audit.coverage_marker_time(db)
+    first = await _facts(store, event_kind="work_state_import")
+    async with engine.connect() as conn:
+        await _database._run_sqlite_compat_migrations(conn)
+    await _seed_work(store, item_id=62, status="pending")
+    async with engine.connect() as conn:
+        await _database._run_sqlite_compat_migrations(conn)
+
+    assert marker is not None
+    assert await _facts(store, event_kind="work_state_import") == first
+    assert [(f["item_id"], f["scope_id"], f["action_outcome"], f["actor_kind"]) for f in first] == [
+        (60, 5, "applied", "system"), (61, 5, "applied", "system")]
+    assert _json.loads(first[0]["after_values"]) == {
+        "dispatch_status": "escalated", "attempt_phase": "implementation", "retry_count": 2,
+        "diagnostic_retry_count": 1, "active_scope_revision": 0}
+    async with store() as db:
+        rows = (await db.execute(text(
+            "SELECT record_kind, fact_time, occurred_at, operation_id FROM factory_audit_events"
+            " WHERE event_kind = 'work_state_import' ORDER BY id"))).fetchall()
+        assert await audit.coverage_marker_time(db) == marker
+        window = await metrics.build_metrics_window(
+            db, window_start=marker - timedelta(hours=1), window_end=marker + timedelta(hours=1))
+        markers = (await db.execute(text(
+            "SELECT COUNT(*) FROM deck_compat_migrations WHERE name = :name"),
+            {"name": audit.COVERAGE_MARKER})).scalar_one()
+    assert markers == 1
+    assert [(row[0], row[1], row[3]) for row in rows] == [
+        ("observed_snapshot", None, f"{audit.COVERAGE_MARKER}:item:60"),
+        ("observed_snapshot", None, f"{audit.COVERAGE_MARKER}:item:61")]
+    assert {datetime.fromisoformat(str(row[2])) for row in rows} == {marker}
+    assert window.instrumentation_start == marker
+    # Imported snapshots are not outcomes, failures or operator actions.
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["unknown_outcomes"].value == 0.0
+    assert by_name["operator_interventions"].value == 0.0
+    assert [await _authority(store, 60), await _authority(store, 61)] == before
+
+
+async def test_c12_intervals_follow_the_stable_marker(db):
+    """C12: empty, partial and wholly historical windows report truthful
+    requested, available and missing intervals. One event inside a window
+    before the marker never erases its missing interval."""
+    actor = audit.derive_actor(actor_kind="operator")
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=datetime(2025, 12, 1, 12),
+        actor=actor, action_outcome="applied", delivery_outcome="delivered")
+    await db.commit()
+
+    historical = await metrics.build_metrics_window(
+        db, window_start=datetime(2025, 12, 1), window_end=datetime(2025, 12, 2))
+    partial = await metrics.build_metrics_window(
+        db, window_start=datetime(2025, 12, 31), window_end=datetime(2026, 1, 2))
+    full = await metrics.build_metrics_window(
+        db, window_start=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        window_end=datetime(2026, 1, 6, tzinfo=timezone.utc))
+
+    assert historical.missing_intervals == [
+        "2025-12-01T00:00:00/2025-12-02T00:00:00: before instrumentation start"]
+    assert (historical.available_interval_start, historical.available_interval_end) == (None, None)
+    delivered = {s.name: s for s in historical.metrics}["delivered_in_window"]
+    assert (delivered.value, delivered.coverage) == (None, "unavailable")
+    assert partial.missing_intervals == [
+        "2025-12-31T00:00:00/2026-01-01T00:00:00: before instrumentation start"]
+    assert (partial.available_interval_start, partial.available_interval_end) == (
+        _COVERAGE_START, datetime(2026, 1, 2))
+    assert {s.name: s for s in partial.metrics}["delivered_in_window"].coverage == "partial"
+    assert full.missing_intervals == []
+    assert {s.name: s for s in full.metrics}["delivered_in_window"].coverage == "full"
+    for window in (historical, partial, full):
+        assert window.instrumentation_start == _COVERAGE_START
+    # Present-state observations keep their own label in every window.
+    assert {s.name: s for s in historical.metrics}["current_queue"].coverage == (
+        "present-state observation (all teams)")
+    assert metrics._coverage(None, datetime(2026, 1, 1), datetime(2026, 1, 2))[0] == "unavailable"
+
+
+async def test_c13_metrics_populations_follow_resolved_context_keys(db):
+    """C04/C13: a team key selects that team's present state; a key of the
+    wrong kind, an unknown key or a scope of another team has no current
+    population and is never reported as global. Terminal tracking is a
+    separate sample from delivery."""
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_scope(db, 2, preset_id=8)
+    for item_id, scope_id in ((31, 1), (32, 1), (33, 2)):
+        await _seed_item(db, item_id, scope_id=scope_id)
+    await db.commit()
+    team_a = await audit.context_key_for(db, "team", 7)
+    scope_b = await audit.context_key_for(db, "scope", 2)
+    await audit.record_delivery_fact(
+        db, item_id=31, scope_id=1, team_context_key=team_a, delivery_outcome="unknown",
+        completion_kind="closed_unproven", fact_source="github_watcher", fact_time=_now())
+    await db.commit()
+
+    async def window(**keys):
+        result = await metrics.build_metrics_window(
+            db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1),
+            filter_scope="scoped", **keys)
+        return {sample.name: sample for sample in result.metrics}
+
+    team = await window(team_context_key=team_a)
+    assert (team["total_tracked_attempts"].value, team["total_tracked_attempts"].coverage) == (
+        2.0, "present-state observation (team)")
+    assert team["terminal_tracking_in_window"].value == 1.0
+    assert team["delivered_in_window"].value == 0.0
+    for keys in ({"team_context_key": team_a, "scope_context_key": scope_b},
+                 {"team_context_key": "team:999:synthetic"},
+                 {"scope_context_key": team_a}):
+        refused = await window(**keys)
+        assert refused["total_tracked_attempts"].value is None, keys
+        assert refused["total_tracked_attempts"].unknown_reasons == [
+            "the selected context key has no current resource"]
+
+
+async def test_c12_durations_pair_only_same_launch_boundaries(db):
+    """C12: the real lifecycle writer records the launch boundary. A duration
+    pairs it only with the first terminal fact of the same launch; another
+    launch and a terminal fact without a launch identity stay unknown."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+
+    for item_id in (21, 22, 23):
+        await _seed_item(db, item_id)
+    for launch_id in (121, 122):
+        await db.execute(text(
+            "INSERT INTO agent_team_launches (id, preset_id, plan_hash, status, created_at)"
+            " SELECT :id, preset_id, 'synthetic-plan', 'completed', CURRENT_TIMESTAMP"
+            " FROM team_github_scopes WHERE id = 1"), {"id": launch_id})
+    await db.execute(text(
+        "UPDATE github_work_items SET launch_id = id + 100 WHERE id IN (21, 22)"))
+    await db.commit()
+    for item_id in (21, 22):
+        item = await db.get(GithubWorkItem, item_id)
+        await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
+                                     source="github_dispatch_service.launch")
+    await db.commit()
+    starts = (await db.execute(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "work_lifecycle"))).scalars().all()
+    assert [event.context_snapshot for event in starts] == [
+        {"launch_attempt": "item:21:launch:121"}, {"launch_attempt": "item:22:launch:122"}]
+    assert [event.scope_id for event in starts] == [1, 1]
+    for event in starts:
+        event.occurred_at = _now()
+    await db.commit()
+
+    for minutes, artifact in ((10, None), (20, "pr-21")):
+        await audit.record_delivery_fact(
+            db, item_id=21, delivery_outcome="unknown", completion_kind="closed_unproven",
+            fact_source="github_watcher", fact_time=_now() + timedelta(minutes=minutes),
+            artifact=artifact, attempt="item:21:launch:121:revision:None",
+            launch_attempt=audit.launch_attempt_key(21, 121))
+    await audit.record_delivery_fact(
+        db, item_id=22, delivery_outcome="unknown", completion_kind="closed_unproven",
+        fact_source="github_watcher", fact_time=_now() + timedelta(minutes=5),
+        attempt="item:22:launch:999:revision:None",
+        launch_attempt=audit.launch_attempt_key(22, 999))
+    await audit.record_delivery_fact(
+        db, item_id=23, delivery_outcome="unknown", completion_kind="closed_unproven",
+        fact_source="github_watcher", fact_time=_now() + timedelta(minutes=5))
+    await db.commit()
+
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    duration = {s.name: s for s in window.metrics}["elapsed_attempt_duration"]
+    assert (duration.value, duration.sample_count, duration.unknown_count) == (600.0, 1, 2)
+    assert duration.unknown_reasons[1:] == [
+        "no recorded launch boundary for the same attempt",
+        "terminal fact without a launch identity"]
+    assert duration.counting_unit == "seconds_median"
+
+
+async def test_c12_real_verification_charges_record_retry_classes(store, monkeypatch):
+    """C12: the real verification charges record one implementation and one
+    diagnostic retry fact in their transactions. Evidenced classes and the
+    authoritative counters are reported separately."""
+    import json as _json
+
+    from app.models.database import GithubAttemptScopeRevision, GithubWorkItem, TeamGithubScope
+    from app.services.github_verification_service import github_verification_service
+
+    async with store() as db:
+        await audit.install_forward_coverage(await db.connection(), installed_at=_COVERAGE_START)
+        await db.commit()
+    await _seed_team(store)
+    await _seed_work(store, item_id=63, status="verifying", retry_count=0)
+    await _seed_work(store, item_id=64, status="dispatched", attempt_phase="diagnostic",
+                     active_scope_revision=1, workspace_id=106,
+                     lease_token="synthetic-lease-64")
+    async with store() as db:
+        revision = GithubAttemptScopeRevision(
+            work_item_id=64, dispatch_nonce=_NONCE, revision=1,
+            owner_slot_id=_OWNER["slot"], owner_member_id=_OWNER["member"],
+            phase="diagnostic", execution_target="workspace", summary="Diagnostic",
+            allowed_paths=["src/a.py"], allowed_actions=["edit_tests"],
+            allowed_commands=[], prohibited_actions=[], tool_fallbacks={},
+            baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+            originating_escalation_reason="retry_count_exhausted",
+            expected_workspace_id=106, expected_lease_token_hash="h" * 64,
+            max_failed_heads=2, status="active")
+        db.add(revision)
+        await db.commit()
+        revision_id = revision.id
+
+    async def no_notice(*_args, **_kwargs):
+        # Mail boundary: the owner notice is outside the charge transaction.
+        return None
+
+    monkeypatch.setattr(github_verification_service, "_notify_diagnostic_failure", no_notice)
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        item = await db.get(GithubWorkItem, 63)
+        await github_verification_service._record_transient_merge_failure(
+            db, scope, item, "synthetic transient failure")
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        item = await db.get(GithubWorkItem, 64)
+        revision = await db.get(GithubAttemptScopeRevision, revision_id)
+        await github_verification_service._record_diagnostic_failure(
+            db, scope, item, revision, "d" * 40)
+
+    charges = await _facts(store, event_kind="retry_charge")
+    assert [(f["item_id"], f["revision_id"], f["sanitized_reason"], _json.loads(f["after_values"]))
+            for f in charges] == [
+        (63, None, "transient_merge_failure", {"retry_count": 1}),
+        (64, revision_id, "diagnostic_failed_head", {"diagnostic_retry_count": 2})]
+    assert {(f["actor_kind"], f["actor_reference"]) for f in charges} == {
+        ("scheduler", "github_dispatch_scheduler")}
+    async with store() as db:
+        window = await metrics.build_metrics_window(
+            db, window_start=datetime.utcnow() - timedelta(hours=1),
+            window_end=datetime.utcnow() + timedelta(hours=1))
+        failed_heads = (await db.execute(text(
+            "SELECT failed_head_count FROM github_attempt_scope_revisions WHERE id = :id"),
+            {"id": revision_id})).scalar_one()
+    by_name = {s.name: s for s in window.metrics}
+    assert by_name["implementation_retries"].value == 1.0
+    assert by_name["diagnostic_retries"].value == 1.0
+    assert by_name["implementation_retry_counters"].value == 3.0
+    assert by_name["diagnostic_retry_counters"].value == 3.0
+    assert failed_heads == 1

@@ -6,10 +6,16 @@ metric definitions and the recorded limits.
 
 ## Event kinds
 
-The ledger records these explicit kinds: `policy_change`,
-`leader_assignment`, `recovery_cancellation`, `prepared_attempt_resume`,
-`operator_escalation`, `workspace_release`, `work_lifecycle` and
-`observed_snapshot` imports. Each event records occurrence and recording
+The ledger records explicit kinds at their real consumers, including
+`policy_change`, `leader_assignment`, `recovery_cancellation`,
+`recovery_hold`, `recovery_checkpoint_release`, `request_cancellation`,
+`prepared_attempt_resume`, `workspace_release`, `work_lifecycle`,
+`delivery_evidence`, `handoff_reassignment`, `handoff_acceptance`,
+`approval_decision`, `continuation_request`, `continuation_decision`,
+`continuation_ack`, `retry_charge` and `work_state_import`. Each notice
+(for example `lifecycle_notification` or
+`continuation_decision_notification`) has its own fact, separate from its
+action fact. Each event records occurrence and recording
 times, source, record kind with distinct fact source and fact time, actor
 kind and reference, deletion-safe live references, immutable context keys
 and snapshot labels, non-secret correlation and optional operation identity,
@@ -27,8 +33,13 @@ agent token is ever stored.
 ## Safe-field allowlist
 
 Before and after values pass a strict allowlist of state and identity labels.
-Credential-shaped keys and values are dropped. Sanitized reasons remove
-credential-shaped keywords together with the value token that follows them.
+Only primitive values are kept; nested objects are dropped. Context snapshots
+and review evidence pass typed field projections. Every stored text value is
+sanitized: assignment, colon, JSON and header forms keep their label and
+replace the value with `[redacted]`; known token formats, URL user
+information, opaque hex values and long opaque blobs are redacted wherever
+they appear. A 40-character commit SHA and controlled reason codes stay
+exact.
 
 ## Rollback and failure injection evidence
 
@@ -69,11 +80,15 @@ Metrics report requested window, filter scope, counting unit, sample count,
 sources, available interval, missing intervals and coverage. Terminal,
 delivered, non-delivery, unknown, review, recovery, intervention, harness
 and cost counts stay distinct. Unknown and excluded counts appear with their
-reasons. Elapsed attempt duration uses recorded start and stop or terminal
-events for the same attempt and is named by those boundaries; it is never
-presented as execution time or operator hands-on minutes. Diagnostic and
-implementation retries stay separate; authoritative budget counters retain
-their semantics and event totals never replace them. Cost is null or
+reasons. Elapsed attempt duration is the median from the dispatch fact to
+the first terminal fact of the same launched attempt, matched by a
+non-secret launch identity; unpaired facts are unknown, and it is never
+presented as execution time or operator hands-on minutes. Each verification
+retry charge records an implementation or diagnostic `retry_charge` fact in
+its transaction; the authoritative budget counters are separate
+present-state samples and event totals never replace them. Terminal
+tracking is its own sample. Present-state samples name their population;
+a context key without a current resource gives unknown values. Cost is null or
 unknown without measured attribution; partial provider or time coverage is
 displayed as coverage and never presented as a total. Tracked attempts in
 separate scopes remain distinct and are never advertised as a unique-PR
@@ -116,8 +131,13 @@ and no writes.
 
 ## Coverage limits and unavailable measurements
 
-Instrumentation start is the earliest recorded ledger time; events before it
-do not exist and missing intervals stay unavailable. The ledger observes
+Instrumentation start is a stable coverage marker that the SQLite
+compatibility migration installs once. It never moves when events are added.
+The same step imports the persisted state of each existing work item once as
+an `observed_snapshot` at the marker time, with no fact time. Missing
+intervals before the marker stay unavailable, and an event inside one never
+removes it. Ledger samples carry `full`, `partial` or `unavailable` coverage.
+The ledger observes
 actual results and never approves plans, raises limits, retries work,
 releases a workspace or replays a mutation because an event is present or
 absent. V14 measurements remain NOT_PERFORMED. Operator hands-on minutes

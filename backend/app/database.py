@@ -1092,6 +1092,12 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "WHERE pr_number IS NOT NULL AND retry_requested_at IS NOT NULL"
             )
         )
+    # C12: install the stable forward-coverage marker and import the observed
+    # work state once. A later run finds the marker and changes nothing.
+    if await _sqlite_columns(conn, "factory_audit_events"):
+        from app.services.factory_audit_service import install_forward_coverage
+
+        await install_forward_coverage(conn)
     await conn.commit()
 
 

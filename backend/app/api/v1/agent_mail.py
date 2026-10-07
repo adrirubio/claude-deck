@@ -614,6 +614,7 @@ async def decide_work_item_continuation(
     decision_item_id = item.id
     decision_scope_id = item.scope_id
     decided = False
+    revision_id = None
     try:
         approval, revision, _decided = (
             await github_approval_service.decide_continuation(
@@ -699,7 +700,7 @@ async def decide_work_item_continuation(
             await _record_continuation_notice(
                 db, "continuation_decision_notification", actor=actor,
                 scope_id=decision_scope_id, item_id=decision_item_id,
-                request_id=request.approval_request_id, revision_id=None,
+                request_id=request.approval_request_id, revision_id=revision_id,
                 outcome="uncertain", reason="decision notice or delivery unsettled after commit",
                 observe=True)
         if isinstance(exc, GithubApprovalError):

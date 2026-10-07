@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import FactoryAuditEvent, FactoryContextKey
@@ -31,51 +31,165 @@ SAFE_VALUE_FIELDS = {
     "wake_enabled", "mailbox_status", "kind", "request_kind", "decision",
     "status_note", "phase", "execution_target", "failed_head_count",
     "max_failed_heads", "workspace_enabled", "dispatchable",
-    "recovery_checkpoint_stage",
+    "recovery_checkpoint_stage", "active_scope_revision",
     # C11: typed finite continuation policy settings.
     "continuation_enabled", "max_continuation_revisions",
     "max_continuation_failed_heads", "max_failed_heads_per_revision",
     "max_scope_paths", "max_scope_commands",
 }
 
-# Value shapes that must never appear in ledger content.
-_FORBIDDEN_VALUE = re.compile(
-    r"(token|secret|password|credential|capability_hash|lease)", re.IGNORECASE)
+# C10: typed, named fields for event-time snapshots. Values are primitive
+# and bounded; nested dictionaries and lists of objects are never stored.
+SAFE_SNAPSHOT_FIELDS = {
+    "github_auth_mode", "configured_provider", "observed_runtime_provider",
+    "repo_owner", "repo_name", "scope_created_at", "scope_updated_at",
+    "team_created_at", "team_display_name", "slot_display_name",
+    "issue_number", "pr_number", "issue_type", "artifact", "fact_source",
+    "event_time_labels",
+    # C06/C12: stable non-secret attempt identities and the retry class.
+    "attempt", "launch_attempt", "retry_class",
+}
+
+# C10/C03: the typed fields of a human review evidence record.
+SAFE_REVIEW_FIELDS = {"fact_kind", "artifact", "version", "actor", "source"}
+
+_MAX_TEXT = 200
+_MAX_REASON = 500
+
+# Keys whose values are never stored, whatever their content.
+_SECRET_KEY = re.compile(
+    r"(?:^|[_\-\s])(?:token|secret|password|passwd|credential|capability|"
+    r"api[_\-]?key|authorization|cookie|nonce)(?:$|[_\-\s])",
+    re.IGNORECASE)
+
+_SECRET_WORDS = (
+    r"token|secret|password|passwd|pwd|credential|credentials|capability[_\-]?hash|"
+    r"lease[_\-]?token|api[_\-]?key|access[_\-]?key|private[_\-]?key|authorization|"
+    r"cookie|session[_\-]?token|nonce|bearer|basic"
+)
+
+# C10: credential-shaped text in free-form values, applied in order. Each
+# entry keeps its leading label and replaces only the value.
+_REDACTIONS = (
+    # Assignment and header forms: "token=x", "password: x", '"secret": "x"',
+    # "Authorization: Bearer x".
+    # Prefixed names such as "github_token" or "X-Api-Key" count too.
+    (re.compile(
+        rf"(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_\-])*(?:{_SECRET_WORDS})s?)"
+        r"([\"']?\s*[:=]\s*)(?:bearer\s+|basic\s+)?[\"']?[^\s\"',;}]+"),
+     r"\1\2[redacted]"),
+    # Scheme forms without a separator: "Bearer x", "Basic x".
+    (re.compile(r"(?i)\b((?:bearer|basic)\s+)[A-Za-z0-9._~+/\-]{8,}=*"),
+     r"\1[redacted]"),
+    # A credential word followed by any value: "token abc". This is
+    # conservative; the next word is redacted even when it is ordinary text.
+    (re.compile(
+        rf"(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_\-])*(?:{_SECRET_WORDS})s?\s+)"
+        r"(?!\[redacted\])[^\s\"',;]+"),
+     r"\1[redacted]"),
+    # Known credential formats.
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+     "[redacted]"),
+    (re.compile(r"\b(?:xox[abpr]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{16,})\b"),
+     "[redacted]"),
+    # URLs with embedded user information.
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/@:]+:[^\s/@]+@"),
+     r"\1[redacted]@"),
+    # Opaque hex values of 16 or more characters (lease tokens, nonces,
+    # digests). A 40-character Git commit SHA is public identity and stays.
+    (re.compile(r"\b(?![A-Fa-f0-9]{40}\b)[A-Fa-f0-9]{16,}\b"), "[redacted]"),
+    # Long opaque token-like blobs that mix letters and digits. Paths with
+    # "/" separators are not matched. A 40-character commit SHA stays.
+    (re.compile(
+        r"\b(?![A-Fa-f0-9]{40}\b)(?=[A-Za-z0-9+_\-]*\d)(?=[A-Za-z0-9+_\-]*[A-Za-z])"
+        r"[A-Za-z0-9+_\-]{40,}={0,2}"),
+     "[redacted]"),
+)
 
 
 class AuditWriteError(RuntimeError):
     """An audit write failed; the caller must roll back its own change."""
 
 
-_CREDENTIAL_SEGMENT = re.compile(
-    r"(?:token|secret|password|credential|capability_hash|lease)\S*\s+\S+",
-    re.IGNORECASE)
+def sanitize_text(value: str, *, limit: int = _MAX_TEXT) -> str:
+    """C10: remove credential-shaped content from one free-text value.
+
+    Keyword forms keep the keyword and redact the value that follows it, so
+    ordinary words such as "release" stay readable. Known token formats,
+    URL user information and long opaque blobs are redacted wherever they
+    appear. The result is bounded.
+    """
+    cleaned = str(value)
+    for pattern, replacement in _REDACTIONS:
+        cleaned = pattern.sub(replacement, cleaned)
+    return cleaned[:limit]
 
 
 def sanitize_reason(reason: str | None) -> str | None:
-    """Keep a short sanitized reason with no credential-shaped content.
-
-    Credential-shaped keywords remove the keyword and the value token that
-    follows it.
-    """
+    """Keep a short sanitized reason with no credential-shaped content."""
     if reason is None:
         return None
-    cleaned = _CREDENTIAL_SEGMENT.sub("[redacted]", str(reason))
-    cleaned = _FORBIDDEN_VALUE.sub("[redacted]", cleaned)
-    return cleaned[:500]
+    return sanitize_text(str(reason), limit=_MAX_REASON)
+
+
+def _safe_primitive(value: Any) -> tuple[bool, Any]:
+    """Accept only bounded primitives; sanitize text. Returns (keep, value)."""
+    if value is None or isinstance(value, bool) or isinstance(value, (int, float)):
+        return True, value
+    if isinstance(value, str):
+        return True, sanitize_text(value)
+    return False, None
 
 
 def allowlist_values(values: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Keep only allowlisted keys and refuse credential-shaped values."""
-    if not values:
+    """Keep allowlisted keys with safe primitive values only.
+
+    C10: a value under an allowed key is sanitized too. Nested objects are
+    dropped; no arbitrary dictionary is copied into the ledger.
+    """
+    if not values or not isinstance(values, dict):
         return None
     safe: dict[str, Any] = {}
     for key, value in values.items():
-        if key not in SAFE_VALUE_FIELDS:
+        if key not in SAFE_VALUE_FIELDS or _SECRET_KEY.search(str(key)):
             continue
-        if isinstance(value, str) and _FORBIDDEN_VALUE.search(key):
+        keep, projected = _safe_primitive(value)
+        if keep:
+            safe[key] = projected
+    return safe or None
+
+
+def project_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """C10: a typed, bounded projection of an event-time snapshot."""
+    if not snapshot or not isinstance(snapshot, dict):
+        return None
+    safe: dict[str, Any] = {}
+    for key, value in snapshot.items():
+        if key not in SAFE_SNAPSHOT_FIELDS:
             continue
-        safe[key] = value
+        if key == "event_time_labels":
+            if isinstance(value, (list, tuple)):
+                safe[key] = [
+                    label for label in value
+                    if isinstance(label, str) and label in SAFE_SNAPSHOT_FIELDS
+                ]
+            continue
+        keep, projected = _safe_primitive(value)
+        if keep:
+            safe[key] = projected
+    return safe or None
+
+
+def project_review_evidence(evidence: dict[str, Any] | None) -> dict[str, Any] | None:
+    """C10/C03: a typed projection of a review evidence record."""
+    if not evidence or not isinstance(evidence, dict):
+        return None
+    safe: dict[str, Any] = {}
+    for key in SAFE_REVIEW_FIELDS:
+        if key in evidence:
+            keep, projected = _safe_primitive(evidence[key])
+            if keep:
+                safe[key] = projected
     return safe or None
 
 
@@ -235,7 +349,8 @@ async def record_event(
         team_context_key=team_context_key,
         scope_context_key=scope_context_key,
         item_context_key=item_context_key,
-        context_snapshot=context_snapshot,
+        # C10: every stored value passes a typed, bounded projection.
+        context_snapshot=project_snapshot(context_snapshot),
         correlation_id=correlation_id,
         operation_id=operation_id,
         replay_key=replay_key,
@@ -245,7 +360,7 @@ async def record_event(
         action_outcome=action_outcome,
         delivery_outcome=delivery_outcome,
         completion_kind=completion_kind,
-        human_review_evidence=human_review_evidence,
+        human_review_evidence=project_review_evidence(human_review_evidence),
     )
     # A failed insert, including a concurrent duplicate on the unique replay
     # key, propagates. The caller owns the transaction: the audited change
@@ -303,13 +418,15 @@ async def record_observed_snapshot(
     context_snapshot: dict[str, Any] | None = None,
     correlation_id: str | None = None,
     after_values: dict[str, Any] | None = None,
+    operation_id: str | None = None,
 ) -> FactoryAuditEvent:
     """A13/A14: record imported current state as an observed snapshot.
 
     The import observation time is the event occurrence time. A reliable
     external fact keeps its own source and fact time distinct from the
     import time. Unknown historical times remain unavailable and are never
-    inferred from generic row timestamps.
+    inferred from generic row timestamps. C12: an operation identity makes
+    a repeated import return the existing snapshot.
     """
     return await record_event(
         db,
@@ -324,8 +441,150 @@ async def record_observed_snapshot(
         scope_id=scope_id,
         item_id=item_id,
         context_snapshot=context_snapshot,
-        correlation_id=correlation_id,
+        correlation_id=correlation_id or operation_id,
+        operation_id=operation_id,
         after_values=after_values,
+        action_outcome="applied",
+    )
+
+
+# C12: the stable forward-coverage marker. Its migration row time is the
+# instrumentation start; it never moves when events are added or removed.
+COVERAGE_MARKER = "p05_factory_audit_coverage"
+
+_IMPORT_SOURCE = "factory_audit_service.import_observed_state"
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
+
+
+async def coverage_marker_time(conn: Any) -> datetime | None:
+    """Read the installed coverage marker from a session or connection."""
+    table = (await conn.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+        " AND name = 'deck_compat_migrations'"))).first()
+    if table is None:
+        return None
+    value = (await conn.execute(text(
+        "SELECT applied_at FROM deck_compat_migrations WHERE name = :name"),
+        {"name": COVERAGE_MARKER})).scalar_one_or_none()
+    return _as_datetime(value)
+
+
+async def install_forward_coverage(
+    conn: Any, *, installed_at: datetime | None = None
+) -> datetime:
+    """C12: install the coverage marker and import observed state once.
+
+    Called from the SQLite compatibility migrations. A second run finds the
+    marker and changes nothing. The import records the persisted state of
+    each existing work item as an observed snapshot at the marker time; it
+    never reconstructs history or infers fact times from row timestamps.
+    """
+    await conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("
+        "name VARCHAR PRIMARY KEY, applied_at DATETIME NOT NULL)"))
+    existing = await coverage_marker_time(conn)
+    if existing is not None:
+        return existing
+    marker = (installed_at or datetime.utcnow()).replace(tzinfo=None)
+    await conn.execute(text(
+        "INSERT OR IGNORE INTO deck_compat_migrations (name, applied_at)"
+        " VALUES (:name, :applied_at)"),
+        {"name": COVERAGE_MARKER, "applied_at": marker})
+    marker = await coverage_marker_time(conn) or marker
+    await import_observed_state(conn, observed_at=marker)
+    return marker
+
+
+async def import_observed_state(conn: Any, *, observed_at: datetime) -> int:
+    """C12: one idempotent observed snapshot per existing work item."""
+    from sqlalchemy.ext.asyncio import AsyncSession as _AsyncSession
+
+    from app.models.database import GithubWorkItem
+
+    actor = derive_actor(actor_kind="system")
+    imported = 0
+    # The session joins the migration transaction; the caller commits it.
+    session = _AsyncSession(bind=conn, expire_on_commit=False, autoflush=False)
+    try:
+        rows = (await session.execute(select(
+            GithubWorkItem.id, GithubWorkItem.scope_id, GithubWorkItem.issue_number,
+            GithubWorkItem.issue_type, GithubWorkItem.pr_number,
+            GithubWorkItem.dispatch_status, GithubWorkItem.attempt_phase,
+            GithubWorkItem.retry_count, GithubWorkItem.diagnostic_retry_count,
+            GithubWorkItem.active_scope_revision,
+        ).order_by(GithubWorkItem.id))).all()
+        for row in rows:
+            await record_observed_snapshot(
+                session,
+                event_kind="work_state_import",
+                source=_IMPORT_SOURCE,
+                observed_at=observed_at,
+                actor=actor,
+                fact_source="github_work_items persisted state",
+                fact_time=None,
+                scope_id=row.scope_id,
+                item_id=row.id,
+                context_snapshot={"issue_number": row.issue_number,
+                                  "issue_type": row.issue_type,
+                                  "pr_number": row.pr_number},
+                after_values={
+                    "dispatch_status": row.dispatch_status,
+                    "attempt_phase": row.attempt_phase,
+                    "retry_count": row.retry_count,
+                    "diagnostic_retry_count": row.diagnostic_retry_count,
+                    "active_scope_revision": row.active_scope_revision,
+                },
+                operation_id=f"{COVERAGE_MARKER}:item:{row.id}",
+            )
+            imported += 1
+        await session.flush()
+    finally:
+        await session.close()
+    return imported
+
+
+def launch_attempt_key(item_id: int, launch_id: int | None) -> str:
+    """C12: the non-secret identity of one launched attempt."""
+    return f"item:{item_id}:launch:{launch_id}"
+
+
+async def record_retry_charge(
+    db: AsyncSession,
+    *,
+    item_id: int,
+    scope_id: int | None,
+    revision_id: int | None,
+    retry_class: str,
+    counter_value: int,
+    reason_code: str,
+    source: str,
+) -> FactoryAuditEvent:
+    """C12: evidence for one charged retry, in the charge's transaction.
+
+    The counter stays authoritative; this fact only classifies the charge as
+    an implementation or diagnostic retry. An audit-write failure surfaces
+    and rolls back the charge, like other in-transaction facts.
+    """
+    if retry_class not in {"implementation", "diagnostic"}:
+        raise ValueError(f"unsupported retry class: {retry_class}")
+    counter = "diagnostic_retry_count" if retry_class == "diagnostic" else "retry_count"
+    return await record_event(
+        db,
+        event_kind="retry_charge",
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        after_values={counter: counter_value},
+        context_snapshot={"retry_class": retry_class},
+        sanitized_reason=reason_code,
         action_outcome="applied",
     )
 
@@ -367,6 +626,7 @@ async def record_delivery_fact(
     artifact: str | None = None,
     actor: dict[str, Any] | None = None,
     attempt: str | None = None,
+    launch_attempt: str | None = None,
 ) -> FactoryAuditEvent:
     """A28-A35: record one sourced delivery outcome fact per tracked attempt.
 
@@ -376,15 +636,20 @@ async def record_delivery_fact(
     ``attempt`` is a stable non-secret attempt identity; a later attempt on
     the same item therefore records its own fact. Raw dispatch state is
     never rewritten. Merge evidence and independent human review stay
-    distinct fields.
+    distinct fields. C12: ``launch_attempt`` binds the terminal boundary to
+    the launch that started the attempt, for same-attempt durations.
     """
     if attempt:
         operation_id = f"delivery:{attempt}:{artifact or 'attempt'}"
     else:
         operation_id = f"delivery:{item_id}:{artifact or 'attempt'}"
-    context_snapshot = None
+    context_snapshot: dict[str, Any] = {}
     if artifact:
-        context_snapshot = {"artifact": artifact, "fact_source": fact_source}
+        context_snapshot.update({"artifact": artifact, "fact_source": fact_source})
+    if attempt:
+        context_snapshot["attempt"] = attempt
+    if launch_attempt:
+        context_snapshot["launch_attempt"] = launch_attempt
     return await record_event(
         db,
         event_kind="delivery_evidence",
@@ -396,7 +661,7 @@ async def record_delivery_fact(
         scope_id=scope_id,
         team_context_key=team_context_key,
         scope_context_key=scope_context_key,
-        context_snapshot=context_snapshot,
+        context_snapshot=context_snapshot or None,
         delivery_outcome=delivery_outcome,
         completion_kind=completion_kind,
         action_outcome="applied",
@@ -428,12 +693,10 @@ async def current_delivery_outcome(db: AsyncSession, item_id: int) -> str | None
 
 
 async def instrumentation_start(db: AsyncSession) -> datetime | None:
-    """Earliest recorded_at in the ledger: the instrumentation start marker.
+    """C12: the installed forward-coverage marker, or None when absent.
 
-    Reads expose this as the coverage start. Events before it do not exist;
-    missing intervals stay unavailable rather than reconstructed.
+    The first event is never the coverage start. Without the marker no
+    interval is covered; missing intervals stay unavailable rather than
+    reconstructed.
     """
-    from sqlalchemy import func
-    return (await db.execute(
-        select(func.min(FactoryAuditEvent.recorded_at))
-    )).scalar_one_or_none()
+    return await coverage_marker_time(db)

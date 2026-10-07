@@ -142,9 +142,12 @@ async def observe_work_lifecycle(
         occurred_at=datetime.utcnow(),
         actor=_audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
         item_id=item.id,
+        scope_id=item.scope_id,
         before_values={"dispatch_status": from_status} if from_status else None,
         after_values={"dispatch_status": to_status,
                       "active_scope_revision": item.active_scope_revision},
+        # C12: the launch identity is the start boundary of this attempt.
+        context_snapshot={"launch_attempt": _audit.launch_attempt_key(item.id, item.launch_id)},
         action_outcome="applied",
         sanitized_reason=f"lifecycle transition to {to_status}",
         correlation_id=f"lifecycle:{item.id}:{to_status}:{datetime.utcnow().isoformat()}",

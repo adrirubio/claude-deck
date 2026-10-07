@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchAuditEvents, fetchMetricsWindow } from "@/features/factory/auditApi";
+import { ApiHttpError } from "@/lib/api";
 
 const realFetch = globalThis.fetch;
 
@@ -61,8 +62,24 @@ describe("audit browser clients at the HTTP boundary", () => {
 
     const metrics = await fetchMetricsWindow({ windowStart: "s", windowEnd: "e" });
     expect(metrics.metrics[0].value).toBeNull();
-    await expect(fetchAuditEvents({ operatorToken: "bad", page: 1, pageSize: 25 }))
-      .rejects.toThrow();
+    // C14: the exact refusal status and operator message reach the caller.
+    const refusal = await fetchAuditEvents({ operatorToken: "bad", page: 1, pageSize: 25 })
+      .then(() => null, (error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ApiHttpError);
+    expect((refusal as ApiHttpError).status).toBe(401);
+    expect((refusal as ApiHttpError).message).toBe(
+      "The Deck operator token was rejected. Clear it and enter a valid token.");
+  });
+
+  it("surfaces the exact unconfigured-operator 503 refusal", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse(
+      { detail: "operator_token_unconfigured" }, 503)) as unknown as typeof fetch;
+
+    const refusal = await fetchAuditEvents({ operatorToken: "synthetic-operator" })
+      .then(() => null, (error: unknown) => error);
+    expect((refusal as ApiHttpError).status).toBe(503);
+    expect((refusal as ApiHttpError).message).toBe(
+      "The Deck operator token is not configured on the backend.");
   });
 
   // C13: both reads carry the same supported history filters.
