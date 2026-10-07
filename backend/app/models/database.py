@@ -1,6 +1,7 @@
 """SQLAlchemy database models."""
 from datetime import datetime
 from sqlalchemy import (
+    ForeignKey,
     String,
     Integer,
     Boolean,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Index,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -876,3 +878,152 @@ class GithubAttemptScopeRevision(Base):
             name="uix_github_attempt_scope_revision",
         ),
     )
+
+
+class FactoryContextKey(Base):
+    """Immutable context key allocation for audit history.
+
+    A context key belongs to one resource lifetime. Deleting the live team,
+    scope or work item retires its active key (SQLite trigger), so a reused
+    numeric ID allocates a new key and old events stay with the old key. A
+    retired key survives as the address of the retained history.
+    """
+
+    __tablename__ = "factory_context_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key_kind: Mapped[str] = mapped_column(String, nullable=False)
+    numeric_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    context_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # R01: set when the live resource is deleted; NULL for the active lifetime.
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# R01: lifetime retirement of context keys. One active key per kind and ID;
+# deleting the resource retires it, whatever route performs the deletion.
+CONTEXT_KEY_LIFETIME_DDL = (
+    (("factory_context_keys",),
+     "CREATE UNIQUE INDEX IF NOT EXISTS uix_factory_context_keys_active"
+     " ON factory_context_keys (key_kind, numeric_id) WHERE retired_at IS NULL"),
+    (("factory_context_keys", "agent_team_presets"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_team"
+     " AFTER DELETE ON agent_team_presets BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'team' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+    (("factory_context_keys", "team_github_scopes"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_scope"
+     " AFTER DELETE ON team_github_scopes BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'scope' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+    (("factory_context_keys", "github_work_items"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_item"
+     " AFTER DELETE ON github_work_items BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'item' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+)
+
+
+def _install_context_key_lifetime_ddl(_metadata, connection, **_kwargs) -> None:
+    """Create the lifetime index and triggers for the tables that exist."""
+    if connection.dialect.name != "sqlite":
+        return
+    tables = {row[0] for row in connection.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+    if "factory_context_keys" not in tables:
+        return
+    columns = {row[1] for row in connection.exec_driver_sql(
+        "PRAGMA table_info(factory_context_keys)").fetchall()}
+    if "retired_at" not in columns:
+        # A legacy table; the compatibility migration adds the column first.
+        return
+    for required, statement in CONTEXT_KEY_LIFETIME_DDL:
+        if set(required) <= tables:
+            connection.exec_driver_sql(statement)
+
+
+event.listen(Base.metadata, "after_create", _install_context_key_lifetime_ddl)
+
+
+class FactoryAuditEvent(Base):
+    """Durable observation-ledger event.
+
+    The ledger observes actual results. It never approves plans, raises
+    limits, retries work, releases a workspace or replays a mutation.
+    Event facts and context snapshots are immutable; live references are
+    deletion-safe and may become null.
+    """
+
+    __tablename__ = "factory_audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    event_kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # observed events carry fact_source/fact_time distinct from import time.
+    record_kind: Mapped[str] = mapped_column(String, default="observed", nullable=False)
+    fact_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    fact_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Actor derivation: role from actual authentication or scheduler context.
+    actor_kind: Mapped[str] = mapped_column(String, nullable=False)
+    actor_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_reference: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Deletion-safe live references. ON DELETE SET NULL keeps the event and
+    # its snapshots after guard-permitted deletion; events never cascade
+    # away and never add a deletion block.
+    team_preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True)
+    team_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True)
+    scope_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="SET NULL"), nullable=True)
+    item_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="SET NULL"), nullable=True)
+    revision_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="SET NULL"), nullable=True)
+    request_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_approval_requests.id", ondelete="SET NULL"), nullable=True)
+
+    # Immutable context keys and snapshot labels.
+    team_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    scope_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    item_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Absent JSON values are SQL NULL, never JSON null (C03 rule for all
+    # ledger JSON columns).
+    context_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True)
+
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    operation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # C07: race-safe replay identity bound to the action and the exact
+    # resource. A supplied operation id never collides across resources.
+    replay_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    sanitized_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    before_values: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    after_values: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+    # Outcomes stay separate: action outcome records what the action
+    # established; delivery outcome requires its own evidence.
+    action_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    delivery_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    human_review_evidence: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+
+
+class FactoryResultCursor(Base):
+    """A34: the fair round-robin position of later-result reconciliation.
+
+    One row per scope. It holds only the last read ledger event ID; it is
+    not a fact and never changes an attempt's identity or result.
+    """
+
+    __tablename__ = "factory_result_cursors"
+
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), primary_key=True)
+    last_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

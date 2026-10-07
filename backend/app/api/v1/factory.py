@@ -16,7 +16,10 @@ from app.database import get_db
 from app.api.v1.deps import require_operator
 from app.config import settings
 from app.models import factory_schemas as wire
-from app.models.schemas import SetupPreflightRequest, SetupPreflightResponse, SetupPreflightCheck
+from app.models.schemas import (
+    FactoryReviewAcceptanceDeclaration, SetupPreflightRequest, SetupPreflightResponse,
+    SetupPreflightCheck,
+)
 from app.services.github_client import github_client, GithubClientResponseError
 from app.services.github_app_auth_service import GithubAppAuthError, github_app_auth_service
 from app.services import factory_projection_service as projections
@@ -356,3 +359,177 @@ async def repository(scope_id: int, db=Depends(read_snapshot)):
     if not 0 < scope_id < 2**63:
         raise projections.FactoryReadError("invalid_filter", 422)
     return await projections.repository_detail(db, scope_id)
+
+
+# ---------------------------------------------------------------------------
+# P05: observation ledger reads and safe delivery metrics
+# ---------------------------------------------------------------------------
+
+@router.get("/audit-events")
+async def list_factory_audit_events(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    event_kind: str | None = None,
+    team_context_key: str | None = None,
+    scope_context_key: str | None = None,
+    item_context_key: str | None = None,
+    team_id: int | None = None,
+    scope_id: int | None = None,
+    item_id: int | None = None,
+    _operator: None = Depends(require_operator),
+    db=Depends(get_db),
+):
+    """A15/A16/A21/A38: operator-protected paginated audit reads.
+
+    Historical context keys address retained history after deletion; current
+    ID filters resolve the current resource context key. Agent tokens do not
+    authorize audit reads. Deleted live links are labelled unavailable while
+    snapshot labels remain readable.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.database import FactoryAuditEvent
+    from app.models.schemas import FactoryAuditEventPage, FactoryAuditEventRead
+    from app.services.factory_audit_service import current_context_key as _current_key
+
+    # C05/R01: current-ID filters resolve the active key of the current
+    # resource lifetime. The read never allocates a key and performs no write.
+    # A current ID with no recorded lifetime key selects no events.
+    unresolved = False
+    for numeric, kind, supplied in (
+        (team_id, "team", team_context_key),
+        (scope_id, "scope", scope_context_key),
+        (item_id, "item", item_context_key),
+    ):
+        if numeric is None or supplied is not None:
+            continue
+        resolved = await _current_key(db, kind, numeric)
+        if resolved is None:
+            unresolved = True
+        elif kind == "team":
+            team_context_key = resolved
+        elif kind == "scope":
+            scope_context_key = resolved
+        else:
+            item_context_key = resolved
+    if unresolved:
+        return FactoryAuditEventPage(
+            items=[], total=0, page=page, page_size=page_size,
+            team_context_key=team_context_key, scope_context_key=scope_context_key,
+            event_kind=event_kind, snapshot_labels=[])
+
+    stmt = select(FactoryAuditEvent)
+    count_stmt = select(func.count()).select_from(FactoryAuditEvent)
+    if event_kind:
+        stmt = stmt.where(FactoryAuditEvent.event_kind == event_kind)
+        count_stmt = count_stmt.where(FactoryAuditEvent.event_kind == event_kind)
+    if team_context_key:
+        stmt = stmt.where(FactoryAuditEvent.team_context_key == team_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.team_context_key == team_context_key)
+    if scope_context_key:
+        stmt = stmt.where(FactoryAuditEvent.scope_context_key == scope_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.scope_context_key == scope_context_key)
+    if item_context_key:
+        stmt = stmt.where(FactoryAuditEvent.item_context_key == item_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.item_context_key == item_context_key)
+    total = int((await db.execute(count_stmt)).scalar_one_or_none() or 0)
+    rows = (await db.execute(
+        stmt.order_by(FactoryAuditEvent.occurred_at.desc(), FactoryAuditEvent.id.desc())
+        .offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+    items = []
+    labels: set[str] = set()
+    for row in rows:
+        if row.context_snapshot:
+            labels.update(str(key) for key in row.context_snapshot.keys())
+        items.append(FactoryAuditEventRead(
+            id=row.id, occurred_at=row.occurred_at, recorded_at=row.recorded_at,
+            event_kind=row.event_kind, source=row.source, record_kind=row.record_kind,
+            fact_source=row.fact_source, fact_time=row.fact_time,
+            actor_kind=row.actor_kind, actor_reference=row.actor_reference,
+            team_preset_id=row.team_preset_id, team_slot_id=row.team_slot_id,
+            scope_id=row.scope_id, item_id=row.item_id, revision_id=row.revision_id,
+            request_id=row.request_id,
+            team_context_key=row.team_context_key, scope_context_key=row.scope_context_key,
+            item_context_key=row.item_context_key, context_snapshot=row.context_snapshot,
+            correlation_id=row.correlation_id, sanitized_reason=row.sanitized_reason,
+            before_values=row.before_values, after_values=row.after_values,
+            action_outcome=row.action_outcome, delivery_outcome=row.delivery_outcome,
+            completion_kind=row.completion_kind, human_review_evidence=row.human_review_evidence,
+            live_links_available=any(value is not None for value in (
+                row.team_preset_id, row.scope_id, row.item_id, row.revision_id)),
+        ))
+    return FactoryAuditEventPage(
+        items=items, total=total, page=page, page_size=page_size,
+        team_context_key=team_context_key, scope_context_key=scope_context_key,
+        event_kind=event_kind, snapshot_labels=sorted(labels))
+
+
+@router.post("/review-acceptances", status_code=201)
+async def declare_review_acceptance(
+    declaration: FactoryReviewAcceptanceDeclaration,
+    _operator: None = Depends(require_operator),
+    db=Depends(get_db),
+):
+    """A32: record one trusted review acceptance declaration.
+
+    Operator-protected and observational. The operator credential
+    authenticates the recording action only; the declared reviewer stays a
+    separate field. The route never changes work state, approvals, merges,
+    retries, leases or counters. A binding refusal or replay conflict is
+    recorded as one rejected observation and returns 409.
+    """
+    from app.models.schemas import FactoryReviewAcceptanceRead
+    from app.services import factory_audit_service as audit
+
+    operation_id = f"review_acceptance:{declaration.declaration_id}"
+    recording_actor = audit.derive_actor(actor_kind="operator")
+    replay = (await db.execute(text(
+        "SELECT id FROM factory_audit_events WHERE operation_id = :op"
+        " AND event_kind = 'review_acceptance_declared' LIMIT 1"),
+        {"op": operation_id})).first()
+    try:
+        event, counted, delivered = await audit.record_review_acceptance(
+            db, declaration, recording_actor=recording_actor)
+        await db.commit()
+    except (audit.ReviewDeclarationRefused, audit.ReplayConflictError) as exc:
+        refusal = exc.code if isinstance(exc, audit.ReviewDeclarationRefused) else "replay_conflict"
+        await db.rollback()
+        await audit.record_observation(
+            db, event_kind="review_acceptance_declared", source="operator_declaration",
+            occurred_at=datetime.utcnow(), actor=recording_actor,
+            action_outcome="rejected",
+            item_id=None if refusal == "work_item_not_found" else declaration.work_item_id,
+            correlation_id=operation_id, sanitized_reason=f"declaration refused: {refusal}")
+        return JSONResponse(status_code=409, content=FactoryReviewAcceptanceRead(
+            operation_id=operation_id, refusal=refusal).model_dump())
+    body = FactoryReviewAcceptanceRead(
+        event_id=event.id, operation_id=operation_id, counted=counted,
+        delivery_established=delivered)
+    if replay is not None:
+        return JSONResponse(status_code=200, content=body.model_dump())
+    return body
+
+
+@router.get("/metrics")
+async def get_factory_metrics(
+    window_start: datetime,
+    window_end: datetime,
+    filter_scope: str = "all",
+    team_context_key: str | None = None,
+    scope_context_key: str | None = None,
+    db=Depends(get_db),
+):
+    """A23-A38: safe aggregates with window, scope, unit, samples and
+    coverage. Ordinary factory read: no protected details, no fresh GitHub
+    fetches and no writes.
+    """
+    from app.services import factory_metrics_service as _metrics
+    return await _metrics.build_metrics_window(
+        db,
+        window_start=window_start,
+        window_end=window_end,
+        filter_scope=filter_scope,
+        team_context_key=team_context_key,
+        scope_context_key=scope_context_key,
+    )

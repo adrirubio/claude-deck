@@ -10,6 +10,7 @@ import { OverviewPage, WorkPage, WorkDetailPage, RepositoriesPage, RepositoryPag
 import { BridgeEntry, MailEntry } from './features/factory/ContextPages'
 import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
 import { RepositorySetupPage } from './features/factory/RepositorySetupPage'
+import { AuditMetricsPage } from './features/factory/AuditMetricsPanel'
 
 function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate replace to={`/teams${search}${hash}`} /> }
 
@@ -24,6 +25,7 @@ function App() {
               <Route path="/" element={<MainLayout />}>
                 <Route index element={<OverviewPage />} />
                 <Route path="work" element={<WorkPage />} />
+                <Route path="audit" element={<AuditMetricsPage />} />
                 <Route path="work/:workItemId" element={<WorkDetailPage />} />
                 <Route path="repositories" element={<RepositoriesPage />} />
                 <Route path="repositories/new" element={<RepositorySetupPage />} />

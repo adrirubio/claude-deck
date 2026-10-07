@@ -37,6 +37,7 @@ export default defineConfig({
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
+            { text: 'Factory Audit & Metrics', link: '/guide/factory-audit-and-metrics' },
             { text: 'Contributing', link: '/guide/contributing' },
           ],
         },

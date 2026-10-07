@@ -12,6 +12,7 @@ from app.models.database import (
     GithubWorkspace,
     MailMessage,
 )
+from app.services import factory_audit_service as audit
 from app.services.github_approval_service import (
     GithubApprovalError,
     github_approval_service,
@@ -27,11 +28,14 @@ async def cancel_stranded_initial_approval(
     request_id: int,
     dispatch_nonce: str,
     reason: str,
+    actor: dict | None = None,
 ) -> GithubApprovalRequest:
     """Supersede pending authority and its Mail without resetting the attempt.
 
     The route must authenticate the operator. The item claim serializes this
     transition with dispatch/approval writes; the approval CAS preserves decisions.
+    A caller that supplies its trusted ``actor`` gets one action fact in the
+    cancellation transaction. An exact replay records nothing.
     """
     if not reason.strip():
         raise GithubApprovalError("cancellation_reason_required", status_code=400)
@@ -153,6 +157,26 @@ async def cancel_stranded_initial_approval(
         raise GithubApprovalError("initial_approval_cancel_conflict")
     for root in roots:
         root.request_status = "superseded"
+    if actor is not None:
+        # C07/C09: the action fact belongs to the guarded mutation and its
+        # exact request; it commits or rolls back with the cancellation.
+        operation_id = f"initial_cancellation:request:{request_id}"
+        await audit.record_event(
+            db,
+            event_kind="recovery_cancellation",
+            source="github_initial_approval_recovery.cancel_stranded_initial_approval",
+            occurred_at=now,
+            actor=actor,
+            scope_id=item.scope_id,
+            item_id=work_item_id,
+            request_id=request_id,
+            before_values={"status": "pending", "request_kind": "initial_plan"},
+            after_values={"status": "superseded"},
+            action_outcome="applied",
+            sanitized_reason="stranded initial approval cancelled",
+            operation_id=operation_id,
+            correlation_id=operation_id,
+        )
     await db.flush()
     await db.refresh(approval)
     await db.commit()

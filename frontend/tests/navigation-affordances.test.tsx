@@ -91,7 +91,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(within(nav).getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
-    expect(within(nav).getAllByRole('link')).toHaveLength(8)
+    expect(within(nav).getAllByRole('link')).toHaveLength(9)
     for (const link of within(nav).getAllByRole('link')) expect(link).toHaveAttribute('title', link.getAttribute('aria-label'))
     fireEvent.click(within(nav).getByRole('link', { name: 'Harnesses' })); await settle()
     expect(within(nav).getByRole('link', { name: 'Harnesses' })).toHaveAttribute('aria-current', 'page')

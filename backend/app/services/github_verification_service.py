@@ -487,6 +487,9 @@ class GithubVerificationService:
         if item_result.rowcount != 1 or revision_result.rowcount != 1:
             await db.rollback()
             raise ContinuationCompletionError("stale_continuation_context")
+        await self._record_revision_outcome(
+            db, item, revision, "completed",
+            source="github_verification_service.submit_diagnostic_completion")
         await db.commit()
         await db.refresh(item)
         await github_dispatch_service.notify_owner(
@@ -898,7 +901,8 @@ class GithubVerificationService:
             if verdict == "merged":
                 chosen = max(selected, key=self._pull_number)
                 item.pr_number = self._pull_number(chosen)
-                self._mark_merged(item)
+                await self._mark_merged_with_fact(
+                    db, item, chosen, source="github_verification_service._reconcile_attempt_pulls")
                 item.status_note = (
                     "Merged pull requests found for this dispatch head: "
                     + ", ".join(f"#{number}" for number in numbers)
@@ -937,7 +941,8 @@ class GithubVerificationService:
         item.pr_number = pr_number
         item.last_verified_sha = None
         if verdict == "merged":
-            self._mark_merged(item)
+            await self._mark_merged_with_fact(
+                db, item, pull, source="github_verification_service._record_selected_pull")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
@@ -1199,10 +1204,14 @@ class GithubVerificationService:
             await db.refresh(scope)
             await db.refresh(item)
             return
-        self._mark_merged(item)
+        await self._mark_merged_with_fact(
+            db, item, pull, source="github_verification_service._reconcile_escalated_merge")
         if revision is not None:
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
+            await self._record_revision_outcome(
+                db, item, revision, "completed",
+                source="github_verification_service._reconcile_escalated_merge")
         await db.commit()
         if notify:
             await self._notify_blocker_merged(db, scope, item)
@@ -1342,7 +1351,11 @@ class GithubVerificationService:
                 return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
-            self._mark_merged(item)
+            await self._mark_merged_with_fact(
+                db, item, pull, source="github_verification_service._observe_diagnostic_checks")
+            await self._record_revision_outcome(
+                db, item, revision, "completed",
+                source="github_verification_service._observe_diagnostic_checks")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
@@ -1350,6 +1363,9 @@ class GithubVerificationService:
             if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
                 return
             revision.status = "superseded"
+            await self._record_revision_outcome(
+                db, item, revision, "superseded",
+                source="github_verification_service._observe_diagnostic_checks")
             await github_dispatch_service.escalate_without_notification(
                 db,
                 item,
@@ -1490,6 +1506,13 @@ class GithubVerificationService:
             revision.failed_head_count += 1
             revision.last_failed_head_sha = head_sha
             item.diagnostic_retry_count += 1
+            # C12: diagnostic retry evidence, in the charge's transaction.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_retry_charge(
+                db, item_id=item.id, scope_id=item.scope_id, revision_id=revision.id,
+                retry_class="diagnostic", counter_value=item.diagnostic_retry_count,
+                reason_code="diagnostic_failed_head",
+                source="github_verification_service._record_diagnostic_failure")
             item.diagnostic_last_verified_sha = head_sha
             item.status_note = "Diagnostic checks produced failure evidence."
             item.updated_at = datetime.utcnow()
@@ -1686,13 +1709,19 @@ class GithubVerificationService:
             if revision is not None:
                 revision.status = "completed"
                 revision.completed_at = datetime.utcnow()
-            self._mark_merged(item)
+                await self._record_revision_outcome(
+                    db, item, revision, "completed",
+                    source="github_verification_service._verify_item")
+            await self._mark_merged_with_fact(db, item, pull, source="github_verification_service._verify_item")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
         if verdict == "closed_unmerged":
             if revision is not None:
                 revision.status = "superseded"
+                await self._record_revision_outcome(
+                    db, item, revision, "superseded",
+                    source="github_verification_service._verify_item")
             await github_dispatch_service.escalate_without_notification(
                 db,
                 item,
@@ -1843,7 +1872,8 @@ class GithubVerificationService:
             )
             return
         if verdict == "merged":
-            self._mark_merged(item)
+            await self._mark_merged_with_fact(
+                db, item, pull, source="github_verification_service._process_review_item")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
@@ -1987,7 +2017,11 @@ class GithubVerificationService:
                 )
             return
 
-        self._mark_merged(item)
+        # The merge response carries no merge time, so the sourced fact time
+        # stays unknown (null); the record time is the observation time.
+        await self._mark_merged_with_fact(
+            db, item, {"number": item.pr_number},
+            source="github_verification_service._process_review_item.auto_merge")
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
@@ -2082,6 +2116,13 @@ class GithubVerificationService:
         note: str,
     ) -> None:
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=None,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="transient_merge_failure",
+            source="github_verification_service._record_transient_merge_failure")
         if item.retry_count > scope.max_verification_retries:
             await self._fallback_to_human_merge(
                 db,
@@ -2243,6 +2284,9 @@ class GithubVerificationService:
                 return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
+            await self._record_revision_outcome(
+                db, item, revision, "completed",
+                source="github_verification_service._promote_verified_item")
         item.last_verified_sha = head_sha
         item.dispatch_status = "ready_for_review"
         item.status_note = f"PR #{item.pr_number} is ready for review."
@@ -2319,6 +2363,29 @@ class GithubVerificationService:
         item.escalation_reason = None
         item.status_note = None
         item.updated_at = datetime.utcnow()
+
+    async def _mark_merged_with_fact(
+        self, db: AsyncSession, item: GithubWorkItem, pull: dict | None, *, source: str
+    ) -> None:
+        # R02: the sourced merge outcome is recorded in the merge transaction,
+        # bound to the attempt, revision and PR artifact.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_merged_delivery(db, item, pull, source=source)
+        self._mark_merged(item)
+
+    async def _record_revision_outcome(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        status: str,
+        *,
+        source: str,
+    ) -> None:
+        # R08: the preserved revision result, in the result's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_revision_outcome(
+            db, item_id=item.id, revision_id=revision.id, status=status, source=source)
 
     async def _fallback_to_human_merge(
         self,
@@ -2504,6 +2571,13 @@ class GithubVerificationService:
         revision.failed_head_count += 1
         revision.last_failed_head_sha = head_sha
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=revision.id,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="product_verification_failure",
+            source="github_verification_service._record_product_verification_failure")
         item.last_verified_sha = head_sha
         self._set_failure_note(item, note)
         revision_exhausted = revision.failed_head_count >= revision.max_failed_heads
@@ -2573,6 +2647,13 @@ class GithubVerificationService:
 
         item.last_verified_sha = head_sha
         item.retry_count += 1
+        # C12: implementation retry evidence, in the charge's transaction.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_retry_charge(
+            db, item_id=item.id, scope_id=item.scope_id, revision_id=None,
+            retry_class="implementation", counter_value=item.retry_count,
+            reason_code="failed_verification_attempt",
+            source="github_verification_service._record_failed_verification_attempt")
         self._set_failure_note(item, note)
         await github_dispatch_service.notify_owner(
             db,
