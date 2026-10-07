@@ -50,12 +50,13 @@ def _identity(pid: int, session_id: str) -> bool:
     return values == [session_id]
 
 
-def _has_current_prompt(data: bytes, offset: int, started_at: datetime) -> bool:
+def _current_prompt_index(data: bytes, offset: int, started_at: datetime) -> int | None:
     """Find a main-turn start; the ordered parser validates its full binding."""
     lines = data.splitlines()
     if offset:
         lines = lines[1:]
-    for line in reversed(lines):
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
         row = json.loads(line)
         if (row.get("type") != "user" or row.get("isSidechain") is True
                 or row.get("isReplay") is True):
@@ -77,8 +78,8 @@ def _has_current_prompt(data: bytes, offset: int, started_at: datetime) -> bool:
                        and all(isinstance(part, dict) and part.get("type") == "tool_result"
                                for part in content))
         if not tool_result:
-            return True
-    return False
+            return index
+    return None
 
 
 def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
@@ -96,7 +97,7 @@ def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
         # earlier chunks through the same descriptor. Never infer a turn start
         # from progress alone, and never read an unbounded conversation history.
         if data.endswith(b"\n"):
-            while offset and not _has_current_prompt(data, offset, started_at):
+            while offset and _current_prompt_index(data, offset, started_at) is None:
                 remaining = _MAX_HISTORY_BYTES - len(data)
                 if remaining <= 0:
                     break
@@ -117,6 +118,11 @@ def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
     lines = data.splitlines()
     if offset:
         lines = lines[1:]
+    prompt_index = _current_prompt_index(data, offset, started_at)
+    if prompt_index is not None:
+        # Earlier turns cannot invalidate a new, fully bound main-turn start.
+        # Every event from this prompt onward retains the ordered guards below.
+        lines = lines[prompt_index:]
     state, reason, observed_at = "unknown", "no_native_event", None
     terminal = None
     cursor = None
