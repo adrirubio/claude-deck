@@ -86,7 +86,8 @@ def _state(path: Path, uid: int, session_id: str, cwd: str, now: datetime,
         if timestamp < started_at:
             continue
         if (row.get("sessionId") != session_id or not isinstance(row.get("cwd"), str)
-                or Path(row["cwd"]).resolve() != Path(cwd).resolve()):
+                or not Path(row["cwd"]).is_absolute()
+                or not Path(row["cwd"]).resolve().is_relative_to(Path(cwd).resolve())):
             return "unknown", "session_mismatch", None
         if observed_at and timestamp < observed_at:
             return "unknown", "observation_invalid", None
