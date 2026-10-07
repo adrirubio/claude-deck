@@ -449,6 +449,7 @@ class GithubOwnerObservationPause(Base):
     paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     resume_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     resumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resume_context_key: Mapped[str | None] = mapped_column(String, nullable=True)
     operator_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     notice_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

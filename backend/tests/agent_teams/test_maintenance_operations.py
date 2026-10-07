@@ -1,5 +1,5 @@
 """Maintenance profiles and real disposable Git updates preserve source history."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -49,6 +49,9 @@ class CheckFixture(Maintenance):
     def __init__(self,p,actual,runs): super().__init__(p);self.actual=actual;self.runs=runs
     def run(self,argv,**_kwargs):
         return json.dumps(self.runs if 'check-runs' in argv[-1] else self.actual).encode()
+    def current_checks(self,_pull):
+        if self.runs.get('total_count',0)>100: raise ValueError('incomplete')
+        return self.runs['check_runs']
 
 
 @pytest.mark.parametrize('change',['head','base','unmerged','missing','wrong_app','wrong_head','pending','skipped','too_many'])
@@ -80,14 +83,16 @@ def git(path,*args):
 class IntegrationFixture(Maintenance):
     def __init__(self,p,path,tip,mode):
         super().__init__(p);self.path=path;self.tip=tip;self.mode=mode;self.notices=[];self.safety_calls=0;self.required=[]
+        sqlite3.connect(p.database).close()
     def safety(self): self.safety_calls+=1
     def accepted(self,_pull): return self.tip
     def rows(self,query,values=()):
         if 'github_work_items' in query: return [{'id':1,'scope_id':1,'owner_slot_id':2,'dispatch_status':'dispatched','dispatch_nonce':'fixture','active_scope_revision':4,'delivery_policy':json.dumps({'accepted_base_update':self.mode,'required_checks':self.required})}]
         if 'team_github_scopes' in query: return [{'repo_owner':'fixture','repo_name':'repo','base_ref':'origin/integration','preset_id':1}]
-        if 'github_workspaces' in query: return [{'path':str(self.path),'enabled':True}]
+        if 'github_workspaces' in query: return [{'id':1,'path':str(self.path),'enabled':True}]
         raise AssertionError(query)
     def checkpoint(self,*_args): return {'message':1,'member':2,'generation':3}
+    def approved_owner(self,*_args): return {'authority':'fixture','workspace_id':1,'generation':3}
     def authority(self,*_args): return 'unchanged-private-authority'
     def bindings(self,*_args): return []
     def generations(self,*_args): return []
@@ -147,7 +152,7 @@ def test_integration_preflight_does_not_change_source_or_record_success(tmp_path
 class UpgradeFixture(Maintenance):
     def __init__(self,p,old,new,tree,contents,stop_unknown=False):
         super().__init__(p);self.current=old;self.old=old;self.new=new;self.tree=tree;self.contents=contents
-        self.enabled=True;self.commands=[];self.stop_unknown=stop_unknown
+        self.enabled=True;self.commands=[];self.stop_unknown=stop_unknown;self.started=False
     def source(self,path,**_kwargs): return {'head':self.current if str(path)==self.profile.controller else self.new,'tree':self.tree,'branch':''}
     def git(self,path,*args,**_kwargs):
         if args[0]=='diff': return b'source.py\n'
@@ -169,8 +174,224 @@ class UpgradeFixture(Maintenance):
         return {'autonomy_enabled':self.enabled}
     def run(self,argv,**_kwargs):
         self.commands.append(tuple(argv))
+        if argv[1]=='start': self.started=True
         if argv[1]=='show': return b'ActiveState=active\nSubState=running\nMainPID=123\nControlGroup=\n' if self.stop_unknown else b'ActiveState=inactive\nSubState=dead\nMainPID=0\nControlGroup=\n'
         return b''
+
+
+def configured_upgrade(tmp_path):
+    p=profile(tmp_path,version_records={'readiness.json':'controller_pin'})
+    Path(p.controller).mkdir();(Path(p.controller)/'private.env').write_text('Preserve operator settings')
+    Path(p.state_dir).mkdir();(Path(p.state_dir)/'readiness.json').write_text(json.dumps({'controller_pin':'a'*40}))
+    Path(p.supervisor_state).write_text(json.dumps({'autonomy_enabled':False,'last_tick':datetime.now(timezone.utc).isoformat()}))
+    sqlite3.connect(p.database).close();Path(p.arming_file).write_text('armed')
+    contents=b'accepted source';files={'source.py':hashlib.sha256(contents).hexdigest()}
+    log=tmp_path/'proof.log';log.write_text('Focused synthetic proof')
+    source={'head':'b'*40,'tree':'c'*40,'status':''}
+    receipt=tmp_path/'proof.json';receipt.write_text(json.dumps({'eligible':True,'exit_code':0,'source_before':source,'source_after':source,'log':str(log),'log_sha256':hashlib.sha256(log.read_bytes()).hexdigest()}))
+    review=tmp_path/'review.md';review.write_text('ACCEPT\n'+'b'*40+'\n'+digest(files))
+    request=UpgradeRequest(operation_id='upgrade-1',expected_head='a'*40,target_head='b'*40,candidate=str(tmp_path/'candidate'),
+        accepted_pulls=[AcceptedPull(repository='fixture/repo',number=1,head='b'*40,base='main',checks=['Tests'])],
+        reviewed_files=files,review_file=str(review),review_sha256=hashlib.sha256(review.read_bytes()).hexdigest(),proof_receipt=str(receipt))
+    return UpgradeFixture(p,'a'*40,'b'*40,'c'*40,contents),request
+
+
+@pytest.mark.parametrize('failure',['health','preservation','autonomy_on','off_timeout','marker','evidence'])
+def test_upgrade_failure_always_attempts_and_proves_stop(tmp_path,monkeypatch,failure):
+    service,request=configured_upgrade(tmp_path)
+    api=service.api
+    def changed_api(method,path,body=None):
+        if service.started and failure=='off_timeout' and method=='PATCH': raise TimeoutError('fixture')
+        if service.started and path=='/health' and failure in {'health','off_timeout'}:
+            if failure=='off_timeout': service.enabled=True
+            return {'status':'unknown'}
+        if service.started and method=='GET' and path!='/health' and failure=='autonomy_on': return {'autonomy_enabled':True}
+        return api(method,path,body)
+    monkeypatch.setattr(service,'api',changed_api)
+    if failure=='preservation': monkeypatch.setattr(service,'authority',lambda: 'changed' if service.started else 'unchanged')
+    if failure=='marker': Path(service.profile.arming_file).unlink();Path(service.profile.arming_file).mkdir()
+    if failure=='evidence':
+        original=service.record
+        def cannot_save(operation_id,record,*,first=False):
+            if not first: raise OSError('fixture')
+            return original(operation_id,record,first=first)
+        monkeypatch.setattr(service,'record',cannot_save)
+    with pytest.raises(Exception): service.upgrade(request)
+    assert sum(command==('systemctl','start','deck.service') for command in service.commands)<=1
+    assert ('systemctl','stop','deck.service') in service.commands
+    record=read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')
+    if failure=='evidence': assert record['status']=='prepared'
+    else:
+        assert record['status']=='failed_stopped_needs_inspection'
+        assert 'authority_preserved' not in record
+        assert {'step':'controller_stop','status':'confirmed'} in record['cleanup']
+        if failure in {'marker','off_timeout'}: assert any(step['status']=='unknown' for step in record['cleanup'])
+
+
+@pytest.mark.parametrize('change',['scope','slot','coordination','database','unchanged'])
+def test_upgrade_preservation_reads_real_policy_roster_coordination_and_database_identity(tmp_path,monkeypatch,change):
+    service,request=configured_upgrade(tmp_path)
+    with sqlite3.connect(service.profile.database) as db:
+        db.executescript('''
+            CREATE TABLE team_github_scopes (id INTEGER PRIMARY KEY,max_scope_paths INTEGER);
+            INSERT INTO team_github_scopes VALUES (1,29);
+            CREATE TABLE agent_team_slots (id INTEGER PRIMARY KEY,enabled INTEGER,role TEXT);
+            INSERT INTO agent_team_slots VALUES (1,1,'owner');
+            CREATE TABLE agent_team_presets (id INTEGER PRIMARY KEY,autonomy_enabled INTEGER,name TEXT);
+            INSERT INTO agent_team_presets VALUES (1,1,'fixture');
+            CREATE TABLE github_backlog_coordination (scope_id INTEGER PRIMARY KEY,max_daily_requests INTEGER);
+            INSERT INTO github_backlog_coordination VALUES (1,12);
+        ''')
+    monkeypatch.setattr(service,'authority',lambda: Maintenance.authority(service))
+    original=service.run
+    def run_changed(argv,**kwargs):
+        result=original(argv,**kwargs)
+        if argv[1]=='start' and change!='unchanged':
+            if change=='database':
+                replacement=tmp_path/'replacement.sqlite'
+                with sqlite3.connect(service.profile.database) as db,sqlite3.connect(replacement) as target: db.backup(target)
+                os.replace(replacement,service.profile.database)
+            else:
+                query={'scope':'UPDATE team_github_scopes SET max_scope_paths=30',
+                       'slot':"UPDATE agent_team_slots SET enabled=0,role='other'",
+                       'coordination':'UPDATE github_backlog_coordination SET max_daily_requests=99'}[change]
+                with sqlite3.connect(service.profile.database) as db: db.execute(query)
+        return result
+    monkeypatch.setattr(service,'run',run_changed)
+    if change=='unchanged': service.upgrade(request)
+    else:
+        with pytest.raises(ValueError,match='deployed_context_changed'): service.upgrade(request)
+    record=read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')
+    assert record['status']==('deployed_paused' if change=='unchanged' else 'failed_stopped_needs_inspection')
+
+
+def test_checkpoint_is_single_use_across_operation_ids_and_transaction_rollback(tmp_path):
+    service=Maintenance(profile(tmp_path));sqlite3.connect(service.profile.database).close()
+    checkpoint={'message':12,'member':2,'generation':3}
+    with pytest.raises(ValueError):
+        with service.reservation():
+            service.consume_checkpoint('first-operation',checkpoint)
+            raise ValueError('Source effects do not roll back')
+    with pytest.raises(FileExistsError): service.consume_checkpoint('other-operation',checkpoint)
+
+
+def checkpoint_database(service,head='a'*40):
+    stamp=datetime.now(timezone.utc).isoformat();pid=os.getpid()
+    start=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[19]
+    owner={'authority':'fixture-current-approval','workspace_id':1,'generation':10}
+    payload={'kind':'factory_maintenance_checkpoint','operation':'controller_upgrade','operation_id':'upgrade-1',
+        'work_item_id':1,'source_head':head,'owner_context_sha256':digest(owner),
+        'no_inflight_operations':True,'hold_until_release':True}
+    with sqlite3.connect(service.profile.database) as db:
+        db.executescript('''CREATE TABLE mail_messages (id INTEGER PRIMARY KEY,sender_member_id INTEGER,created_at TEXT,payload TEXT);
+            CREATE TABLE mail_team_members (id INTEGER PRIMARY KEY,team_slot_id INTEGER,updated_at TEXT);
+            CREATE TABLE mail_agent_sessions (id INTEGER PRIMARY KEY,member_id INTEGER,team_slot_id INTEGER,pid INTEGER,
+                created_at TEXT,last_seen_at TEXT,provider TEXT,cwd TEXT,bound_pane_pid INTEGER,bound_pane_proc_start TEXT,
+                source TEXT,closed_at TEXT,mailbox_status TEXT,capability_token_hash TEXT);''')
+        db.execute('INSERT INTO mail_messages VALUES (12,2,?,?)',(stamp,json.dumps(payload)))
+        db.execute('INSERT INTO mail_team_members VALUES (2,2,?)',(stamp,))
+        db.execute('INSERT INTO mail_agent_sessions VALUES (10,2,2,?,?,?, ?,?,?,?,?,NULL,?,?)',
+            (pid,stamp,stamp,'fixture',str(Path(service.profile.database).parent),pid,start,'mcp','connected','fixture-capability-hash'))
+    item={'id':1,'owner_slot_id':2};workspace={'id':1,'leased_owner_pid':pid,'leased_owner_proc_start':start,'path':str(Path(service.profile.database).parent)}
+    return item,workspace,owner
+
+
+@pytest.mark.parametrize('change',['operation','context','expired','hold','competing','unchanged'])
+def test_real_mail_checkpoint_binds_one_current_operation_and_generation(tmp_path,change):
+    service=Maintenance(profile(tmp_path));item,workspace,owner=checkpoint_database(service)
+    with sqlite3.connect(service.profile.database) as db:
+        payload=json.loads(db.execute('SELECT payload FROM mail_messages').fetchone()[0])
+        if change=='operation': payload['operation_id']='other-operation'
+        elif change=='context': payload['owner_context_sha256']='0'*64
+        elif change=='hold': payload['hold_until_release']=False
+        elif change=='expired': db.execute('UPDATE mail_messages SET created_at=?',((datetime.now(timezone.utc)-timedelta(seconds=901)).isoformat(),))
+        elif change=='competing': db.execute('INSERT INTO mail_agent_sessions SELECT 11,member_id,team_slot_id,pid,created_at,last_seen_at,provider,cwd,bound_pane_pid,bound_pane_proc_start,source,closed_at,mailbox_status,? FROM mail_agent_sessions',('second-capability-hash',))
+        db.execute('UPDATE mail_messages SET payload=?',(json.dumps(payload),))
+    call=lambda: service.checkpoint(item,workspace,'controller_upgrade',12,'a'*40,'upgrade-1',owner)
+    if change=='unchanged': assert call()=={'message':12,'member':2,'generation':10}
+    else:
+        with pytest.raises(ValueError): call()
+
+
+def test_upgrade_rechecks_real_checkpoint_age_after_backup_before_cutover(tmp_path,monkeypatch):
+    from datetime import timedelta
+    service,request=configured_upgrade(tmp_path);item,workspace,owner=checkpoint_database(service,head='b'*40)
+    original=service.rows
+    def rows(query,values=()):
+        if 'github_work_items' in query: return [item|{'dispatch_status':'dispatched'}]
+        if 'github_workspaces' in query: return [workspace]
+        if 'mail_' in query: return Maintenance.rows(service,query,values)
+        return original(query,values)
+    monkeypatch.setattr(service,'rows',rows)
+    monkeypatch.setattr(service,'approved_owner',lambda *_args: owner)
+    request=request.model_copy(update={'checkpoint_messages':{'1':12}})
+    calls=[]
+    def checkpoint(*args):
+        calls.append(True)
+        if len(calls)==2:
+            with sqlite3.connect(service.profile.database) as db:
+                db.execute('UPDATE mail_messages SET created_at=?',((datetime.now(timezone.utc)-timedelta(seconds=901)).isoformat(),))
+        return Maintenance.checkpoint(service,*args)
+    monkeypatch.setattr(service,'checkpoint',checkpoint)
+    with pytest.raises(ValueError,match='owner_checkpoint_changed'): service.upgrade(request)
+    assert len(calls)==2 and service.current=='a'*40
+    assert ('systemctl','stop','deck.service') not in service.commands
+    assert ('systemctl','start','deck.service') not in service.commands
+    assert read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')['status']=='failed_paused_needs_inspection'
+
+
+def test_timeout_settles_actual_child_process_before_releasing_reservation(tmp_path):
+    import sys
+    service=Maintenance(profile(tmp_path));sqlite3.connect(service.profile.database).close()
+    pidfile=tmp_path/'child.pid'
+    code='import os,signal,time;from pathlib import Path;Path('+repr(str(pidfile))+').write_text(str(os.getpid()));signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)'
+    with service.reservation():
+        with pytest.raises(ValueError,match='timeout_settled'):
+            service.run([sys.executable,'-c',code],timeout=.1)
+        pid=int(pidfile.read_text())
+        with pytest.raises(ProcessLookupError): os.kill(pid,0)
+
+
+def integration_authority_db(service):
+    with sqlite3.connect(service.profile.database) as db:
+        db.executescript('''CREATE TABLE github_work_items (id INTEGER PRIMARY KEY,scope_id INTEGER,dispatch_status TEXT);
+            INSERT INTO github_work_items VALUES (1,1,'dispatched');
+            CREATE TABLE team_github_scopes (id INTEGER PRIMARY KEY,base_ref TEXT);
+            INSERT INTO team_github_scopes VALUES (1,'origin/integration');''')
+    service.authority=lambda item_id: Maintenance.authority(service,item_id)
+
+
+@pytest.mark.parametrize('when',['before_reservation','during_merge'])
+def test_real_independent_authority_writer_cannot_cross_source_boundary(tmp_path,monkeypatch,when):
+    from contextlib import contextmanager
+    workspace,before,tip=repository(tmp_path);(tmp_path/'state').mkdir()
+    service=IntegrationFixture(profile(tmp_path),workspace,tip,'fast_forward');integration_authority_db(service)
+    request=IntegrationRequest(operation_id='integration-race',work_item_id=1,expected_head=before,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    if when=='before_reservation':
+        original=service.reservation
+        @contextmanager
+        def cancel_then_reserve():
+            with sqlite3.connect(service.profile.database) as writer: writer.execute("UPDATE github_work_items SET dispatch_status='failed' WHERE id=1")
+            with original(): yield
+        monkeypatch.setattr(service,'reservation',cancel_then_reserve)
+        with pytest.raises(ValueError,match='reserved_owner_context_changed'): service.integration_update(request)
+        assert git(workspace,'rev-parse','HEAD')==before
+        assert not (Path(service.profile.state_dir)/'maintenance/checkpoint-claims/1.json').exists()
+    else:
+        original=service.git;blocked=[]
+        def try_cancel(path,*args,**kwargs):
+            if args[0]=='merge':
+                with sqlite3.connect(service.profile.database,timeout=.02) as writer:
+                    with pytest.raises(sqlite3.OperationalError,match='locked'):
+                        writer.execute("UPDATE github_work_items SET dispatch_status='failed' WHERE id=1")
+                    blocked.append(True)
+            return original(path,*args,**kwargs)
+        monkeypatch.setattr(service,'git',try_cancel)
+        service.integration_update(request)
+        assert blocked==[True] and git(workspace,'rev-parse','HEAD')==tip
+        with sqlite3.connect(service.profile.database) as db: assert db.execute('SELECT dispatch_status FROM github_work_items').fetchone()[0]=='dispatched'
 
 
 @pytest.mark.parametrize('stop_unknown',[False,True])
@@ -194,7 +415,7 @@ def test_upgrade_records_only_confirmed_version_and_preserves_operator_files(tmp
         with pytest.raises(ValueError,match='termination_unknown'): service.upgrade(request)
     else: service.upgrade(request)
     record=read_json(Path(p.state_dir)/'maintenance/upgrade-1.json')
-    assert record['status']==('paused_needs_inspection' if stop_unknown else 'deployed_paused')
+    assert record['status']==('failed_termination_unknown' if stop_unknown else 'deployed_paused')
     assert service.enabled is False and not Path(p.arming_file).exists()
     assert (Path(p.controller)/'private.env').read_text()=='Do not replace'
     assert service.current==('a'*40 if stop_unknown else 'b'*40)

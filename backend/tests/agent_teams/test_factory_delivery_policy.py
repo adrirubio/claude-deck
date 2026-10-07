@@ -541,6 +541,80 @@ async def test_recorded_resume_preserves_scope_contact_budgets_and_exact_replay(
         await pause.resume_observation_pause(db,item,scope,record.id,"Changed reason")
 
 
+@pytest.mark.asyncio
+async def test_initial_resume_uses_only_grace_with_no_new_owner_progress(db,monkeypatch,tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    import app.services.github_dispatch_service as dispatch_module
+    scope,item,workspace,_revision,slot,*_=await observation_fixture(db,monkeypatch,tmp_path,initial=True)
+    original=datetime.utcnow()-timedelta(hours=4)
+    item.dispatched_at=original;item.updated_at=original
+    workspace.lease_last_owner_contact_at=original
+    item.delivery_policy=dict(item.delivery_policy,owner_idle_seconds=3600)
+    await db.commit()
+    assert await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    assert await pause.handle_observation_gap(db,scope,item)
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,'Inspect complete'))['status']=='resumed'
+    resumed=record.resumed_at
+    class Later(datetime):
+        @classmethod
+        def utcnow(cls): return resumed+timedelta(seconds=31)
+        @classmethod
+        def now(cls,tz=None):
+            value=resumed+timedelta(seconds=31)
+            return value.replace(tzinfo=timezone.utc).astimezone(tz) if tz else value
+    monkeypatch.setattr(dispatch_module,'datetime',Later)
+    monkeypatch.setattr(pause,'datetime',Later)
+    await github_dispatch_service.monitor_dispatched(db,scope,[slot],wake_state_by_slot={slot.id:'ready'})
+    records=list((await db.scalars(select(GithubOwnerObservationPause).order_by(GithubOwnerObservationPause.id))).all())
+    assert len(records)==2 and records[-1].status=='waiting'
+    assert item.dispatched_at==original and workspace.lease_last_owner_contact_at==original
+    assert item.retry_count==3 and item.active_scope_revision==0
+
+
+@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','unchanged'])
+@pytest.mark.asyncio
+async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkeypatch,tmp_path,change):
+    from pathlib import Path
+    from sqlalchemy.ext.asyncio import create_async_engine,AsyncSession
+    from app.database import Base
+    from app.models.database import GithubApprovalRequest
+    from app.services.maintenance_operations import Maintenance,InstallationProfile
+    database=tmp_path/'owner.sqlite'
+    engine=create_async_engine('sqlite+aiosqlite:///'+str(database))
+    try:
+        async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+        async with AsyncSession(engine,expire_on_commit=False) as db:
+            scope,item,workspace,revision,slot,member,session,*_=await observation_fixture(db,monkeypatch,tmp_path,initial=change=='missing_ack')
+            if change=='unapproved':
+                request=(await db.scalars(select(GithubApprovalRequest))).one();request.status='pending'
+            elif change=='missing_ack': item.ack_received_at=None
+            elif change=='handoff': item.handoff_state='pending'
+            elif change=='revision': revision.status='superseded'
+            elif change=='competing_generation':
+                db.add(MailAgentSession(member_id=member.id,provider=slot.provider,source='mcp',session_key='competing',
+                    pid=session.pid+1,cwd=session.cwd,team_slot_id=slot.id,team_preset_id=scope.preset_id,
+                    bound_pane_pid=session.bound_pane_pid,bound_pane_proc_start=session.bound_pane_proc_start,
+                    capability_token_hash='other-fixture-hash'))
+            await db.commit()
+            profile=InstallationProfile(controller=str(tmp_path/'controller'),database=str(database),
+                operator_env=str(tmp_path/'operator.env'),api_url='http://127.0.0.1:8000/api/v1',service='fixture.service',
+                supervisor_unit='fixture.timer',supervisor_state=str(tmp_path/'supervisor.json'),state_dir=str(tmp_path/'state'),
+                hold_files=[str(tmp_path/'HOLD')],arming_file=str(tmp_path/'armed'),github_user='fixture',workspace_user='fixture',
+                protected_files=['private.env'])
+            service=Maintenance(profile)
+            call=lambda: service.approved_owner({'id':item.id},{'id':workspace.id})
+            if change=='unchanged':
+                result=await asyncio.to_thread(call)
+                assert result['workspace_id']==workspace.id and result['generation']==session.id
+            else:
+                with pytest.raises(ValueError): await asyncio.to_thread(call)
+            assert not Path(profile.controller).exists()
+    finally: await engine.dispose()
+
+
 @pytest.mark.parametrize("change", ["commands", "budget", "nonce", "generation", "lease", "expired", "unrelated_reason"])
 @pytest.mark.asyncio
 async def test_recorded_resume_refuses_changed_or_expired_authority(db, monkeypatch, tmp_path, change):

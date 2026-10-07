@@ -5,7 +5,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 
 from sqlalchemy import select, update
@@ -54,10 +53,10 @@ def _process_identity(slot, session, workspace):
         if not _identity(pid, options.get("session_id")):
             raise ValueError("owner_native_identity_changed")
     elif slot.provider == "codex-cli":
+        from app.services.codex_process_identity import explicit_resume
         native_id = activity._canonical_session_id(options.get("session_id"))
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-        if (not native_id or Path(os.fsdecode(argv[0])).name != "codex"
-                or b"resume" not in argv or native_id.encode() not in argv):
+        if not native_id or not explicit_resume(argv, native_id):
             raise ValueError("owner_native_identity_changed")
     elif slot.provider == "pi-cli":
         from app.services.pi_activity_service import _native_process
@@ -107,6 +106,15 @@ async def bound_authority(db, scope, item):
       .execution_options(populate_existing=True))).all())
     if not sessions or len(sessions) > 256:
         raise ValueError("owner_generation_unavailable")
+    live=[]
+    for candidate in sessions:
+        if not candidate.last_seen_at or not 0 <= (datetime.utcnow()-candidate.last_seen_at).total_seconds() <= MCP_HEARTBEAT_TTL_SECONDS:
+            continue
+        state,_start=activity._process(candidate.pid)
+        if state not in activity._STOPPED_STATES and _start is not None:
+            live.append(candidate)
+    if len(live)!=1 or live[0].id!=sessions[0].id:
+        raise ValueError("owner_generation_ambiguous")
     session = sessions[0]
     if (session.provider != slot.provider or session.bound_pane_pid != workspace.leased_owner_pid
             or session.bound_pane_proc_start != workspace.leased_owner_proc_start or not session.cwd
@@ -287,5 +295,19 @@ async def resume_observation_pause(db, item, scope, pause_id, reason):
     else:
         item.last_nudge_at = now
     item.updated_at = now
+    record.resume_context_key = _digest([item.id, item.dispatch_nonce, item.owner_slot_id,
+                                        item.active_scope_revision, item.last_nudge_at])
     await db.commit()
     return {"pause_id": record.id, "status": "resumed", "resumed_at": now.isoformat()}
+
+
+async def initial_recovery_grace(db, item, idle_anchor):
+    """An unchanged operator resume gives one grace, never a full idle interval."""
+    key = _digest([item.id, item.dispatch_nonce, item.owner_slot_id,
+                   item.active_scope_revision, item.last_nudge_at])
+    record = await db.scalar(select(GithubOwnerObservationPause).where(
+        GithubOwnerObservationPause.work_item_id == item.id,
+        GithubOwnerObservationPause.status == "resumed",
+        GithubOwnerObservationPause.resume_context_key == key,
+    ))
+    return bool(record and record.resumed_at and idle_anchor <= record.resumed_at)

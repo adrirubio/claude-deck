@@ -80,6 +80,35 @@ async def observe(api):
         return await GithubClient(http=http, token="polling-token").list_check_runs_for_ref("owner", "repo", SHA)
 
 
+@pytest.mark.parametrize('scenario',['queued_replacement','queued_rerun','current_failure','external_success','incomplete'])
+def test_maintenance_uses_current_generation_reader_and_external_application(monkeypatch,tmp_path,scenario):
+    import json
+    from app.services.maintenance_operations import AcceptedPull,InstallationProfile,Maintenance
+    api=API([check()], [run()], {10:[job()]})
+    if scenario=='queued_replacement': api.runs.append(run(11,status='queued',conclusion=None))
+    elif scenario=='queued_rerun': api.runs=[run(attempt=2,status='queued',conclusion=None)]
+    elif scenario=='current_failure':
+        api.checks=[check(conclusion='failure')];api.runs=[run(conclusion='failure')];api.jobs={10:[job(conclusion='failure')]}
+    elif scenario=='incomplete': api.jobs={10:[]}
+    elif scenario=='external_success': api.checks.append(check(200,app=23,name='External test'))
+    original=httpx.AsyncClient
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs: original(transport=httpx.MockTransport(api),**kwargs))
+    profile=InstallationProfile(controller=str(tmp_path/'controller'),database=str(tmp_path/'db'),operator_env=str(tmp_path/'env'),
+        api_url='http://127.0.0.1:8000/api/v1',service='fixture.service',supervisor_unit='fixture.timer',
+        supervisor_state=str(tmp_path/'supervisor'),state_dir=str(tmp_path/'state'),hold_files=[str(tmp_path/'HOLD')],
+        arming_file=str(tmp_path/'armed'),github_user='fixture',workspace_user='fixture',protected_files=['private.env'])
+    class Service(Maintenance):
+        def run(self,argv,**_kwargs):
+            if argv==['gh','auth','token']: return b'polling-token'
+            return json.dumps({'merged':True,'head':{'sha':SHA},'base':{'ref':'work'},'merge_commit_sha':'b'*40}).encode()
+    pull=AcceptedPull(repository='owner/repo',number=1,head=SHA,base='work',
+        checks=['CI','External test'] if scenario=='external_success' else ['CI'],
+        check_apps={'External test':'external'} if scenario=='external_success' else {})
+    if scenario=='external_success': assert Service(profile).accepted(pull)=='b'*40
+    else:
+        with pytest.raises((ValueError,GithubCheckObservationError)): Service(profile).accepted(pull)
+
+
 @pytest.mark.asyncio
 async def test_old_cancelled_failure_and_jobless_replacement_are_pending():
     api = API([check(conclusion="failure")], [run(conclusion="cancelled"), run(11, status="queued", conclusion=None)])

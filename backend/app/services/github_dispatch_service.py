@@ -2162,6 +2162,8 @@ class GithubDispatchService:
             idle_overdue = datetime.utcnow() - idle_anchor > timedelta(
                 seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds
             )
+            from app.services.owner_observation_pause import initial_recovery_grace
+            idle_overdue = idle_overdue or await initial_recovery_grace(db, item, idle_anchor)
             if not idle_overdue:
                 continue
             if item.last_nudge_at is None or item.last_nudge_at < idle_anchor:

@@ -48,6 +48,8 @@ EXPECTED_ESCALATION_REASONS = frozenset(
         "brief_unread",
         "leader_ack_timeout",
         "owner_idle_timeout",
+        "owner_observation_unavailable",
+        "integration_update_conflict",
         "retry_count_exhausted",
         "continuation_revision_exhausted",
         "continuation_budget_exhausted",
@@ -498,8 +500,17 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
             "services/github_dispatch_service.py",
             "continuation_revision_exhausted",
         ),
+        (
+            "api/v1/factory_maintenance.py",
+            "integration_update_conflict",
+        ),
     ]
-    assert _escalation_call_reasons() | {
+    direct_literals = [write for write in writes if write.field == "escalation_reason"
+                       and write.form == "assignment" and write.value is not None]
+    assert [(write.path.as_posix(),write.value) for write in direct_literals] == [
+        ("services/owner_observation_pause.py","owner_observation_unavailable")
+    ]
+    assert _escalation_call_reasons() | {write.value for write in direct_literals} | {
         write.value for write in conditional_escalation_writes
     } == ESCALATION_REASONS
 

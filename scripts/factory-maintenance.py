@@ -15,12 +15,16 @@ def main():
     parser.add_argument('operation',choices=['upgrade','integration-update'])
     parser.add_argument('--profile',required=True,type=Path)
     parser.add_argument('--request',required=True,type=Path)
-    parser.add_argument('--execute',action='store_true')
+    action=parser.add_mutually_exclusive_group()
+    action.add_argument('--execute',action='store_true')
+    action.add_argument('--checkpoint-template',action='store_true')
     args=parser.parse_args()
     try:
         profile=InstallationProfile.model_validate(read_json(args.profile,private=True))
         kind=UpgradeRequest if args.operation=='upgrade' else IntegrationRequest
         request=kind.model_validate(read_json(args.request,private=True))
+        if args.checkpoint_template:
+            print(json.dumps(Maintenance(profile).checkpoint_templates(request)));return 0
         if not args.execute:
             print(json.dumps({'status':'data_validated_no_execution','operation':args.operation}));return 0
         directory=Path(profile.state_dir)/'maintenance';directory.mkdir(mode=0o700,exist_ok=True)

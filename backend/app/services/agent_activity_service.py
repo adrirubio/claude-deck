@@ -278,8 +278,8 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             return result(state, reason, observed_at)
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
-        if (Path(os.fsdecode(argv[0])).name != "codex" or b"resume" not in argv
-                or session_id.encode() not in argv):
+        from app.services.codex_process_identity import explicit_resume
+        if not explicit_resume(argv, session_id):
             return result("unknown", "session_mismatch")
         home = _codex_home(pid)
         path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)

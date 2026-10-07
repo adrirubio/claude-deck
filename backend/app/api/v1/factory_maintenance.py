@@ -81,16 +81,18 @@ async def integration_outcome(preset_id: int, item_id: int, request: Integration
             raise HTTPException(status_code=409,detail="maintenance_replay_conflict")
         return {"status":"already_recorded","outcome":old.outcome}
     try:
-        values={"updated_at":GithubWorkItem.updated_at}
-        if request.outcome=="needs_coordination":
-            values.update(dispatch_status="escalated",escalation_reason="integration_update_conflict",
-                status_note="The accepted integration update needs coordination. Preserve the owner, commits, conflicts, approval and finite budgets.")
-        claimed=await db.execute(update(GithubWorkItem).where(
+        claim=update(GithubWorkItem).where(
             GithubWorkItem.id==item_id,GithubWorkItem.dispatch_status=="dispatched",
             GithubWorkItem.dispatch_nonce==request.expected_dispatch_nonce,
             GithubWorkItem.active_scope_revision==request.expected_scope_revision,
             GithubWorkItem.owner_slot_id==request.expected_owner_slot,
-        ).values(**values).execution_options(synchronize_session=False))
+        )
+        if request.outcome=="needs_coordination":
+            claim=claim.values(dispatch_status="escalated",escalation_reason="integration_update_conflict",
+                status_note="The accepted integration update needs coordination. Preserve the owner, commits, conflicts, approval and finite budgets.")
+        else:
+            claim=claim.values(updated_at=GithubWorkItem.updated_at)
+        claimed=await db.execute(claim.execution_options(synchronize_session=False))
         if claimed.rowcount!=1:
             await db.rollback()
             raise HTTPException(status_code=409,detail="maintenance_context_changed")
