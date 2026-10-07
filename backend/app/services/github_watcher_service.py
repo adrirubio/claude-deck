@@ -7,10 +7,13 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
+from app.models.database import (
+    AgentTeamSlot,
+    GithubAttemptScopeRevision,
+    GithubWorkItem,
+    TeamGithubScope,
+)
 from app.services.github_client import GithubClient, github_client
-from app.models.database import GithubAttemptScopeRevision
-from sqlalchemy import select
 from app.services.github_dispatch_service import github_dispatch_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
@@ -26,8 +29,37 @@ def _parse_gh_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
+_WATCHER_SCHEDULER = "github_watcher"
+_NOTIFICATION_SOURCE = "github_watcher_service.notify_blocker_merged"
+
+
+def attempt_key(item_id: int, launch_id: int | None, revision_id: int | None) -> str:
+    """Stable non-secret identity of one tracked attempt and revision.
+
+    The dispatch nonce is a private capability, so it never enters the key.
+    The launch row and the immutable revision row identify the attempt.
+    """
+    return f"item:{item_id}:launch:{launch_id}:revision:{revision_id}"
+
+
+def notification_operation_id(key: str, outcome: str) -> str:
+    """Notification identity, distinct from the committed action identity.
+
+    An earlier applied action fact can never suppress a later notification
+    result for the same attempt, and an earlier uncertain result never
+    suppresses a later settled one.
+    """
+    return f"notification:blocker-merged:{key}:{outcome}"
+
+
 async def observe_notification_uncertainty(
-    db, *, item_id: int, revision_id: int | None = None, session_factory=None
+    db,
+    *,
+    item_id: int,
+    revision_id: int | None = None,
+    scope_id: int | None = None,
+    attempt: str | None = None,
+    session_factory=None,
 ) -> None:
     """C09: the production notification failure observer.
 
@@ -42,24 +74,28 @@ async def observe_notification_uncertainty(
         await db.rollback()
     except Exception:
         pass
+    key = attempt or attempt_key(item_id, None, revision_id)
     fresh = None
     try:
         if session_factory is None:
             from app.database import AsyncSessionLocal as session_factory
         fresh = session_factory()
         from app.services import factory_audit_service as _audit
+        operation_id = notification_operation_id(key, "uncertain")
         await _audit.record_event(
             fresh,
-            event_kind="work_lifecycle",
-            source="github_watcher_service.notify_blocker_merged",
+            event_kind="lifecycle_notification",
+            source=_NOTIFICATION_SOURCE,
             occurred_at=datetime.utcnow(),
             actor=_audit.derive_actor(
-                actor_kind="scheduler", scheduler="github_watcher"),
+                actor_kind="scheduler", scheduler=_WATCHER_SCHEDULER),
+            scope_id=scope_id,
             item_id=item_id,
+            revision_id=revision_id,
             action_outcome="uncertain",
             sanitized_reason="notification transport unsettled after commit",
-            operation_id=f"notification-uncertain:{item_id}:{revision_id}",
-            correlation_id=f"notification-uncertain:{item_id}:{revision_id}",
+            operation_id=operation_id,
+            correlation_id=operation_id,
         )
         await fresh.commit()
     except Exception:
@@ -149,13 +185,19 @@ class GithubWatcherService:
         ).scalars().all()
         if not active:
             return
+        # Scalars are captured before any await: a failed notification in
+        # _complete_and_notify rolls back and expires the loaded rows.
+        pending = [(item.id, item.issue_number) for item in active]
         current = await client.get_issues_by_number(
             scope.repo_owner,
             scope.repo_name,
-            [item.issue_number for item in active],
+            [issue_number for _item_id, issue_number in pending],
         )
-        for item in active:
-            issue = current.get(item.issue_number)
+        for item_id, issue_number in pending:
+            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+            if item is None or item.dispatch_status not in _ACTIVE_STATUSES:
+                continue
+            issue = current.get(issue_number)
             if issue is not None and issue.get("state") == "closed":
                 await self._complete_and_notify(db, scope, item)
                 continue
@@ -197,29 +239,16 @@ class GithubWatcherService:
         ]
         if not stalled:
             return
-        from types import SimpleNamespace
-        pending_items = [
-            (item.id, item.issue_number, item.issue_title, item.pr_number,
-             item.active_scope_revision, item.scope_id, item.owner_slot_id)
-            for item in stalled
-        ]
-        stalled_by_id = {
-            entry[0]: SimpleNamespace(
-                id=entry[0], issue_number=entry[1], issue_title=entry[2],
-                pr_number=entry[3], active_scope_revision=entry[4],
-                scope_id=entry[5], owner_slot_id=entry[6],
-                dispatch_status="failed", escalation_reason=None,
-                updated_at=None)
-            for entry in pending_items
-        }
+        # Scalars are captured before any await. A failed notification below
+        # rolls the session back and expires every loaded row, so later loop
+        # entries must never read attributes from the original objects.
+        pending = [(item.id, item.issue_number, item.pr_number) for item in stalled]
         current = await client.get_issues_by_number(
             scope.repo_owner,
             scope.repo_name,
-            [entry[1] for entry in pending_items],
+            [issue_number for _item_id, issue_number, _pr_number in pending],
         )
-        pending_by_id = {entry[0]: entry for entry in pending_items}
-        for captured_id in list(pending_by_id):
-            _cid, issue_number, _title, pr_number, _rev, _scope, _owner = pending_by_id[captured_id]
+        for item_id, issue_number, pr_number in pending:
             issue = current.get(issue_number)
             if issue is None or issue.get("state") != "closed":
                 continue
@@ -227,12 +256,21 @@ class GithubWatcherService:
                 logger.info(
                     "Work item %s (issue #%s) has a closed issue but an unresolved "
                     "PR #%s; leaving it for the verification path",
-                    _cid,
+                    item_id,
                     issue_number,
                     pr_number,
                 )
                 continue
-            await self._complete_and_notify(db, scope, stalled_by_id[captured_id])
+            # Re-read the real row: it is current even after an earlier
+            # entry's notification failure rolled the session back.
+            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+            if (
+                item is None
+                or item.dispatch_status not in _CLOSED_ISSUE_RECONCILABLE_STATUSES
+                or item.pr_number is not None
+            ):
+                continue
+            await self._complete_and_notify(db, scope, item)
 
     async def _complete_and_notify(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
@@ -240,60 +278,93 @@ class GithubWatcherService:
         # Immutable scalars are captured before any await or commit so the
         # failure path never touches expired ORM state.
         captured_item_id = item.id
-        captured_issue_number = item.issue_number
-        captured_issue_title = item.issue_title
+        captured_scope_id = scope.id
+        captured_preset_id = scope.preset_id
         captured_pr_number = item.pr_number
+        captured_launch_id = item.launch_id
         captured_active_revision = item.active_scope_revision
-        # A28-A35: the terminal transition records its sourced outcome fact.
-        # A resolved PR on the closed issue is merge evidence (delivered).
-        # A closure without any PR remains unknown: terminal tracking alone
-        # never establishes delivery. Raw dispatch state is not rewritten.
+        captured_nonce = item.dispatch_nonce
+        # The original attempt is the revision row of this item, dispatch
+        # attempt and active revision number. The newest row for the item
+        # alone could belong to a different attempt.
+        captured_revision_id = None
+        if captured_nonce is not None:
+            captured_revision_id = (await db.scalars(
+                select(GithubAttemptScopeRevision.id).where(
+                    GithubAttemptScopeRevision.work_item_id == captured_item_id,
+                    GithubAttemptScopeRevision.dispatch_nonce == captured_nonce,
+                    GithubAttemptScopeRevision.revision == captured_active_revision,
+                ).limit(1)
+            )).first()
+        captured_attempt = attempt_key(
+            captured_item_id, captured_launch_id, captured_revision_id)
+        # A28-A35: the terminal transition records its sourced outcome fact
+        # in the same transaction. A resolved PR on the closed issue is merge
+        # evidence (delivered). A closure without any PR remains unknown:
+        # terminal tracking alone never establishes delivery.
         from app.services import factory_audit_service as _audit
         await _audit.record_delivery_fact(
             db,
-            item_id=item.id,
-            delivery_outcome="delivered" if item.pr_number is not None else "unknown",
-            completion_kind="merged_code" if item.pr_number is not None else "closed_unproven",
+            item_id=captured_item_id,
+            revision_id=captured_revision_id,
+            scope_id=captured_scope_id,
+            delivery_outcome="delivered" if captured_pr_number is not None else "unknown",
+            completion_kind=(
+                "merged_code" if captured_pr_number is not None else "closed_unproven"
+            ),
             fact_source="github_watcher_service._reconcile_closed_issues",
             fact_time=datetime.utcnow(),
+            attempt=captured_attempt,
         )
-        captured_revision_id = (await db.scalars(
-            select(GithubAttemptScopeRevision.id).where(
-                GithubAttemptScopeRevision.work_item_id == captured_item_id,
-                GithubAttemptScopeRevision.revision == captured_active_revision,
-            ).limit(1)
-        )).first()
-        from sqlalchemy import text as _sql_text
-        transitioned_at = datetime.utcnow()
-        await db.execute(_sql_text(
-            "UPDATE github_work_items SET dispatch_status = 'completed',"
-            " escalation_reason = NULL, updated_at = :ts WHERE id = :item_id"),
-            {"ts": transitioned_at, "item_id": captured_item_id})
-        # Keep any live ORM view consistent for callers.
         item.dispatch_status = "completed"
         item.escalation_reason = None
-        item.updated_at = transitioned_at
+        item.updated_at = datetime.utcnow()
         await db.commit()
         try:
             slots = (
                 await db.execute(
                     select(AgentTeamSlot)
-                    .where(AgentTeamSlot.preset_id == scope.preset_id)
+                    .where(AgentTeamSlot.preset_id == captured_preset_id)
                     .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
                 )
             ).scalars().all()
             await github_dispatch_service.notify_blocker_merged(db, scope, item, slots)
+            operation_id = notification_operation_id(captured_attempt, "applied")
+            await _audit.record_event(
+                db,
+                event_kind="lifecycle_notification",
+                source=_NOTIFICATION_SOURCE,
+                occurred_at=datetime.utcnow(),
+                actor=_audit.derive_actor(
+                    actor_kind="scheduler", scheduler=_WATCHER_SCHEDULER),
+                scope_id=captured_scope_id,
+                item_id=captured_item_id,
+                revision_id=captured_revision_id,
+                action_outcome="applied",
+                sanitized_reason="blocker-merged notification sent",
+                operation_id=operation_id,
+                correlation_id=operation_id,
+            )
             await db.commit()
         except Exception:
             logger.exception(
                 "Failed to send blocker-merged notification for work item %s",
                 captured_item_id,
             )
+            # The committed transition is never replayed. Its unsettled
+            # notification is observed as uncertain in a fresh session.
             await observe_notification_uncertainty(
-                db, item_id=captured_item_id, revision_id=captured_revision_id,
-                session_factory=getattr(self, "observer_session_factory", None))
+                db,
+                item_id=captured_item_id,
+                revision_id=captured_revision_id,
+                scope_id=captured_scope_id,
+                attempt=captured_attempt,
+                session_factory=getattr(self, "observer_session_factory", None),
+            )
             try:
                 await db.rollback()
+                # Callers keep using the scope after this entry.
+                await db.refresh(scope)
             except Exception:
                 pass
 

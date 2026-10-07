@@ -261,11 +261,12 @@ class AgentTeamService:
                     raise ValueError("leader_assignment_required")
             # C09: team autonomy policy changes persist their event in the
             # same transaction. An audit-write failure rolls back the change.
+            # update_preset is the real autonomy method.
             from app.services import factory_audit_service as _audit
             await _audit.record_event(
                 db,
                 event_kind="policy_change",
-                source="agent_team_service.set_autonomy",
+                source="agent_team_service.update_preset",
                 occurred_at=datetime.utcnow(),
                 actor=_audit.derive_actor(actor_kind="operator"),
                 team_preset_id=preset.id,

@@ -222,8 +222,8 @@ class GithubWorkspaceService:
                 if workspace.leased_at is not None:
                     await self.force_release_acquisition(
                         db,
-            actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
-                        
+                        actor_kind="scheduler",
+                        actor_scheduler="github_dispatch_scheduler",
                         workspace_id=workspace.id,
                         scope_id=scope.id,
                         item_id=item.id,
@@ -687,6 +687,40 @@ class GithubWorkspaceService:
                 push_token_expires_at=workspace_row.push_token_expires_at,
             )
             current_owner_slot_id = item_row.owner_slot_id
+            from app.services import factory_audit_service as _audit
+            # C08: the actor comes from the trusted entry point. The
+            # acquisition identity is the workspace and its lease time; the
+            # lease token is a capability and never enters the ledger.
+            release_actor = _audit.derive_actor(
+                actor_kind=actor_kind,
+                member_id=actor_member_id,
+                session_id=actor_session_id,
+                scheduler=actor_scheduler,
+            )
+            acquisition = (
+                f"workspace:{workspace_id}:leased_at:"
+                f"{expected_leased_at.isoformat() if expected_leased_at else None}"
+            )
+            release_fields = {
+                "event_kind": "workspace_release",
+                "source": "github_workspace_service._release_acquisition",
+                "actor": release_actor,
+                "scope_id": scope_id,
+                "item_id": item_id,
+                "correlation_id": f"workspace_release:{acquisition}",
+            }
+
+            async def observe_release(outcome: str, reason: str) -> None:
+                # A refused or failed release is observed after its own
+                # transaction ends. Observation failure never masks it.
+                await _audit.record_observation(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    action_outcome=outcome,
+                    sanitized_reason=reason,
+                    **release_fields,
+                )
+
             if (
                 workspace_row.scope_id != scope_id
                 or workspace_row.leased_item_id != item_id
@@ -694,26 +728,7 @@ class GithubWorkspaceService:
                 or workspace_row.lease_token != lease_token
             ):
                 await db.rollback()
-                # A08: the refused release is recorded as rejected in a fresh
-                # observation transaction. Observation failure never masks
-                # the refusal.
-                try:
-                    from app.services import factory_audit_service as _audit
-                    await _audit.record_event(
-                        db,
-                        event_kind="workspace_release",
-                        source="github_workspace_service._release_acquisition",
-                        occurred_at=datetime.utcnow(),
-                        actor=_audit.derive_actor(actor_kind=actor_kind, member_id=actor_member_id, session_id=actor_session_id, scheduler=actor_scheduler),
-                        scope_id=scope_id,
-                        item_id=item_id,
-                        action_outcome="rejected",
-                        sanitized_reason="lease identity mismatch",
-                        correlation_id=f"workspace-release:{workspace_id}:{item_id}",
-                    )
-                    await db.commit()
-                except Exception:
-                    await db.rollback()
+                await observe_release("rejected", "acquisition identity mismatch")
                 return False
             await db.commit()
             snapshot = None
@@ -759,9 +774,17 @@ class GithubWorkspaceService:
                 .execution_options(synchronize_session="fetch")
             )
             if result.rowcount != 1:
+                # C09: a late CAS refusal. The acquisition, owner or lease
+                # contact changed while the release awaited; nothing was
+                # revoked or cleaned up.
                 await db.rollback()
+                await observe_release("rejected", "release guard changed before release")
                 return False
+            # Each external effect is recorded only as far as it is proved.
+            credential_effect = "not_attempted"
+            config_effect = "not_attempted"
             try:
+                credential_effect = "unknown"
                 await self.revoke_push_token(
                     scope,
                     config_workspace,
@@ -771,48 +794,71 @@ class GithubWorkspaceService:
                         else current_owner_slot_id
                     ),
                 )
+                credential_effect = "revoked_or_not_held"
                 if snapshot is not None:
+                    config_effect = "unknown"
                     await self.remove_managed_worktree_config(config_workspace)
+                    config_effect = "removed"
                 # A06/A08: the release event commits in the same transaction
                 # as the release itself. An audit-write failure rolls back
                 # the release.
-                from app.services import factory_audit_service as _audit
+                operation_id = f"workspace_release:{acquisition}"
                 await _audit.record_event(
                     db,
-                    event_kind="workspace_release",
-                    source="github_workspace_service._release_acquisition",
                     occurred_at=datetime.utcnow(),
-                    actor=_audit.derive_actor(actor_kind=actor_kind, member_id=actor_member_id, session_id=actor_session_id, scheduler=actor_scheduler),
-                    scope_id=scope_id,
-                    item_id=item_id,
                     action_outcome="applied",
                     sanitized_reason="workspace release applied",
-                    correlation_id=f"workspace-release:{workspace_id}:{item_id}",
+                    operation_id=operation_id,
+                    **release_fields,
                 )
                 await db.commit()
                 return True
             except BaseException as exc:
                 await db.rollback()
+                restore_effect = "not_needed"
+                restore_exc_raised: GithubWorkspaceConfigError | None = None
                 if snapshot is not None:
                     try:
                         await self.restore_worktree_config(config_workspace, snapshot)
+                        restore_effect = "restored"
                     except GithubWorkspaceConfigError as restore_exc:
-                        detail = (
-                            "Worktree release failed and managed config restoration "
-                            f"also failed: {restore_exc}"
-                        )
-                        await self._record_config_repair_note(
-                            db,
-                            workspace_id=workspace_id,
-                            item_id=item_id,
-                            detail=detail,
-                        )
-                        if not isinstance(exc, Exception):
-                            raise exc from restore_exc
-                        raise GithubWorkspaceConfigError(
-                            detail,
-                            restoration_failed=True,
-                        ) from restore_exc
+                        restore_effect = "restore_failed"
+                        restore_exc_raised = restore_exc
+                if isinstance(exc, Exception):
+                    # C09: the local release rolled back. A remote revocation
+                    # cannot be undone by that rollback, so the observed
+                    # result names each known effect. Only an effect whose
+                    # result cannot be proved makes the outcome uncertain.
+                    # A partial config removal is proved settled only when
+                    # the snapshot restoration succeeded.
+                    uncertain = (
+                        credential_effect == "unknown"
+                        or restore_effect == "restore_failed"
+                        or (config_effect == "unknown" and restore_effect != "restored")
+                    )
+                    await observe_release(
+                        "uncertain" if uncertain else "rejected",
+                        "workspace release rolled back; "
+                        f"push access {credential_effect}; "
+                        f"managed config {config_effect}; restoration {restore_effect}",
+                    )
+                if restore_exc_raised is not None:
+                    detail = (
+                        "Worktree release failed and managed config restoration "
+                        f"also failed: {restore_exc_raised}"
+                    )
+                    await self._record_config_repair_note(
+                        db,
+                        workspace_id=workspace_id,
+                        item_id=item_id,
+                        detail=detail,
+                    )
+                    if not isinstance(exc, Exception):
+                        raise exc from restore_exc_raised
+                    raise GithubWorkspaceConfigError(
+                        detail,
+                        restoration_failed=True,
+                    ) from restore_exc_raised
                 raise
 
     async def release(self, db: AsyncSession, item_id: int) -> bool:

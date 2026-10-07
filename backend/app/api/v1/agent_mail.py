@@ -53,6 +53,7 @@ from app.models.schemas import (
     TeamListResponse,
 )
 from app.services import agent_mail_install_service
+from app.services import factory_audit_service
 from app.services.agent_mail_service import (
     MailAuthorityError,
     MailDeliveryIntegrityError,
@@ -536,6 +537,13 @@ async def decide_work_item_continuation(
                 decision=request.decision,
                 reason=request.reason,
                 request_id=request.approval_request_id,
+                # C08: the authenticated Leader session is the actor of a
+                # resulting hold, never the operator.
+                actor=factory_audit_service.derive_actor(
+                    actor_kind="member",
+                    member_id=session.member_id,
+                    session_id=session.id,
+                ),
             )
         )
         async with github_approval_service.continuation_transport_lock(approval.id):

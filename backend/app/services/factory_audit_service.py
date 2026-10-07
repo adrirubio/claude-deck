@@ -31,6 +31,11 @@ SAFE_VALUE_FIELDS = {
     "wake_enabled", "mailbox_status", "kind", "request_kind", "decision",
     "status_note", "phase", "execution_target", "failed_head_count",
     "max_failed_heads", "workspace_enabled", "dispatchable",
+    "recovery_checkpoint_stage",
+    # C11: typed finite continuation policy settings.
+    "continuation_enabled", "max_continuation_revisions",
+    "max_continuation_failed_heads", "max_failed_heads_per_revision",
+    "max_scope_paths", "max_scope_commands",
 }
 
 # Value shapes that must never appear in ledger content.
@@ -242,17 +247,45 @@ async def record_event(
         completion_kind=completion_kind,
         human_review_evidence=human_review_evidence,
     )
+    # A failed insert, including a concurrent duplicate on the unique replay
+    # key, propagates. The caller owns the transaction: the audited change
+    # must never commit when its fact did not, and a duplicate winner never
+    # stands in for a change that this transaction lost.
     db.add(event)
-    try:
-        await db.flush()
-    except Exception:
-        await db.rollback()
-        if replay_key is not None:
-            existing = await find_by_operation(db, replay_key)
-            if existing is not None:
-                return existing
-        raise
+    await db.flush()
     return event
+
+
+async def record_observation(db: AsyncSession, **fields: Any) -> FactoryAuditEvent | None:
+    """C09: record a refusal or uncertainty in its own observation transaction.
+
+    Use this only after the observed action's own transaction has ended.
+    Services roll back their guarded writes before they refuse. Pending ORM
+    changes are rolled back here and are never committed with the
+    observation. A clean session is not rolled back, so rows the caller still
+    reads stay loaded. Observation failure never masks the original result
+    and never replays the action.
+    """
+    if db.new or db.dirty or db.deleted:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+    # A failed earlier flush leaves the transaction unusable without pending
+    # objects; one retry after rollback records the observation then.
+    for attempt in range(2):
+        try:
+            event = await record_event(db, **fields)
+            await db.commit()
+            return event
+        except Exception:
+            try:
+                await db.rollback()
+            except Exception:
+                return None
+            if attempt:
+                return None
+    return None
 
 
 async def record_observed_snapshot(
@@ -333,16 +366,22 @@ async def record_delivery_fact(
     fact_time: datetime | None,
     artifact: str | None = None,
     actor: dict[str, Any] | None = None,
+    attempt: str | None = None,
 ) -> FactoryAuditEvent:
     """A28-A35: record one sourced delivery outcome fact per tracked attempt.
 
     Later facts reconcile the classification without double-counting
     delivery: the non-secret operation identity binds the fact to the
     attempt and artifact, so repeated evidence returns the same event.
-    Raw dispatch state is never rewritten. Merge evidence and independent
-    human review stay distinct fields.
+    ``attempt`` is a stable non-secret attempt identity; a later attempt on
+    the same item therefore records its own fact. Raw dispatch state is
+    never rewritten. Merge evidence and independent human review stay
+    distinct fields.
     """
-    operation_id = f"delivery:{item_id}:{artifact or 'attempt'}"
+    if attempt:
+        operation_id = f"delivery:{attempt}:{artifact or 'attempt'}"
+    else:
+        operation_id = f"delivery:{item_id}:{artifact or 'attempt'}"
     context_snapshot = None
     if artifact:
         context_snapshot = {"artifact": artifact, "fact_source": fact_source}

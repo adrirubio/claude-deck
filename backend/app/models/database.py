@@ -869,7 +869,10 @@ class FactoryAuditEvent(Base):
     team_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     scope_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     item_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    context_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Absent JSON values are SQL NULL, never JSON null (C03 rule for all
+    # ledger JSON columns).
+    context_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True)
 
     correlation_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     operation_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -877,8 +880,8 @@ class FactoryAuditEvent(Base):
     # resource. A supplied operation id never collides across resources.
     replay_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     sanitized_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    before_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    after_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    before_values: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    after_values: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     # Outcomes stay separate: action outcome records what the action
     # established; delivery outcome requires its own evidence.
