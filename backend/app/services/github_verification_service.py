@@ -44,6 +44,8 @@ from app.services.github_recovery_gate import (
 from app.services.github_workspace_service import github_workspace_service
 from app.services.team_communication_policy import HUMAN_REVIEW_SUMMARY_GUIDANCE
 
+from app.services.factory_delivery_policy import effective_policy, required_check_blockers, scope_policy
+
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
 _STATUS_FAILURE_STATES = {"failure", "error"}
@@ -1367,7 +1369,12 @@ class GithubVerificationService:
                 if check not in pending
                 and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
             ]
-            state = "red" if failed else "pending" if pending else "green"
+            blockers = required_check_blockers(effective_policy(item, scope), checks, head_sha)
+            state = "red" if failed else "pending" if pending or blockers else "green"
+        elif effective_policy(item, scope).required_checks:
+            state = "pending"
+            evidence_rows = [{"name": check.name, "state": "missing"}
+                             for check in effective_policy(item, scope).required_checks]
         else:
             combined = await client.get_combined_status_for_ref(
                 scope.repo_owner,
@@ -1697,7 +1704,9 @@ class GithubVerificationService:
             scope.repo_name,
             head_sha or "",
         )
-        if not checks:
+        policy = effective_policy(item, scope)
+        blockers = required_check_blockers(policy, checks, head_sha)
+        if not checks and not policy.required_checks:
             if await self._process_combined_status(
                 db,
                 scope,
@@ -1752,7 +1761,12 @@ class GithubVerificationService:
             item.updated_at = datetime.utcnow()
             await db.commit()
             return
-        if all(check.get("conclusion") in _SUCCESS_CONCLUSIONS for check in checks):
+        if blockers:
+            item.status_note = "Required GitHub checks blocked: " + "; ".join(blockers)
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
+        if checks and all(check.get("conclusion") in _SUCCESS_CONCLUSIONS for check in checks):
             await self._promote_verified_item(
                 db,
                 scope,
@@ -1911,7 +1925,7 @@ class GithubVerificationService:
             return
         current_head = self._head_sha(pull)
         if current_head != item.last_verified_sha or not await self._head_is_green(
-            scope, client, current_head
+            scope, client, current_head, item=item
         ):
             item.dispatch_status = "verifying"
             item.status_note = (
@@ -2550,14 +2564,16 @@ class GithubVerificationService:
         return str(sha) if sha else None
 
     async def _head_is_green(
-        self, scope: TeamGithubScope, client: GithubClient, head_sha: str | None
+        self, scope: TeamGithubScope, client: GithubClient, head_sha: str | None,
+        *, item: GithubWorkItem | None = None
     ) -> bool:
         if not head_sha:
             return False
         checks = await client.list_check_runs_for_ref(
             scope.repo_owner, scope.repo_name, head_sha
         )
-        if not checks:
+        policy = effective_policy(item, scope) if item is not None else scope_policy(scope)
+        if not checks or required_check_blockers(policy, checks, head_sha):
             return False
         if any(
             check.get("status") != "completed" or check.get("conclusion") is None

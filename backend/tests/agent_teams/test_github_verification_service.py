@@ -3395,6 +3395,60 @@ async def test_fresh_dispatch_retry_clears_verification_clock(db):
     await github_dispatch_service.reset_for_retry(db, item)
     assert item.verification_head_sha is None
     assert item.verification_started_at is None
+@pytest.mark.parametrize("state", ["missing", "pending", "cancelled", "failure", "skipped", "neutral"])
+@pytest.mark.asyncio
+async def test_required_job_cannot_be_replaced_by_other_green_checks_or_status(db, state):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    checks = [{"name": "Other tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+               "status": "completed", "conclusion": "success"}]
+    if state != "missing":
+        checks.append({"name": "Full project tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+                       "status": "in_progress" if state == "pending" else "completed",
+                       "conclusion": None if state == "pending" else state})
+    client = _Client(check_runs=checks, combined_status={"state": "success", "statuses": [{"context": "ci"}]})
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status not in {"ready_for_review", "awaiting_human_review", "merged"}
+    assert client.ready_calls == 0 and client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_required_job_cannot_be_replaced_by_combined_status_only(db):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    client = _Client(check_runs=[], combined_status={"state": "success", "statuses": [{"context": "ci"}]})
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert "Full project tests: missing" in item.status_note
+    assert client.ready_calls == 0 and client.merge_calls == 0 and item.retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_required_jobs_succeed_on_exact_candidate_before_promotion(db):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    client = _Client(check_runs=[{"name": "Full project tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+                                 "status": "completed", "conclusion": "success"}])
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "ready_for_review" and item.last_verified_sha == "sha"
 
 
 class _UnavailableChecksClient(_Client):
