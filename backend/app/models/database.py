@@ -438,6 +438,30 @@ class GithubMaintenanceEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class GithubAcceptedSourceImport(Base):
+    """Exact accepted file identities; never an owner edit permission."""
+
+    __tablename__ = "github_accepted_source_imports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    work_item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True
+    )
+    scope_revision_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="CASCADE")
+    )
+    context_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    accepted_repository: Mapped[str] = mapped_column(String, nullable=False)
+    accepted_pull_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    accepted_source_sha: Mapped[str] = mapped_column(String, nullable=False)
+    accepted_merge_sha: Mapped[str] = mapped_column(String, nullable=False)
+    observed_head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    path_snapshots: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class GithubOwnerObservationPause(Base):
     """A bounded observation wait and an operator recovery of unchanged authority."""
 

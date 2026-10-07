@@ -25,6 +25,7 @@ from app.models.database import (
 )
 from app.services.github_app_auth_service import github_app_auth_service
 from app.services.agent_mail_service import agent_mail_service
+from app.services.accepted_source_imports import matching_imported_paths, source_import_claim_conditions
 from app.services.github_approval_service import (
     IMPLEMENTATION_COMPLETION_ACTIONS,
     github_approval_service,
@@ -214,7 +215,20 @@ class GithubVerificationService:
                 "continuation_diff_inconclusive"
             ) from exc
         changed_paths = self._changed_tree_paths(baseline_tree, current_tree)
-        if not changed_paths.issubset(set(revision.allowed_paths)):
+        outside_paths = changed_paths - set(revision.allowed_paths)
+        import_conditions = []
+        if outside_paths:
+            import_conditions = source_import_claim_conditions(item, revision, workspace, scope)
+            try:
+                async with asyncio.timeout(45):
+                    imported = await matching_imported_paths(
+                        db, item, revision, workspace, scope, current_tree,
+                        outside_paths, current_head_sha, client=client, token=token,
+                    )
+            except (ValueError, TimeoutError, GithubClientResponseError, httpx.HTTPError) as exc:
+                raise ContinuationCompletionError("continuation_import_inconclusive") from exc
+            outside_paths -= imported
+        if outside_paths:
             raise ContinuationCompletionError("continuation_paths_out_of_scope")
         if (
             revision.status == "submitted"
@@ -237,6 +251,7 @@ class GithubVerificationService:
                 GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
                 GithubWorkItem.active_scope_revision == revision.revision,
                 GithubWorkItem.pr_number.is_not(None),
+                *import_conditions,
                 exists(
                     select(GithubWorkspace.id).where(
                         GithubWorkspace.id == workspace.id,

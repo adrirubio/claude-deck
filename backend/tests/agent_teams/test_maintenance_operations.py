@@ -98,6 +98,7 @@ class IntegrationFixture(Maintenance):
     def bindings(self,*_args): return []
     def generations(self,*_args): return []
     def api(self,method,path,body=None): self.notices.append(body);return {'status':'recorded'}
+    def record_source_import(self,*_args): return {'status':'mock_adapter','paths':[]}
 
 
 def repository(tmp_path,diverged=False):
