@@ -1354,6 +1354,73 @@ async def test_c08_automatic_cleanup_paths_record_the_scheduler_reference(store)
     assert await _facts(store, actor_kind="operator") == []
 
 
+async def test_c08_stale_reclaim_records_scheduler_only_for_eligible_lease(
+    store, tmp_path, monkeypatch
+):
+    """C08: the real stale-lease reclaim releases only a stale, dead-owner,
+    quiescent worktree lease and records the scheduler reference. A live
+    owner and a dirty worktree keep their exact leases."""
+    import subprocess
+
+    from app.models.database import GithubWorkspace, TeamGithubScope
+    from app.services.github_workspace_service import github_workspace_service
+
+    # Controlled git fixture: real worktrees on one base commit.
+    repo = tmp_path / "reclaim-repo"
+    repo.mkdir()
+    for args in (["init", "-q", str(repo)],
+                 ["-C", str(repo), "config", "user.email", "fixture@example.invalid"],
+                 ["-C", str(repo), "config", "user.name", "Fixture"],
+                 ["-C", str(repo), "commit", "--allow-empty", "-q", "-m", "base"],
+                 ["-C", str(repo), "branch", "-M", "base"]):
+        subprocess.run(["git", *args], check=True)
+    worktrees = {}
+    for name in ("stale", "alive", "dirty"):
+        path = tmp_path / f"reclaim-{name}"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(path),
+                        "-b", f"fixture-{name}"], check=True)
+        worktrees[name] = path
+    (worktrees["dirty"] / "uncommitted.txt").write_text("pending work")
+
+    await _seed_team(store)
+    stale_at = datetime.utcnow() - timedelta(hours=7)
+    pids = {"stale": 900001, "alive": 900002, "dirty": 900003}
+    for offset, name in enumerate(("stale", "alive", "dirty")):
+        await _seed_work(store, item_id=95 + offset, status="merged", workspace_id=96 + offset,
+                         workspace_kind="worktree", lease_token=f"synthetic-lease-{name}",
+                         leased_at=stale_at)
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        scope.base_ref = "base"
+        for offset, name in enumerate(("stale", "alive", "dirty")):
+            workspace = await db.get(GithubWorkspace, 96 + offset)
+            workspace.path = str(worktrees[name])
+            workspace.leased_owner_pid = pids[name]
+            workspace.leased_owner_proc_start = f"start-{name}"
+        await db.commit()
+
+    def read_proc_start(pid):
+        # Process boundary: only the "alive" owner still runs with its start.
+        if pid == pids["alive"]:
+            return "start-alive"
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", read_proc_start)
+    kept_before = [await _protected(store, 96), await _protected(store, 97)]
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        released = await github_workspace_service.reclaim_stale(db, scope)
+
+    assert released == 1
+    facts = await _facts(store, event_kind="workspace_release")
+    assert [(f["item_id"], f["action_outcome"], f["actor_kind"], f["actor_reference"])
+            for f in facts] == [(95, "applied", "scheduler", "github_dispatch_scheduler")]
+    assert (await _protected(store, 95))[1] == []
+    assert [await _protected(store, 96), await _protected(store, 97)] == kept_before
+    assert await _facts(store, actor_kind="operator") == []
+
+
 async def test_c08_legacy_token_release_forwards_supplied_trusted_references(store):
     """C08: the legacy token entry has no production route caller. It forwards
     supplied trusted references unchanged and keeps its token check."""
