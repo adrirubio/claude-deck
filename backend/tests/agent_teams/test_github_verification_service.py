@@ -3299,6 +3299,102 @@ async def test_transient_merge_failure_falls_back_to_human_after_budget(db):
     assert "Auto-merge retry budget exhausted" in messages[0].body_markdown
 
 
+@pytest.mark.parametrize("state", ["missing", "pending", "cancelled", "failure", "skipped", "neutral"])
+@pytest.mark.asyncio
+async def test_required_job_cannot_be_replaced_by_other_green_checks_or_status(db, state):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    checks = [{"name": "Other tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+               "status": "completed", "conclusion": "success"}]
+    if state != "missing":
+        checks.append({"name": "Full project tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+                       "status": "in_progress" if state == "pending" else "completed",
+                       "conclusion": None if state == "pending" else state})
+    client = _Client(check_runs=checks, combined_status={"state": "success", "statuses": [{"context": "ci"}]})
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status not in {"ready_for_review", "awaiting_human_review", "merged"}
+    assert client.ready_calls == 0 and client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_required_job_cannot_be_replaced_by_combined_status_only(db):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    client = _Client(check_runs=[], combined_status={"state": "success", "statuses": [{"context": "ci"}]})
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert "Full project tests: missing" in item.status_note
+    assert client.ready_calls == 0 and client.merge_calls == 0 and item.retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_required_jobs_succeed_on_exact_candidate_before_promotion(db):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    item.delivery_policy = FactoryDeliveryPolicy(required_checks=[{"name": "Full project tests"}]).model_dump()
+    item.delivery_policy_revision = 2
+    await db.commit()
+    client = _Client(check_runs=[{"name": "Full project tests", "head_sha": "sha", "app": {"slug": "github-actions"},
+                                 "status": "completed", "conclusion": "success"}])
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "ready_for_review" and item.last_verified_sha == "sha"
+
+
+@pytest.mark.parametrize("phase", ["diagnostic", "implementation"])
+@pytest.mark.asyncio
+async def test_policy_adoption_during_check_read_cannot_accept_old_requirements(db, phase):
+    from app.models.schemas import FactoryDeliveryPolicy
+    from app.services.factory_delivery_policy import adopt_attempt_policy, update_scope_policy
+
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(db, scope, dispatch_status="dispatched", pr_number=5, owner_slot_id=slot.id,
+                       dispatch_nonce="policy-race", active_scope_revision=1 if phase == "diagnostic" else 0,
+                       attempt_phase=phase)
+    revision = None
+    if phase == "diagnostic":
+        revision, _workspace = await _diagnostic_revision(db, scope, item, slot, member)
+    class AdoptingClient(_Client):
+        async def adopt(self):
+            policy = FactoryDeliveryPolicy(required_checks=[{"name": "New required job"}])
+            assert await update_scope_policy(db, scope, expected_revision=1, policy=policy, reason="Fixture new policy")
+            assert await adopt_attempt_policy(db, item, scope, expected_dispatch_nonce="policy-race",
+                                               expected_scope_revision=item.active_scope_revision,
+                                               expected_policy_revision=None, target_policy_revision=2, reason="Fixture adoption")
+        async def list_check_runs_for_ref(self, *_args):
+            if phase == "diagnostic":
+                await self.adopt()
+            return [{"name": "Old job", "status": "completed", "conclusion": "success"}]
+        async def mark_pull_ready_for_review(self, *_args):
+            self.ready_calls += 1
+            if phase == "implementation":
+                await self.adopt()
+            return {"ok": True}
+    client = AdoptingClient()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.delivery_policy_revision == 2 and item.last_verified_sha is None
+    assert item.dispatch_status == "dispatched" and client.merge_calls == 0
+    if revision is not None:
+        await db.refresh(revision)
+        assert not (revision.evidence or {}).get("diagnostic_observations")
+
+
 class _UnavailableChecksClient(_Client):
     async def list_check_runs_for_ref(self, owner, repo, ref):
         raise GithubCheckObservationError("observation_changed")

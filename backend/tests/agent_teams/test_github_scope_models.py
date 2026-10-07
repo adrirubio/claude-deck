@@ -254,6 +254,8 @@ async def test_compat_migration_adds_new_columns_to_legacy_db():
     assert "area_labels" in slot_cols
     assert "expertise" in slot_cols
     assert "status_note" in work_item_cols
+    assert {"delivery_policy", "delivery_policy_revision"} <= work_item_cols
+    assert {"delivery_policy", "delivery_policy_revision"} <= scope_cols
     assert "auto_merged_at" in work_item_cols
     assert "last_verified_sha" in work_item_cols
     assert "max_concurrent_dispatched" in scope_cols
