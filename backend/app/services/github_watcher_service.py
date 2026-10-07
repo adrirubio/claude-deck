@@ -26,24 +26,29 @@ def _parse_gh_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
-async def observe_notification_uncertainty(db, *, item_id: int, revision_id: int | None = None) -> None:
-    # The failed notification transaction must end before observation; the
-    # observer records through the session after a clean boundary.
-    try:
-        await db.rollback()
-    except Exception:
-        pass
+async def observe_notification_uncertainty(
+    db, *, item_id: int, revision_id: int | None = None, session_factory=None
+) -> None:
     """C09: the production notification failure observer.
 
     The action is committed but its notification transport is unsettled.
     The outcome stays explicitly uncertain; the action is never replayed
-    because its audit fact is absent. Observation failure never masks the
-    original failure.
+    because its audit fact is absent. The failed notification transaction
+    ends before observation, and the observation records through a fresh
+    session bound to the same action database. Observation failure never
+    masks the original failure.
     """
+    try:
+        await db.rollback()
+    except Exception:
+        pass
+    if session_factory is None:
+        from app.database import AsyncSessionLocal as session_factory
+    fresh = session_factory()
     try:
         from app.services import factory_audit_service as _audit
         await _audit.record_event(
-            db,
+            fresh,
             event_kind="work_lifecycle",
             source="github_watcher_service.notify_blocker_merged",
             occurred_at=datetime.utcnow(),
@@ -55,11 +60,12 @@ async def observe_notification_uncertainty(db, *, item_id: int, revision_id: int
             operation_id=f"notification-uncertain:{item_id}:{revision_id}",
             correlation_id=f"notification-uncertain:{item_id}:{revision_id}",
         )
-        await db.commit()
+        await fresh.commit()
     except Exception:
         logger.exception(
             "Failed to record notification uncertainty for work item %s", item_id)
-        await db.rollback()
+    finally:
+        await fresh.close()
 
 
 class GithubWatcherService:
@@ -209,6 +215,11 @@ class GithubWatcherService:
     async def _complete_and_notify(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
     ) -> None:
+        # Immutable scalars are captured before any await or commit so the
+        # failure path never touches expired ORM state.
+        captured_item_id = item.id
+        captured_issue_number = item.issue_number
+        captured_issue_title = item.issue_title
         # A28-A35: the terminal transition records its sourced outcome fact.
         # A resolved PR on the closed issue is merge evidence (delivered).
         # A closure without any PR remains unknown: terminal tracking alone
@@ -243,10 +254,12 @@ class GithubWatcherService:
             await db.commit()
         except Exception:
             logger.exception(
-                "Failed to send blocker-merged notification for work item %s", item.id
+                "Failed to send blocker-merged notification for work item %s",
+                captured_item_id,
             )
             await observe_notification_uncertainty(
-                db, item_id=item.id, revision_id=captured_revision_id)
+                db, item_id=captured_item_id, revision_id=captured_revision_id,
+                session_factory=getattr(self, "observer_session_factory", None))
             await db.rollback()
 
 

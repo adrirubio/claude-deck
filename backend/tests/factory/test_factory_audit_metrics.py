@@ -37,6 +37,7 @@ async def db():
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:
         session.info["async_engine"] = engine
+        session.info["session_maker"] = maker
         yield session
     await engine.dispose()
 
@@ -1116,8 +1117,10 @@ async def test_c09_production_notification_observer_records_uncertainty(db):
 
     await _seed_item(db, 1)
     await db.commit()
-    await _watcher.observe_notification_uncertainty(db, item_id=1)
-    await _watcher.observe_notification_uncertainty(db, item_id=1)
+    await _watcher.observe_notification_uncertainty(
+        db, item_id=1, session_factory=db.info["session_maker"])
+    await _watcher.observe_notification_uncertainty(
+        db, item_id=1, session_factory=db.info["session_maker"])
     rows = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events"
         " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
@@ -1164,6 +1167,7 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
         raise RuntimeError("notification transport failed")
 
     monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", failing_notify)
+    _watcher.github_watcher_service.observer_session_factory = lambda: db.info["session_maker"]()
     scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(
         db, scope_obj, FakeClient())
@@ -1198,13 +1202,6 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     assert tuple(item_after) == ("completed", 0, 1, 0)
 
 
-@pytest.mark.xfail(
-    reason="C09 v8 matrix in progress: the injected transport RuntimeError "
-           "escapes the watcher notify handler to the test despite the "
-           "wrapped notify call; the escape path is the exact open item; the "
-           "observer itself persists facts correctly in isolation; no "
-           "production guard is relaxed",
-    strict=False)
 async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
     """C09 v8: low-level transport failure inside the real notifier leaves the
     session mid-transaction; the production observer ends that transaction
@@ -1258,8 +1255,14 @@ async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
 
     monkeypatch.setattr(_mail, "send_direct_message",
                         AsyncMock(side_effect=RuntimeError("low-level transport failure")))
+    maker = db.info["session_maker"]
+    # The fresh observer session binds to the disposable action database.
+    _watcher.github_watcher_service.observer_session_factory = lambda: maker()
     scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
+    # Replay models a fresh production poll: the scope is re-read
+    # asynchronously rather than reused across rollback boundaries.
+    scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
 
     facts = (await db.execute(text(
