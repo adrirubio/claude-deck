@@ -133,3 +133,29 @@ def test_claude_partial_record_is_unknown(native):
 def test_claude_world_writable_log_is_unknown(native):
     native["log"].chmod(0o666)
     assert native["observe"]().state == "unknown"
+
+
+@pytest.mark.parametrize("count,state", [(3, "working"), (5, "idle")])
+def test_claude_workspace_subdirectory_keeps_main_turn(native, count, state):
+    backend = native["cwd"] / "backend"
+    backend.mkdir()
+    for row in native["records"][1:4]:
+        row["cwd"] = str(backend)
+    native["write"](native["records"][:count])
+    assert native["observe"]().state == state
+
+
+def test_claude_relative_cwd_is_not_bound_to_workspace(native):
+    native["end"]["cwd"] = "backend"
+    native["write"]()
+    assert native["observe"]().state == "unknown"
+
+
+def test_claude_subdirectory_symlink_outside_workspace_is_unknown(native):
+    outside = native["cwd"].parent / "outside"
+    outside.mkdir()
+    link = native["cwd"] / "linked"
+    link.symlink_to(outside, target_is_directory=True)
+    native["end"]["cwd"] = str(link)
+    native["write"]()
+    assert native["observe"]().state == "unknown"
