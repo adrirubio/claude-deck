@@ -1128,13 +1128,6 @@ async def test_c09_production_notification_observer_records_uncertainty(db):
     assert outcome == "uncertain"
 
 
-@pytest.mark.xfail(
-    reason="C09 watcher-loop case in progress: the closed-issue loop did not "
-           "complete the transition for a verifying item; the exact "
-           "_CLOSED_ISSUE_RECONCILABLE_STATUSES membership and closed-issue "
-           "transition preconditions are under diagnosis; no production "
-           "guard is relaxed",
-    strict=False)
 async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     """C09: the watcher's own closed-issue loop with a failing notifier after
     the committed transition records explicit uncertainty bound to the real
@@ -1150,8 +1143,8 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     await _seed_workspace(db)
     await _seed_item(db, 1)
     await db.execute(text(
-        "UPDATE github_work_items SET dispatch_status = 'verifying', issue_number = 1,"
-        " pr_number = 55 WHERE id = 1"))
+        "UPDATE github_work_items SET dispatch_status = 'failed', issue_number = 1,"
+        " pr_number = NULL WHERE id = 1"))
     await db.execute(text(
         "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
         " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
@@ -1185,8 +1178,21 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
         " WHERE event_kind = 'work_lifecycle' AND action_outcome = 'uncertain'"))).fetchall()
     assert len(facts) == 1
     assert facts[0][1] == "notification-uncertain:1:1"
-    # The transition is never replayed: one completed mutation only.
+    # The transition is never replayed: one uncertain fact per operation
+    # identity even when the loop runs again; protected state is unchanged.
+    scope_obj = await db.get(TeamGithubScope, 1)
+    await _watcher.github_watcher_service._reconcile_closed_issues(
+        db, scope_obj, FakeClient())
     completed = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events"
         " WHERE operation_id = 'notification-uncertain:1:1'"))).scalar_one()
     assert completed == 1
+    # Exact protected state comparison: attempt identity and counters.
+    revision_row = (await db.execute(text(
+        "SELECT status, failed_head_count, delivery_attempt_count"
+        " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
+    assert tuple(revision_row) == ("active", 0, 0)
+    item_after = (await db.execute(text(
+        "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count"
+        " FROM github_work_items WHERE id = 1"))).first()
+    assert tuple(item_after) == ("completed", 0, 1, 0)

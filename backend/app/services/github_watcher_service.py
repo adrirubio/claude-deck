@@ -27,6 +27,12 @@ def _parse_gh_ts(value: str) -> datetime:
 
 
 async def observe_notification_uncertainty(db, *, item_id: int, revision_id: int | None = None) -> None:
+    # The failed notification transaction must end before observation; the
+    # observer records through the session after a clean boundary.
+    try:
+        await db.rollback()
+    except Exception:
+        pass
     """C09: the production notification failure observer.
 
     The action is committed but its notification transport is unsettled.
@@ -214,6 +220,11 @@ class GithubWatcherService:
             fact_source="github_watcher_service._reconcile_closed_issues",
             fact_time=datetime.utcnow(),
         )
+        captured_revision_id = (await db.scalars(
+            select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+            ).order_by(GithubAttemptScopeRevision.id.desc()).limit(1)
+        )).first()
         item.dispatch_status = "completed"
         item.escalation_reason = None
         item.updated_at = datetime.utcnow()
@@ -232,15 +243,8 @@ class GithubWatcherService:
             logger.exception(
                 "Failed to send blocker-merged notification for work item %s", item.id
             )
-            revision_row_id = (await db.scalars(
-                select(GithubAttemptScopeRevision.id).where(
-                    GithubAttemptScopeRevision.work_item_id == item.id,
-                    GithubAttemptScopeRevision.status.not_in(
-                        ("completed", "cancelled", "rejected", "superseded", "expired")),
-                ).order_by(GithubAttemptScopeRevision.id.desc()).limit(1)
-            )).first()
             await observe_notification_uncertainty(
-                db, item_id=item.id, revision_id=revision_row_id)
+                db, item_id=item.id, revision_id=captured_revision_id)
             await db.rollback()
 
 
