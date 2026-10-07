@@ -199,7 +199,9 @@ class GithubWatcherService:
                 continue
             issue = current.get(issue_number)
             if issue is not None and issue.get("state") == "closed":
-                await self._complete_and_notify(db, scope, item)
+                await self._complete_and_notify(
+                    db, scope, item,
+                    fact_source="github_watcher_service._recheck_active_items")
                 continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
@@ -270,17 +272,29 @@ class GithubWatcherService:
                 or item.pr_number is not None
             ):
                 continue
-            await self._complete_and_notify(db, scope, item)
+            await self._complete_and_notify(
+                db, scope, item,
+                fact_source="github_watcher_service._reconcile_closed_issues")
 
     async def _complete_and_notify(
-        self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        *,
+        fact_source: str = "github_watcher_service._complete_and_notify",
     ) -> None:
+        """Complete a closed-issue item and notify its team.
+
+        ``fact_source`` names the actual watcher caller. The watcher reads no
+        pull request state, so it never has merge evidence: a non-null PR
+        number on a closed issue does not prove delivery.
+        """
         # Immutable scalars are captured before any await or commit so the
         # failure path never touches expired ORM state.
         captured_item_id = item.id
         captured_scope_id = scope.id
         captured_preset_id = scope.preset_id
-        captured_pr_number = item.pr_number
         captured_launch_id = item.launch_id
         captured_active_revision = item.active_scope_revision
         captured_nonce = item.dispatch_nonce
@@ -298,21 +312,20 @@ class GithubWatcherService:
             )).first()
         captured_attempt = attempt_key(
             captured_item_id, captured_launch_id, captured_revision_id)
-        # A28-A35: the terminal transition records its sourced outcome fact
-        # in the same transaction. A resolved PR on the closed issue is merge
-        # evidence (delivered). A closure without any PR remains unknown:
-        # terminal tracking alone never establishes delivery.
+        # A28-A35/C02: the terminal transition records its sourced outcome
+        # fact in the same transaction. Issue closure is terminal tracking
+        # only. Neither closure nor a non-null PR number proves a merge, so
+        # the outcome stays unknown. Merge evidence is recorded only by the
+        # verification path, which reads the pull request.
         from app.services import factory_audit_service as _audit
         await _audit.record_delivery_fact(
             db,
             item_id=captured_item_id,
             revision_id=captured_revision_id,
             scope_id=captured_scope_id,
-            delivery_outcome="delivered" if captured_pr_number is not None else "unknown",
-            completion_kind=(
-                "merged_code" if captured_pr_number is not None else "closed_unproven"
-            ),
-            fact_source="github_watcher_service._reconcile_closed_issues",
+            delivery_outcome="unknown",
+            completion_kind="closed_unproven",
+            fact_source=fact_source,
             fact_time=datetime.utcnow(),
             attempt=captured_attempt,
         )

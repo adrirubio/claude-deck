@@ -214,6 +214,61 @@ async def _observe_resume_rejection(db, item_id: int, code: str) -> None:
     )
 
 
+async def _record_notice(
+    db,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int | None,
+    revision_id: int | None,
+    outcome: str,
+    reason: str,
+) -> None:
+    """C09: one notice fact per outcome; it never masks or replays the action."""
+    from app.services import factory_audit_service as _audit
+    operation_id = f"{event_kind}:request:{request_id}:{outcome}"
+    try:
+        await _audit.record_event(
+            db,
+            event_kind=event_kind,
+            source=source,
+            occurred_at=datetime.now(timezone.utc),
+            actor=actor,
+            scope_id=scope_id,
+            item_id=item_id,
+            revision_id=revision_id,
+            request_id=request_id,
+            action_outcome=outcome,
+            sanitized_reason=reason,
+            operation_id=operation_id,
+            correlation_id=operation_id,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
+_HANDOFF_ACCEPTANCE_CODES = (
+    ("cannot accept a handoff targeted", "not_handoff_target"),
+    ("is unavailable", "handoff_context_unavailable"),
+    ("continuation authority changed", "handoff_authority_changed"),
+    ("state changed before acceptance", "handoff_state_changed"),
+    ("could not be restored", "identity_restore_failed"),
+    ("identity update failed", "identity_update_failed"),
+)
+
+
+def _handoff_acceptance_code(message: str) -> str:
+    """A fixed refusal code; raw exception text never enters the ledger."""
+    for fragment, code in _HANDOFF_ACCEPTANCE_CODES:
+        if fragment in message:
+            return code
+    return "handoff_acceptance_refused"
+
+
 async def _observe_handoff_rejection(db, session, *, item_id: int, scope_id: int, code: str) -> None:
     """C08: an invalid member handoff is a member handoff refusal.
 
@@ -1016,6 +1071,7 @@ async def report_dispatch_status(
                 scope,
                 initiating_slot_id=require_session_slot(session),
                 target_slot_id=report.reassign_to_slot_id,
+                actor=_session_actor(session),
             )
         except ResumeAttemptError as exc:
             await _observe_handoff_rejection(
@@ -1033,6 +1089,11 @@ async def report_dispatch_status(
         accepting_slot_id = require_session_slot(session)
         if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
             raise HTTPException(status_code=403, detail="bind_unverifiable")
+        acceptance_item_id = item.id
+        acceptance_scope_id = item.scope_id
+        # The actor is captured before the service call: a refusal rolls
+        # back and expires the loaded session row.
+        acceptance_actor = _session_actor(session)
         try:
             await github_dispatch_service.accept_handoff(
                 db,
@@ -1040,10 +1101,35 @@ async def report_dispatch_status(
                 accepting_slot_id,
                 accepting_pane_pid=session.bound_pane_pid,
                 accepting_pane_proc_start=session.bound_pane_proc_start,
+                actor=acceptance_actor,
             )
         except GithubWorkspaceCredentialRevokeError as exc:
+            # C09: the old owner's push access revocation is unproved; the
+            # acceptance rolled back.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_observation(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                occurred_at=datetime.now(timezone.utc),
+                actor=acceptance_actor,
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+                action_outcome="uncertain",
+                sanitized_reason="push access revocation unproved; acceptance rolled back",
+                correlation_id=f"handoff_acceptance:uncertain:{acceptance_item_id}",
+            )
             raise HTTPException(status_code=503, detail=exc.block_code) from exc
         except ValueError as exc:
+            await _observe_refusal(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                actor=acceptance_actor,
+                code=_handoff_acceptance_code(str(exc)),
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
         await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
@@ -1180,18 +1266,33 @@ async def report_dispatch_status(
         await db.commit()
     elif report.status == "workspace_released":
         item_id = item.id
+        release_scope_id = item.scope_id
         owner_slot_id = item.owner_slot_id
-        if report.reporting_slot_id != owner_slot_id:
-            raise HTTPException(
-                status_code=403,
-                detail="only the owner slot may release its workspace",
+
+        async def refuse_release(status_code: int, code: str, detail: str):
+            # C09: an authenticated owner-release remedy refusal is recorded
+            # for the actual item before the guard refuses. Guards are kept.
+            await _observe_refusal(
+                db,
+                event_kind="workspace_release",
+                source="agent_teams.report_dispatch_status.workspace_released",
+                actor=_session_actor(session),
+                code=code,
+                scope_id=release_scope_id,
+                item_id=item_id,
             )
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        if report.reporting_slot_id != owner_slot_id:
+            await refuse_release(
+                403, "not_owner_slot", "only the owner slot may release its workspace")
         if report.lease_token is None:
-            raise HTTPException(status_code=400, detail="lease_token required")
+            await refuse_release(400, "lease_token_required", "lease_token required")
         if item.dispatch_status not in _RELEASABLE_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=(
+            await refuse_release(
+                409,
+                "status_not_releasable",
+                (
                     f"workspace cannot be released while the item is "
                     f"{item.dispatch_status}; release is legal only from "
                     f"{', '.join(_RELEASABLE_STATUSES)}"
@@ -1207,13 +1308,14 @@ async def report_dispatch_status(
                 )
             ).scalar_one()
             if current_owner != report.reporting_slot_id:
-                raise HTTPException(status_code=403, detail="not_item_owner")
+                await refuse_release(403, "not_item_owner", "not_item_owner")
         else:
             blocker = await github_workspace_service.release_blocker(scope, workspace, item)
             if blocker is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
+                await refuse_release(
+                    409,
+                    "release_blocked",
+                    (
                         f"workspace will not be released: {blocker}. Commit and "
                         "push, or report the situation in status_note and leave "
                         "the lease held."
@@ -1301,6 +1403,10 @@ async def request_github_work_item_continuation(
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="scope_not_found")
+    request_scope_id = item.scope_id
+    # Captured before the service call: a refusal may roll back and expire
+    # the loaded session row.
+    request_actor = _session_actor(session)
     try:
         revision, approval, _created = (
             await github_approval_service.create_continuation_request(
@@ -1323,7 +1429,7 @@ async def request_github_work_item_continuation(
                     for name, fallback in request.tool_fallbacks.items()
                 },
                 lease_token=request.lease_token,
-                actor=_session_actor(session),
+                actor=request_actor,
             )
         )
         async with github_approval_service.continuation_transport_lock(approval.id):
@@ -1344,6 +1450,20 @@ async def request_github_work_item_continuation(
             if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
             if linked:
+                # C09: the request notice is settled; its fact is separate
+                # from the request fact.
+                await _record_notice(
+                    db,
+                    event_kind="continuation_request_notification",
+                    source="agent_teams.request_github_work_item_continuation",
+                    actor=request_actor,
+                    scope_id=request_scope_id,
+                    item_id=item_id,
+                    request_id=approval.id,
+                    revision_id=revision.id,
+                    outcome="applied",
+                    reason="continuation request notice delivered",
+                )
                 await github_approval_service.nudge_pending_continuation_leader(
                     db,
                     approval,
@@ -1359,6 +1479,17 @@ async def request_github_work_item_continuation(
             revision=_scope_revision_response(revision),
         )
     except GithubApprovalError as exc:
+        if exc.status_code != 404:
+            # C09: an authenticated owner request refusal is recorded.
+            await _observe_refusal(
+                db,
+                event_kind="continuation_request",
+                source="agent_teams.request_github_work_item_continuation",
+                actor=request_actor,
+                code=exc.detail,
+                scope_id=request_scope_id,
+                item_id=item_id,
+            )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except GithubAppAuthError as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc
@@ -1670,6 +1801,10 @@ async def acknowledge_github_work_item_scope_revision(
     ).scalar_one_or_none()
     if revision is None:
         raise HTTPException(status_code=404, detail="scope_revision_not_found")
+    # Captured before any await; a refusal may roll back and expire rows.
+    ack_scope_id = item.scope_id
+    ack_revision_id = revision.id
+    ack_actor = _session_actor(session)
     try:
         await github_dispatch_service.activate_continuation_revision(
             db,
@@ -1680,6 +1815,7 @@ async def acknowledge_github_work_item_scope_revision(
             authenticated_owner_slot_id=slot_id,
             dispatch_nonce=request.dispatch_nonce,
             lease_token=request.lease_token,
+            actor=ack_actor,
         )
     except GithubAppAuthError as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc
@@ -1689,9 +1825,21 @@ async def acknowledge_github_work_item_scope_revision(
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
     except ValueError as exc:
         detail = str(exc)
+        # C09: an authenticated owner ACK refusal is recorded for the actual
+        # revision; the attempt is unchanged.
+        await _observe_refusal(
+            db,
+            event_kind="continuation_ack",
+            source="agent_teams.acknowledge_github_work_item_scope_revision",
+            actor=ack_actor,
+            code=detail,
+            scope_id=ack_scope_id,
+            item_id=item_id,
+            revision_id=ack_revision_id,
+        )
         status_code = 403 if detail in {"not_item_owner", "lease_token_mismatch"} else 409
         raise HTTPException(status_code=status_code, detail=detail) from exc
-    return await _reload_work_item_response(db, item.id)
+    return await _reload_work_item_response(db, item_id)
 
 
 @router.post(
@@ -2082,6 +2230,17 @@ async def update_preset(
             autonomy_enabled=request.autonomy_enabled,
         )
     except ValueError as exc:
+        if str(exc) == "leader_assignment_required":
+            # C09: an authenticated autonomy refusal is recorded for its team;
+            # the policy is unchanged.
+            await _observe_refusal(
+                db,
+                event_kind="policy_change",
+                source="agent_team_service.update_preset",
+                actor=_operator_actor(),
+                code="leader_assignment_required",
+                team_preset_id=preset_id,
+            )
         raise _bad_request(exc) from exc
     if request.autonomy_enabled is not None:
         await _sync_github_jobs(db)
@@ -2554,6 +2713,16 @@ async def force_release_github_workspace(
     if workspace is None or workspace.scope_id != scope_id:
         raise HTTPException(status_code=404, detail="GitHub workspace not found")
     if workspace.leased_item_id is None:
+        # C09: an authenticated operator refusal is recorded for the scope;
+        # no item lease exists to bind.
+        await _observe_refusal(
+            db,
+            event_kind="workspace_release",
+            source="agent_teams.force_release_github_workspace",
+            actor=_operator_actor(),
+            code="workspace_not_leased",
+            scope_id=scope_id,
+        )
         raise _conflict(
             "Workspace is not leased",
             block_code="workspace_not_leased",

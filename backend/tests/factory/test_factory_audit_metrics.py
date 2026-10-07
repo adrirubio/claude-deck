@@ -1249,8 +1249,108 @@ async def _protected(maker, item_id: int) -> tuple:
             [tuple(r) for r in revisions], [tuple(r) for r in approvals])
 
 
+_AUTHORITY_COLUMNS = {
+    "item": (
+        "dispatch_status, escalation_reason, pending_reason, owner_slot_id, routing_method,"
+        " handoff_state, handoff_target_slot_id, approval_round_count, retry_count,"
+        " diagnostic_retry_count, active_scope_revision, attempt_phase, pr_number,"
+        " dispatch_nonce, dispatch_head_ref, launch_id, ack_received_at, ack_approver_member_id,"
+        " ack_evidence_message_id, ack_enforcement_epoch, ack_approval_round,"
+        " continuation_activated_at, last_verified_sha"),
+    "leases": (
+        "id, leased_item_id, leased_at, lease_token, push_token_expires_at, leased_owner_pid,"
+        " leased_owner_proc_start, lease_last_owner_contact_at, released_at, enabled"),
+    "revisions": (
+        "id, dispatch_nonce, revision, owner_slot_id, owner_member_id, status, failed_head_count,"
+        " last_failed_head_sha, max_failed_heads, recovery_checkpoint_stage, approval_request_id,"
+        " delivery_message_id, acknowledged_at, cancelled_at, expected_workspace_id,"
+        " expected_lease_token_hash"),
+    "approvals": (
+        "id, request_kind, dispatch_nonce, approval_round, owner_member_id, leader_member_id,"
+        " status, scope_revision_id, request_message_id, decision_message_id, superseded_at"),
+}
+
+
+async def _authority(maker, item_id: int) -> dict:
+    """C09: the complete guarded authority state of one item, fresh session.
+
+    Every owner, lease, process, contact, approval, revision, ACK, limit and
+    failed-head value is read. Tests compare it before and after, apart from
+    the intended change they name explicitly.
+    """
+    queries = {
+        "item": f"SELECT {_AUTHORITY_COLUMNS['item']} FROM github_work_items WHERE id = :id",
+        "leases": (f"SELECT {_AUTHORITY_COLUMNS['leases']} FROM github_workspaces"
+                   " WHERE scope_id = 5 ORDER BY id"),
+        "revisions": (f"SELECT {_AUTHORITY_COLUMNS['revisions']}"
+                      " FROM github_attempt_scope_revisions WHERE work_item_id = :id ORDER BY id"),
+        "approvals": (f"SELECT {_AUTHORITY_COLUMNS['approvals']}"
+                      " FROM github_approval_requests WHERE work_item_id = :id ORDER BY id"),
+    }
+    state: dict = {}
+    async with maker() as db:
+        for name, query in queries.items():
+            rows = (await db.execute(text(query), {"id": item_id})).mappings().all()
+            state[name] = [dict(row) for row in rows]
+    state["item"] = state["item"][0] if state["item"] else None
+    return state
+
+
+def _except(state: dict, section: str, *keys: str, row: int | None = None) -> dict:
+    """A copy of an authority state without the named intended changes."""
+    import copy
+
+    result = copy.deepcopy(state)
+    targets = [result[section]] if isinstance(result[section], dict) else (
+        result[section] if row is None else [result[section][row]])
+    for target in targets:
+        for key in keys:
+            target.pop(key, None)
+    return result
+
+
 def _lease_iso(value: datetime = _FIXED_LEASE) -> str:
     return value.isoformat()
+
+
+async def test_c02_c09_active_item_closed_issue_with_open_pr_is_not_delivered(store, monkeypatch):
+    """C02/C09 W27: the active-item watcher completes a closed issue whose PR
+    is still open, but records no delivery. The outcome stays unknown and
+    the fact names its actual caller. Only the terminal state changes."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=82, status="dispatched", workspace_id=92,
+                     lease_token="synthetic-lease-82", pr_number=73)
+    before = await _authority(store, 82)
+
+    class ClosedIssueOpenPull:
+        # External GitHub boundary: the issue is closed; the watcher reads no PR.
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "labels": []} for number in numbers}
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._recheck_active_items(db, scope, ClosedIssueOpenPull())
+
+    delivery = await _facts(store, event_kind="delivery_evidence")
+    assert len(delivery) == 1
+    async with store() as db:
+        stored = (await db.execute(text(
+            "SELECT delivery_outcome, completion_kind, source FROM factory_audit_events"
+            " WHERE event_kind = 'delivery_evidence'"))).first()
+    assert tuple(stored) == (
+        "unknown", "closed_unproven", "github_watcher_service._recheck_active_items")
+    assert await _facts(store, event_kind="delivery_evidence", action_outcome="applied") == delivery
+    after = await _authority(store, 82)
+    assert after["item"]["dispatch_status"] == "completed"
+    assert _except(after, "item", "dispatch_status") == _except(before, "item", "dispatch_status")
 
 
 async def test_c08_operator_force_release_route_records_shared_operator_role(store, client):
@@ -1419,6 +1519,704 @@ async def test_c08_stale_reclaim_records_scheduler_only_for_eligible_lease(
     assert (await _protected(store, 95))[1] == []
     assert [await _protected(store, 96), await _protected(store, 97)] == kept_before
     assert await _facts(store, actor_kind="operator") == []
+
+
+async def test_c09_autonomy_route_refuses_and_records_missing_leader(store, client):
+    """C09 proof 6: the actual autonomy route refuses leader_assignment_required,
+    records one rejected fact for the team and leaves the policy unchanged."""
+    await _seed_team(store)
+    async with store() as db:
+        await db.execute(text("UPDATE agent_team_slots SET enabled = 0 WHERE id = :id"),
+                         {"id": _LEADER["slot"]})
+        await db.commit()
+
+    refused = await client.patch("/api/v1/agent-teams/presets/7", headers=_OPERATOR_HEADERS,
+                                 json={"autonomy_enabled": True})
+
+    assert refused.status_code == 400
+    facts = await _facts(store)
+    assert [(f["event_kind"], f["action_outcome"], f["team_preset_id"], f["actor_kind"],
+             f["sanitized_reason"]) for f in facts] == [
+        ("policy_change", "rejected", 7, "operator", "leader_assignment_required")]
+    async with store() as db:
+        autonomy = (await db.execute(text(
+            "SELECT autonomy_enabled FROM agent_team_presets WHERE id = 7"))).scalar_one()
+    assert autonomy == 0
+
+
+async def test_c09_leader_change_success_and_audit_rollback_are_separate(store, client, monkeypatch):
+    """A03/C09 proof 6: an actual Leader change commits with one applied fact;
+    an audit insert failure on the same route leaves the Leader unchanged."""
+    from app.services import factory_audit_service as _audit
+
+    await _seed_team(store)
+
+    async def expected_now():
+        async with store() as db:
+            return str((await db.execute(text(
+                "SELECT updated_at FROM agent_team_presets WHERE id = 7"))).scalar_one())
+
+    original = _audit.record_event
+
+    async def failing(db, **fields):
+        if fields.get("event_kind") == "leader_assignment":
+            raise RuntimeError("synthetic audit insert failure")
+        return await original(db, **fields)
+
+    monkeypatch.setattr(_audit, "record_event", failing)
+    failed = await client.put(
+        "/api/v1/agent-teams/presets/7/leader", headers=_OPERATOR_HEADERS,
+        json={"leader_slot_id": _OTHER["slot"], "expected_leader_slot_id": _LEADER["slot"],
+              "expected_updated_at": await expected_now(), "reason": "rotation"})
+    assert failed.status_code == 500
+    async with store() as db:
+        leader = (await db.execute(text(
+            "SELECT leader_slot_id FROM agent_team_presets WHERE id = 7"))).scalar_one()
+    assert leader == _LEADER["slot"]
+    assert await _facts(store) == []
+
+    monkeypatch.setattr(_audit, "record_event", original)
+    changed = await client.put(
+        "/api/v1/agent-teams/presets/7/leader", headers=_OPERATOR_HEADERS,
+        json={"leader_slot_id": _OTHER["slot"], "expected_leader_slot_id": _LEADER["slot"],
+              "expected_updated_at": await expected_now(), "reason": "rotation"})
+    assert changed.status_code == 200
+    facts = await _facts(store, event_kind="leader_assignment")
+    assert [(f["action_outcome"], f["actor_kind"], f["before_values"], f["after_values"])
+            for f in facts] == [
+        ("applied", "operator", f'{{"leader_slot_id": {_LEADER["slot"]}}}',
+         f'{{"leader_slot_id": {_OTHER["slot"]}}}')]
+
+
+async def test_c08_acquire_reset_failure_releases_with_scheduler_identity(store, monkeypatch):
+    """C08 proof 1: acquire leases a free worktree, its reset fails, and the
+    automatic cleanup releases that exact acquisition as the scheduler."""
+    from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
+    from app.services.github_workspace_service import (
+        GithubWorkspaceResetError, github_workspace_service,
+    )
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=83, status="pending")
+    async with store() as db:
+        db.add(GithubWorkspace(id=93, scope_id=5, path="/tmp/matrix-free-93", kind="worktree"))
+        await db.commit()
+
+    async def reset_fails(*_args, **_kwargs):
+        # Git boundary: the workspace reset fails after the lease commits.
+        raise GithubWorkspaceResetError("synthetic reset failure", transient=False)
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_fails)
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        item = await db.get(GithubWorkItem, 83)
+        assert await github_workspace_service.acquire(db, scope, item) is None
+
+    facts = await _facts(store, event_kind="workspace_release")
+    assert len(facts) == 1
+    fact = facts[0]
+    assert (fact["action_outcome"], fact["actor_kind"], fact["actor_reference"],
+            fact["item_id"]) == ("applied", "scheduler", "github_dispatch_scheduler", 83)
+    assert fact["operation_id"].startswith("workspace_release:workspace:93:leased_at:")
+    assert fact["operation_id"] != "workspace_release:workspace:93:leased_at:None"
+    after = await _authority(store, 83)
+    workspace = next(lease for lease in after["leases"] if lease["id"] == 93)
+    assert (workspace["leased_item_id"], workspace["lease_token"]) == (None, None)
+    assert workspace["released_at"] is not None
+    assert await _facts(store, actor_kind="operator") == []
+
+
+async def test_c09_watcher_accepted_send_then_failure_records_one_action(store, monkeypatch):
+    """C09 proof 5: the real Mail send accepts the blocker notice, then the
+    notifier fails. One terminal action, one delivered message and explicit
+    notification uncertainty remain; a second poll repeats nothing."""
+    from app.models.database import TeamGithubScope
+    from app.services.agent_mail_service import agent_mail_service
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=84, status="escalated", escalation_reason="plan_blocked")
+    monkeypatch.setattr(github_watcher_service, "observer_session_factory", store, raising=False)
+    original_send = agent_mail_service.send_direct_message
+
+    async def accepted_then_fails(db, **kwargs):
+        await original_send(db, **kwargs)
+        raise RuntimeError("synthetic failure after accepted send")
+
+    monkeypatch.setattr(agent_mail_service, "send_direct_message", accepted_then_fails)
+
+    class ClosedIssue:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "labels": []} for number in numbers}
+
+    for _poll in range(2):
+        async with store() as db:
+            scope = await db.get(TeamGithubScope, 5)
+            await github_watcher_service._reconcile_closed_issues(db, scope, ClosedIssue())
+
+    delivery = await _facts(store, event_kind="delivery_evidence")
+    notices = await _facts(store, event_kind="lifecycle_notification")
+    assert len(delivery) == 1
+    assert [f["action_outcome"] for f in notices] == ["uncertain"]
+    async with store() as db:
+        messages = (await db.execute(text(
+            "SELECT COUNT(*) FROM mail_messages WHERE payload LIKE '%blocker_merged%'"
+        ))).scalar_one()
+        status = (await db.execute(text(
+            "SELECT dispatch_status FROM github_work_items WHERE id = 84"))).scalar_one()
+    assert messages == 1
+    assert status == "completed"
+
+
+async def test_c08_stale_reclaim_contact_race_keeps_lease_without_cleanup(
+    store, tmp_path, monkeypatch
+):
+    """C08 proof 7: the owner contact changes while the real reclaim checks
+    quiescence. The guarded CAS refuses, one rejected scheduler fact is
+    recorded, the exact lease stays, and nothing is revoked or cleaned."""
+    import subprocess
+
+    from app.models.database import GithubWorkspace, TeamGithubScope
+    from app.services.github_workspace_service import github_workspace_service
+
+    repo = tmp_path / "race-repo"
+    repo.mkdir()
+    for args in (["init", "-q", str(repo)],
+                 ["-C", str(repo), "config", "user.email", "fixture@example.invalid"],
+                 ["-C", str(repo), "config", "user.name", "Fixture"],
+                 ["-C", str(repo), "commit", "--allow-empty", "-q", "-m", "base"],
+                 ["-C", str(repo), "branch", "-M", "base"]):
+        subprocess.run(["git", *args], check=True)
+    worktree = tmp_path / "race-ws"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(worktree),
+                    "-b", "fixture-race"], check=True)
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=85, status="merged", workspace_id=94,
+                     workspace_kind="worktree", lease_token="synthetic-lease-race",
+                     leased_at=datetime.utcnow() - timedelta(hours=7))
+    async with store() as db:
+        (await db.get(TeamGithubScope, 5)).base_ref = "base"
+        workspace = await db.get(GithubWorkspace, 94)
+        workspace.path = str(worktree)
+        workspace.leased_owner_pid = 900010
+        workspace.leased_owner_proc_start = "start-race"
+        await db.commit()
+
+    def dead_owner(pid):
+        raise ProcessLookupError(pid)
+
+    contact_at = datetime.utcnow()
+    real_runner = github_workspace_service._runner
+    effects: list[str] = []
+
+    async def racing_runner(args):
+        if "status" in args:
+            # The owner makes contact from a separate session mid-check.
+            async with store() as other:
+                lease = await other.get(GithubWorkspace, 94)
+                lease.lease_last_owner_contact_at = contact_at
+                await other.commit()
+        return await real_runner(args)
+
+    async def record_revoke(*_args, **_kwargs):
+        effects.append("revoke")
+        return True
+
+    async def record_remove(*_args, **_kwargs):
+        effects.append("remove_config")
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", dead_owner)
+    monkeypatch.setattr(github_workspace_service, "_runner", racing_runner)
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", record_revoke)
+    monkeypatch.setattr(github_workspace_service, "remove_managed_worktree_config", record_remove)
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        released = await github_workspace_service.reclaim_stale(db, scope)
+
+    assert released == 0
+    assert effects == []
+    facts = await _facts(store, event_kind="workspace_release")
+    assert [(f["action_outcome"], f["actor_kind"], f["actor_reference"], f["item_id"])
+            for f in facts] == [("rejected", "scheduler", "github_dispatch_scheduler", 85)]
+    after = await _authority(store, 85)
+    lease = next(row for row in after["leases"] if row["id"] == 94)
+    assert (lease["leased_item_id"], lease["lease_token"], lease["leased_owner_pid"]) == (
+        85, "synthetic-lease-race", 900010)
+    assert lease["lease_last_owner_contact_at"] is not None
+
+
+class _LaunchItem:
+    """Launcher boundary result for one slot (tmux launch is external)."""
+
+    def __init__(self, status: str, tmux_target: str | None):
+        self.status = status
+        self.tmux_target = tmux_target
+
+
+class _LaunchResult:
+    def __init__(self, item: _LaunchItem):
+        self.launch_id = None
+        self.items = [item]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "released"),
+    [
+        ("value_error", "escalated", True),
+        ("failed_no_target", "failed", True),
+        ("failed_live_target", "failed", False),
+    ],
+)
+async def test_c08_dispatch_pending_launch_failures_record_scheduler_releases(
+    store, monkeypatch, case, expected_status, released
+):
+    """C08 proof 2: dispatch_pending drives the launcher ValueError and the
+    failed-launch paths into the real release with the scheduler reference;
+    a failed launch with a live tmux target keeps its lease."""
+    from app.models.database import (
+        AgentTeamPreset, AgentTeamSlot, GithubWorkItem, GithubWorkspace, TeamGithubScope,
+    )
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_workspace_service import github_workspace_service
+
+    # A minimal team with no Mail sessions, like the existing dispatch tests.
+    async with store() as db:
+        preset = AgentTeamPreset(id=8, name="Dispatch matrix", created_by="fixture")
+        db.add(preset)
+        await db.flush()
+        leader = AgentTeamSlot(id=21, preset_id=8, position=0, display_name="Leader",
+                               role="Leader", provider="codex-cli", repo_id="r",
+                               repo_path="/tmp/r", repo_name="r", launch_mode="plain",
+                               launch_options={}, enabled=True)
+        owner = AgentTeamSlot(id=22, preset_id=8, position=1, display_name="Backend",
+                              provider="codex-cli", repo_id="r", repo_path="/tmp/r",
+                              repo_name="r", launch_mode="plain", launch_options={},
+                              enabled=True, area_labels=["area:backend"])
+        db.add_all([leader, owner])
+        await db.flush()
+        preset.leader_slot_id = 21
+        db.add(TeamGithubScope(id=6, preset_id=8, repo_owner="o", repo_name="dispatch-matrix",
+                               repo_path="/tmp/dispatch-matrix", base_ref="origin/master"))
+        await db.flush()
+        db.add(GithubWorkspace(id=96, scope_id=6, path="/tmp/dispatch-matrix-ws"))
+        db.add(GithubWorkItem(id=86, scope_id=6, issue_number=86, issue_title="Dispatch",
+                              issue_url="u", github_updated_at=datetime.utcnow(),
+                              dispatch_status="pending"))
+        await db.commit()
+
+    async def succeeds(*_args, **_kwargs):
+        return None
+
+    async def git_ok(_args):
+        # Git boundary: worktree configuration commands succeed.
+        return 0, ""
+
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 999_999,
+                        raising=False)
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", succeeds)
+    monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", succeeds)
+    monkeypatch.setattr(github_workspace_service, "validate_app_remote", succeeds)
+    monkeypatch.setattr(github_workspace_service, "_runner", git_ok)
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
+
+    async def launcher(*_args, **_kwargs):
+        if case == "value_error":
+            raise ValueError("synthetic blocked plan")
+        target = "matrix:0.0" if case == "failed_live_target" else None
+        return _LaunchResult(_LaunchItem("failed", target))
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 6)
+        slots = list((await db.execute(
+            select(AgentTeamSlot).where(AgentTeamSlot.preset_id == 8)
+            .order_by(AgentTeamSlot.position))).scalars().all())
+        await github_dispatch_service.dispatch_pending(
+            db, scope, slots, launcher=launcher,
+            issue_labels_by_number={86: ["area:backend"]})
+
+    async with store() as db:
+        status, lease_item = (await db.execute(text(
+            "SELECT i.dispatch_status, w.leased_item_id FROM github_work_items i,"
+            " github_workspaces w WHERE i.id = 86 AND w.id = 96"))).first()
+    assert status == expected_status
+    releases = await _facts(store, event_kind="workspace_release")
+    if released:
+        assert lease_item is None
+        assert [(f["item_id"], f["action_outcome"], f["actor_kind"], f["actor_reference"])
+                for f in releases] == [(86, "applied", "scheduler", "github_dispatch_scheduler")]
+    else:
+        assert lease_item == 86
+        assert releases == []
+    assert await _facts(store, actor_kind="operator") == []
+
+
+async def _seed_prepared_attempt(maker, item_id: int, workspace_id: int) -> None:
+    await _seed_work(
+        maker, item_id=item_id, status="escalated", workspace_id=workspace_id,
+        lease_token=f"synthetic-lease-{item_id}",
+        escalation_reason="prepared_owner_unavailable", routing_method="label",
+        dispatch_head_ref=f"deck/slot-12/issue-{item_id}-{_NONCE}",
+        dispatch_base_ref="origin/master", last_verified_sha="a" * 40)
+
+
+@pytest.mark.parametrize(
+    ("case", "body", "status_code", "outcome"),
+    [
+        ("success", {"resume": True}, 200, "applied"),
+        ("invalid_target", {"resume": True, "reassign_to_slot_id": 999}, 409, "rejected"),
+        ("liveness_unknown", {"resume": True, "reassign_to_slot_id": 13}, 409, "rejected"),
+        ("audit_failure", {"resume": True}, 500, None),
+    ],
+)
+async def test_c09_prepared_resume_route_records_actual_outcome(
+    store, client, monkeypatch, case, body, status_code, outcome
+):
+    """C09 proof 3: the operator resume route records its applied fact in the
+    resume transaction; target and liveness refusals record rejections; an
+    audit failure rolls back. Attempt, approval, budgets and lease remain."""
+    from app.services import factory_audit_service as _audit
+
+    await _seed_team(store)
+    await _seed_prepared_attempt(store, 87, 97)
+    before = await _authority(store, 87)
+    if case == "audit_failure":
+        original = _audit.record_event
+
+        async def failing(db, **fields):
+            if fields.get("event_kind") == "prepared_attempt_resume":
+                raise RuntimeError("synthetic audit insert failure")
+            return await original(db, **fields)
+
+        monkeypatch.setattr(_audit, "record_event", failing)
+
+    response = await client.post("/api/v1/agent-teams/presets/7/work-items/87/resume-attempt",
+                                 headers=_OPERATOR_HEADERS, json=body)
+
+    assert response.status_code == status_code, response.text
+    facts = await _facts(store, event_kind="prepared_attempt_resume")
+    after = await _authority(store, 87)
+    if outcome is None:
+        assert facts == []
+        assert after == before
+        return
+    assert [(f["action_outcome"], f["actor_kind"], f["item_id"]) for f in facts] == [
+        (outcome, "operator", 87)]
+    if outcome == "applied":
+        assert after["item"]["dispatch_status"] == "pending"
+        changed = ("dispatch_status", "escalation_reason", "pending_reason")
+        assert _except(after, "item", *changed) == _except(before, "item", *changed)
+    else:
+        expected_code = ("invalid_resume_target" if case == "invalid_target"
+                         else "previous_owner_liveness_unknown")
+        assert facts[0]["sanitized_reason"] == expected_code
+        assert after == before
+
+
+async def test_c09_scope_lookup_race_and_authority_refusals_are_recorded(store, client, monkeypatch):
+    """C09 proof 4: the actual scope route refuses a configuration change made
+    during App installation lookup, and an identity change while a lease is
+    held. Each refusal records one rejected fact for the scope; nothing changes."""
+    from app.services.github_app_auth_service import github_app_auth_service
+
+    await _seed_team(store)
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE team_github_scopes SET github_auth_mode = 'app', enabled = 0,"
+            " github_app_installation_id = NULL WHERE id = 5"))
+        await db.commit()
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", lambda **_kwargs: None)
+
+    async def racing_lookup(_owner, _repo):
+        # External App lookup: a competing writer changes the scope meanwhile.
+        async with store() as other:
+            await other.execute(text(
+                "UPDATE team_github_scopes SET dispatch_label = 'changed-during-lookup'"
+                " WHERE id = 5"))
+            await other.commit()
+        return 73
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", racing_lookup)
+    raced = await client.patch("/api/v1/agent-teams/github-scopes/5",
+                               headers=_OPERATOR_HEADERS, json={"enabled": True})
+    assert raced.status_code == 409
+    assert raced.json()["detail"] == "scope_changed_during_app_lookup"
+
+    async def plain_lookup(_owner, _repo):
+        return 73
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", plain_lookup)
+    await _seed_work(store, item_id=88, status="dispatched", workspace_id=98,
+                     lease_token="synthetic-lease-88")
+    in_use = await client.patch("/api/v1/agent-teams/github-scopes/5",
+                                headers=_OPERATOR_HEADERS, json={"repo_name": "renamed"})
+    assert in_use.status_code == 409
+    assert in_use.json()["detail"] == "scope_identity_in_use"
+
+    facts = await _facts(store, event_kind="policy_change")
+    assert [(f["action_outcome"], f["scope_id"], f["actor_kind"], f["sanitized_reason"])
+            for f in facts] == [
+        ("rejected", 5, "operator", "scope_changed_during_app_lookup"),
+        ("rejected", 5, "operator", "scope_identity_in_use"),
+    ]
+    async with store() as db:
+        scope = (await db.execute(text(
+            "SELECT enabled, github_app_installation_id, repo_name, dispatch_label"
+            " FROM team_github_scopes WHERE id = 5"))).first()
+    assert tuple(scope) == (0, None, "matrix-repo", "changed-during-lookup")
+
+
+async def test_c09_scope_writer_reservation_contention_is_refused_and_recorded(store, client):
+    """C09 proof 4: another writer holds the SQLite write lock while the real
+    scope route reserves the writer. The reservation fails after the busy
+    timeout, the route refuses scope_changed_during_update, and once the lock
+    is released its refusal observation commits. The scope is unchanged."""
+    import asyncio
+
+    await _seed_team(store)
+    holder = store()
+    # Begin a competing write transaction and keep its lock.
+    await holder.execute(text("UPDATE agent_team_presets SET name = name WHERE id = 7"))
+    patch = asyncio.create_task(client.patch(
+        "/api/v1/agent-teams/github-scopes/5", headers=_OPERATOR_HEADERS,
+        json={"dispatch_label": "contended-label"}))
+    try:
+        # The reservation waits for the 5 s busy timeout; release after it.
+        await asyncio.sleep(6)
+    finally:
+        await holder.rollback()
+        await holder.close()
+    response = await patch
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "scope_changed_during_update"
+    facts = await _facts(store, event_kind="policy_change")
+    assert [(f["action_outcome"], f["scope_id"], f["actor_kind"], f["sanitized_reason"])
+            for f in facts] == [("rejected", 5, "operator", "scope_changed_during_update")]
+    async with store() as db:
+        label = (await db.execute(text(
+            "SELECT dispatch_label FROM team_github_scopes WHERE id = 5"))).scalar_one()
+    assert label != "contended-label"
+
+
+@pytest.mark.parametrize("send_fails", [False, True])
+async def test_c09_handoff_initiation_records_action_and_separate_notice(
+    store, client, monkeypatch, send_fails
+):
+    """C08/C09 N1: a valid member handoff records one applied action fact in
+    the handoff commit and a separate notice fact. A send failure after the
+    commit keeps the pending handoff and records the notice as uncertain."""
+    from app.services.agent_mail_service import agent_mail_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=89, status="dispatched")
+    if send_fails:
+        async def failing_send(*_args, **_kwargs):
+            raise RuntimeError("synthetic low-level send failure")
+
+        monkeypatch.setattr(agent_mail_service, "send_direct_message", failing_send)
+
+    response = await client.post(
+        "/api/v1/agent-teams/dispatch-status", headers=_session_headers(_OWNER),
+        json={"work_item_id": 89, "status": "handoff_initiated",
+              "reassign_to_slot_id": _OTHER["slot"]})
+
+    assert response.status_code == (500 if send_fails else 200)
+    actions = await _facts(store, event_kind="handoff_reassignment")
+    notices = await _facts(store, event_kind="handoff_notification")
+    assert [(f["action_outcome"], f["actor_member_id"], f["actor_session_id"], f["item_id"])
+            for f in actions] == [("applied", _OWNER["member"], _OWNER["session"], 89)]
+    assert [f["action_outcome"] for f in notices] == (["uncertain"] if send_fails else ["applied"])
+    assert actions[0]["operation_id"] != notices[0]["operation_id"]
+    authority = await _authority(store, 89)
+    assert (authority["item"]["handoff_state"], authority["item"]["handoff_target_slot_id"],
+            authority["item"]["owner_slot_id"]) == ("pending", _OTHER["slot"], _OWNER["slot"])
+
+
+@pytest.mark.parametrize("pending", [True, False])
+async def test_c09_handoff_acceptance_records_applied_or_refused(store, client, pending):
+    """C08/C09 N2: the target member's acceptance records one applied fact in
+    the acceptance commit; a stale handoff state is refused, recorded with a
+    fixed code, and leaves ownership and the lease unchanged."""
+    await _seed_team(store)
+    await _seed_work(store, item_id=90, status="dispatched", workspace_id=100,
+                     lease_token="synthetic-lease-90", handoff_target_slot_id=_OTHER["slot"],
+                     handoff_state="pending" if pending else None)
+    before = await _authority(store, 90)
+
+    response = await client.post(
+        "/api/v1/agent-teams/dispatch-status", headers=_session_headers(_OTHER),
+        json={"work_item_id": 90, "status": "handoff_accepted"})
+
+    facts = await _facts(store, event_kind="handoff_acceptance")
+    after = await _authority(store, 90)
+    assert [(f["actor_member_id"], f["actor_session_id"]) for f in facts] == [
+        (_OTHER["member"], _OTHER["session"])]
+    if pending:
+        assert response.status_code == 200, response.text
+        assert facts[0]["action_outcome"] == "applied"
+        assert facts[0]["before_values"] == f'{{"owner_slot_id": {_OWNER["slot"]}}}'
+        assert facts[0]["after_values"] == f'{{"owner_slot_id": {_OTHER["slot"]}}}'
+        assert after["item"]["owner_slot_id"] == _OTHER["slot"]
+    else:
+        assert response.status_code == 409
+        assert (facts[0]["action_outcome"], facts[0]["sanitized_reason"]) == (
+            "rejected", "handoff_state_changed")
+        assert after == before
+
+
+async def _seed_approved_continuation(maker, *, item_id: int, workspace_id: int) -> dict:
+    from app.models.database import (
+        GithubApprovalRequest, GithubAttemptScopeRevision, MailMessage,
+    )
+    from app.services.github_approval_service import github_approval_service
+
+    token = f"synthetic-lease-{item_id}"
+    await _seed_work(maker, item_id=item_id, status="escalated", workspace_id=workspace_id,
+                     workspace_kind="primary", lease_token=token,
+                     escalation_reason="retry_count_exhausted", pr_number=73,
+                     dispatch_head_ref=_HEAD_REF)
+    async with maker() as db:
+        revision = GithubAttemptScopeRevision(
+            work_item_id=item_id, dispatch_nonce=_NONCE, revision=1,
+            owner_slot_id=_OWNER["slot"], owner_member_id=_OWNER["member"],
+            phase="implementation", execution_target="workspace", summary="Approved",
+            allowed_paths=["src/a.py"], allowed_actions=["edit_production"],
+            allowed_commands=[], prohibited_actions=[], tool_fallbacks={},
+            baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+            originating_escalation_reason="retry_count_exhausted",
+            expected_workspace_id=workspace_id,
+            expected_lease_token_hash=github_approval_service.lease_token_hash(token),
+            max_failed_heads=2, status="approved", delivered_at=datetime.utcnow())
+        db.add(revision)
+        await db.flush()
+        delivery = MailMessage(kind="message", recipient_member_id=_OWNER["member"],
+                               body_markdown="Approved revision",
+                               delivery_key=f"github-scope:{revision.id}:delivery")
+        approval = GithubApprovalRequest(
+            work_item_id=item_id, request_kind="continuation", dispatch_nonce=_NONCE,
+            approval_round=3, owner_member_id=_OWNER["member"],
+            leader_member_id=_LEADER["member"], request_fingerprint="c" * 64,
+            status="approved", scope_revision_id=revision.id)
+        db.add_all([delivery, approval])
+        await db.flush()
+        revision.delivery_message_id = delivery.id
+        revision.approval_request_id = approval.id
+        await db.commit()
+        return {"revision": revision.id, "approval": approval.id, "token": token}
+
+
+@pytest.mark.parametrize("valid_token", [True, False])
+async def test_c09_continuation_ack_records_lifecycle_fact_or_refusal(
+    store, client, monkeypatch, valid_token
+):
+    """C09 N4: the owner ACK activates the approved revision with one applied
+    lifecycle fact in the activation commit; a wrong lease token is refused,
+    recorded for the revision and changes nothing."""
+    from app.services.github_client import GithubCommitSnapshot, github_client
+
+    await _seed_team(store)
+    ids = await _seed_approved_continuation(store, item_id=91, workspace_id=101)
+    _stub_open_pull(monkeypatch)
+
+    async def snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_commit_snapshot", snapshot)
+    before = await _authority(store, 91)
+
+    response = await client.post(
+        "/api/v1/agent-teams/github-work-items/91/scope-revisions/1/ack",
+        headers=_session_headers(_OWNER),
+        json={"dispatch_nonce": _NONCE,
+              "lease_token": ids["token"] if valid_token else "synthetic-wrong-token"})
+
+    facts = await _facts(store, event_kind="continuation_ack")
+    after = await _authority(store, 91)
+    assert [(f["actor_member_id"], f["actor_session_id"], f["revision_id"]) for f in facts] == [
+        (_OWNER["member"], _OWNER["session"], ids["revision"])]
+    if valid_token:
+        assert response.status_code == 200, response.text
+        assert facts[0]["action_outcome"] == "applied"
+        assert facts[0]["operation_id"] == f"continuation_ack:revision:{ids['revision']}"
+        assert after["item"]["dispatch_status"] == "dispatched"
+        assert after["revisions"][0]["status"] == "active"
+    else:
+        assert response.status_code == 403
+        assert facts[0]["action_outcome"] == "rejected"
+        # C10 limit: the current sanitizer redacts the credential keywords in
+        # the refusal code "lease_token_mismatch".
+        assert facts[0]["sanitized_reason"].endswith("_mismatch")
+        assert after == before
+
+
+async def test_c09_initial_plan_request_and_decision_record_actors_and_notice(store, client):
+    """C09 rows 18-20: the real initial request and Leader decision routes
+    record the applied decision in its commit and a separate notice; a
+    non-Leader decision is refused and recorded with its actual actor."""
+    await _seed_team(store)
+    await _seed_work(store, item_id=92, status="dispatched", nonce=_NONCE)
+
+    created = await client.post(
+        "/api/v1/agent-mail/approval-requests", headers=_session_headers(_OWNER),
+        json={"work_item_id": 92, "dispatch_nonce": _NONCE, "summary": "Initial plan"})
+    assert created.status_code == 200, created.text
+    request_id = created.json()["id"]
+    body = {"work_item_id": 92, "dispatch_nonce": _NONCE, "approval_request_id": request_id,
+            "decision": "approved", "reason": "bounded plan"}
+
+    refused = await client.post("/api/v1/agent-mail/decisions",
+                                headers=_session_headers(_OTHER), json=body)
+    decided = await client.post("/api/v1/agent-mail/decisions",
+                                headers=_session_headers(_LEADER), json=body)
+
+    assert refused.status_code == 403
+    assert decided.status_code == 200, decided.text
+    decisions = await _facts(store, event_kind="approval_decision")
+    assert [(f["action_outcome"], f["actor_member_id"], f["actor_session_id"], f["request_id"])
+            for f in decisions] == [
+        ("rejected", _OTHER["member"], _OTHER["session"], request_id),
+        ("applied", _LEADER["member"], _LEADER["session"], request_id),
+    ]
+    notices = await _facts(store, event_kind="approval_decision_notification")
+    assert [(f["action_outcome"], f["request_id"]) for f in notices] == [("applied", request_id)]
+    assert decisions[1]["operation_id"] != notices[0]["operation_id"]
+
+
+async def test_c09_release_remedy_refusals_record_actor_and_keep_guards(store, client):
+    """C09 rows 1-2: the operator workspace_not_leased refusal and the owner
+    status refusal are recorded with their actual actors before the guard
+    refuses; the lease and item state stay unchanged."""
+    from app.models.database import GithubWorkspace
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=93, status="dispatched", workspace_id=103,
+                     lease_token="synthetic-lease-93")
+    async with store() as db:
+        db.add(GithubWorkspace(id=104, scope_id=5, path="/tmp/matrix-unleased-104"))
+        await db.commit()
+    before = await _authority(store, 93)
+
+    not_leased = await client.post(
+        "/api/v1/agent-teams/github-scopes/5/workspaces/104/force-release",
+        headers=_OPERATOR_HEADERS,
+        json={"force": True, "expected_leased_at": _lease_iso(), "reason": "fixture"})
+    not_releasable = await client.post(
+        "/api/v1/agent-teams/dispatch-status", headers=_session_headers(_OWNER),
+        json={"work_item_id": 93, "status": "workspace_released",
+              "lease_token": "synthetic-lease-93"})
+
+    assert (not_leased.status_code, not_releasable.status_code) == (409, 409)
+    facts = await _facts(store, event_kind="workspace_release")
+    # C10 limit: the current sanitizer also alters the "leased" keyword, so
+    # the stored reason is compared with its own sanitized code.
+    assert [(f["action_outcome"], f["actor_kind"], f["actor_member_id"], f["item_id"],
+             f["sanitized_reason"]) for f in facts] == [
+        ("rejected", "operator", None, None, audit.sanitize_reason("workspace_not_leased")),
+        ("rejected", "member", _OWNER["member"], 93, "status_not_releasable"),
+    ]
+    assert await _authority(store, 93) == before
 
 
 async def test_c08_legacy_token_release_forwards_supplied_trusted_references(store):

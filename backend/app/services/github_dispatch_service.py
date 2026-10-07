@@ -269,7 +269,14 @@ class GithubDispatchService:
         authenticated_owner_slot_id: int,
         dispatch_nonce: str,
         lease_token: str,
+        actor: dict | None = None,
     ) -> bool:
+        """Activate an approved continuation revision on the owner's ACK.
+
+        A caller that supplies its trusted ``actor`` gets one applied ACK
+        lifecycle fact in the activation commit. An exact replay writes
+        nothing and records nothing.
+        """
         await db.refresh(item)
         await db.refresh(revision)
         if revision.recovery_checkpoint_stage not in (None, "ack_open"):
@@ -443,6 +450,29 @@ class GithubDispatchService:
         ):
             await db.rollback()
             raise ValueError("stale_continuation_context")
+        if actor is not None:
+            # C09/A12: the owner ACK lifecycle transition records its fact in
+            # the activation commit, bound to the immutable revision row.
+            from app.services import factory_audit_service as _audit
+            operation_id = f"continuation_ack:revision:{revision.id}"
+            await _audit.record_event(
+                db,
+                event_kind="continuation_ack",
+                source="github_dispatch_service.activate_continuation_revision",
+                occurred_at=now,
+                actor=actor,
+                scope_id=scope.id,
+                item_id=item.id,
+                revision_id=revision.id,
+                request_id=revision.approval_request_id,
+                before_values={"status": "approved", "dispatch_status": "escalated"},
+                after_values={"status": "active", "dispatch_status": "dispatched",
+                              "phase": revision.phase},
+                action_outcome="applied",
+                sanitized_reason="continuation revision acknowledged",
+                operation_id=operation_id,
+                correlation_id=operation_id,
+            )
         await db.commit()
         await db.refresh(item)
         await db.refresh(revision)
@@ -1835,7 +1865,14 @@ class GithubDispatchService:
         *,
         initiating_slot_id: int,
         target_slot_id: int,
+        actor: dict | None = None,
     ) -> None:
+        """Mark a pending handoff and notify its target.
+
+        A caller that supplies its trusted ``actor`` gets one applied action
+        fact in the handoff commit and a separate notice fact: applied, or
+        uncertain when the send fails after the commit.
+        """
         if item.owner_slot_id != initiating_slot_id:
             raise ResumeAttemptError("not_item_owner", "Only the current owner may initiate a handoff")
         target = await db.get(AgentTeamSlot, target_slot_id)
@@ -1851,27 +1888,89 @@ class GithubDispatchService:
         item.handoff_state = "pending"
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
-        await db.commit()
-        target_member = await agent_mail_service.get_or_create_slot_member(db, target)
-        await agent_mail_service.send_direct_message(
-            db,
-            recipient_member_id=target_member.id,
-            subject=f"GitHub dispatch handoff: work item {item.id}",
-            body_markdown=(
-                f"Work item {item.id} is being handed to your slot. Do not work in "
-                "the workspace yet. First call "
-                f"`deck_report_dispatch_status(work_item_id={item.id}, "
-                "status=\"handoff_accepted\")` and wait for a 200 response. Then "
-                "call `deck_get_work_item_context` to receive the preserved branch "
-                "and lease capability."
-            ),
-            payload={
-                "kind": "github_dispatch_handoff",
-                "work_item_id": item.id,
-                "target_slot_id": target_slot_id,
-            },
-            bypass_nudge_cooldown=True,
+        item_id = item.id
+        handoff = (
+            f"handoff:item:{item_id}:launch:{item.launch_id}:"
+            f"from:{initiating_slot_id}:to:{target_slot_id}:at:{item.updated_at.isoformat()}"
         )
+        from app.services import factory_audit_service as _audit
+
+        notice_fields = None
+        if actor is not None:
+            # C09/A12: the pending handoff records its applied fact in the
+            # handoff commit.
+            await _audit.record_event(
+                db,
+                event_kind="handoff_reassignment",
+                source="github_dispatch_service.initiate_handoff",
+                occurred_at=item.updated_at,
+                actor=actor,
+                scope_id=scope.id,
+                item_id=item_id,
+                before_values={"owner_slot_id": initiating_slot_id},
+                after_values={"owner_slot_id": initiating_slot_id},
+                action_outcome="applied",
+                sanitized_reason=f"handoff pending to slot {target_slot_id}",
+                operation_id=handoff,
+                correlation_id=handoff,
+            )
+            notice_fields = {
+                "event_kind": "handoff_notification",
+                "source": "github_dispatch_service.initiate_handoff",
+                "actor": actor,
+                "scope_id": scope.id,
+                "item_id": item_id,
+                "correlation_id": f"{handoff}:notice",
+            }
+        await db.commit()
+        try:
+            target_member = await agent_mail_service.get_or_create_slot_member(db, target)
+            await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=target_member.id,
+                subject=f"GitHub dispatch handoff: work item {item_id}",
+                body_markdown=(
+                    f"Work item {item_id} is being handed to your slot. Do not work in "
+                    "the workspace yet. First call "
+                    f"`deck_report_dispatch_status(work_item_id={item_id}, "
+                    "status=\"handoff_accepted\")` and wait for a 200 response. Then "
+                    "call `deck_get_work_item_context` to receive the preserved branch "
+                    "and lease capability."
+                ),
+                payload={
+                    "kind": "github_dispatch_handoff",
+                    "work_item_id": item_id,
+                    "target_slot_id": target_slot_id,
+                },
+                bypass_nudge_cooldown=True,
+            )
+        except Exception:
+            if notice_fields is not None:
+                # The committed handoff stands; its notice is unsettled.
+                await _audit.record_observation(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    action_outcome="uncertain",
+                    sanitized_reason="handoff notice unsettled after commit",
+                    operation_id=f"{handoff}:notice:uncertain",
+                    **notice_fields,
+                )
+            raise
+        if notice_fields is not None:
+            try:
+                await _audit.record_event(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    action_outcome="applied",
+                    sanitized_reason="handoff notice sent",
+                    operation_id=f"{handoff}:notice:applied",
+                    **notice_fields,
+                )
+                await db.commit()
+            except Exception:
+                # The notice is already sent; a missing observation never
+                # replays it.
+                await db.rollback()
 
     async def accept_handoff(
         self,
@@ -1881,6 +1980,7 @@ class GithubDispatchService:
         *,
         accepting_pane_pid: int,
         accepting_pane_proc_start: str,
+        actor: dict | None = None,
     ) -> None:
         if item.handoff_target_slot_id != accepting_slot_id:
             raise ValueError(
@@ -2089,6 +2189,32 @@ class GithubDispatchService:
             ):
                 await db.rollback()
                 raise ValueError("handoff state changed before acceptance")
+            if actor is not None:
+                # C09/A12: the acceptance fact is written before the external
+                # effects in the acceptance transaction. An audit failure
+                # therefore causes no revocation or identity write, and a
+                # later external failure rolls this fact back with the rest.
+                from app.services import factory_audit_service as _audit
+                acceptance = (
+                    f"handoff_acceptance:item:{item_id}:from:{old_owner_slot_id}:"
+                    f"to:{accepting_slot_id}:at:{now.isoformat()}"
+                )
+                await _audit.record_event(
+                    db,
+                    event_kind="handoff_acceptance",
+                    source="github_dispatch_service.accept_handoff",
+                    occurred_at=now,
+                    actor=actor,
+                    scope_id=scope.id,
+                    item_id=item_id,
+                    revision_id=active_revision.id if active_revision is not None else None,
+                    before_values={"owner_slot_id": old_owner_slot_id},
+                    after_values={"owner_slot_id": accepting_slot_id},
+                    action_outcome="applied",
+                    sanitized_reason="handoff accepted",
+                    operation_id=acceptance,
+                    correlation_id=acceptance,
+                )
             try:
                 await github_workspace_service.revoke_push_token(
                     scope,

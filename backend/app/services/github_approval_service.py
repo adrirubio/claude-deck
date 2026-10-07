@@ -84,6 +84,42 @@ class GithubApprovalError(ValueError):
         super().__init__(detail)
 
 
+async def _record_decision_fact(
+    db: AsyncSession,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int,
+    revision_id: int | None,
+    request_kind: str,
+    decision: str,
+) -> None:
+    """C09/A12: one applied request or decision fact in its owning commit.
+
+    The replay identity binds the action to the immutable request row.
+    """
+    operation_id = f"{event_kind}:request:{request_id}"
+    await audit.record_event(
+        db,
+        event_kind=event_kind,
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        request_id=request_id,
+        after_values={"request_kind": request_kind, "decision": decision},
+        action_outcome="applied",
+        sanitized_reason=f"{request_kind} {decision}",
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
+
+
 class ActiveCancellationNoticeError(GithubApprovalError):
     """The cancellation stands, but its owner notice was refused.
 
@@ -632,6 +668,20 @@ class GithubApprovalService:
         try:
             await db.flush()
             revision.approval_request_id = approval.id
+            request_actor = actor or audit.derive_actor(
+                actor_kind="member", member_id=authenticated_owner_member_id)
+            await _record_decision_fact(
+                db,
+                event_kind="continuation_request",
+                source="github_approval_service.create_continuation_request",
+                actor=request_actor,
+                scope_id=scope.id,
+                item_id=item.id,
+                request_id=approval.id,
+                revision_id=revision.id,
+                request_kind="continuation",
+                decision="requested",
+            )
             if checkpoint_stage is not None:
                 # C09: the decision hold is a persisted transition by the
                 # requesting owner, not an operator action.
@@ -1696,7 +1746,15 @@ class GithubApprovalService:
         decision: str,
         reason: str,
         request_id: int,
+        actor: dict | None = None,
     ) -> tuple[GithubApprovalRequest, bool]:
+        """Decide one initial-plan request as its designated Leader.
+
+        A caller that supplies its trusted ``actor`` gets one applied decision
+        fact in the decision commit. An exact replay records nothing.
+        """
+        decision_item_id = item.id
+        decision_scope_id = item.scope_id
         request = await self.resolve_for_decision(
             db,
             item,
@@ -1781,6 +1839,19 @@ class GithubApprovalService:
             )
             .execution_options(synchronize_session=False)
         )
+        if result.rowcount == 1 and actor is not None:
+            await _record_decision_fact(
+                db,
+                event_kind="approval_decision",
+                source="github_approval_service.decide",
+                actor=actor,
+                scope_id=decision_scope_id,
+                item_id=decision_item_id,
+                request_id=request_id,
+                revision_id=None,
+                request_kind="initial_plan",
+                decision=decision,
+            )
         await db.commit()
         await db.refresh(request)
         if result.rowcount == 1:
@@ -2004,6 +2075,20 @@ class GithubApprovalService:
             if current_leader.id != authenticated_leader_member_id:
                 raise GithubApprovalError("stale_approval_recipient")
             raise GithubApprovalError("approval_request_already_decided")
+        decision_actor = actor or audit.derive_actor(
+            actor_kind="member", member_id=authenticated_leader_member_id)
+        await _record_decision_fact(
+            db,
+            event_kind="continuation_decision",
+            source="github_approval_service.decide_continuation",
+            actor=decision_actor,
+            scope_id=hold_scope_id,
+            item_id=work_item_id,
+            request_id=hold_request_id,
+            revision_id=hold_revision_id,
+            request_kind="continuation",
+            decision=decision,
+        )
         if entering_ack_hold:
             # C09: the ack hold is a persisted transition by the deciding
             # Leader, not an operator action.

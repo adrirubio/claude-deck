@@ -452,6 +452,13 @@ async def decide_work_item(
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="scope_not_found")
+    # C08: the authenticated Leader session is the decision actor. Scalars
+    # are captured before any await; a refusal may expire loaded rows.
+    actor = factory_audit_service.derive_actor(
+        actor_kind="member", member_id=session.member_id, session_id=session.id)
+    decision_item_id = item.id
+    decision_scope_id = item.scope_id
+    decided = False
     try:
         approval, _decided = await github_approval_service.decide(
             db,
@@ -460,7 +467,9 @@ async def decide_work_item(
             decision=request.decision,
             reason=request.reason,
             request_id=request.approval_request_id,
+            actor=actor,
         )
+        decided = True
         decision_delivery_key = f"github-approval:{approval.id}:decision"
         if approval.decision_message_id is not None:
             linked_message = await db.get(MailMessage, approval.decision_message_id)
@@ -493,6 +502,12 @@ async def decide_work_item(
             await db.refresh(approval)
         elif approval.decision_message_id != message.id:
             raise GithubApprovalError("approval_decision_link_mismatch")
+        # C09: the decision notice is settled; its fact is separate from the
+        # decision fact and keyed by the stable decision delivery key.
+        await _record_decision_notice(
+            db, actor=actor, scope_id=decision_scope_id, item_id=decision_item_id,
+            request_id=request.approval_request_id, outcome="applied",
+            reason="decision notice delivered")
         await github_dispatch_service.apply_approval_decision(
             db,
             item,
@@ -506,15 +521,79 @@ async def decide_work_item(
             db,
             {approval.owner_member_id},
         )
-    except GithubApprovalError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailAuthorityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailDeliveryIntegrityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        if not decided:
+            if isinstance(exc, GithubApprovalError) and exc.status_code != 404:
+                # C09: an authenticated decision refusal is recorded.
+                await factory_audit_service.record_observation(
+                    db,
+                    event_kind="approval_decision",
+                    source="agent_mail.decide_work_item",
+                    occurred_at=datetime.utcnow(),
+                    actor=actor,
+                    scope_id=decision_scope_id,
+                    item_id=decision_item_id,
+                    request_id=request.approval_request_id,
+                    action_outcome="rejected",
+                    sanitized_reason=exc.detail,
+                    correlation_id=(
+                        f"approval_decision:rejected:{request.approval_request_id}:{exc.detail}"
+                    ),
+                )
+        elif isinstance(exc, (MailAuthorityError, MailDeliveryIntegrityError)) or not isinstance(
+            exc, (GithubApprovalError, ValueError)
+        ):
+            # The committed decision stands; its notice or follow-on transition
+            # is unsettled and is never replayed by the ledger.
+            await _record_decision_notice(
+                db, actor=actor, scope_id=decision_scope_id, item_id=decision_item_id,
+                request_id=request.approval_request_id, outcome="uncertain",
+                reason="decision notice or transition unsettled after commit",
+                observe=True)
+        if isinstance(exc, GithubApprovalError):
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if isinstance(exc, (MailAuthorityError, MailDeliveryIntegrityError)):
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
     return await agent_mail_service._message_response(db, message, for_member_id=None)
+
+
+async def _record_decision_notice(
+    db: AsyncSession,
+    *,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int,
+    outcome: str,
+    reason: str,
+    observe: bool = False,
+) -> None:
+    """C09: one initial-decision notice fact per outcome, never masking it."""
+    operation_id = f"approval_decision_notice:request:{request_id}:{outcome}"
+    fields = dict(
+        event_kind="approval_decision_notification",
+        source="agent_mail.decide_work_item",
+        occurred_at=datetime.utcnow(),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        request_id=request_id,
+        action_outcome=outcome,
+        sanitized_reason=reason,
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
+    if observe:
+        await factory_audit_service.record_observation(db, **fields)
+        return
+    try:
+        await factory_audit_service.record_event(db, **fields)
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
 
 @router.post("/continuation-decisions", response_model=MailMessageResponse)
@@ -528,6 +607,13 @@ async def decide_work_item_continuation(
         raise HTTPException(status_code=404, detail="work_item_not_found")
     if item.dispatch_nonce != request.dispatch_nonce:
         raise HTTPException(status_code=409, detail="stale_nonce")
+    # C08: the authenticated Leader session is the actor of the decision and
+    # of a resulting hold, never the operator.
+    actor = factory_audit_service.derive_actor(
+        actor_kind="member", member_id=session.member_id, session_id=session.id)
+    decision_item_id = item.id
+    decision_scope_id = item.scope_id
+    decided = False
     try:
         approval, revision, _decided = (
             await github_approval_service.decide_continuation(
@@ -537,15 +623,11 @@ async def decide_work_item_continuation(
                 decision=request.decision,
                 reason=request.reason,
                 request_id=request.approval_request_id,
-                # C08: the authenticated Leader session is the actor of a
-                # resulting hold, never the operator.
-                actor=factory_audit_service.derive_actor(
-                    actor_kind="member",
-                    member_id=session.member_id,
-                    session_id=session.id,
-                ),
+                actor=actor,
             )
         )
+        decided = True
+        revision_id = revision.id
         async with github_approval_service.continuation_transport_lock(approval.id):
             linked, decision_linked = (
                 await github_approval_service.ensure_continuation_decision_message(
@@ -555,6 +637,12 @@ async def decide_work_item_continuation(
                     revision,
                 )
             )
+            if decision_linked:
+                await _record_continuation_notice(
+                    db, "continuation_decision_notification", actor=actor,
+                    scope_id=decision_scope_id, item_id=decision_item_id,
+                    request_id=request.approval_request_id, revision_id=revision_id,
+                    outcome="applied", reason="continuation decision notice delivered")
             message = await agent_mail_service._message_response(
                 db,
                 linked,
@@ -566,26 +654,101 @@ async def decide_work_item_continuation(
                     approval,
                     revision,
                 ):
-                    await github_approval_service.deliver_approved_continuation(
-                        db,
-                        item,
-                        approval,
-                        revision,
+                    _revision, delivered = (
+                        await github_approval_service.deliver_approved_continuation(
+                            db,
+                            item,
+                            approval,
+                            revision,
+                        )
                     )
+                    if delivered:
+                        await _record_continuation_notice(
+                            db, "continuation_delivery_notification", actor=actor,
+                            scope_id=decision_scope_id, item_id=decision_item_id,
+                            request_id=request.approval_request_id, revision_id=revision_id,
+                            outcome="applied", reason="approved revision delivered")
             elif decision_linked:
                 await agent_mail_service.auto_nudge_members(
                     db,
                     {approval.owner_member_id},
                 )
-    except GithubApprovalError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailAuthorityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailDeliveryIntegrityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        if not decided:
+            if isinstance(exc, GithubApprovalError) and exc.status_code != 404:
+                # C09: an authenticated decision refusal is recorded.
+                await factory_audit_service.record_observation(
+                    db,
+                    event_kind="continuation_decision",
+                    source="agent_mail.decide_work_item_continuation",
+                    occurred_at=datetime.utcnow(),
+                    actor=actor,
+                    scope_id=decision_scope_id,
+                    item_id=decision_item_id,
+                    request_id=request.approval_request_id,
+                    action_outcome="rejected",
+                    sanitized_reason=exc.detail,
+                    correlation_id=(
+                        f"continuation_decision:rejected:{request.approval_request_id}:"
+                        f"{exc.detail}"
+                    ),
+                )
+        else:
+            # The committed decision stands; its notice or delivery is
+            # unsettled and is never replayed by the ledger.
+            await _record_continuation_notice(
+                db, "continuation_decision_notification", actor=actor,
+                scope_id=decision_scope_id, item_id=decision_item_id,
+                request_id=request.approval_request_id, revision_id=None,
+                outcome="uncertain", reason="decision notice or delivery unsettled after commit",
+                observe=True)
+        if isinstance(exc, GithubApprovalError):
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if isinstance(exc, (MailAuthorityError, MailDeliveryIntegrityError)):
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
     return message
+
+
+async def _record_continuation_notice(
+    db: AsyncSession,
+    event_kind: str,
+    *,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int,
+    revision_id: int | None,
+    outcome: str,
+    reason: str,
+    observe: bool = False,
+) -> None:
+    """C09: one continuation notice fact per outcome, never masking it."""
+    operation_id = f"{event_kind}:request:{request_id}:{outcome}"
+    fields = dict(
+        event_kind=event_kind,
+        source="agent_mail.decide_work_item_continuation",
+        occurred_at=datetime.utcnow(),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        request_id=request_id,
+        action_outcome=outcome,
+        sanitized_reason=reason,
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
+    if observe:
+        await factory_audit_service.record_observation(db, **fields)
+        return
+    try:
+        await factory_audit_service.record_event(db, **fields)
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
 
 @router.get("/messages", response_model=list[MailMessageResponse])
