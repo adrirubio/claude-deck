@@ -1199,55 +1199,85 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
 
 
 @pytest.mark.xfail(
-    reason="C09 v8 matrix in progress per Mail2917: revision selection must "
-           "bind the original attempt and scope revision explicitly (not "
-           "newest-by-item); item and attempt scalars must be captured "
-           "before commit and await; the observer's rollback boundary on a "
-           "tainted session needs proof or correction; the case must assert "
-           "the full populated protected-state matrix; whole-notifier "
-           "stubbing does not yet prove low-level transport failure",
+    reason="C09 v8 matrix in progress per Mail2917/2927: fixture now seeds "
+           "distinct slot and member ids, a Leader slot with role and "
+           "leader_slot_id, the real revision row and populated protected "
+           "state; the low-level send_direct_message injection still yields "
+           "no uncertain fact, so the notifier's internal early-return "
+           "guards and escalated-payload preconditions remain under "
+           "diagnosis; no production guard is relaxed",
     strict=False)
 async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
-    """C09 v8: observation through a session poisoned by the failed send
-    still records the uncertain fact; a second loop run replays nothing and
-    protected state is unchanged."""
-    from app.services import github_dispatch_service as _dispatch
-    from app.services import github_watcher_service as _watcher
+    """C09 v8: low-level transport failure inside the real notifier leaves the
+    session mid-transaction; the production observer ends that transaction
+    and records the uncertain fact bound to the original attempt and
+    revision; a second loop run replays nothing; the full populated
+    protected-state matrix is unchanged."""
+    from unittest.mock import AsyncMock
+
     from app.models.database import TeamGithubScope
+    from app.services import github_watcher_service as _watcher
+    from app.services.agent_mail_service import agent_mail_service as _mail
 
     await _seed_scope(db, 1, preset_id=7)
-    await _seed_slot_member(db, preset_id=7)
+    await _seed_slot_member(db, slot_id=5, member_id=8, preset_id=7)
     await _seed_workspace(db)
     await _seed_item(db, 1)
     await db.execute(text(
+        "UPDATE agent_team_presets SET leader_slot_id = 5 WHERE id = 7"))
+    await db.execute(text(
+        "UPDATE agent_team_slots SET role = 'Leader' WHERE id = 5"))
+    await db.execute(text(
         "UPDATE github_work_items SET dispatch_status = 'escalated', issue_number = 1,"
-        " pr_number = NULL WHERE id = 1"))
+        " pr_number = NULL, owner_slot_id = 5, retry_count = 2, approval_round_count = 3,"
+        " diagnostic_retry_count = 1 WHERE id = 1"))
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
+        " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
+        " allowed_actions, allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha,"
+        " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
+        " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
+        " delivery_attempt_count, approval_request_id, created_at)"
+        " VALUES (1, 1, 'n', 0, 5, 8, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
+        " 'a', 'b', 'r', 1, 'h', 2, 1, 'active', 1, NULL, CURRENT_TIMESTAMP)"))
+    await db.execute(text(
+        "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce,"
+        " approval_round, owner_member_id, leader_member_id, request_fingerprint, status,"
+        " request_message_id, scope_revision_id, created_at)"
+        " VALUES (1, 1, 'initial_plan', 'n', 1, 8, 8, 'fp', 'approved', NULL, 1, CURRENT_TIMESTAMP)"))
     await db.commit()
+
+    protected_before = (await db.execute(text(
+        "SELECT status, failed_head_count, delivery_attempt_count FROM github_attempt_scope_revisions"
+        " WHERE id = 1"))).first(), (await db.execute(text(
+        "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count,"
+        " owner_slot_id FROM github_work_items WHERE id = 1"))).first(), (await db.execute(text(
+        "SELECT leased_item_id, lease_token, leased_owner_pid FROM github_workspaces WHERE id = 1"))).first()
 
     class FakeClient:
         async def get_issues_by_number(self, owner, name, numbers):
             return {number: {"state": "closed"} for number in numbers}
 
-    # Low-level transport failure with an open session transaction: the
-    # notifier raises after the committed transition while the session is
-    # mid-transaction (tainted); observation must end that transaction
-    # before recording.
-    async def tainted_notify(*_args, **_kwargs):
+    async def failing_transport(*_args, **_kwargs):
         raise RuntimeError("low-level transport failure")
 
-    monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", tainted_notify)
-    await db.begin()
+    monkeypatch.setattr(_mail, "send_direct_message", AsyncMock(side_effect=failing_transport))
     scope_obj = await db.get(TeamGithubScope, 1)
-    before = (await db.execute(text(
-        "SELECT status, failed_head_count, delivery_attempt_count"
-        " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
 
     facts = (await db.execute(text(
-        "SELECT COUNT(*) FROM factory_audit_events WHERE action_outcome = 'uncertain'"))).scalar_one()
-    assert facts == 1
-    after = (await db.execute(text(
-        "SELECT status, failed_head_count, delivery_attempt_count"
-        " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
-    assert tuple(after) == tuple(before)
+        "SELECT action_outcome, operation_id FROM factory_audit_events"
+        " WHERE action_outcome = 'uncertain'"))).fetchall()
+    assert len(facts) == 1
+    assert facts[0][1].startswith("notification-uncertain:1:")
+    protected_after = (await db.execute(text(
+        "SELECT status, failed_head_count, delivery_attempt_count FROM github_attempt_scope_revisions"
+        " WHERE id = 1"))).first(), (await db.execute(text(
+        "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count,"
+        " owner_slot_id FROM github_work_items WHERE id = 1"))).first(), (await db.execute(text(
+        "SELECT leased_item_id, lease_token, leased_owner_pid FROM github_workspaces WHERE id = 1"))).first()
+    assert tuple(protected_after[0]) == tuple(protected_before[0])
+    assert tuple(protected_after[2]) == tuple(protected_before[2])
+    assert tuple(protected_after[1])[1:] == tuple(protected_before[1])[1:]
+    assert protected_after[1][0] == "completed"
