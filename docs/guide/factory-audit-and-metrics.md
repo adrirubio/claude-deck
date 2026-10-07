@@ -34,20 +34,24 @@ A window wholly before the marker has no ledger values: they are unknown, not ze
 
 ## How to read the metrics
 
-Each outcome metric counts **one current result per tracked attempt**. A delivered result outranks sourced non-delivery, which outranks unknown, so later evidence can resolve an unknown result but never lowers a delivered one. Repeated evidence counts once. A known fact time places the result in a window; otherwise the record time does.
+Each outcome metric counts **one current result per tracked attempt**. A delivered result outranks sourced non-delivery, which outranks unknown, so later evidence can resolve an unknown result but never lowers a delivered one. Repeated evidence counts once.
+
+The fact that established the current result places it in a window: its known fact time, or its record time when the fact time is unknown. A weaker later fact, such as a routine issue closure, never moves an earlier delivery into a later window. Terminal tracking is placed at the first terminal fact of the attempt.
 
 | Metric | Meaning |
 | --- | --- |
 | `terminal_tracking_in_window` | Tracked attempts with a terminal fact. Terminal tracking is not delivery. Deleting the live item does not change the count. |
 | `delivered_in_window` | Attempts whose current result is delivered. A merged pull request, observed by the verification merge paths, records this result with the PR merge time and the verified head version. A trusted acceptance declaration of an exact design version also records it (see below). |
+| `merged_code_in_window` | Code attempts whose current result is a sourced merged pull request. |
+| `delivered_design_in_window` | Design attempts whose current result is delivered: a merged design pull request, or a trusted acceptance of an exact design version. Independent review is counted separately. |
 | `closed_without_delivery` | Attempts with sourced proof that they ended without delivery. GitHub closed the issue as not planned or duplicate, with no pull request. Or a fresh read showed that every pull request of the attempt is closed without merge, the issue is closed, and no approval, revision or retry continues the attempt. |
 | `unknown_outcomes` | Terminal tracking without result evidence, for example an ordinary issue closure with no merge evidence. |
 | `independently_human_reviewed_design` | Delivered design attempts with a validated independent human review of the exact delivered version, counted once per attempt. The evidence must name a human reviewer and attest independence; an agent member or the operator credential never qualifies. A merge, Leader approval or a review of another version is not human review. |
-| `elapsed_attempt_duration` | The median seconds from dispatch to terminal tracking of the same launched attempt. It is not execution time or operator hands-on time. Unpaired facts are unknown. |
+| `elapsed_attempt_duration` | The median seconds from dispatch to terminal tracking of the same launched attempt, within one work item lifetime. It is not execution time or operator hands-on time. Unpaired facts are unknown. |
 | `implementation_retries`, `diagnostic_retries` | Recorded retry charges by class. |
 | `implementation_retry_counters`, `diagnostic_retry_counters` | The authoritative budget counters now. An authorized retry can reset them, so they are not charge counts. |
 | `recovery_success` | Preserved revision results that completed. A cancellation or resume request is not a recovery success. |
-| `operator_interventions` | Distinct applied operator actions. Notification facts are not actions; rejected and uncertain actions are excluded and reported. |
+| `operator_interventions` | Distinct applied operator actions, one per action and exact resource. Notification facts and facts derived from an action, such as the delivery fact of a review declaration, are not actions; rejected and uncertain actions are excluded and reported. |
 | `harness_failures` | Failed launch transitions only. |
 | `current_queue`, `total_tracked_attempts`, `pending_reviews`, `active_revisions` | Present state from live records, labelled with their population. |
 | `cost` | Unknown. There is no measured usage attribution. |
@@ -58,7 +62,9 @@ Tracked attempts in separate scopes stay distinct. A count is never a unique-PR 
 
 A closed-without-merge result is a combination of current conditions. It has no reliable result time, so its fact time stays unknown and the record time places it. The pull request closure time and the issue closure time are kept as separate source times.
 
-The watcher reads later results. Each poll reads at most 20 attempts that are unknown or closed without delivery, in turn, with no age limit. When a pull request of such an attempt merged later, the watcher records the delivery on the original attempt. It never changes a work item. The metrics read itself never fetches GitHub.
+The watcher reads later results. Each poll reads at most 20 attempts that are unknown or closed without delivery, in turn, with no age limit. When a pull request of such an attempt merged later, the watcher records the delivery on the original attempt, with the attempt's original type and resource lifetime. When the work item was deleted, replaced or moved during the read, nothing is recorded. The watcher never changes a work item for a later result. The metrics read itself never fetches GitHub.
+
+The watcher completes a work item only through one guarded write. The write requires the same attempt and status that the watcher read, and no pending approval request, live revision or requested retry. If any of these changed, the item stays unchanged and no result is recorded.
 
 ## Review acceptance declarations
 
@@ -86,7 +92,7 @@ The event list uses the operator token for this browser tab. If no token is stor
 
 - Facts before the coverage marker are not available and are not reconstructed.
 - Independent human review is recorded only through operator declarations from a trusted source. Without a declaration, reviewed-design counts stay at zero with explicit unknowns. Test declarations are synthetic and prove no live human review.
-- The observed runtime provider comes only from the native process of the slot's current authenticated Mail session. Agents started through a `node` or `bun` wrapper, and absent, ambiguous or changed sessions, stay unknown.
+- The observed runtime provider comes only from the native process of the slot's current, fresh authenticated Mail session. Agents started through a `node` or `bun` wrapper, and absent, expired, ambiguous or changed sessions, stay unknown.
 - Human benefit measurements and operator hands-on minutes are not measured (V14 NOT_PERFORMED).
 - Cost stays unknown without measured usage attribution.
 - Events are retained for the life of the database. No automatic purge exists.

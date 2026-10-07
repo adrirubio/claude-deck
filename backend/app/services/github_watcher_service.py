@@ -235,9 +235,12 @@ class GithubWatcherService:
                 continue
             issue = current.get(issue_number)
             if issue is not None and issue.get("state") == "closed":
+                # T01: active work completes only when no continuing authority
+                # exists at the terminal write.
                 await self._complete_and_notify(
                     db, scope, item,
-                    fact_source="github_watcher_service._recheck_active_items", issue=issue)
+                    fact_source="github_watcher_service._recheck_active_items", issue=issue,
+                    guard_continuation=True)
                 continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
@@ -407,7 +410,8 @@ class GithubWatcherService:
 
         rows = (await db.execute(
             select(FactoryAuditEvent.id, FactoryAuditEvent.item_id,
-                   FactoryAuditEvent.item_context_key, FactoryAuditEvent.delivery_outcome,
+                   FactoryAuditEvent.item_context_key, FactoryAuditEvent.scope_context_key,
+                   FactoryAuditEvent.team_context_key, FactoryAuditEvent.delivery_outcome,
                    FactoryAuditEvent.context_snapshot)
             .where(FactoryAuditEvent.scope_id == scope.id,
                    FactoryAuditEvent.event_kind == "delivery_evidence",
@@ -417,10 +421,18 @@ class GithubWatcherService:
         for row in rows:
             snapshot = row.context_snapshot if isinstance(row.context_snapshot, dict) else {}
             attempt = snapshot.get("attempt")
-            if not attempt:
+            if not attempt or not row.item_context_key:
                 continue
+            # T04: the original attempt context: its lifetime keys and its
+            # first recorded type. Later facts never take the current type.
             state = attempts.setdefault(f"{row.item_context_key}|{attempt}", {
-                "attempt": attempt, "item_id": row.item_id, "delivered": False})
+                "attempt": attempt, "item_id": row.item_id, "delivered": False,
+                "item_context_key": row.item_context_key,
+                "scope_context_key": row.scope_context_key,
+                "team_context_key": row.team_context_key,
+                "issue_type": snapshot.get("issue_type")})
+            if state["issue_type"] is None:
+                state["issue_type"] = snapshot.get("issue_type")
             state["delivered"] = state["delivered"] or row.delivery_outcome == "delivered"
             state["latest_id"] = row.id
             state["snapshot"] = snapshot
@@ -454,7 +466,8 @@ class GithubWatcherService:
                 continue
             try:
                 item = await db.get(GithubWorkItem, state["item_id"], populate_existing=True)
-                if item is None or item.scope_id != captured_scope[0]:
+                if item is None or not await self._original_context_holds(
+                        db, item, state, captured_scope):
                     continue
                 current_attempt, _, _ = await _audit.item_attempt(db, item)
                 is_current = current_attempt == state["attempt"] and item.pr_number == pr_number
@@ -467,8 +480,11 @@ class GithubWatcherService:
                         or GithubVerificationService._pull_number(pull) != pr_number
                         or not _pull_in_repository(pull, repository)):
                     continue
+                # T04: recheck the original lifetime, scope and repository after
+                # the external read. A deleted, replaced or moved item gets no fact.
                 item = await db.get(GithubWorkItem, state["item_id"], populate_existing=True)
-                if item is None:
+                if item is None or not await self._original_context_holds(
+                        db, item, state, captured_scope):
                     continue
                 head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
                 if is_current and (item.dispatch_head_ref is None
@@ -483,7 +499,12 @@ class GithubWatcherService:
                 await _audit.record_merged_delivery(
                     db, item, pull,
                     source="github_watcher_service._reconcile_provisional_results",
-                    attempt_identity=(state["attempt"], revision_id, launch))
+                    attempt_identity=(state["attempt"], revision_id, launch),
+                    original_context={
+                        "item_context_key": state["item_context_key"],
+                        "scope_context_key": state["scope_context_key"],
+                        "team_context_key": state["team_context_key"],
+                        "issue_type": state["issue_type"]})
                 await db.commit()
             except Exception:
                 logger.info("Later result unavailable for attempt %s", state["attempt"],
@@ -494,6 +515,24 @@ class GithubWatcherService:
                 except Exception:
                     pass
         return len(batch)
+
+    async def _original_context_holds(
+        self, db: AsyncSession, item: GithubWorkItem, state: dict, captured_scope: tuple
+    ) -> bool:
+        """T04: the item is still the original lifetime, scope and repository."""
+        from app.services import factory_audit_service as _audit
+
+        if item.scope_id != captured_scope[0]:
+            return False
+        scope_row = await db.get(TeamGithubScope, item.scope_id, populate_existing=True)
+        if scope_row is None or (scope_row.repo_owner, scope_row.repo_name) != captured_scope[1:]:
+            return False
+        if await _audit.current_context_key(db, "item", item.id) != state["item_context_key"]:
+            return False
+        if state["scope_context_key"] is not None and await _audit.current_context_key(
+                db, "scope", item.scope_id) != state["scope_context_key"]:
+            return False
+        return True
 
     async def _attempt_continues(self, db: AsyncSession, item_id: int) -> bool:
         """R02/A30: a pending approval, live revision or requested retry continues it."""

@@ -56,6 +56,9 @@ SAFE_SNAPSHOT_FIELDS = {
     "runtime_provider_evidence", "runtime_session_id", "claimed_runtime_provider",
     # A30/A32: the exact artifact version and separate source times.
     "artifact_version", "pull_closed_at", "issue_closed_at",
+    # T05: original typed identities and creation times.
+    "original_team_id", "original_scope_id", "original_item_id", "original_slot_id",
+    "item_created_at", "slot_created_at",
 }
 
 # C10/C03: the typed fields of a human review evidence record.
@@ -295,6 +298,27 @@ def _canonical_fact(**fields: Any) -> tuple:
         for name, value in sorted(fields.items()))
 
 
+# T02: snapshot fields that are evidence of the fact itself. Live labels
+# (names, types, runtime observations) are enrichment and may change.
+_STABLE_EVIDENCE_FIELDS = (
+    "attempt", "launch_attempt", "artifact", "artifact_version", "fact_source",
+    "pull_closed_at", "issue_closed_at", "retry_class",
+)
+
+
+def _stable_evidence(snapshot: dict | None) -> dict:
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    return {key: snapshot.get(key) for key in _STABLE_EVIDENCE_FIELDS if snapshot.get(key) is not None}
+
+
+def _naive(value: datetime | None) -> datetime | None:
+    if isinstance(value, str):
+        value = _parse_time(value)
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
 async def _resolve_parents(
     db: AsyncSession,
     *,
@@ -345,9 +369,12 @@ async def event_time_snapshot(
     if item_id is not None:
         item = await db.get(GithubWorkItem, item_id)
         if item is not None:
+            # T05: the original item identity and creation time are retained
+            # as typed fields, so deletion and numeric reuse lose nothing.
             snapshot.update({
                 "issue_number": item.issue_number, "issue_type": item.issue_type,
-                "pr_number": item.pr_number})
+                "pr_number": item.pr_number, "original_item_id": item.id,
+                "item_created_at": _iso(item.created_at)})
             slot_id = item.owner_slot_id
     if scope_id is not None:
         scope = await db.get(TeamGithubScope, scope_id)
@@ -355,20 +382,24 @@ async def event_time_snapshot(
             snapshot.update({
                 "repo_owner": scope.repo_owner, "repo_name": scope.repo_name,
                 "github_auth_mode": scope.github_auth_mode,
+                "original_scope_id": scope.id,
                 "scope_created_at": _iso(scope.created_at),
                 "scope_updated_at": _iso(scope.updated_at)})
     if team_preset_id is not None:
         preset = await db.get(AgentTeamPreset, team_preset_id)
         if preset is not None:
             snapshot.update({
-                "team_display_name": preset.name, "team_created_at": _iso(preset.created_at)})
+                "team_display_name": preset.name, "original_team_id": preset.id,
+                "team_created_at": _iso(preset.created_at)})
             if slot_id is None:
                 slot_id = preset.leader_slot_id
     if slot_id is not None:
         slot = await db.get(AgentTeamSlot, slot_id)
         if slot is not None:
             snapshot.update({
-                "slot_display_name": slot.display_name, "configured_provider": slot.provider})
+                "slot_display_name": slot.display_name, "configured_provider": slot.provider,
+                "original_slot_id": slot.id,
+                "slot_created_at": _iso(getattr(slot, "created_at", None))})
     if slot_id is not None:
         # A20: the observed runtime harness comes only from the native
         # process of the event-time slot's current authenticated MCP
@@ -472,7 +503,7 @@ async def _current_generation(db: AsyncSession, slot_id: int) -> tuple[str, Any]
     sessions = (await db.execute(select(
         MailAgentSession.id, MailAgentSession.session_key, MailAgentSession.member_id,
         MailAgentSession.provider, MailAgentSession.bound_pane_pid,
-        MailAgentSession.bound_pane_proc_start,
+        MailAgentSession.bound_pane_proc_start, MailAgentSession.last_seen_at,
     ).where(
         MailAgentSession.member_id == members[0],
         MailAgentSession.team_slot_id == slot_id,
@@ -487,6 +518,17 @@ async def _current_generation(db: AsyncSession, slot_id: int) -> tuple[str, Any]
         return "absent", None
     if len(sessions) > 1:
         return "ambiguous", None
+    # T10: the existing authenticated MCP freshness rule
+    # (agent_mail_service.MCP_HEARTBEAT_TTL_SECONDS, imported only). An
+    # expired generation proves nothing, however live its pane is.
+    from datetime import timedelta
+
+    from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS
+
+    cutoff = datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+    seen = sessions[0].last_seen_at
+    if seen is None or _naive(seen) < cutoff:
+        return "stale", None
     retired = (await db.execute(select(MailPaneLifecycle.retired_at).where(
         MailPaneLifecycle.pane_pid == binding.pane_pid,
         MailPaneLifecycle.pane_proc_start == binding.pane_proc_start,
@@ -564,6 +606,7 @@ def _parse_time(value: Any) -> datetime | None:
 async def record_merged_delivery(
     db: AsyncSession, item: Any, pull: dict | None, *, source: str,
     attempt_identity: tuple[str, int | None, str] | None = None,
+    original_context: dict[str, Any] | None = None,
 ) -> FactoryAuditEvent:
     """R02: the sourced delivery fact of a merged pull request.
 
@@ -592,11 +635,20 @@ async def record_merged_delivery(
     # head stays unknown and is never taken from mutable item state.
     head = pull.get("head")
     version = head.get("sha") if isinstance(head, dict) else None
-    snapshot = {"artifact_version": version} if isinstance(version, str) and version else None
+    snapshot: dict[str, Any] = {}
+    if isinstance(version, str) and version:
+        snapshot["artifact_version"] = version
+    # T04: a later fact keeps the original attempt's type and lifetime keys.
+    original = original_context or {}
+    issue_type = original.get("issue_type") or item.issue_type
+    snapshot["issue_type"] = issue_type
     return await record_delivery_fact(
         db, item_id=item.id, revision_id=revision_id, scope_id=item.scope_id,
+        team_context_key=original.get("team_context_key"),
+        scope_context_key=original.get("scope_context_key"),
+        item_context_key=original.get("item_context_key"),
         delivery_outcome="delivered",
-        completion_kind="merged_design" if item.issue_type == "design" else "merged_code",
+        completion_kind="merged_design" if issue_type == "design" else "merged_code",
         fact_source="github_pull_request_merged",
         fact_time=_parse_time(pull.get("merged_at")),
         artifact=artifact,
@@ -607,8 +659,13 @@ async def record_merged_delivery(
 async def record_revision_outcome(
     db: AsyncSession, *, item_id: int, revision_id: int, status: str, source: str
 ) -> FactoryAuditEvent:
-    """R08: one preserved revision result fact, in the result's transaction."""
-    operation_id = f"revision_outcome:{revision_id}:{status}"
+    """R08: one preserved revision result fact, in the result's transaction.
+
+    T02: the identity names the observing call site, so a second site that
+    observes the same result appends rather than conflicts; recovery counts
+    distinct revisions.
+    """
+    operation_id = f"revision_outcome:{revision_id}:{status}:{source}"
     return await record_event(
         db, event_kind="revision_outcome", source=source, occurred_at=datetime.utcnow(),
         actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
@@ -718,17 +775,30 @@ async def record_event(
             revision_id=revision_id, request_id=request_id)
         existing = await find_by_operation(db, replay_key)
         if existing is not None:
+            # T02: the complete stable evidence payload. Only observation-time
+            # and runtime fields (occurred_at, the actor's session and the
+            # runtime observation labels) may differ in an exact retry.
             canonical = _canonical_fact(
                 action_outcome=action_outcome, delivery_outcome=delivery_outcome,
                 completion_kind=completion_kind, fact_source=fact_source,
-                before_values=projected_before, after_values=projected_after)
+                fact_time=_naive(fact_time), source=source,
+                actor_kind=actor["actor_kind"], actor_reference=actor.get("actor_reference"),
+                actor_member_id=actor.get("actor_member_id"),
+                before_values=projected_before, after_values=projected_after,
+                evidence=_stable_evidence(projected_snapshot),
+                human_review_evidence=project_review_evidence(human_review_evidence))
             if canonical != _canonical_fact(
                     action_outcome=existing.action_outcome,
                     delivery_outcome=existing.delivery_outcome,
                     completion_kind=existing.completion_kind,
                     fact_source=existing.fact_source,
+                    fact_time=_naive(existing.fact_time), source=existing.source,
+                    actor_kind=existing.actor_kind, actor_reference=existing.actor_reference,
+                    actor_member_id=existing.actor_member_id,
                     before_values=existing.before_values,
-                    after_values=existing.after_values):
+                    after_values=existing.after_values,
+                    evidence=_stable_evidence(existing.context_snapshot),
+                    human_review_evidence=existing.human_review_evidence):
                 raise ReplayConflictError(f"replay conflict for {event_kind}")
             return existing
     event = FactoryAuditEvent(
@@ -1176,6 +1246,7 @@ async def record_delivery_fact(
     scope_id: int | None = None,
     team_context_key: str | None = None,
     scope_context_key: str | None = None,
+    item_context_key: str | None = None,
     delivery_outcome: str,
     completion_kind: str,
     fact_source: str,
@@ -1202,8 +1273,15 @@ async def record_delivery_fact(
     # identical fact deduplicates while later, different evidence for the same
     # attempt and artifact is appended, never suppressed.
     attempt_identity = attempt or f"item:{item_id}"
+    # T02: the immutable fact identity also names the exact version, the
+    # reliable fact time and the observing call site. Distinct versions and
+    # times append; two call sites observing one merge record two facts that
+    # reduce to one result per attempt.
+    version = (snapshot or {}).get("artifact_version") or "unversioned"
+    when = _naive(fact_time).isoformat() if fact_time is not None else "unknown"
     operation_id = (f"delivery:{attempt_identity}:{artifact or 'attempt'}:"
-                    f"{delivery_outcome}:{completion_kind}:{fact_source}")
+                    f"{delivery_outcome}:{completion_kind}:{fact_source}:"
+                    f"{version}:{when}:{source or fact_source}")
     context_snapshot: dict[str, Any] = dict(snapshot or {})
     context_snapshot["attempt"] = attempt_identity
     context_snapshot["fact_source"] = fact_source
@@ -1227,6 +1305,7 @@ async def record_delivery_fact(
         scope_id=scope_id,
         team_context_key=team_context_key,
         scope_context_key=scope_context_key,
+        item_context_key=item_context_key,
         context_snapshot=context_snapshot,
         delivery_outcome=delivery_outcome,
         completion_kind=completion_kind,

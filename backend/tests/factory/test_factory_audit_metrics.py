@@ -1014,9 +1014,11 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     delivery = (await db.execute(text(
         "SELECT operation_id, revision_id, delivery_outcome FROM factory_audit_events"
         " WHERE event_kind = 'delivery_evidence'"))).fetchall()
-    # R03: the operation identity includes the fact (outcome, kind, source).
+    # R03/T02: the operation identity includes the fact (outcome, kind, fact
+    # source), the exact version, the reliable fact time and the call site.
     assert [tuple(row) for row in delivery] == [(
         "delivery:item:1:launch:None:revision:1:attempt:unknown:closed_unproven:"
+        "github_watcher_service._reconcile_closed_issues:unversioned:unknown:"
         "github_watcher_service._reconcile_closed_issues", 1, "unknown")]
     # The transition is never replayed: the completed item is no longer
     # reconcilable, so a second loop adds no fact; protected state is unchanged.
@@ -3213,6 +3215,9 @@ async def test_r02_real_merge_consumer_records_sourced_delivery(
     # F01: the public metrics response.
     public = await _public_metrics(client, _now() - timedelta(days=1), _now() + timedelta(hours=1))
     assert (public["delivered_in_window"]["value"], public["delivered_in_window"]["sample_count"]) == (1.0, 1)
+    # T09: separate code and design delivery categories.
+    assert (public["merged_code_in_window"]["value"], public["delivered_design_in_window"]["value"]) == (
+        (1.0, 0.0) if issue_type == "code" else (0.0, 1.0))
     reviewed = public["independently_human_reviewed_design"]
     assert (reviewed["value"], reviewed["sample_count"], reviewed["unknown_count"]) == (
         (0.0, 1, 1) if issue_type == "design" else (0.0, 0, 0))
@@ -3562,6 +3567,93 @@ async def test_t01_terminal_claim_refuses_continuing_authority_on_both_paths(
         assert after == before
 
 
+@pytest.mark.parametrize("case", [
+    "active_pending_request", "active_live_revision", "active_retry_requested",
+    "active_late_acquisition", "active_terminal"])
+async def test_t01_active_closure_claim_refuses_continuing_authority(store, monkeypatch, case):
+    """T01 (B1 3715): the active-item closure consumer uses the same guarded
+    terminal claim. A pending request, a live revision, a requested retry, or
+    a continuation committed by an independent session just before the
+    write keeps the active item with no result fact. A closed issue with no
+    continuing authority still completes the active item."""
+    from app.models.database import (
+        GithubApprovalRequest, GithubAttemptScopeRevision, TeamGithubScope,
+    )
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import GithubWatcherService, github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(
+        store, item_id=161, status="dispatched",
+        retry_requested_at=_FIXED_LEASE if case == "active_retry_requested" else None)
+    async with store() as db:
+        if case == "active_live_revision":
+            await db.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
+                " created_at, updated_at) VALUES (161, 5, '/tmp/ws-161', 'worktree', 1, 1,"
+                " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            db.add(GithubAttemptScopeRevision(
+                work_item_id=161, dispatch_nonce=_NONCE, revision=1,
+                owner_slot_id=_OWNER["slot"], owner_member_id=_OWNER["member"],
+                phase="implementation", execution_target="workspace", summary="Live",
+                allowed_paths=["src/a.py"], allowed_actions=["edit_production"],
+                allowed_commands=[], prohibited_actions=[], tool_fallbacks={},
+                baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+                originating_escalation_reason="plan_blocked",
+                expected_workspace_id=161, expected_lease_token_hash="h" * 64,
+                max_failed_heads=2, status="active"))
+        if case == "active_pending_request":
+            db.add(GithubApprovalRequest(
+                work_item_id=161, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                approval_round=3, owner_member_id=_OWNER["member"],
+                leader_member_id=_LEADER["member"], request_fingerprint="f" * 64,
+                status="pending"))
+        await db.commit()
+    before = await _authority(store, 161)
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+    original = GithubWatcherService._claim_terminal
+
+    async def acquire_then_claim(self, db, item_id, **kwargs):
+        if case == "active_late_acquisition":
+            async with store() as other:
+                other.add(GithubApprovalRequest(
+                    work_item_id=161, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                    approval_round=4, owner_member_id=_OWNER["member"],
+                    leader_member_id=_LEADER["member"], request_fingerprint="e" * 64,
+                    status="pending"))
+                await other.commit()
+        return await original(self, db, item_id, **kwargs)
+
+    monkeypatch.setattr(GithubWatcherService, "_claim_terminal", acquire_then_claim)
+
+    class ClosedIssue:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "state_reason": "completed",
+                             "closed_at": "2026-10-06T11:40:00Z", "labels": []}
+                    for number in numbers}
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._recheck_active_items(db, scope, ClosedIssue())
+
+    facts = await _facts(store, event_kind="delivery_evidence")
+    after = await _authority(store, 161)
+    if case == "active_terminal":
+        assert len(facts) == 1
+        assert after["item"]["dispatch_status"] == "completed"
+        return
+    assert facts == []
+    if case == "active_late_acquisition":
+        assert after["item"] == before["item"]
+    else:
+        assert after == before
+
+
 def _native_process(argv0: str, *args: str, executable: str = "/bin/sleep"):
     """A synthetic native fixture: a real process whose argv[0] is argv0.
 
@@ -3590,6 +3682,7 @@ async def _bind_native(store, who: dict, pid: int, start: str, *, claimed: str =
         await db.execute(text(
             "UPDATE mail_agent_sessions SET source = :source, closed_at = NULL,"
             " mailbox_status = 'connected', capability_token_hash = :token,"
+            " last_seen_at = CURRENT_TIMESTAMP,"
             " bound_pane_pid = :pid, bound_pane_proc_start = :start, team_slot_id = :slot,"
             " member_id = :member, provider = :claimed WHERE id = :session"),
             {"source": source, "token": "h" * 64 if token else None, "pid": pid,
@@ -3680,7 +3773,7 @@ async def test_a20_real_consumers_record_native_runtime_apart_from_configuration
 @pytest.mark.parametrize("case", [
     "absent_closed", "observed_only", "no_token", "unbound_binding", "ambiguous_sessions",
     "changed_lifetime", "lifetime_changed_after_read", "unrelated_argument",
-    "helper_executable"])
+    "helper_executable", "stale_generation", "expires_during_read"])
 async def test_a20_runtime_stays_unknown_without_current_native_proof(store, monkeypatch, case):
     """A20 (Root 3599): an old, observed-only, unauthenticated, unbound or
     ambiguous session, a changed process lifetime, a change after the native
@@ -3733,6 +3826,26 @@ async def test_a20_runtime_stays_unknown_without_current_native_proof(store, mon
             monkeypatch.setattr(peer_process, "pane_is_alive_strict",
                                 lambda pid, proc_start: False if pid == process.pid
                                 else original_alive(pid, proc_start))
+        if case == "stale_generation":
+            # T10: a connected, token-holding generation whose heartbeat expired.
+            async with store() as db:
+                await db.execute(text(
+                    "UPDATE mail_agent_sessions SET last_seen_at = '2026-01-01 00:00:00'"
+                    " WHERE id = :id"), {"id": _OWNER["session"]})
+                await db.commit()
+        if case == "expires_during_read":
+            # T10: the freshness rule expires the generation during the native
+            # read; the recheck after the read must refuse it.
+            from app.services import agent_mail_service as _mail_module
+
+            original_argv = peer_process.pane_agent_argv
+
+            def read_then_expire(pid, proc_start):
+                argv = original_argv(pid, proc_start)
+                monkeypatch.setattr(_mail_module, "MCP_HEARTBEAT_TTL_SECONDS", -3600)
+                return argv
+
+            monkeypatch.setattr(peer_process, "pane_agent_argv", read_then_expire)
         async with store() as db:
             item = await db.get(GithubWorkItem, 134)
             await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
@@ -3747,6 +3860,7 @@ async def test_a20_runtime_stays_unknown_without_current_native_proof(store, mon
         "unbound_binding": "absent", "ambiguous_sessions": "ambiguous",
         "changed_lifetime": "unavailable", "lifetime_changed_after_read": "lifetime_changed",
         "unrelated_argument": "unsupported_form", "helper_executable": "unsupported_form",
+        "stale_generation": "stale", "expires_during_read": "lifetime_changed",
     }[case]
     row = (await _runtime_rows(store, "work_lifecycle"))[-1]
     assert row[:3] == ("claude-code", None, expected)
@@ -3984,6 +4098,294 @@ async def test_a32_nonqualifying_declarations_never_establish_delivery(store, cl
             {"id": rows[0]["id"]})).scalar_one()
     import json as _json
     assert _audit.validated_review_evidence(_json.loads(evidence)) is (case == "code_item")
+
+
+@pytest.mark.parametrize("change", [
+    "exact_retry", "fact_time", "source", "actor", "artifact_version", "human_review"])
+async def test_t02_replay_compares_the_complete_stable_payload(store, change):
+    """T02 (B4 F01, Astra F05): one immutable operation identity accepts an
+    exact retry, whose observation time and session may differ. A changed
+    fact time, call-site source, actor, exact artifact version or review
+    evidence is refused; the old event is never returned as the new fact."""
+    await _seed_team(store)
+    await _seed_work(store, item_id=170, status="completed")
+    operator = audit.derive_actor(actor_kind="operator")
+
+    def fields(**overrides):
+        base = dict(
+            event_kind="design_review", source="test.writer", occurred_at=_now(),
+            actor=operator, action_outcome="applied", item_id=170,
+            fact_source="operator_attested:ref-1", fact_time=datetime(2026, 10, 6, 10),
+            operation_id="t02-op-1",
+            context_snapshot={"attempt": "item:170:launch:None:revision:None",
+                              "artifact": "matrix-owner/matrix-repo/pull/73",
+                              "artifact_version": "a" * 40},
+            human_review_evidence={"fact_kind": "human_review_acceptance",
+                                   "artifact": "matrix-owner/matrix-repo/pull/73",
+                                   "version": "a" * 40, "actor": "synthetic-reviewer",
+                                   "actor_kind": "human", "independent": True,
+                                   "source": "operator_attested:ref-1"})
+        base.update(overrides)
+        return base
+
+    async with store() as db:
+        first = await audit.record_event(db, **fields())
+        await db.commit()
+        first_id = first.id
+    changed = {
+        "exact_retry": dict(occurred_at=_now() + timedelta(minutes=5)),
+        "fact_time": dict(fact_time=datetime(2026, 10, 6, 11)),
+        "source": dict(source="test.other_writer"),
+        "actor": dict(actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_watcher")),
+        "artifact_version": dict(context_snapshot={
+            "attempt": "item:170:launch:None:revision:None",
+            "artifact": "matrix-owner/matrix-repo/pull/73", "artifact_version": "b" * 40}),
+        "human_review": dict(human_review_evidence={
+            "fact_kind": "human_review_acceptance", "artifact": "matrix-owner/matrix-repo/pull/73",
+            "version": "a" * 40, "actor": "another-reviewer", "actor_kind": "human",
+            "independent": True, "source": "operator_attested:ref-1"}),
+    }[change]
+    async with store() as db:
+        if change == "exact_retry":
+            again = await audit.record_event(db, **fields(**changed))
+            assert again.id == first_id
+        else:
+            with pytest.raises(audit.ReplayConflictError):
+                await audit.record_event(db, **fields(**changed))
+    assert len(await _facts(store, event_kind="design_review")) == 1
+
+
+async def test_t02_distinct_exact_versions_append_distinct_delivery_facts(store, client):
+    """T02 (Astra F05): two valid declarations for two recorded versions,
+    with distinct declaration IDs and one reused source reference, keep both
+    exact delivery facts. Neither returns a false delivery success; the
+    public metrics still count one delivered attempt."""
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 171)
+    first = await client.post("/api/v1/factory/review-acceptances", headers=_OPERATOR_HEADERS,
+                              json=_a32_body(171, attempt, declaration_id="synthetic-decl-171-a"))
+    assert first.status_code == 201, first.text
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE github_work_items SET verification_head_sha = :head WHERE id = 171"),
+            {"head": "e" * 40})
+        await db.commit()
+    second = await client.post(
+        "/api/v1/factory/review-acceptances", headers=_OPERATOR_HEADERS,
+        json=_a32_body(171, attempt, declaration_id="synthetic-decl-171-b", version="e" * 40,
+                       occurred_at="2026-10-06T10:30:00+00:00"))
+    assert second.status_code == 201, second.text
+    assert second.json()["delivery_established"] is True
+
+    versions = [row["artifact_version"] for row in await _outcome_rows(store)]
+    assert versions == [_A32_HEAD, "e" * 40]
+    public = await _public_metrics(client, datetime(2026, 10, 6, 9), _now() + timedelta(hours=1))
+    assert public["delivered_in_window"]["value"] == 1.0
+    assert public["independently_human_reviewed_design"]["value"] == 1.0
+
+
+async def test_t03_t09_delivery_is_placed_at_its_result_time_by_category(store, client, monkeypatch):
+    """T03/T09 (B4 F02/F08, Astra F04): an exact design acceptance on day 1,
+    then the real watcher's routine closure on day 2. The public metrics put
+    the one delivery, and the separate design delivery, only in the day-1
+    window; the day-2 window has no delivery and no terminal tracking; the
+    combined window has one of each. Code merges stay a separate category."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 172)
+    accepted = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=_a32_body(172, attempt))
+    assert accepted.status_code == 201, accepted.text
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+
+    class RoutineClosure:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "state_reason": "completed", "labels": []}
+                    for number in numbers}
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._recheck_active_items(db, scope, RoutineClosure())
+    outcomes = await _outcome_rows(store)
+    assert [row["delivery_outcome"] for row in outcomes] == ["delivered", "unknown"]
+
+    now = datetime.utcnow()
+    day1 = await _public_metrics(client, datetime(2026, 10, 6, 9), datetime(2026, 10, 6, 12))
+    day2 = await _public_metrics(client, now - timedelta(minutes=30), now + timedelta(minutes=30))
+    combined = await _public_metrics(client, datetime(2026, 10, 6, 9), now + timedelta(minutes=30))
+
+    def values(public):
+        return tuple(public[name]["value"] for name in (
+            "delivered_in_window", "delivered_design_in_window", "merged_code_in_window",
+            "terminal_tracking_in_window", "unknown_outcomes"))
+
+    assert values(day1) == (1.0, 1.0, 0.0, 1.0, 0.0)
+    assert values(day2) == (0.0, 0.0, 0.0, 0.0, 0.0)
+    assert values(combined) == (1.0, 1.0, 0.0, 1.0, 0.0)
+
+
+@pytest.mark.parametrize("case", ["type_changed", "replaced_item"])
+async def test_t04_late_result_keeps_the_original_attempt_context(store, client, case):
+    """T04 (B4 F03, Astra F03): a code attempt recorded as non-delivery is
+    later merged after the item became a design retry: the late fact stays
+    merged_code on the original lifetime and adds no design-review sample.
+    When the item is deleted and its numeric ID reused during the GitHub
+    read, the replacement receives no fact."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=173, status="completed")
+    original = "item:173:launch:None:revision:None"
+    await _a34_non_delivery(store, 173, original, 73)
+    async with store() as db:
+        original_key = (await db.execute(text(
+            "SELECT item_context_key FROM factory_audit_events"
+            " WHERE event_kind = 'delivery_evidence'"))).scalar_one()
+        await db.execute(text(
+            "UPDATE github_work_items SET issue_type = 'design' WHERE id = 173"))
+        await db.commit()
+
+    class ReadThenReplace(_A34Client):
+        async def get_pull(self, owner, repo, number, *, token=None):
+            pull = await super().get_pull(owner, repo, number, token=token)
+            if case == "replaced_item":
+                async with store() as other:
+                    await other.execute(text("DELETE FROM github_work_items WHERE id = 173"))
+                    await other.commit()
+                await _seed_work(store, item_id=173, status="completed")
+            return pull
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._reconcile_provisional_results(
+            db, scope, ReadThenReplace(merged={73}))
+
+    outcomes = await _outcome_rows(store)
+    if case == "replaced_item":
+        assert [row["delivery_outcome"] for row in outcomes] == ["closed_without_delivery"]
+        return
+    assert [(row["delivery_outcome"], row["completion_kind"], row["item_context_key"])
+            for row in outcomes] == [
+        ("closed_without_delivery", "pr_closed_unmerged", original_key),
+        ("delivered", "merged_code", original_key)]
+    public = await _public_metrics(client, _now() - timedelta(days=2), datetime(2026, 10, 8))
+    assert public["merged_code_in_window"]["value"] == 1.0
+    assert public["delivered_design_in_window"]["value"] == 0.0
+    assert public["independently_human_reviewed_design"]["sample_count"] == 0
+
+
+async def test_t05_original_ids_and_creation_times_survive_deletion(store, client):
+    """T05 (B4 F04): a real lifecycle writer stores the original typed team,
+    scope, item and slot IDs and the item and slot creation times. The
+    protected read keeps them after deletion and numeric ID reuse, with
+    unavailable live links."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=174, status="pending")
+    async with store() as db:
+        item = await db.get(GithubWorkItem, 174)
+        await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
+                                     source="github_dispatch_service.launch")
+        await db.commit()
+    async with store() as db:
+        await db.execute(text("DELETE FROM github_work_items WHERE id = 174"))
+        await db.commit()
+    await _seed_work(store, item_id=174, status="pending")
+
+    response = await client.get("/api/v1/factory/audit-events", headers=_OPERATOR_HEADERS,
+                                params={"event_kind": "work_lifecycle"})
+    assert response.status_code == 200, response.text
+    (event,) = response.json()["items"]
+    snapshot = event["context_snapshot"]
+    assert (snapshot["original_item_id"], snapshot["original_scope_id"],
+            snapshot["original_team_id"], snapshot["original_slot_id"]) == (
+        174, 5, 7, _OWNER["slot"])
+    assert snapshot["item_created_at"] and snapshot["slot_created_at"]
+    assert event["item_id"] is None and event["live_links_available"] is True
+
+
+async def test_t06_durations_pair_only_within_one_item_lifetime(store, client):
+    """T06 (B4 F05): an old lifetime and a new lifetime share the numeric
+    item and launch key. The new attempt's duration is 60 seconds, not the
+    span from the old start; an end without a matching start is unknown."""
+    await _install_marker(store)
+    await _seed_team(store)
+    launch = "item:175:launch:9"
+    scheduler = audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler")
+
+    async def start(at: datetime):
+        async with store() as db:
+            await audit.record_event(
+                db, event_kind="work_lifecycle", source="test.launch", occurred_at=at,
+                actor=scheduler, action_outcome="applied", item_id=175,
+                after_values={"dispatch_status": "dispatched"},
+                context_snapshot={"launch_attempt": launch})
+            await db.commit()
+
+    await _seed_work(store, item_id=175, status="pending")
+    await start(_now() - timedelta(days=1))
+    async with store() as db:
+        await db.execute(text("DELETE FROM github_work_items WHERE id = 175"))
+        await db.commit()
+    await _seed_work(store, item_id=175, status="pending")
+    await start(_now())
+    async with store() as db:
+        await audit.record_delivery_fact(
+            db, item_id=175, scope_id=5, delivery_outcome="unknown",
+            completion_kind="closed_unproven", fact_source="test.closure",
+            fact_time=_now() + timedelta(seconds=60), attempt="item:175:launch:9:revision:None",
+            launch_attempt=launch)
+        await db.commit()
+
+    public = await _public_metrics(client, _now() - timedelta(hours=1), _now() + timedelta(hours=1))
+    duration = public["elapsed_attempt_duration"]
+    assert (duration["value"], duration["sample_count"], duration["unknown_count"]) == (60.0, 1, 0)
+
+
+async def test_t07_interventions_count_resource_bound_actions_only(store, client):
+    """T07 (B4 F06): one protected declaration is one operator intervention,
+    not two (its derived delivery fact is not an action). Two actions on two
+    items with one supplied operation ID count twice; an exact retry and a
+    notice add nothing."""
+    await _install_marker(store)
+    await _seed_team(store)
+    attempt = await _a32_item(store, 176)
+    declared = await client.post("/api/v1/factory/review-acceptances",
+                                 headers=_OPERATOR_HEADERS, json=_a32_body(176, attempt))
+    assert declared.status_code == 201, declared.text
+    window = (datetime(2026, 10, 6), datetime.utcnow() + timedelta(hours=1))
+    public = await _public_metrics(client, *window)
+    assert public["operator_interventions"]["value"] == 1.0
+
+    operator = audit.derive_actor(actor_kind="operator")
+    await _seed_work(store, item_id=177, status="escalated")
+    await _seed_work(store, item_id=178, status="escalated")
+    async with store() as db:
+        for item_id in (177, 178, 177):  # the third call is an exact retry
+            await audit.record_event(
+                db, event_kind="operator_escalation", source="test.route",
+                occurred_at=datetime.utcnow(), actor=operator, action_outcome="applied",
+                item_id=item_id, operation_id="client-op-shared")
+        await audit.record_event(
+            db, event_kind="operator_escalation_notification", source="test.route",
+            occurred_at=datetime.utcnow(), actor=operator, action_outcome="applied",
+            item_id=177, operation_id="client-op-shared-notice")
+        await db.commit()
+    public = await _public_metrics(client, *window)
+    assert public["operator_interventions"]["value"] == 3.0
 
 
 class _A34Client:

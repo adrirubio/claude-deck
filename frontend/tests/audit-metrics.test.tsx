@@ -52,6 +52,17 @@ function windowBody(marker: string): MetricsWindow {
         source: "factory_audit_events", coverage: "full",
       },
       {
+        name: "merged_code_in_window", counting_unit: "code_attempts", value: 3,
+        sample_count: 3, unknown_count: 0, excluded_count: 0, unknown_reasons: [],
+        source: "factory_audit_events", coverage: "full; sourced merged code pull requests",
+      },
+      {
+        name: "delivered_design_in_window", counting_unit: "design_attempts", value: 4,
+        sample_count: 4, unknown_count: 0, excluded_count: 0, unknown_reasons: [],
+        source: "factory_audit_events",
+        coverage: "full; merged design or exact accepted design version; review is separate",
+      },
+      {
         name: "terminal_tracking_in_window", counting_unit: "work_items", value: 2,
         sample_count: 2, unknown_count: 0, excluded_count: 0, unknown_reasons: [],
         source: "factory_audit_events", coverage: "full; terminal tracking is not delivery",
@@ -135,6 +146,12 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(screen.getByText("reason mount")).toBeInTheDocument();
     expect(screen.getByText("terminal_tracking_in_window")).toBeInTheDocument();
+    // T09: separate code and design delivery rows, apart from total delivery.
+    const codeRow = screen.getByText("merged_code_in_window").closest("tr")!;
+    expect(within(codeRow).getByText("code_attempts")).toBeInTheDocument();
+    expect(within(codeRow).getAllByText("3", { selector: "td" })).toHaveLength(2);
+    const designRow = screen.getByText("delivered_design_in_window").closest("tr")!;
+    expect(within(designRow).getByText(/review is separate/)).toBeInTheDocument();
     expect(screen.getByText(/Showing metrics for team all, scope all/)).toBeInTheDocument();
     expect(screen.getByText("unavailable")).toBeInTheDocument();
     expect(screen.getByText(/Snapshot labels in page: team_display_name/)).toBeInTheDocument();

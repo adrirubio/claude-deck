@@ -34,6 +34,19 @@ const SAFE_SNAPSHOT_FIELDS = [
   "launch_attempt",
   "retry_class",
   "fact_source",
+  // A20/A32/T05: native runtime evidence, exact versions, source times and
+  // original typed identities.
+  "runtime_provider_evidence",
+  "claimed_runtime_provider",
+  "artifact_version",
+  "pull_closed_at",
+  "issue_closed_at",
+  "original_team_id",
+  "original_scope_id",
+  "original_item_id",
+  "original_slot_id",
+  "item_created_at",
+  "slot_created_at",
 ] as const;
 
 type AppliedFilters = { teamKey: string; scopeKey: string };
