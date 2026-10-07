@@ -4688,8 +4688,9 @@ async def test_final_recovery_identity_separates_revision_reuse_within_one_item(
         operation_id="revision_outcome:50:completed:legacy.writer")
     await db.commit()
     legacy = await _recovery_sample(db)
-    assert legacy.sample_count == 3
-    assert any("legacy revision results" in reason for reason in legacy.unknown_reasons)
+    # Root 3920: the ambiguous legacy fact is excluded with its count and reason.
+    assert (legacy.value, legacy.sample_count, legacy.excluded_count) == (2.0, 2, 1)
+    assert any("1 legacy revision result" in reason for reason in legacy.unknown_reasons)
 
 
 @pytest.mark.parametrize("reuse", ["item_lifetime", "same_item_revision"])
@@ -4748,16 +4749,22 @@ async def _public_recovery(client, scope_key=None):
     return next(s for s in response.json()["metrics"] if s["name"] == "recovery_success")
 
 
-@pytest.mark.parametrize(("statuses", "expected"), [
-    (("completed", "exhausted"), (1.0, 2)), (("completed", "completed"), (2.0, 2))])
-async def test_root3918_legacy_facts_keep_retained_event_identity(store, client, statuses, expected):
-    """Root 3918 (B4 38569491 F01, owner copy of its legacy-shape probe):
+@pytest.mark.parametrize(("statuses", "with_bound", "expected"), [
+    (("completed", "exhausted"), False, (0.0, 0, 2)),
+    (("completed", "completed"), False, (0.0, 0, 2)),
+    (("completed", "exhausted"), True, (1.0, 1, 2))])
+async def test_root3920_legacy_facts_are_excluded_as_ambiguous(
+    store, client, statuses, with_bound, expected
+):
+    """Root 3920 (B4 38569491 F01, owner copy of its legacy-shape probe):
     two old-format revision results with no recorded lifetime, on the same
     item key and reused revision number, written by distinct operations.
-    Each keeps its own retained event identity; no shared legacy lifetime is
-    inferred. The public response counts both and states the uncertainty.
-    Limit: the legacy shape is written through the current record_event, as
-    the former writer did; the old module itself is not executed."""
+    No shared lifetime is inferred: both are excluded from value and
+    sample_count, with the actual excluded fact count and the ambiguity
+    reason, and stay visible in audit history. A mixed case adds one bound
+    result, which alone contributes. Limit: the legacy shape is written
+    through the current record_event, as the former writer did; the old
+    module itself is not executed."""
     await _install_marker(store)
     await _seed_team(store)
     await _seed_work(store, item_id=196, status="completed", workspace_id=196)
@@ -4784,10 +4791,24 @@ async def test_root3918_legacy_facts_keep_retained_event_identity(store, client,
             assert "revision_created_at" not in (row.context_snapshot or {})
             key = row.scope_context_key
             await db.commit()
+        if with_bound:
+            bound_id = await _insert_revision(
+                db, 196, nonce="bound-attempt", created="2026-10-07 12:00:00", **who)
+            await db.commit()
+            await audit.record_revision_outcome(
+                db, item_id=196, revision_id=bound_id, status="completed",
+                source="github_dispatch_service")
+            await db.commit()
     for scope in (None, key):
         sample = await _public_recovery(client, scope)
-        assert (sample["value"], sample["sample_count"]) == expected, sample
-        assert any("legacy revision results" in reason for reason in sample["unknown_reasons"])
+        assert (sample["value"], sample["sample_count"], sample["excluded_count"]) == expected, sample
+        assert any("2 legacy revision result" in reason for reason in sample["unknown_reasons"])
+    async with store() as db:
+        # The excluded facts stay visible in audit history.
+        legacy_facts = (await db.execute(text(
+            "SELECT COUNT(*) FROM factory_audit_events WHERE event_kind = 'revision_outcome'"
+            " AND json_extract(context_snapshot, '$.revision_created_at') IS NULL"))).scalar_one()
+    assert legacy_facts == 2
 
 
 class _A34Client:

@@ -202,9 +202,14 @@ async def build_metrics_window(
     revision_results: dict[str, set] = {}
     for row in recovery_rows:
         revision_results.setdefault(_revision_result_identity(row), set()).add(row.status)
-    recovery_applied = sum(1 for statuses in revision_results.values() if "completed" in statuses)
-    recovery_total = len(revision_results)
-    recovery_unbound = sum(1 for identity in revision_results if identity.startswith("event:"))
+    # Root 3920: facts without a recorded revision lifetime are an ambiguous
+    # population. They stay visible in audit history but are excluded from
+    # value and sample_count, with their actual count and the reason.
+    bound_results = {identity: statuses for identity, statuses in revision_results.items()
+                     if not identity.startswith("event:")}
+    recovery_unbound = len(revision_results) - len(bound_results)
+    recovery_applied = sum(1 for statuses in bound_results.values() if "completed" in statuses)
+    recovery_total = len(bound_results)
     recovery_uncertain = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
@@ -314,12 +319,12 @@ async def build_metrics_window(
         windowed("unknown_outcomes", "tracked_attempts", float(terminal_unknown), terminal_unknown,
                  reasons=["terminal status without result evidence"] if terminal_unknown else []),
         windowed("recovery_success", "preserved_revision_outcomes", float(recovery_applied),
-                 recovery_total, unknown=recovery_uncertain,
+                 recovery_total, unknown=recovery_uncertain, excluded=recovery_unbound,
                  reasons=((["recovery actions with unsettled transport or external effects"]
                            if recovery_uncertain else [])
-                          + (["legacy revision results without lifetime identity count "
-                              "once per retained event; their shared lifetime is unknown"]
-                             if recovery_unbound else []))),
+                          + ([f"{recovery_unbound} legacy revision result fact(s) without "
+                              "lifetime identity are excluded; their revision population "
+                              "is ambiguous"] if recovery_unbound else []))),
         windowed("operator_interventions", "authenticated_actions", float(interventions),
                  interventions, excluded=intervention_excluded,
                  reasons=(["rejected or uncertain operator actions are excluded"]
