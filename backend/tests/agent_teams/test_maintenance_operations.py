@@ -284,12 +284,12 @@ def checkpoint_database(service,head='a'*40):
         'work_item_id':1,'source_head':head,'owner_context_sha256':digest(owner),
         'no_inflight_operations':True,'hold_until_release':True}
     with sqlite3.connect(service.profile.database) as db:
-        db.executescript('''CREATE TABLE mail_messages (id INTEGER PRIMARY KEY,sender_member_id INTEGER,created_at TEXT,payload TEXT);
+        db.executescript('''CREATE TABLE mail_messages (id INTEGER PRIMARY KEY,sender_member_id INTEGER,created_at TEXT,payload TEXT,body_markdown TEXT);
             CREATE TABLE mail_team_members (id INTEGER PRIMARY KEY,team_slot_id INTEGER,updated_at TEXT);
             CREATE TABLE mail_agent_sessions (id INTEGER PRIMARY KEY,member_id INTEGER,team_slot_id INTEGER,pid INTEGER,
                 created_at TEXT,last_seen_at TEXT,provider TEXT,cwd TEXT,bound_pane_pid INTEGER,bound_pane_proc_start TEXT,
                 source TEXT,closed_at TEXT,mailbox_status TEXT,capability_token_hash TEXT);''')
-        db.execute('INSERT INTO mail_messages VALUES (12,2,?,?)',(stamp,json.dumps(payload)))
+        db.execute('INSERT INTO mail_messages (id,sender_member_id,created_at,payload) VALUES (12,2,?,?)',(stamp,json.dumps(payload)))
         db.execute('INSERT INTO mail_team_members VALUES (2,2,?)',(stamp,))
         db.execute('INSERT INTO mail_agent_sessions VALUES (10,2,2,?,?,?, ?,?,?,?,?,NULL,?,?)',
             (pid,stamp,stamp,'fixture',str(Path(service.profile.database).parent),pid,start,'mcp','connected','fixture-capability-hash'))
@@ -495,3 +495,53 @@ def test_final_ci_read_cannot_expire_checkpoint_before_real_git_merge(tmp_path,m
     assert len(reads)==2 and git(workspace,'rev-parse','HEAD')==before
     assert not (Path(service.profile.state_dir)/'maintenance/checkpoint-claims/12.json').exists()
     assert read_json(Path(service.profile.state_dir)/'maintenance/integration-expiry.json')['status']=='needs_coordination'
+
+
+@pytest.mark.parametrize("change", [
+    "unchanged", "prose", "duplicate", "operation", "context", "sender",
+    "hold", "inflight", "too_large", "scalar", "explicit_payload_conflict",
+])
+def test_standard_authenticated_mail_body_confirms_only_exact_checkpoint(tmp_path, change):
+    service = Maintenance(profile(tmp_path))
+    item, workspace, owner = checkpoint_database(service)
+    with sqlite3.connect(service.profile.database) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(mail_messages)")}
+        # Keep this decisive case runnable against the original clean source.
+        if "body_markdown" not in columns:
+            db.execute("ALTER TABLE mail_messages ADD COLUMN body_markdown TEXT")
+        payload = json.loads(db.execute("SELECT payload FROM mail_messages").fetchone()[0])
+        original = dict(payload)
+        if change == "operation":
+            payload["operation_id"] = "other-operation"
+        elif change == "context":
+            payload["owner_context_sha256"] = "0" * 64
+        elif change == "hold":
+            payload["hold_until_release"] = False
+        elif change == "inflight":
+            payload["no_inflight_operations"] = False
+        body = json.dumps(payload)
+        if change == "prose":
+            body = "I confirm this checkpoint: " + body
+        elif change == "duplicate":
+            body = '{"operation_id":"wrong",' + body[1:]
+        elif change == "too_large":
+            body += " " * 65537
+        elif change == "scalar":
+            body = "null"
+        if change == "sender":
+            db.execute("UPDATE mail_messages SET sender_member_id=999")
+        structured = "null"
+        if change == "explicit_payload_conflict":
+            original["operation_id"] = "other-operation"
+            structured = json.dumps(original)
+        db.execute("UPDATE mail_messages SET payload=?,body_markdown=?", (structured, body))
+    call = lambda: service.checkpoint(item, workspace, "controller_upgrade", 12, "a" * 40, "upgrade-1", owner)
+    if change == "unchanged":
+        try:
+            observed = call()
+        except ValueError:
+            observed = None
+        assert observed == {"message": 12, "member": 2, "generation": 10}
+    else:
+        with pytest.raises(ValueError):
+            call()

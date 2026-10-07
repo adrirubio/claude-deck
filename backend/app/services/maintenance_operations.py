@@ -362,7 +362,7 @@ class Maintenance:
         return live
 
     def checkpoint(self, item, workspace, operation, message_id, head, operation_id, owner):
-        messages = self.rows("SELECT sender_member_id,created_at,payload FROM mail_messages WHERE id=?", (message_id,))
+        messages = self.rows("SELECT sender_member_id,created_at,payload,body_markdown FROM mail_messages WHERE id=?", (message_id,))
         members = self.rows("SELECT id FROM mail_team_members WHERE team_slot_id=? ORDER BY updated_at DESC,id DESC LIMIT 1",
                             (item["owner_slot_id"],))
         sessions=self.current_sessions(members[0]['id'],item['owner_slot_id']) if members else []
@@ -377,6 +377,23 @@ class Maintenance:
                 or session["bound_pane_proc_start"] != workspace["leased_owner_proc_start"]):
             raise ValueError("owner_checkpoint_changed")
         payload = json.loads(message["payload"]) if isinstance(message["payload"], str) else message["payload"]
+        if payload is None:
+            # The standard authenticated MCP Mail tool sends only a body.
+            # Accept one complete JSON object; never extract from prose.
+            body = message.get("body_markdown")
+            if not isinstance(body, str) or len(body.encode("utf-8")) > 65536:
+                raise ValueError("owner_checkpoint_not_confirmed")
+            def unique(pairs):
+                value = {}
+                for key, field in pairs:
+                    if key in value:
+                        raise ValueError("duplicate_checkpoint_field")
+                    value[key] = field
+                return value
+            try:
+                payload = json.loads(body, object_pairs_hook=unique)
+            except (ValueError, TypeError):
+                raise ValueError("owner_checkpoint_not_confirmed") from None
         expected = {"kind":"factory_maintenance_checkpoint", "operation":operation,
                     "operation_id":operation_id,"work_item_id":item["id"], "source_head":head,
                     "owner_context_sha256":digest(owner), "no_inflight_operations":True,"hold_until_release":True}
