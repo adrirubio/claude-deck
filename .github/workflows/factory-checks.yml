@@ -25,8 +25,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: python -m pip install -r scripts/factory-check-requirements.txt
+      - run: python -m pip install ruff==0.14.10
       - name: Check changed Python files
         env:
           ACCEPTED_BASE: ${{ github.event.pull_request.base.sha }}
-        run: python scripts/factory-static-check.py --base "$ACCEPTED_BASE"
+        run: |
+          CHECK_SCRIPT=scripts/factory-static-check.py
+          if ! test -f "$CHECK_SCRIPT"; then
+            CHECK_SCRIPT="$RUNNER_TEMP/factory-static-check.py"
+            git show "$ACCEPTED_BASE:scripts/factory-static-check.py" > "$CHECK_SCRIPT"
+          fi
+          python "$CHECK_SCRIPT" --base "$ACCEPTED_BASE"
