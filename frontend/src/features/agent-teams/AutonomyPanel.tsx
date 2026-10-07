@@ -239,6 +239,8 @@ const escalationReasonLabels: Record<string, string> = {
   brief_unread: 'Owner has not read the brief',
   leader_ack_timeout: 'Leader acknowledgement timed out',
   owner_idle_timeout: 'Owner idle timeout',
+  owner_observation_unavailable: 'Owner observation unavailable',
+  integration_update_conflict: 'Integration update needs coordination',
   retry_count_exhausted: 'Verification retries exhausted',
   continuation_revision_exhausted: 'Continuation revision exhausted',
   continuation_budget_exhausted: 'Continuation budget exhausted',

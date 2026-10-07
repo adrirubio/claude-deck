@@ -98,7 +98,7 @@ def test_actual_mcp_tool_list_keeps_close_private_to_pi(monkeypatch, provider):
     names = {tool.name for tool in asyncio.run(module.mcp.list_tools())}
     assert ("__deck_mail_close_generation" in names) == (provider == "pi-cli")
     assert "deck_decide_continuation" in names
-    assert len({name for name in names if name.startswith("deck_")}) == 31
+    assert len({name for name in names if name.startswith("deck_")}) == 32
     assert {"deck_get_backlog_coordination", "deck_report_backlog_assessment",
             "deck_report_owner_followup",
             "deck_get_operator_action_contexts", "deck_prepare_operator_action_contexts",

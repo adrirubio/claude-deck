@@ -2373,6 +2373,9 @@ class FactoryDeliveryPolicy(BaseModel):
     owner_contact: Literal["reports", "native"] = "reports"
     owner_idle_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
     owner_nudge_grace_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
+    owner_observation_wait_seconds: Optional[int] = Field(default=None, ge=30, le=1800)
+    owner_observation_resume_seconds: int = Field(default=900, ge=60, le=3600)
+    accepted_base_update: Literal["disabled", "fast_forward", "merge"] = "disabled"
     broad_checks: Literal["local", "hosted"] = "local"
     checkpoint_delay_report_seconds: Optional[int] = Field(default=1800, ge=60, le=86400)
     caller_inventory_required: bool = False
@@ -2385,6 +2388,8 @@ class FactoryDeliveryPolicy(BaseModel):
             raise ValueError("Required check identities must be unique.")
         if self.broad_checks == "hosted" and not self.required_checks:
             raise ValueError("Hosted broad checks need required check identities.")
+        if self.owner_observation_wait_seconds is not None and self.owner_contact != "native":
+            raise ValueError("Observation waits need native owner contact.")
         return self
 
 

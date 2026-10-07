@@ -124,6 +124,9 @@ def policy_guidance(policy: FactoryDeliveryPolicy, revision: int | None) -> str:
     if policy.owner_contact == "native":
         lines.append("Fresh bound native work can renew owner contact. It grants no approval or scope.")
         lines.append("Use progress reports when native evidence is unknown or idle. Report state changes through Mail.")
+        if policy.owner_observation_wait_seconds is not None:
+            lines.append(f"Unknown native evidence can use a bounded {policy.owner_observation_wait_seconds}-second observation wait after the usual nudge.")
+            lines.append("A recorded observation pause preserves approval and budgets. Only the operator can resume its unchanged context.")
     else:
         lines.append("Use owner progress reports before the configured idle timeout.")
     if policy.checkpoint_delay_report_seconds is not None:
