@@ -1196,3 +1196,58 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
         "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count"
         " FROM github_work_items WHERE id = 1"))).first()
     assert tuple(item_after) == ("completed", 0, 1, 0)
+
+
+@pytest.mark.xfail(
+    reason="C09 v8 matrix in progress per Mail2917: revision selection must "
+           "bind the original attempt and scope revision explicitly (not "
+           "newest-by-item); item and attempt scalars must be captured "
+           "before commit and await; the observer's rollback boundary on a "
+           "tainted session needs proof or correction; the case must assert "
+           "the full populated protected-state matrix; whole-notifier "
+           "stubbing does not yet prove low-level transport failure",
+    strict=False)
+async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
+    """C09 v8: observation through a session poisoned by the failed send
+    still records the uncertain fact; a second loop run replays nothing and
+    protected state is unchanged."""
+    from app.services import github_dispatch_service as _dispatch
+    from app.services import github_watcher_service as _watcher
+    from app.models.database import TeamGithubScope
+
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_slot_member(db, preset_id=7)
+    await _seed_workspace(db)
+    await _seed_item(db, 1)
+    await db.execute(text(
+        "UPDATE github_work_items SET dispatch_status = 'escalated', issue_number = 1,"
+        " pr_number = NULL WHERE id = 1"))
+    await db.commit()
+
+    class FakeClient:
+        async def get_issues_by_number(self, owner, name, numbers):
+            return {number: {"state": "closed"} for number in numbers}
+
+    # Low-level transport failure with an open session transaction: the
+    # notifier raises after the committed transition while the session is
+    # mid-transaction (tainted); observation must end that transaction
+    # before recording.
+    async def tainted_notify(*_args, **_kwargs):
+        raise RuntimeError("low-level transport failure")
+
+    monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", tainted_notify)
+    await db.begin()
+    scope_obj = await db.get(TeamGithubScope, 1)
+    before = (await db.execute(text(
+        "SELECT status, failed_head_count, delivery_attempt_count"
+        " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
+    await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
+    await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
+
+    facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE action_outcome = 'uncertain'"))).scalar_one()
+    assert facts == 1
+    after = (await db.execute(text(
+        "SELECT status, failed_head_count, delivery_attempt_count"
+        " FROM github_attempt_scope_revisions WHERE id = 1"))).first()
+    assert tuple(after) == tuple(before)
