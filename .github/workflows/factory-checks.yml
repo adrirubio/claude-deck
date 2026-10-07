@@ -1,0 +1,32 @@
+name: Factory source checks
+
+on:
+  pull_request:
+    branches: [master, feature/software-delivery-product-reposition]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: factory-source-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Changed Python undefined names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r scripts/factory-check-requirements.txt
+      - name: Check changed Python files
+        env:
+          ACCEPTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/factory-static-check.py --base "$ACCEPTED_BASE"
