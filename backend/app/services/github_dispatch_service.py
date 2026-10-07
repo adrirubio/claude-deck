@@ -88,6 +88,8 @@ ESCALATION_REASONS = frozenset(
         "brief_unread",
         "leader_ack_timeout",
         "owner_idle_timeout",
+        "owner_observation_unavailable",
+        "integration_update_conflict",
         "retry_count_exhausted",
         "continuation_revision_exhausted",
         "continuation_budget_exhausted",
@@ -2160,6 +2162,8 @@ class GithubDispatchService:
             idle_overdue = datetime.utcnow() - idle_anchor > timedelta(
                 seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds
             )
+            from app.services.owner_observation_pause import initial_recovery_grace
+            idle_overdue = idle_overdue or await initial_recovery_grace(db, item, idle_anchor)
             if not idle_overdue:
                 continue
             if item.last_nudge_at is None or item.last_nudge_at < idle_anchor:
@@ -2167,6 +2171,9 @@ class GithubDispatchService:
             elif datetime.utcnow() - item.last_nudge_at > timedelta(
                 seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds
             ):
+                from app.services.owner_observation_pause import handle_observation_gap
+                if await handle_observation_gap(db, scope, item):
+                    continue
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
 
@@ -2364,6 +2371,9 @@ class GithubDispatchService:
                 )
                 continue
             if now - item.continuation_nudged_at <= nudge_grace:
+                continue
+            from app.services.owner_observation_pause import handle_observation_gap
+            if await handle_observation_gap(db, scope, item):
                 continue
             revision.status = "superseded"
             await self.escalate(

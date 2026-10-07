@@ -960,6 +960,44 @@ def deck_launch_team(
 
 
 @mcp.tool()
+def deck_render_github_summary(
+    current_body: str,
+    summary: dict[str, Any],
+    expected_body_sha256: Optional[str] = None,
+) -> dict:
+    """Render one short current summary in an issue or PR body.
+
+    Supply goal, status, completed, remaining, next_action and human_action.
+    Status is Working, Checking, Awaiting review, Blocked or Complete.
+    Optional effort bounds are minutes of active work, with confidence and scope.
+    Waiting is a separate description. Source SHA is an optional public checkpoint.
+    Read the current body with existing authorized GitHub access before rendering.
+    The tool preserves all text outside its deck:current-summary block.
+    It refuses ambiguous markers, private summary text and a changed expected body hash.
+    It performs no GitHub write and grants no approval, merge or milestone authority.
+    Use one responsible body publisher. Reconcile concurrent edits before publication.
+    """
+    identity = _ensure_registered()
+    if not identity.get("ok"):
+        return identity
+    try:
+        from datetime import datetime, timezone
+        try:
+            from mcp_shim.github_summary_protocol import CurrentSummary, render_summary
+        except ModuleNotFoundError as error:
+            if error.name != "mcp_shim":
+                raise
+            from github_summary_protocol import CurrentSummary, render_summary
+        report = CurrentSummary.model_validate({**summary, "reported_at": datetime.now(timezone.utc)})
+        result = render_summary(current_body, report, expected_body_sha256=expected_body_sha256)
+    except (ValueError, TypeError):
+        return {"ok": False, "error": {"code": "invalid_github_summary"},
+                "suggestion": "Use bounded public text, valid markers and a scoped effort range, or Unknown."}
+    return {"ok": True, **result,
+            "next_action": "Publish with existing authorized access after reconciling the current body."}
+
+
+@mcp.tool()
 def deck_prepare_work_remaining_summary(
     work_item_id: int,
     remaining: str,
