@@ -4233,7 +4233,8 @@ async def test_t03_t09_delivery_is_placed_at_its_result_time_by_category(store, 
     assert values(combined) == (1.0, 1.0, 0.0, 1.0, 0.0)
 
 
-@pytest.mark.parametrize("case", ["type_changed", "replaced_item"])
+@pytest.mark.parametrize("case", [
+    "type_changed", "replaced_item", "replaced_in_other_scope", "repository_changed"])
 async def test_t04_late_result_keeps_the_original_attempt_context(store, client, case):
     """T04 (B4 F03, Astra F03): a code attempt recorded as non-delivery is
     later merged after the item became a design retry: the late fact stays
@@ -4259,11 +4260,31 @@ async def test_t04_late_result_keeps_the_original_attempt_context(store, client,
     class ReadThenReplace(_A34Client):
         async def get_pull(self, owner, repo, number, *, token=None):
             pull = await super().get_pull(owner, repo, number, token=token)
-            if case == "replaced_item":
+            if case in ("replaced_item", "replaced_in_other_scope"):
                 async with store() as other:
                     await other.execute(text("DELETE FROM github_work_items WHERE id = 173"))
                     await other.commit()
                 await _seed_work(store, item_id=173, status="completed")
+            if case == "replaced_in_other_scope":
+                # The reused numeric ID now belongs to another scope and repository.
+                async with store() as other:
+                    await other.execute(text(
+                        "CREATE TEMP TABLE scope_copy AS SELECT * FROM team_github_scopes"
+                        " WHERE id = 5"))
+                    await other.execute(text(
+                        "UPDATE scope_copy SET id = 6, repo_name = 'other-repo'"))
+                    await other.execute(text(
+                        "INSERT INTO team_github_scopes SELECT * FROM scope_copy"))
+                    await other.execute(text("DROP TABLE scope_copy"))
+                    await other.execute(text(
+                        "UPDATE github_work_items SET scope_id = 6 WHERE id = 173"))
+                    await other.commit()
+            if case == "repository_changed":
+                # The same item and scope now name another repository.
+                async with store() as other:
+                    await other.execute(text(
+                        "UPDATE team_github_scopes SET repo_name = 'renamed-repo' WHERE id = 5"))
+                    await other.commit()
             return pull
 
     async with store() as db:
@@ -4272,8 +4293,18 @@ async def test_t04_late_result_keeps_the_original_attempt_context(store, client,
             db, scope, ReadThenReplace(merged={73}))
 
     outcomes = await _outcome_rows(store)
-    if case == "replaced_item":
+    if case != "type_changed":
+        # No fact on a replacement, another scope or another repository.
         assert [row["delivery_outcome"] for row in outcomes] == ["closed_without_delivery"]
+        # The setup really changed the context during the read.
+        async with store() as db:
+            scope_id, repo_name = (await db.execute(text(
+                "SELECT i.scope_id, s.repo_name FROM github_work_items i"
+                " JOIN team_github_scopes s ON s.id = i.scope_id WHERE i.id = 173"))).first()
+        assert (scope_id, repo_name) == {
+            "replaced_item": (5, "matrix-repo"),
+            "replaced_in_other_scope": (6, "other-repo"),
+            "repository_changed": (5, "renamed-repo")}[case]
         return
     assert [(row["delivery_outcome"], row["completion_kind"], row["item_context_key"])
             for row in outcomes] == [
