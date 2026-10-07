@@ -6,6 +6,8 @@ apply their separately reviewed field allowlist in factory_projection_service.
 from __future__ import annotations
 from typing import NamedTuple
 from fastapi import HTTPException
+from app.services.factory_delivery_policy import effective_policy
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision, GithubWorkItem, GithubWorkspace, TeamGithubScope
@@ -59,6 +61,8 @@ def _work_item_response(
     return GithubWorkItemResponse(
         id=item.id,
         scope_id=item.scope_id,
+        delivery_policy=effective_policy(item, scope),
+        delivery_policy_revision=item.delivery_policy_revision,
         repo_owner=scope.repo_owner,
         repo_name=scope.repo_name,
         issue_number=item.issue_number,

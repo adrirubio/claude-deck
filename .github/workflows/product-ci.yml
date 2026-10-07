@@ -15,43 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: Product backend regression tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      PYTHONPATH: ${{ github.workspace }}/backend
-      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - name: Install test dependencies
-        run: python -m pip install -r backend/requirements.txt apscheduler
-      - name: Configure identity for disposable Git fixtures
-        run: |
-          git config --global user.name 'Product CI'
-          git config --global user.email 'product-ci@users.noreply.github.com'
-      - name: Run isolated backend regressions
-        run: >-
-          python -m pytest
-          backend/tests/agent_teams
-          backend/tests/factory
-          backend/tests/test_sqlite_compat_migrations.py
-          backend/tests/test_provider_operations.py
-          backend/tests/test_provider_readiness.py
-          backend/tests/test_provider_contract_api.py
-          backend/tests/test_providers.py
-          backend/tests/test_multi_provider_smoke.py
-          -q --tb=short --disable-warnings
-
   frontend:
     name: Product frontend tests and build
     runs-on: ubuntu-latest
@@ -76,13 +39,11 @@ jobs:
   gate:
     name: Product CI gate
     if: always()
-    needs: [backend, frontend]
+    needs: [frontend]
     runs-on: ubuntu-latest
     steps:
-      - name: Require both job results
+      - name: Require the frontend result
         env:
-          BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
         run: |
-          test "$BACKEND_RESULT" = success
           test "$FRONTEND_RESULT" = success

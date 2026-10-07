@@ -233,6 +233,8 @@ class TeamGithubScope(Base):
     dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
     design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
     merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
+    delivery_policy: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    delivery_policy_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     max_concurrent_dispatched: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     max_verification_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
@@ -341,6 +343,8 @@ class GithubWorkItem(Base):
     scope_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    delivery_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    delivery_policy_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
     issue_title: Mapped[str] = mapped_column(String, nullable=False)
     issue_url: Mapped[str] = mapped_column(String, nullable=False)
@@ -404,6 +408,21 @@ class GithubWorkItem(Base):
     __table_args__ = (
         UniqueConstraint("scope_id", "issue_number", name="uix_scope_issue"),
     )
+
+
+class GithubDeliveryPolicyEvent(Base):
+    """Operator changes to scope defaults or an attempt's effective policy."""
+
+    __tablename__ = "github_delivery_policy_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_id: Mapped[int] = mapped_column(Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), nullable=False, index=True)
+    work_item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy: Mapped[dict] = mapped_column(JSON, nullable=False)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    actor: Mapped[str] = mapped_column(String, default="operator", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class GithubWorkspace(Base):
