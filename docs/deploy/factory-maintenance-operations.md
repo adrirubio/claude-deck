@@ -55,6 +55,8 @@ Use `--checkpoint-template` instead of `--execute` to prepare the current checkp
 
 Every active owner supplies a current Mail checkpoint payload:
 
+With the standard MCP tool, call `deck_send_message` and use the JSON object as the complete `body`. Add no prose or code fence. The authenticated HTTP Mail API can also use its structured `payload` field. An explicit structured payload takes precedence. Both forms use the same owner, process, authority, age and operation checks.
+
 ```json
 {
   "kind": "factory_maintenance_checkpoint",
