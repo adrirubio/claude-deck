@@ -1199,11 +1199,10 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
 
 
 @pytest.mark.xfail(
-    reason="C09 v8 matrix in progress: the real-notifier low-level transport "
-           "injection raises MissingGreenlet at the aiosqlite execute "
-           "boundary inside the notifier chain; the exact tainted-session "
-           "semantics at that boundary remain under diagnosis; no production "
-           "guard is relaxed",
+    reason="C09 v8 matrix in progress: the observer path executes (proven by "
+           "its reached deprecation sites) but the uncertain fact is not "
+           "persisted; the swallowed observer exception is now logged for "
+           "diagnosis and the exact persistence failure remains open",
     strict=False)
 async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
     """C09 v8: low-level transport failure inside the real notifier leaves the

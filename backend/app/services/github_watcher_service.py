@@ -57,6 +57,8 @@ async def observe_notification_uncertainty(db, *, item_id: int, revision_id: int
         )
         await db.commit()
     except Exception:
+        logger.exception(
+            "Failed to record notification uncertainty for work item %s", item_id)
         await db.rollback()
 
 
