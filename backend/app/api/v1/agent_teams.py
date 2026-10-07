@@ -257,8 +257,11 @@ from app.services.github_work_item_projection import (
     _reload_work_item_response,
     _work_item_response,
 )
+from app.api.v1.factory_delivery import router as delivery_router
+from app.services.factory_delivery_policy import scope_policy
 
 router = APIRouter()
+router.include_router(delivery_router)
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +377,8 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         dispatch_label=scope.dispatch_label,
         design_label=scope.design_label,
         merge_policy=scope.merge_policy,
+        delivery_policy=scope_policy(scope),
+        delivery_policy_revision=scope.delivery_policy_revision,
         github_auth_mode=scope.github_auth_mode,
         github_auth_configured=_scope_auth_configured(scope),
         github_poll_token_configured=bool(settings.github_token),

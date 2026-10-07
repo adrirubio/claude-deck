@@ -297,7 +297,7 @@ def test_pi_marker_changed_during_observation_is_unknown(native, monkeypatch):
 
 def test_no_binding_or_unsupported_provider_stays_unknown(native):
     assert native["observe"](candidates=[]).state == "unknown"
-    assert native["observe"](provider="claude-code").reason == "provider_unsupported"
+    assert native["observe"](provider="claude-code").reason == "session_identity_unavailable"
 
 
 def test_codex_still_requires_explicit_session_identity(native):

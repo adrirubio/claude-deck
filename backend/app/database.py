@@ -781,6 +781,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
     scope_columns = {row[1] for row in result.fetchall()}
+    if scope_columns and "delivery_policy" not in scope_columns:
+        await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN delivery_policy JSON DEFAULT '{}' NOT NULL"))
+    if scope_columns and "delivery_policy_revision" not in scope_columns:
+        await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN delivery_policy_revision INTEGER DEFAULT 1 NOT NULL"))
     if scope_columns and "max_concurrent_dispatched" not in scope_columns:
         await conn.execute(
             text("ALTER TABLE team_github_scopes ADD COLUMN max_concurrent_dispatched INTEGER DEFAULT 3 NOT NULL")
@@ -946,6 +950,11 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             )
         )
 
+    if work_item_columns and "delivery_policy" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN delivery_policy JSON"))
+    if work_item_columns and "delivery_policy_revision" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN delivery_policy_revision INTEGER"))
+
     workspace_columns = await _sqlite_columns(conn, "github_workspaces")
     if workspace_columns and "lease_token" not in workspace_columns:
         await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN lease_token VARCHAR"))
@@ -1088,6 +1097,9 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
 async def init_db() -> None:
     """Initialize database tables."""
+    # Register the derived observation table for CLI and HTTP startup alike.
+    from app.models import database, github_work_progress  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     if settings.database_url.startswith("sqlite"):

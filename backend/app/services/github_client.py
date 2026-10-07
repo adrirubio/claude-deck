@@ -233,6 +233,28 @@ class GithubClient:
             if self._http is None:
                 await client.aclose()
 
+    async def get_issue(
+        self, owner: str, repo: str, number: int, *, token: str | None = None,
+    ) -> dict | None:
+        """Read one expected issue endpoint for explicitly published progress."""
+        endpoint = f"/repos/{owner}/{repo}/issues/{number}"
+        client = self._client()
+        try:
+            response = await client.get(endpoint, headers=self._headers(token))
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            self._require_expected_response(response, endpoint=endpoint, label="issue")
+            issue = self._json_object(response, "issue")
+            if (type(issue.get("number")) is not int or issue["number"] != number
+                    or "pull_request" in issue
+                    or issue.get("html_url") != f"https://github.com/{owner}/{repo}/issues/{number}"):
+                raise GithubClientResponseError("GitHub progress issue identity was invalid")
+            return issue
+        finally:
+            if self._http is None:
+                await client.aclose()
+
     async def get_pull(
         self,
         owner: str,

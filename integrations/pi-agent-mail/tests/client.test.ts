@@ -32,6 +32,11 @@ test('public tools contain authority schemas but never private close', () => {
   assert(manifest.every(tool => tool.name.startsWith('deck_')))
   assert.equal(privateTools[0].name, '__deck_mail_close_generation')
   assert.equal(privateTools[0].inputSchema.additionalProperties, false)
+  const remaining = manifest.find(tool => tool.name === 'deck_prepare_work_remaining_summary')
+  assert(remaining)
+  assert.deepEqual(remaining.inputSchema.required, ['work_item_id', 'remaining', 'next_action'])
+  assert.match(remaining.description, /Leader-only/)
+  assert.match(remaining.description, /does not publish to GitHub/)
 })
 
 for (const status of [403, 409]) test(`final Pi result event preserves ${status} and error semantics`, () => {

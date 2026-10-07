@@ -29,6 +29,7 @@ from app.models.database import (
 )
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
 from app.services.pi_activity_service import observe_pi
+from app.services.claude_activity_service import observe_claude
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
@@ -257,12 +258,24 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             if provenance is not None and provenance.get("session_id"):
                 provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
-        if provider != "codex-cli":
+        if provider not in {"codex-cli", "claude-code"}:
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
             return result("unknown", "duplicate_native_identity")
         if not session_id or _canonical_session_id(session_id) != session_id:
             return result("unknown", "session_identity_unavailable")
+        if provider == "claude-code":
+            options = {"provenance": provenance} if provenance is not None else {}
+            state, reason, observed_at = observe_claude(
+                pid, session_id, cwd, now, _process_started_at(start), **options)
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            if provenance is not None and provenance.get("session_id"):
+                provenance.update(pane_pid=pid, pane_start=start, provider=provider)
+            return result(state, reason, observed_at)
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
         if (Path(os.fsdecode(argv[0])).name != "codex" or b"resume" not in argv
@@ -302,7 +315,7 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
     # so another harness cannot supply a false Working event for this owner.
     native_identity_counts: dict[str, int] = {}
     for (options,) in await rows(select(AgentTeamSlot.launch_options).where(
-            AgentTeamSlot.provider == "codex-cli")):
+            AgentTeamSlot.provider.in_(["codex-cli", "claude-code"]))):
         session_id = _canonical_session_id((options or {}).get("session_id"))
         if session_id is not None:
             native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
@@ -370,6 +383,15 @@ class PrivateActivity:
     settlement_id: str | None
     cursor: str | None = None
     current_settlement_id: str | None = None
+    binding_identity: str | None = None
+
+
+def private_binding_identity(provider: str, pane_pid: int, pane_start: str, cwd: str,
+                             native_pid: int | None = None, native_start: str | None = None) -> str:
+    return hashlib.sha256(json.dumps(
+        [provider, pane_pid, pane_start, str(Path(cwd).resolve()), native_pid, native_start],
+        separators=(",", ":"),
+    ).encode()).hexdigest()
 
 
 async def observe_private_team(db: AsyncSession, preset_id: int,
@@ -383,18 +405,27 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
             metadata = {}
             observed = _observe(*entry, now, provenance=metadata)
             identity = None
+            binding_identity = None
             if metadata.get("session_id") and metadata.get("pane_pid"):
                 identity = hashlib.sha256(json.dumps({key: metadata.get(key) for key in (
                     "provider", "session_id", "pane_pid", "pane_start", "native_pid", "native_start",
                 )}, sort_keys=True).encode()).hexdigest()
+                matching = [binding for binding in entry[3]
+                            if binding.pane_pid == metadata["pane_pid"] and binding.pane_start == metadata["pane_start"]
+                            and binding.native_pid == metadata.get("native_pid")]
+                if matching:
+                    binding_identity = private_binding_identity(
+                        entry[1], metadata["pane_pid"], metadata["pane_start"], matching[0].cwd,
+                        metadata.get("native_pid"), metadata.get("native_start"))
             settled = (observed.state == "idle" and observed.reason == "native_turn_completed"
-                       and metadata.get("event_source") in {"agent_settled", "task_complete"}
+                       and metadata.get("event_source") in {"agent_settled", "task_complete", "claude_end_turn"}
                        and observed.observed_at is not None
                        and 0 <= (now - observed.observed_at).total_seconds() <= _WORK_FRESHNESS_SECONDS)
             values[entry[0]] = PrivateActivity(observed.state, observed.reason, observed.observed_at,
                                                identity, metadata.get("event_id") if settled else None,
                                                metadata.get("event_id"),
-                                               metadata.get("current_settlement_id") if observed.state == "idle" else None)
+                                               metadata.get("current_settlement_id") if observed.state == "idle" else None,
+                                               binding_identity)
         return values
 
     if max_input_rows is None:
