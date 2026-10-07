@@ -7,6 +7,7 @@ from pathlib import Path
 import pwd
 import sqlite3
 import subprocess
+import sys
 
 import pytest
 from pydantic import ValidationError
@@ -427,3 +428,70 @@ def test_upgrade_records_only_confirmed_version_and_preserves_operator_files(tmp
     assert read_json(Path(p.state_dir)/'readiness.json')['other']=='preserve'
     if stop_unknown: assert 'authority_preserved' not in record
     else: assert record['authority_preserved'] is True
+
+
+@pytest.mark.parametrize('observation',['denied','malformed','stopped','unknown_time','confirmed_dead'])
+def test_current_checkpoint_retains_unresolved_competitor(tmp_path, monkeypatch, observation):
+    service=Maintenance(profile(tmp_path));item,workspace,owner=checkpoint_database(service)
+    child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])
+    try:
+        stamp=datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(service.profile.database) as db:
+            db.execute('INSERT INTO mail_agent_sessions SELECT 9,member_id,team_slot_id,?,created_at,?,provider,cwd,bound_pane_pid,bound_pane_proc_start,source,closed_at,mailbox_status,? FROM mail_agent_sessions WHERE id=10',
+                (child.pid,None if observation=='unknown_time' else stamp,'competing-private-hash'))
+        original=Path.read_text
+        target=f'/proc/{child.pid}/stat'
+        raw=original(Path(target))
+        if observation=='confirmed_dead':child.terminate();child.wait(timeout=3)
+        else:
+            def read(path,*args,**kwargs):
+                if str(path)==target:
+                    if observation=='denied':raise PermissionError('synthetic process observation denied')
+                    if observation=='malformed':return 'malformed'
+                    if observation=='stopped':return raw.replace(') S ',') T ').replace(') R ',') T ')
+                return original(path,*args,**kwargs)
+            monkeypatch.setattr(Path,'read_text',read)
+        call=lambda:service.checkpoint(item,workspace,'controller_upgrade',12,'a'*40,'upgrade-1',owner)
+        if observation=='confirmed_dead':assert call()=={'message':12,'member':2,'generation':10}
+        else:
+            with pytest.raises(ValueError):call()
+    finally:
+        if child.poll() is None:child.terminate();child.wait(timeout=3)
+
+
+def test_final_ci_read_cannot_expire_checkpoint_before_real_git_merge(tmp_path,monkeypatch):
+    workspace,before,tip=repository(tmp_path);(tmp_path/'state').mkdir()
+    service=IntegrationFixture(profile(tmp_path),workspace,tip,'fast_forward')
+    item,bound,owner=checkpoint_database(service,head=before)
+    with sqlite3.connect(service.profile.database) as db:
+        import json
+        payload=json.loads(db.execute('SELECT payload FROM mail_messages WHERE id=12').fetchone()[0])
+        payload.update(operation='integration_update',operation_id='integration-expiry')
+        db.execute('UPDATE mail_messages SET payload=? WHERE id=12',(json.dumps(payload),))
+    original_rows=service.rows
+    def rows(query,values=()):
+        if 'mail_' in query:return Maintenance.rows(service,query,values)
+        return original_rows(query,values)
+    monkeypatch.setattr(service,'rows',rows)
+    monkeypatch.setattr(service,'approved_owner',lambda *_args:owner)
+    monkeypatch.setattr(service,'checkpoint',lambda _item,_workspace,*args:Maintenance.checkpoint(service,item,bound,*args))
+    import app.services.maintenance_operations as operations
+    actual_datetime=operations.datetime
+    class Clock(actual_datetime):
+        advance=0
+        @classmethod
+        def now(cls,tz=None):return actual_datetime.now(tz)+timedelta(seconds=cls.advance)
+    monkeypatch.setattr(operations,'datetime',Clock)
+    reads=[]
+    def accepted(_pull):
+        reads.append(True)
+        if len(reads)==2:Clock.advance=901
+        return tip
+    monkeypatch.setattr(service,'accepted',accepted)
+    request=IntegrationRequest(operation_id='integration-expiry',work_item_id=1,expected_head=before,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=12)
+    with pytest.raises(ValueError,match='owner_checkpoint_changed'):service.integration_update(request)
+    assert len(reads)==2 and git(workspace,'rev-parse','HEAD')==before
+    assert not (Path(service.profile.state_dir)/'maintenance/checkpoint-claims/12.json').exists()
+    assert read_json(Path(service.profile.state_dir)/'maintenance/integration-expiry.json')['status']=='needs_coordination'

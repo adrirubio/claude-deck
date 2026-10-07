@@ -334,6 +334,7 @@ class Maintenance:
         return {'status':'template_requires_owner_confirmation','payloads':payloads}
 
     def current_sessions(self, member_id, slot_id):
+        from app.utils.peer_process import process_is_confirmed_dead
         rows=self.rows("SELECT id,pid,created_at,last_seen_at,provider,cwd,bound_pane_pid,bound_pane_proc_start "
             "FROM mail_agent_sessions WHERE member_id=? AND team_slot_id=? AND source='mcp' AND closed_at IS NULL "
             "AND mailbox_status='connected' AND capability_token_hash IS NOT NULL ORDER BY id DESC LIMIT 257",
@@ -343,14 +344,21 @@ class Maintenance:
         for row in rows:
             try:
                 seen=datetime.fromisoformat(row['last_seen_at']).replace(tzinfo=timezone.utc)
-                if not 0<=(datetime.now(timezone.utc)-seen).total_seconds()<=MCP_HEARTBEAT_TTL_SECONDS: continue
-                fields=Path(f"/proc/{row['pid']}/stat").read_text().rsplit(')',1)[1].split()
-                self.process(row['pid'],fields[19])
-                live.append(row)
-            except (OSError,ValueError,TypeError,IndexError):
+            except (ValueError,TypeError):
+                raise ValueError('current_generation_unavailable') from None
+            if not 0<=(datetime.now(timezone.utc)-seen).total_seconds()<=MCP_HEARTBEAT_TTL_SECONDS:
                 continue
+            # Stopped, denied and malformed observations remain competitors.
+            # Only a confirmed dead process can be omitted.
+            if not process_is_confirmed_dead(row['pid']):
+                live.append(row)
         if len(live)!=1 or live[0]['id']!=rows[0]['id']:
             raise ValueError('current_generation_ambiguous')
+        try:
+            fields=Path(f"/proc/{live[0]['pid']}/stat").read_text().rsplit(')',1)[1].split()
+            self.process(live[0]['pid'],fields[19])
+        except (OSError,ValueError,TypeError,IndexError):
+            raise ValueError('current_generation_unavailable') from None
         return live
 
     def checkpoint(self, item, workspace, operation, message_id, head, operation_id, owner):
@@ -585,14 +593,22 @@ class Maintenance:
         self.record(request.operation_id,record,first=True)
         try:
             with self.reservation():
+                # Finish slow external observations before the final owner,
+                # process, source and checkpoint freshness checks.
+                if self.accepted(request.accepted_pull)!=tip: raise ValueError('accepted_tip_changed')
+                self.safety()
                 if self.authority(item['id'])!=authority or self.approved_owner(item,workspace)!=owner:
                     raise ValueError('reserved_owner_context_changed')
                 if self.source(path,user=user)!=before or self.bindings(item['owner_slot_id'])!=bindings or self.generations(item['owner_slot_id'])!=generations:
                     raise ValueError('reserved_checkpoint_changed')
                 self.checkpoint(item,workspace,'integration_update',request.checkpoint_message,before['head'],request.operation_id,owner)
-                if self.accepted(request.accepted_pull)!=tip: raise ValueError('accepted_tip_changed')
-                self.safety()
                 self.consume_checkpoint(request.operation_id,checkpoint)
+                # The durable claim can wait on storage. Recheck freshness and
+                # native lifetime immediately before Git. run() also enforces
+                # the reservation deadline before it starts the child.
+                if self.approved_owner(item,workspace)!=owner or self.generations(item['owner_slot_id'])!=generations:
+                    raise ValueError('reserved_owner_context_changed')
+                self.checkpoint(item,workspace,'integration_update',request.checkpoint_message,before['head'],request.operation_id,owner)
                 args=["merge","--ff-only",tip] if mode=="fast_forward" else ["merge","--no-edit","--no-verify","--no-gpg-sign","--no-stat",tip]
                 self.git(path,*args,user=user)
                 after=self.source(path,user=user)

@@ -18,6 +18,7 @@ from app.services import agent_activity_service as activity
 from app.services.factory_delivery_policy import effective_policy
 from app.services.github_approval_service import github_approval_service
 from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS
+from app.utils.peer_process import process_is_confirmed_dead
 
 REASON = "owner_observation_unavailable"
 _GAPS = {"observation_unavailable", "observation_incomplete", "native_log_unavailable",
@@ -108,10 +109,19 @@ async def bound_authority(db, scope, item):
         raise ValueError("owner_generation_unavailable")
     live=[]
     for candidate in sessions:
-        if not candidate.last_seen_at or not 0 <= (datetime.utcnow()-candidate.last_seen_at).total_seconds() <= MCP_HEARTBEAT_TTL_SECONDS:
+        if not candidate.last_seen_at:
+            raise ValueError("owner_generation_unavailable")
+        if not 0 <= (datetime.utcnow()-candidate.last_seen_at).total_seconds() <= MCP_HEARTBEAT_TTL_SECONDS:
             continue
-        state,_start=activity._process(candidate.pid)
-        if state not in activity._STOPPED_STATES and _start is not None:
+        try:
+            state,_start=activity._process(candidate.pid)
+        except (OSError,ValueError,TypeError,IndexError):
+            if not process_is_confirmed_dead(candidate.pid):
+                live.append(candidate)
+            continue
+        # T/t is a live stopped process. Unknown records remain competitors.
+        # Known zombie/exit states cannot continue to act.
+        if state not in {"Z","X","x"}:
             live.append(candidate)
     if len(live)!=1 or live[0].id!=sessions[0].id:
         raise ValueError("owner_generation_ambiguous")

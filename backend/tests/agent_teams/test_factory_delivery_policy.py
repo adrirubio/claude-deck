@@ -574,7 +574,7 @@ async def test_initial_resume_uses_only_grace_with_no_new_owner_progress(db,monk
     assert item.retry_count==3 and item.active_scope_revision==0
 
 
-@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','unchanged'])
+@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','competing_stopped','competing_denied','unchanged'])
 @pytest.mark.asyncio
 async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkeypatch,tmp_path,change):
     from pathlib import Path
@@ -593,7 +593,17 @@ async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkey
             elif change=='missing_ack': item.ack_received_at=None
             elif change=='handoff': item.handoff_state='pending'
             elif change=='revision': revision.status='superseded'
-            elif change=='competing_generation':
+            elif change in {'competing_generation','competing_stopped','competing_denied'}:
+                if change != 'competing_generation':
+                    from app.services import agent_activity_service as activity
+                    original=activity._process
+                    def observed(pid):
+                        if pid==session.pid+1:
+                            if change=='competing_denied': raise PermissionError('synthetic process observation denied')
+                            return 'T','competing-start'
+                        return original(pid)
+                    monkeypatch.setattr(activity,'_process',observed)
+                    monkeypatch.setattr('app.services.owner_observation_pause.process_is_confirmed_dead',lambda _pid:False)
                 db.add(MailAgentSession(member_id=member.id,provider=slot.provider,source='mcp',session_key='competing',
                     pid=session.pid+1,cwd=session.cwd,team_slot_id=slot.id,team_preset_id=scope.preset_id,
                     bound_pane_pid=session.bound_pane_pid,bound_pane_proc_start=session.bound_pane_proc_start,
