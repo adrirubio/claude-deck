@@ -1392,6 +1392,14 @@ class AgentTeamService:
             from app.services.github_dispatch_service import github_dispatch_service
 
             base = f"{base}\n\n{github_dispatch_service._leader_unblock_instructions()}"
+        from app.models.database import TeamGithubScope
+        from app.services.factory_delivery_policy import policy_guidance, scope_policy
+        scopes = (await db.execute(select(TeamGithubScope).where(
+            TeamGithubScope.preset_id == preset.id, TeamGithubScope.enabled.is_(True),
+        ))).scalars().all()
+        for scope in scopes:
+            base += f"\n\nRepository delivery defaults: {scope.repo_owner}/{scope.repo_name}.\n"
+            base += policy_guidance(scope_policy(scope), scope.delivery_policy_revision)
         guidance = team_communication_guidance(slot.controlled_language_enabled is not False)
         return f"{base}\n\n{guidance}"
 

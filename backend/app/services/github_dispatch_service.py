@@ -583,6 +583,12 @@ class GithubDispatchService:
         item.owner_slot_id = owner_slot_id
         item.routing_method = routing_method
         item.dispatch_nonce = secrets.token_hex(8)
+        from app.services.factory_delivery_policy import scope_policy
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        if scope is None:
+            raise ValueError("Dispatch scope is missing")
+        item.delivery_policy = scope_policy(scope).model_dump(mode="json")
+        item.delivery_policy_revision = scope.delivery_policy_revision
         item.dispatch_head_ref = attempt_head_ref(item, owner_slot_id)
         item.dispatch_base_ref = base_ref
         item.approval_round_count = 1
@@ -1149,6 +1155,8 @@ class GithubDispatchService:
                     ]
                 )
             lines.extend(self._build_instructions(item, scope))
+        from app.services.factory_delivery_policy import effective_policy, policy_guidance
+        lines.extend(["", policy_guidance(effective_policy(item, scope), item.delivery_policy_revision)])
         language_enabled = owner is None or owner.controlled_language_enabled is not False
         lines.extend(["", team_communication_guidance(language_enabled)])
         return "\n".join(lines)
@@ -2136,16 +2144,24 @@ class GithubDispatchService:
                 ):
                     await self.escalate(db, item, "leader_ack_timeout")
                 continue
-            idle_anchor = item.updated_at or item.created_at
+            from app.services.factory_delivery_policy import effective_policy
+            from app.services.native_owner_contact import renew_native_owner_contact
+            policy = effective_policy(item, scope)
+            workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            await renew_native_owner_contact(db, scope, item, workspace)
+            idle_anchor = max(value for value in (
+                item.updated_at or item.created_at,
+                workspace.lease_last_owner_contact_at if workspace is not None else None,
+            ) if value is not None)
             idle_overdue = datetime.utcnow() - idle_anchor > timedelta(
-                seconds=settings.github_owner_idle_timeout_seconds
+                seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds
             )
             if not idle_overdue:
                 continue
             if item.last_nudge_at is None or item.last_nudge_at < idle_anchor:
                 await self._nudge_owner_for_progress(db, item)
             elif datetime.utcnow() - item.last_nudge_at > timedelta(
-                seconds=settings.github_nudge_grace_seconds
+                seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
@@ -2273,6 +2289,13 @@ class GithubDispatchService:
                 )
                 continue
             workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            from app.services.factory_delivery_policy import effective_policy
+            from app.services.native_owner_contact import renew_native_owner_contact
+            policy = effective_policy(item, scope)
+            idle_timeout = timedelta(seconds=policy.owner_idle_seconds or settings.github_owner_idle_timeout_seconds)
+            nudge_grace = timedelta(seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds)
+            await renew_native_owner_contact(db, scope, item, workspace, revision)
+            now = datetime.utcnow()
             anchors = [
                 value
                 for value in (

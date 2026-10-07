@@ -16,6 +16,50 @@ from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 
 
+@pytest.mark.asyncio
+async def test_delivery_policy_operator_api_records_defaults_and_explicit_attempt_adoption(client, db):
+    from app.models.schemas import FactoryDeliveryPolicy
+
+    preset = AgentTeamPreset(name="Delivery fixture", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="fixture", repo_name="repo", repo_path="/tmp/repo")
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(scope_id=scope.id, issue_number=1, issue_title="Fixture", issue_url="https://example.test/1",
+                          github_updated_at=datetime.utcnow(), dispatch_nonce="fixture-nonce", dispatch_status="dispatched")
+    db.add(item)
+    await db.commit()
+    response = await client.patch(f"/api/v1/agent-teams/github-scopes/{scope.id}/delivery-policy", json={
+        "expected_revision": 1, "reason": "Fixture change",
+        "policy": FactoryDeliveryPolicy(required_checks=[{"name": "Project tests"}]).model_dump(),
+    })
+    assert response.status_code == 200 and response.json()["revision"] == 2
+    await db.refresh(item)
+    assert item.delivery_policy is None
+    response = await client.patch(f"/api/v1/agent-teams/github-work-items/{item.id}/delivery-policy", json={
+        "expected_dispatch_nonce": "fixture-nonce", "expected_scope_revision": 0,
+        "expected_policy_revision": None, "target_policy_revision": 2, "reason": "Explicit adoption",
+    })
+    assert response.status_code == 200 and response.json()["policy"]["required_checks"][0]["name"] == "Project tests"
+    history = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/delivery-policy/history")
+    assert history.status_code == 200 and len(history.json()["events"]) == 2
+    assert history.json()["events"][0]["work_item_id"] == item.id
+
+
+@pytest.mark.asyncio
+async def test_delivery_policy_endpoints_require_operator_authority(client):
+    for method, path, body in [
+        ("PATCH", "/github-scopes/1/delivery-policy", {"expected_revision": 1, "policy": {}, "reason": "Fixture"}),
+        ("PATCH", "/github-work-items/1/delivery-policy", {"expected_dispatch_nonce": "fixture", "expected_scope_revision": 0,
+                                                         "target_policy_revision": 1, "reason": "Fixture"}),
+        ("GET", "/github-scopes/1/delivery-policy/history", None),
+    ]:
+        response = await client.request(method, "/api/v1/agent-teams" + path,
+                                        json=body, headers={"X-Deck-Operator-Token": "invalid"})
+        assert response.status_code == 401
+
+
 @pytest.mark.parametrize(
     ("mode", "token", "app_id", "key_path", "bot_login", "expected"),
     [

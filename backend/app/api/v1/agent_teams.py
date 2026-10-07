@@ -117,7 +117,11 @@ from app.services.github_verification_service import (
 from app.services.agent_team_service import PlanConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
+from app.api.v1.factory_delivery import router as delivery_router
+from app.services.factory_delivery_policy import effective_policy, scope_policy
+
 router = APIRouter()
+router.include_router(delivery_router)
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +237,8 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         dispatch_label=scope.dispatch_label,
         design_label=scope.design_label,
         merge_policy=scope.merge_policy,
+        delivery_policy=scope_policy(scope),
+        delivery_policy_revision=scope.delivery_policy_revision,
         github_auth_mode=scope.github_auth_mode,
         github_auth_configured=_scope_auth_configured(scope),
         github_poll_token_configured=bool(settings.github_token),
@@ -339,6 +345,8 @@ def _work_item_response(
     return GithubWorkItemResponse(
         id=item.id,
         scope_id=item.scope_id,
+        delivery_policy=effective_policy(item, scope),
+        delivery_policy_revision=item.delivery_policy_revision,
         repo_owner=scope.repo_owner,
         repo_name=scope.repo_name,
         issue_number=item.issue_number,

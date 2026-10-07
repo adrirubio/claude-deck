@@ -2320,6 +2320,55 @@ class AgentTeamSlotReorderRequest(BaseModel):
     slot_ids: List[int]
 
 
+class DeliveryRequiredCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    app_slug: str = Field(default="github-actions", min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+
+
+class FactoryDeliveryPolicy(BaseModel):
+    """Project delivery choices. These fields grant no execution authority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_checks: List[DeliveryRequiredCheck] = Field(default_factory=list, max_length=32)
+    owner_contact: Literal["reports", "native"] = "reports"
+    owner_idle_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
+    owner_nudge_grace_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
+    broad_checks: Literal["local", "hosted"] = "local"
+    checkpoint_delay_report_seconds: Optional[int] = Field(default=1800, ge=60, le=86400)
+    caller_inventory_required: bool = False
+    regression_proof_required: bool = False
+
+    @model_validator(mode="after")
+    def validate_checks(self):
+        identities = [(check.name, check.app_slug) for check in self.required_checks]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Required check identities must be unique.")
+        if self.broad_checks == "hosted" and not self.required_checks:
+            raise ValueError("Hosted broad checks need required check identities.")
+        return self
+
+
+class TeamGithubDeliveryPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    expected_revision: int = Field(ge=1)
+    policy: FactoryDeliveryPolicy
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class GithubAttemptDeliveryPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    expected_dispatch_nonce: str = Field(min_length=1)
+    expected_scope_revision: int = Field(ge=0)
+    expected_policy_revision: Optional[int] = Field(default=None, ge=1)
+    target_policy_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class TeamGithubScopeCreate(BaseModel):
     repo_owner: str
     repo_name: str
@@ -2367,6 +2416,8 @@ class TeamGithubScopeResponse(BaseModel):
     dispatch_label: str
     design_label: str
     merge_policy: str
+    delivery_policy: FactoryDeliveryPolicy = Field(default_factory=FactoryDeliveryPolicy)
+    delivery_policy_revision: int = 1
     github_auth_mode: str
     github_auth_configured: bool
     github_poll_token_configured: bool
@@ -2499,6 +2550,8 @@ class AgentTeamActivityResponse(BaseModel):
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int
+    delivery_policy: FactoryDeliveryPolicy = Field(default_factory=FactoryDeliveryPolicy)
+    delivery_policy_revision: Optional[int] = None
     repo_owner: str
     repo_name: str
     issue_number: int
