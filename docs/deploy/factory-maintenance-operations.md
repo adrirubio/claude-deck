@@ -102,6 +102,13 @@ Focused tests use disposable databases and real disposable Git repositories. Con
 
 ## Accepted source imports
 
+An initial attempt has no continuation file boundary. The existing owner and
+maintenance checks still apply, but this operation does not create an import
+record for that attempt. Historical import records survive item or revision
+deletion. Their original IDs and immutable context remain in the record.
+An absent import table and an empty import table have the same maintenance
+authority value. Creating this table during an upgrade does not change authority.
+
 An integration update can change files outside an owner's approved paths. The operation records the exact accepted file mode, object type and object identity. The original approval baseline and owner permissions remain. Completion recognises a recorded import only while the item, revision, owner, lease, policy and scope still match. A changed imported file still requires coordination.
 
 The held integration operation records these identities in the same SQLite reservation as its final source checks. The record commits before the operation releases that reservation. A registration failure preserves source and reports `needs_coordination`. The operator inspects the result before releasing the owner hold.

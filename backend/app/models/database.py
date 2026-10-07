@@ -445,12 +445,10 @@ class GithubAcceptedSourceImport(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     operation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    work_item_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True
-    )
-    scope_revision_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="CASCADE")
-    )
+    # Historical identities survive source item/revision deletion. Immutable
+    # context hashes prevent a reused integer ID from granting import authority.
+    work_item_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    scope_revision_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     context_sha256: Mapped[str] = mapped_column(String, nullable=False)
     request_sha256: Mapped[str] = mapped_column(String, nullable=False)
     accepted_repository: Mapped[str] = mapped_column(String, nullable=False)

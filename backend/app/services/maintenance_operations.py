@@ -441,7 +441,9 @@ class Maintenance:
         with sqlite3.connect(Path(self.profile.database).resolve().as_uri()+'?mode=ro',uri=True) as db:
             db.row_factory=sqlite3.Row;db.execute('BEGIN')
             for table in _TABLES + (_GLOBAL_TABLES if item_id is None else ()):
-                if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone(): continue
+                if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
+                    if table == 'github_accepted_source_imports': result[table] = []
+                    continue
                 field='id' if table=='github_work_items' else ('leased_item_id' if table=='github_workspaces' else 'work_item_id')
                 where=' WHERE '+field+'=?' if item_id is not None else ''
                 primary=[row['name'] for row in db.execute('PRAGMA table_info("'+table+'")') if row['pk']]
@@ -581,6 +583,8 @@ class Maintenance:
         """The held Git operation records its exact accepted import before release."""
         from app.services.accepted_source_imports import import_record_values, verified_import_snapshots
         from app.services.github_client import GithubTreeEntry
+        if item['active_scope_revision'] == 0:
+            return {'status':'not_applicable','paths':[]}
         db.row_factory = sqlite3.Row
         revision = db.execute("SELECT * FROM github_attempt_scope_revisions WHERE work_item_id=? "
             "AND dispatch_nonce=? AND revision=? AND status='active'",
@@ -622,8 +626,9 @@ class Maintenance:
             if any(old[key] != value for key,value in expected.items()):
                 raise ValueError('source_import_replay_conflict')
             return {'status':'already_recorded','import_id':old['id'],'paths':outside}
-        if db.execute('SELECT COUNT(*) FROM github_accepted_source_imports WHERE scope_revision_id=?',
-                      (revision['id'],)).fetchone()[0] >= 64:
+        if db.execute('SELECT COUNT(*) FROM github_accepted_source_imports WHERE work_item_id=? '
+                      'AND scope_revision_id=? AND context_sha256=?',
+                      (item['id'], revision['id'], values['context_sha256'])).fetchone()[0] >= 64:
             raise ValueError('source_import_read_limit')
         values['path_snapshots'] = json.dumps(snapshots)
         values['created_at'] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
