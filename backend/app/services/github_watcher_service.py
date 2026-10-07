@@ -201,7 +201,7 @@ class GithubWatcherService:
             if issue is not None and issue.get("state") == "closed":
                 await self._complete_and_notify(
                     db, scope, item,
-                    fact_source="github_watcher_service._recheck_active_items")
+                    fact_source="github_watcher_service._recheck_active_items", issue=issue)
                 continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
@@ -274,7 +274,7 @@ class GithubWatcherService:
                 continue
             await self._complete_and_notify(
                 db, scope, item,
-                fact_source="github_watcher_service._reconcile_closed_issues")
+                fact_source="github_watcher_service._reconcile_closed_issues", issue=issue)
 
     async def _complete_and_notify(
         self,
@@ -283,12 +283,15 @@ class GithubWatcherService:
         item: GithubWorkItem,
         *,
         fact_source: str = "github_watcher_service._complete_and_notify",
+        issue: dict | None = None,
     ) -> None:
         """Complete a closed-issue item and notify its team.
 
         ``fact_source`` names the actual watcher caller. The watcher reads no
         pull request state, so it never has merge evidence: a non-null PR
-        number on a closed issue does not prove delivery.
+        number on a closed issue does not prove delivery. R02: an issue that
+        GitHub closed as not planned or duplicate, with no PR, is sourced
+        terminal non-delivery.
         """
         # Immutable scalars are captured before any await or commit so the
         # failure path never touches expired ORM state.
@@ -313,22 +316,32 @@ class GithubWatcherService:
         captured_attempt = attempt_key(
             captured_item_id, captured_launch_id, captured_revision_id)
         # A28-A35/C02: the terminal transition records its sourced outcome
-        # fact in the same transaction. Issue closure is terminal tracking
-        # only. Neither closure nor a non-null PR number proves a merge, so
-        # the outcome stays unknown. Merge evidence is recorded only by the
-        # verification path, which reads the pull request.
+        # fact in the same transaction. Issue closure alone is terminal
+        # tracking: neither closure nor a non-null PR number proves a merge,
+        # so the outcome stays unknown. Merge evidence is recorded by the
+        # verification merge paths, which read the pull request.
         from app.services import factory_audit_service as _audit
+        issue = issue if isinstance(issue, dict) else {}
+        state_reason = issue.get("state_reason")
+        closed_at = _audit._parse_time(issue.get("closed_at"))
+        if state_reason in ("not_planned", "duplicate") and item.pr_number is None:
+            outcome, completion, source_of_fact = (
+                "closed_without_delivery", f"issue_closed_{state_reason}",
+                "github_issue_state_reason")
+        else:
+            outcome, completion, source_of_fact = "unknown", "closed_unproven", fact_source
         await _audit.record_delivery_fact(
             db,
             item_id=captured_item_id,
             revision_id=captured_revision_id,
             scope_id=captured_scope_id,
-            delivery_outcome="unknown",
-            completion_kind="closed_unproven",
-            fact_source=fact_source,
-            fact_time=datetime.utcnow(),
+            delivery_outcome=outcome,
+            completion_kind=completion,
+            fact_source=source_of_fact,
+            fact_time=closed_at,
             attempt=captured_attempt,
             launch_attempt=_audit.launch_attempt_key(captured_item_id, captured_launch_id),
+            source=fact_source,
         )
         item.dispatch_status = "completed"
         item.escalation_reason = None

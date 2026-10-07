@@ -96,7 +96,11 @@ from app.services.github_approval_service import (
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_initial_approval_recovery import cancel_stranded_initial_approval
-from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
+from app.services.github_dispatch_service import (
+    HandoffExternalEffectError,
+    ResumeAttemptError,
+    github_dispatch_service,
+)
 
 
 _CONTINUATION_POLICY_FIELDS = (
@@ -1120,6 +1124,25 @@ async def report_dispatch_status(
                 correlation_id=f"handoff_acceptance:uncertain:{acceptance_item_id}",
             )
             raise HTTPException(status_code=503, detail=exc.block_code) from exc
+        except HandoffExternalEffectError as exc:
+            # R07: the acceptance rolled back after an external stage began.
+            # The known effects are kept; an unproved identity state is
+            # uncertain, never an ordinary rejection.
+            from app.services import factory_audit_service as _audit
+            effects = "; ".join(f"{name} {state}" for name, state in sorted(exc.effects.items()))
+            await _audit.record_observation(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                occurred_at=datetime.now(timezone.utc),
+                actor=acceptance_actor,
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+                action_outcome="uncertain" if exc.uncertain else "rejected",
+                sanitized_reason=f"acceptance rolled back after external effects: {effects}",
+                correlation_id=f"handoff_acceptance:external:{acceptance_item_id}",
+            )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             await _observe_refusal(
                 db,
@@ -1407,6 +1430,8 @@ async def request_github_work_item_continuation(
     # Captured before the service call: a refusal may roll back and expire
     # the loaded session row.
     request_actor = _session_actor(session)
+    # R07: once the request commits, a later failure concerns only its notice.
+    committed_request: tuple[int, int] | None = None
     try:
         revision, approval, _created = (
             await github_approval_service.create_continuation_request(
@@ -1432,6 +1457,7 @@ async def request_github_work_item_continuation(
                 actor=request_actor,
             )
         )
+        committed_request = (approval.id, revision.id)
         async with github_approval_service.continuation_transport_lock(approval.id):
             if await github_approval_service.expire_continuation_if_needed(
                 db,
@@ -1479,7 +1505,12 @@ async def request_github_work_item_continuation(
             revision=_scope_revision_response(revision),
         )
     except GithubApprovalError as exc:
-        if exc.status_code != 404:
+        if committed_request is not None:
+            # R07: the request stands; its notice is known not settled.
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="rejected", reason=exc.detail)
+        elif exc.status_code != 404:
             # C09: an authenticated owner request refusal is recorded.
             await _observe_refusal(
                 db,
@@ -1495,12 +1526,49 @@ async def request_github_work_item_continuation(
         raise HTTPException(status_code=409, detail=exc.code) from exc
     except GithubClientResponseError as exc:
         raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
-    except MailAuthorityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailDeliveryIntegrityError as exc:
+    except (MailAuthorityError, MailDeliveryIntegrityError) as exc:
+        if committed_request is not None:
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="uncertain",
+                reason="continuation request notice unsettled after commit")
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    except Exception:
+        if committed_request is not None:
+            # R07: a transport failure after the request commit is uncertain;
+            # the committed request is never replayed.
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="uncertain",
+                reason="continuation request notice unsettled after commit")
+        raise
+
+
+async def _observe_committed_request_notice(
+    db, committed_request: tuple[int, int], *, actor: dict, scope_id: int | None,
+    item_id: int, outcome: str, reason: str,
+) -> None:
+    """R07: the notice result of a committed continuation request."""
+    from app.services import factory_audit_service as _audit
+    request_id, revision_id = committed_request
+    operation_id = f"continuation_request_notification:request:{request_id}:{outcome}"
+    await _audit.record_observation(
+        db,
+        event_kind="continuation_request_notification",
+        source="agent_teams.request_github_work_item_continuation",
+        occurred_at=datetime.now(timezone.utc),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        request_id=request_id,
+        revision_id=revision_id,
+        action_outcome=outcome,
+        sanitized_reason=reason,
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
 
 
 @router.get(
@@ -2955,8 +3023,19 @@ async def abandon_github_work_item(
         "dispatched",
         "verifying",
     }:
+        # R07: an authenticated operator refusal is recorded with its item.
+        refused_status = item.dispatch_status
+        await _observe_refusal(
+            db,
+            event_kind="operator_escalation",
+            source="agent_teams.abandon_github_work_item",
+            actor=_operator_actor(),
+            code="work_item_not_abandonable",
+            scope_id=item.scope_id,
+            item_id=item.id,
+        )
         raise _conflict(
-            f"Work item in status {item.dispatch_status} cannot be abandoned",
+            f"Work item in status {refused_status} cannot be abandoned",
             block_code="work_item_not_abandonable",
         )
     note = (
@@ -2967,31 +3046,14 @@ async def abandon_github_work_item(
             "owner session is offline."
         )
     )
-    await github_dispatch_service.escalate(
-        db,
-        item,
-        "abandoned_by_operator",
-        note=note,
-    )
-    # A06/A31: the abandon route records an operator escalation with its
-    # action outcome. delivery_outcome stays null: an escalation is never a
-    # terminal delivery outcome and later retries never inflate
-    # non-delivery counts.
-    from app.services import factory_audit_service as _audit
-    await _audit.record_event(
-        db,
-        event_kind="operator_escalation",
-        source="agent_teams.abandon_github_work_item",
-        occurred_at=datetime.now(timezone.utc),
-        actor=_audit.derive_actor(actor_kind="operator"),
-        item_id=item.id,
-        after_values={"status_note": "abandoned_by_operator"},
-        action_outcome="applied",
-        sanitized_reason=note,
-        correlation_id=f"operator-escalation:{item.id}:{item.updated_at.isoformat()}",
-    )
-    await db.commit()
-    return await _reload_work_item_response(db, item.id)
+    # A06/A31/R07: the abandon action and its operator escalation fact commit
+    # together, then the broadcast records its own notice result.
+    # delivery_outcome stays null: an escalation is never a terminal delivery
+    # outcome and later retries never inflate non-delivery counts.
+    abandoned_item_id = item.id
+    await github_dispatch_service.abandon_by_operator(
+        db, item, note, actor=_operator_actor())
+    return await _reload_work_item_response(db, abandoned_item_id)
 
 
 @router.post("/presets/{preset_id}/duplicate", response_model=AgentTeamPresetResponse)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AuditMetricsPage } from "@/features/factory/AuditMetricsPanel";
 import type { AuditEventPage, MetricsWindow } from "@/features/factory/auditApi";
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from "@/features/agent-teams/operatorAuth";
@@ -358,6 +358,53 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(screen.getByText(/Audit events could not be loaded/)).toBeInTheDocument();
   });
+
+  it("shows expanded detail outside the scrolled table and bounds the filters (R10)", async () => {
+    const stub = stubFetch();
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+
+    const toggle = screen.getByRole("button", { name: "Show detail" });
+    expect(toggle).toHaveAttribute("aria-controls", "audit-event-detail");
+    fireEvent.click(toggle);
+    const region = screen.getByRole("region", { name: "Event detail" });
+    expect(region).toHaveAttribute("id", "audit-event-detail");
+    expect(within(region).getByText("team_display_name: Deleted team")).toBeInTheDocument();
+    for (const element of screen.getAllByRole("table")) {
+      expect(element.contains(region)).toBe(false);
+    }
+    for (const label of ["Team context key", "Scope context key"]) {
+      expect(screen.getByLabelText(label).className).toContain("w-full");
+    }
+  });
+
+  it.each(["Escape", "Cancel"])("restores focus to Apply filters after %s closes the token dialog (R11)",
+    async (dismissal) => {
+      const stub = stubFetch();
+      render(<AuditMetricsPage />);
+      await waitFor(() => expect(stub.metrics()).toHaveLength(1));
+      stub.metrics()[0].respond(windowBody("mount"));
+      // The mount read opens the dialog; nothing invoked it, so focus falls back to Apply.
+      await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+      if (dismissal === "Escape") {
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      } else {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      }
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByText("Apply filters")));
+
+      // Opened from Apply filters: focus returns to that invoking control.
+      const apply = screen.getByText("Apply filters");
+      apply.focus();
+      fireEvent.click(apply);
+      await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+      stub.metrics()[1].respond(windowBody("B"));
+      await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(document.activeElement).toBe(apply));
+    });
 
   it("labels each retained result with its own identity after cancellation or failure", async () => {
     const stub = stubFetch();

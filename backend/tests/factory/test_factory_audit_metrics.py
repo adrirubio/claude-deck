@@ -515,40 +515,54 @@ async def test_c03_absent_review_evidence_never_counts(db):
         "SELECT COUNT(*) FROM factory_audit_events WHERE human_review_evidence IS NULL"))).scalar_one()
     assert null_rows == 3
 
+    # R06: a delivered code row is not in the design population.
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
-    by_name = {sample.name: sample for sample in window.metrics}
-    assert by_name["independently_human_reviewed_design"].value == 0.0
-    assert by_name["independently_human_reviewed_design"].unknown_count == 1
-    assert by_name["independently_human_reviewed_design"].coverage == "full"
+    review = {sample.name: sample for sample in window.metrics}["independently_human_reviewed_design"]
+    assert (review.value, review.sample_count, review.unknown_count) == (0.0, 0, 0)
+    assert review.coverage == "full"
 
-    # Invalid evidence (operator actor), then valid and repeated evidence.
-    await audit.record_event(
-        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
-        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
-        human_review_evidence={"fact_kind": "human_review_acceptance",
-                               "artifact": "design-1", "version": "v2",
-                               "actor": "shared-operator-credential",
-                               "source": "operator-session"})
-    await audit.record_event(
-        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
-        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
-        human_review_evidence={"fact_kind": "human_review_acceptance",
-                               "artifact": "design-1", "version": "v2",
-                               "actor": "reviewer-external", "source": "review-record"})
-    await audit.record_event(
-        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
-        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
-        human_review_evidence={"fact_kind": "human_review_acceptance",
-                               "artifact": "design-1", "version": "v2",
-                               "actor": "reviewer-external", "source": "review-record"})
+    # One delivered design attempt and one delivered code attempt.
+    for item_id in (31, 32):
+        await _seed_item(db, item_id)
+    await db.commit()
+    await audit.record_delivery_fact(
+        db, item_id=31, delivery_outcome="delivered", completion_kind="merged_design",
+        fact_source="github_pull_request_merged", fact_time=_now(), artifact="pr:31",
+        attempt="item:31:launch:None:revision:None")
+    await audit.record_delivery_fact(
+        db, item_id=32, delivery_outcome="delivered", completion_kind="merged_code",
+        fact_source="github_pull_request_merged", fact_time=_now(), artifact="pr:32",
+        attempt="item:32:launch:None:revision:None")
     await db.commit()
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
-    by_name = {sample.name: sample for sample in window.metrics}
-    # Only the validated evidence counts; operator-actor evidence never counts.
-    assert by_name["independently_human_reviewed_design"].value == 2.0
-    assert by_name["independently_human_reviewed_design"].sample_count == 2
+    review = {sample.name: sample for sample in window.metrics}["independently_human_reviewed_design"]
+    assert (review.value, review.sample_count, review.unknown_count) == (0.0, 1, 1)
+
+    def evidence(**overrides):
+        base = {"fact_kind": "human_review_acceptance", "artifact": "pr:31", "version": "v2",
+                "actor": "reviewer-external", "actor_kind": "human", "independent": True,
+                "source": "review-record"}
+        return {**base, **overrides}
+
+    rejected = [
+        evidence(actor="shared-operator-credential"),     # operator credential
+        evidence(actor_kind=None, independent=None),      # non-operator string alone
+        evidence(actor="member:22"),                      # an agent member
+        evidence(artifact="pr:99"),                       # another artifact
+        evidence(artifact="pr:32"),                       # a code delivery
+    ]
+    for payload in rejected + [evidence(), evidence()]:  # valid evidence twice
+        await audit.record_event(
+            db, event_kind="design_review", source="test", occurred_at=_now(),
+            actor=launch_actor, action_outcome="applied", human_review_evidence=payload)
+    await db.commit()
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    review = {sample.name: sample for sample in window.metrics}["independently_human_reviewed_design"]
+    # The exact design artifact counts once; nothing else qualifies.
+    assert (review.value, review.sample_count, review.unknown_count) == (1.0, 1, 0)
 
 
 async def test_c02_delivery_facts_reconcile_once_per_attempt(db):
@@ -648,6 +662,12 @@ async def test_c05_deletion_safe_references_and_key_lifetimes(db):
     assert row[0] is None
     assert "Original" in row[1]
 
+    # R01: the deletion retired the old lifetime key.
+    retired = (await db.execute(text(
+        "SELECT retired_at FROM factory_context_keys WHERE context_key = :key"),
+        {"key": first_key})).scalar_one()
+    assert retired is not None
+
     # Numeric ID reuse allocates a distinct key; old events stay attached to
     # the old key only.
     await _seed_scope(db, 5)
@@ -657,16 +677,26 @@ async def test_c05_deletion_safe_references_and_key_lifetimes(db):
         actor=actor, scope_id=5, action_outcome="applied",
         context_snapshot={"team_display_name": "Reused"})
     await db.commit()
-    assert reused.scope_context_key == first_key
+    assert reused.scope_context_key != first_key
     keys = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_context_keys WHERE key_kind = 'scope'"))).scalar_one()
-    assert keys == 1
+    assert keys == 2
+    assert await audit.current_context_key(db, "scope", 5) == reused.scope_context_key
 
-    # Current-ID isolation: the current key addresses only its own events.
-    rows = (await db.execute(text(
-        "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
-        {"key": first_key})).scalar_one()
-    assert rows == 2
+    # Old-key and current-ID isolation: each key addresses only its own lifetime.
+    for key, expected in ((first_key, 1), (reused.scope_context_key, 1)):
+        rows = (await db.execute(text(
+            "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
+            {"key": key})).scalar_one()
+        assert rows == expected
+    # The retired key never selects the replacement live scope: its present
+    # state is unknown, while its retained ledger history stays countable.
+    old = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1),
+        filter_scope="scoped", scope_context_key=first_key)
+    old_by_name = {sample.name: sample for sample in old.metrics}
+    assert old_by_name["total_tracked_attempts"].value is None
+    assert old_by_name["operator_interventions"].value == 1.0
     # Stable historical result counts survive deletion and reuse.
     window = await metrics.build_metrics_window(
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
@@ -731,12 +761,14 @@ async def test_c06_event_site_identity_and_provider_snapshots(db):
     assert retained["repo_owner"] == "original-owner"
     assert retained["repo_name"] == "original-name"
     assert retained["observed_runtime_provider"] == "pi-cli"
-    # Context keys preserve the original attribution after ID reuse.
+    # Context keys preserve the original attribution after ID reuse, and the
+    # recreated scope has no key until an event is recorded for it.
     assert event.scope_context_key is not None
     rows = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
         {"key": event.scope_context_key})).scalar_one()
     assert rows == 1
+    assert await audit.current_context_key(db, "scope", 1) is None
 
 
 async def test_c07_replay_identity_covers_actions_resources_and_races(db):
@@ -776,16 +808,24 @@ async def test_c07_replay_identity_covers_actions_resources_and_races(db):
     assert first.id != second.id
     assert first.replay_key != second.replay_key
 
-    # Conflicting payloads with the same operation id and resource: the
-    # first accepted fact wins; the second never overwrites it.
-    conflicting = await audit.record_event(
+    # R09: a conflicting payload with the same operation id and resource is
+    # refused explicitly. The first fact stands unchanged and no new fact is
+    # committed; an exact replay still returns the first fact.
+    with pytest.raises(audit.ReplayConflictError):
+        await audit.record_event(
+            db, event_kind="policy_change", source="test", occurred_at=_now(),
+            actor=actor, item_id=1, action_outcome="rejected",
+            operation_id="shared-op", after_values={"enabled": False})
+    await db.rollback()
+    stored = (await db.execute(text(
+        "SELECT COUNT(*), MIN(action_outcome) FROM factory_audit_events"
+        " WHERE operation_id = 'shared-op' AND item_id = 1"))).first()
+    assert tuple(stored) == (1, "applied")
+    exact = await audit.record_event(
         db, event_kind="policy_change", source="test", occurred_at=_now(),
-        actor=actor, item_id=1, action_outcome="rejected",
-        operation_id="shared-op", after_values={"enabled": False})
-    await db.commit()
-    assert conflicting.id == first.id
-    assert conflicting.action_outcome == "applied"
-    assert conflicting.after_values == {"enabled": True}
+        actor=actor, item_id=1, action_outcome="applied",
+        operation_id="shared-op", after_values={"enabled": True})
+    assert exact.id == first.id
 
     # Concurrent same-resource duplicates: the unique replay key makes the
     # race safe. Each concurrent producer resolves to the same single fact.
@@ -963,8 +1003,10 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
     delivery = (await db.execute(text(
         "SELECT operation_id, revision_id, delivery_outcome FROM factory_audit_events"
         " WHERE event_kind = 'delivery_evidence'"))).fetchall()
-    assert [tuple(row) for row in delivery] == [
-        ("delivery:item:1:launch:None:revision:1:attempt", 1, "unknown")]
+    # R03: the operation identity includes the fact (outcome, kind, source).
+    assert [tuple(row) for row in delivery] == [(
+        "delivery:item:1:launch:None:revision:1:attempt:unknown:closed_unproven:"
+        "github_watcher_service._reconcile_closed_issues", 1, "unknown")]
     # The transition is never replayed: the completed item is no longer
     # reconcilable, so a second loop adds no fact; protected state is unchanged.
     scope_obj = await db.get(TeamGithubScope, 1)
@@ -2347,6 +2389,37 @@ async def test_c11_continuation_policy_route_records_every_changed_setting(store
     assert facts[0]["scope_id"] == 5
 
 
+async def test_r05_scope_route_records_every_finite_policy_value(store, client):
+    """R05 (B4 F06): the real scope route stores exact old and new values for
+    every general finite policy setting; free-text command hints stay out."""
+    import json as _json
+
+    await _seed_team(store)
+    fields = ("max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+              "max_auto_merges_per_day", "max_build_parallelism", "builds_out_of_tree")
+    async with store() as db:
+        old = dict((await db.execute(text(
+            f"SELECT {', '.join(fields)} FROM team_github_scopes WHERE id = 5"))).mappings().first())
+    new = {"max_approval_rounds": 4, "max_concurrent_dispatched": 2,
+           "max_verification_retries": 5, "max_auto_merges_per_day": 7,
+           "max_build_parallelism": 3, "builds_out_of_tree": True}
+
+    response = await client.patch(
+        "/api/v1/agent-teams/github-scopes/5", headers=_OPERATOR_HEADERS,
+        json={**new, "build_command_hint": "make -j{parallelism} -C {build_dir}"})
+
+    assert response.status_code == 200, response.text
+    facts = await _facts(store, event_kind="policy_change", action_outcome="applied")
+    assert len(facts) == 1
+    before = _json.loads(facts[0]["before_values"])
+    after = _json.loads(facts[0]["after_values"])
+    for field in fields:
+        expected_old = bool(old[field]) if field == "builds_out_of_tree" else old[field]
+        assert before[field] == expected_old, field
+        assert after[field] == new[field], field
+    assert "build_command_hint" not in after
+
+
 async def test_c09_stale_leader_cas_is_refused_and_recorded(store, client):
     """C09: the actual Leader policy CAS refuses a stale expectation, keeps the
     current Leader and records one rejected fact for the team."""
@@ -2897,6 +2970,7 @@ async def test_c10_writer_projects_nested_and_allowed_key_values(db):
                           "event_time_labels": ["slot_display_name", "SYNTHC10LABEL"]},
         human_review_evidence={"fact_kind": "human_review_acceptance", "artifact": "design-1",
                                "version": "v1", "actor": "reviewer-external",
+                               "actor_kind": "human", "independent": True,
                                "source": "Bearer SYNTHC10BEARERVALUE",
                                "raw": {"token": "SYNTHC10RAW"}})
     await db.commit()
@@ -2912,7 +2986,8 @@ async def test_c10_writer_projects_nested_and_allowed_key_values(db):
                                       "event_time_labels": ["slot_display_name"]}
     assert event.human_review_evidence == {
         "fact_kind": "human_review_acceptance", "artifact": "design-1", "version": "v1",
-        "actor": "reviewer-external", "source": "Bearer [redacted]"}
+        "actor": "reviewer-external", "actor_kind": "human", "independent": True,
+        "source": "Bearer [redacted]"}
     assert audit.validated_review_evidence(event.human_review_evidence) is True
 
 
@@ -3036,6 +3111,417 @@ async def test_c09_continuation_decision_notice_send_failure_keeps_committed_dec
         ("applied", _LEADER["member"], revision_id)]
     notices = await _facts(store, event_kind="continuation_decision_notification")
     assert [f["action_outcome"] for f in notices] == ["uncertain", "applied"]
+
+
+async def _install_marker(maker) -> None:
+    """C12: the disposable store's forward-coverage marker precedes its facts."""
+    async with maker() as db:
+        await audit.install_forward_coverage(await db.connection(), installed_at=_COVERAGE_START)
+        await db.commit()
+
+
+@pytest.mark.parametrize(("issue_type", "kind"), [("code", "merged_code"), ("design", "merged_design")])
+async def test_r02_real_merge_consumer_records_sourced_delivery(store, monkeypatch, issue_type, kind):
+    """R02 (B4 F02/F09, Astra F01): the real verification merge path records a
+    delivered fact for the attempt, with the PR merge time as the dedicated
+    fact time and the merge as the dedicated fact source."""
+    from app.models.database import GithubWorkItem, TeamGithubScope
+    from app.services.github_verification_service import github_verification_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=120, status="verifying", issue_type=issue_type)
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_verification_service, "_notify_blocker_merged", no_notice)
+    pull = {"number": 73, "merged_at": "2026-10-06T11:58:00Z", "state": "closed",
+            "head": {"sha": "a" * 40, "ref": _HEAD_REF}}
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        item = await db.get(GithubWorkItem, 120)
+        await github_verification_service._record_selected_pull(db, scope, item, pull, "merged")
+
+    async with store() as db:
+        row = (await db.execute(text(
+            "SELECT delivery_outcome, completion_kind, fact_source, fact_time, source,"
+            " json_extract(context_snapshot, '$.artifact'), team_context_key"
+            " FROM factory_audit_events WHERE event_kind = 'delivery_evidence'"))).first()
+        window = await metrics.build_metrics_window(
+            db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+        status = (await db.execute(text(
+            "SELECT dispatch_status FROM github_work_items WHERE id = 120"))).scalar_one()
+    assert row[:3] == ("delivered", kind, "github_pull_request_merged")
+    assert datetime.fromisoformat(str(row[3])) == datetime(2026, 10, 6, 11, 58)
+    assert row[4] == "github_verification_service._record_selected_pull"
+    assert row[5] == "matrix-owner/matrix-repo/pull/73"
+    assert row[6] is not None  # R04: the parent team key is resolved
+    assert status == "merged"
+    by_name = {s.name: s for s in window.metrics}
+    assert by_name["delivered_in_window"].value == 1.0
+    # Independent human review is never inferred from a merge.
+    review = by_name["independently_human_reviewed_design"]
+    assert (review.value, review.unknown_count) == ((0.0, 1) if issue_type == "design" else (0.0, 0))
+
+
+@pytest.mark.parametrize(("state_reason", "expected"), [
+    ("not_planned", "closed_without_delivery"), ("duplicate", "closed_without_delivery"),
+    ("completed", "unknown")])
+async def test_r02_watcher_records_sourced_terminal_non_delivery(store, monkeypatch, state_reason, expected):
+    """R02: GitHub's not-planned or duplicate closure, with no PR, is sourced
+    terminal non-delivery; an ordinary closure stays unknown."""
+    from app.models.database import TeamGithubScope
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=121, status="escalated", escalation_reason="plan_blocked")
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+
+    class ClosedIssue:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "state_reason": state_reason,
+                             "closed_at": "2026-10-06T11:30:00Z", "labels": []}
+                    for number in numbers}
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._reconcile_closed_issues(db, scope, ClosedIssue())
+    async with store() as db:
+        row = (await db.execute(text(
+            "SELECT delivery_outcome, fact_source, fact_time FROM factory_audit_events"
+            " WHERE event_kind = 'delivery_evidence'"))).first()
+    assert row[0] == expected
+    assert datetime.fromisoformat(str(row[2])) == datetime(2026, 10, 6, 11, 30)
+    if expected == "closed_without_delivery":
+        assert row[1] == "github_issue_state_reason"
+
+
+async def test_r03_one_result_per_attempt_survives_late_evidence_and_deletion(store):
+    """R03 (B4 F03/F04, Astra F02): unknown then delivered for one attempt is
+    one delivered result; repeated evidence adds nothing; a new attempt on the
+    same item and a second scoped attempt for the same PR stay distinct;
+    deleting the live item keeps every historical count."""
+    from app.models.database import GithubWorkItem
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=122, status="completed", pr_number=73)
+    async with store() as db:
+        item = await db.get(GithubWorkItem, 122)
+        await audit.record_delivery_fact(
+            db, item_id=122, scope_id=5, delivery_outcome="unknown",
+            completion_kind="closed_unproven", fact_source="github_watcher_service._reconcile_closed_issues",
+            fact_time=_now(), attempt="item:122:launch:None:revision:None")
+        for _repeat in range(2):
+            await audit.record_merged_delivery(
+                db, item, {"number": 73, "merged_at": _now().isoformat()}, source="test")
+        await db.commit()
+
+    async def counts():
+        async with store() as db:
+            window = await metrics.build_metrics_window(
+                db, window_start=_now() - timedelta(hours=1),
+                window_end=_now() + timedelta(hours=1))
+        by_name = {s.name: s for s in window.metrics}
+        return tuple(by_name[name].value for name in (
+            "terminal_tracking_in_window", "delivered_in_window", "unknown_outcomes"))
+
+    assert await counts() == (1.0, 1.0, 0.0)
+    async with store() as db:
+        merged = (await db.execute(text(
+            "SELECT COUNT(*) FROM factory_audit_events WHERE delivery_outcome = 'delivered'"
+        ))).scalar_one()
+    assert merged == 1
+
+    # A new attempt (another launch) on the same item is a second attempt.
+    async with store() as db:
+        await audit.record_delivery_fact(
+            db, item_id=122, scope_id=5, delivery_outcome="unknown",
+            completion_kind="closed_unproven", fact_source="watcher", fact_time=_now(),
+            attempt="item:122:launch:9:revision:None")
+        await db.commit()
+    assert await counts() == (2.0, 1.0, 1.0)
+
+    # Permitted deletion of the live item keeps the historical counts.
+    async with store() as db:
+        await db.execute(text("DELETE FROM github_work_items WHERE id = 122"))
+        await db.commit()
+    assert await counts() == (2.0, 1.0, 1.0)
+
+
+async def test_r04_real_writers_capture_parent_keys_and_configured_provider(store, client):
+    """R04 (B4 F05, Astra F05): the real lifecycle writer stores the team key
+    so a team filter includes the item fact; the real scope route captures
+    the configured harness from trusted slot configuration."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=123, status="pending")
+    async with store() as db:
+        item = await db.get(GithubWorkItem, 123)
+        await observe_work_lifecycle(db, item=item, from_status=None, to_status="dispatched",
+                                     source="github_dispatch_service.launch")
+        await db.commit()
+    response = await client.patch(
+        "/api/v1/agent-teams/github-scopes/5", headers=_OPERATOR_HEADERS,
+        json={"dispatch_label": "renamed-label"})
+    assert response.status_code == 200, response.text
+
+    async with store() as db:
+        lifecycle = (await db.execute(text(
+            "SELECT team_context_key, json_extract(context_snapshot, '$.configured_provider'),"
+            " json_extract(context_snapshot, '$.slot_display_name')"
+            " FROM factory_audit_events WHERE event_kind = 'work_lifecycle'"))).first()
+        policy = (await db.execute(text(
+            "SELECT json_extract(context_snapshot, '$.configured_provider'),"
+            " json_extract(context_snapshot, '$.observed_runtime_provider'),"
+            " json_extract(context_snapshot, '$.team_display_name')"
+            " FROM factory_audit_events WHERE event_kind = 'policy_change'"))).first()
+        team_key = await audit.current_context_key(db, "team", 7)
+        team_events = (await db.execute(text(
+            "SELECT COUNT(*) FROM factory_audit_events WHERE team_context_key = :key"),
+            {"key": team_key})).scalar_one()
+    assert lifecycle[0] == team_key and team_key is not None
+    assert lifecycle[1:] == ("codex-cli", f"Slot {_OWNER['slot']}")
+    assert policy == ("codex-cli", None, "Matrix team")
+    assert team_events == 2
+
+
+async def test_r07_continuation_request_notice_failure_is_not_a_refused_request(
+    store, client, monkeypatch
+):
+    """R07 (Astra F08): the request commits, then its Mail send fails. The
+    request fact stays applied, the notice is uncertain, and no rejected
+    request fact is recorded."""
+    from app.services.agent_mail_service import agent_mail_service
+    from app.services.github_client import GithubCommitSnapshot, GithubTreeEntry, github_client
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=124, status="escalated", workspace_id=124,
+                     workspace_kind="worktree", lease_token="synthetic-lease-124",
+                     escalation_reason="retry_count_exhausted", pr_number=73,
+                     dispatch_head_ref=_HEAD_REF)
+    _stub_open_pull(monkeypatch)
+
+    async def snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    async def tree(*_args, **_kwargs):
+        return [GithubTreeEntry(path="src/a.py", mode="100644", object_type="blob", sha="c" * 40)]
+
+    async def failing_send(*_args, **_kwargs):
+        raise RuntimeError("synthetic low-level send failure")
+
+    monkeypatch.setattr(github_client, "get_commit_snapshot", snapshot)
+    monkeypatch.setattr(github_client, "get_recursive_tree", tree)
+    monkeypatch.setattr(agent_mail_service, "send_message", failing_send)
+    response = await client.post(
+        "/api/v1/agent-teams/github-work-items/124/continuation-requests",
+        headers=_session_headers(_OWNER),
+        json={"dispatch_nonce": _NONCE, "phase": "implementation",
+              "execution_target": "workspace", "summary": "Bounded matrix correction",
+              "allowed_paths": ["src/a.py"],
+              "allowed_actions": ["edit_production", "push_pr_head", "request_verification"],
+              "allowed_commands": ["pytest -q"], "prohibited_actions": ["Do not edit CI"],
+              "max_failed_heads": 1, "tool_fallbacks": {},
+              "lease_token": "synthetic-lease-124"})
+
+    assert response.status_code == 500
+    requests = await _facts(store, event_kind="continuation_request")
+    notices = await _facts(store, event_kind="continuation_request_notification")
+    assert [f["action_outcome"] for f in requests] == ["applied"]
+    assert [(f["action_outcome"], f["request_id"]) for f in notices] == [
+        ("uncertain", requests[0]["request_id"])]
+    async with store() as db:
+        pending = (await db.execute(text(
+            "SELECT COUNT(*) FROM github_approval_requests WHERE work_item_id = 124"
+            " AND status = 'pending'"))).scalar_one()
+    assert pending == 1
+
+
+@pytest.mark.parametrize(("restore_fails", "outcome"), [(False, "rejected"), (True, "uncertain")])
+async def test_r07_handoff_acceptance_keeps_known_external_effects(
+    store, client, monkeypatch, restore_fails, outcome
+):
+    """R07 (B4 F10): push access is revoked, the worktree identity write
+    fails, and the acceptance rolls back. The fact keeps each known effect;
+    a failed restoration is uncertain, never an ordinary rejection."""
+    from app.services.github_workspace_service import (
+        _MANAGED_WORKTREE_KEYS, GithubWorkspaceConfigError, WorktreeConfigSnapshot,
+        github_workspace_service,
+    )
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=125, status="dispatched", workspace_id=125,
+                     workspace_kind="worktree", lease_token="synthetic-lease-125",
+                     handoff_target_slot_id=_OTHER["slot"], handoff_state="pending")
+    before = await _authority(store, 125)
+
+    async def snapshot(_workspace):
+        return WorktreeConfigSnapshot({key: () for key in _MANAGED_WORKTREE_KEYS})
+
+    async def revoke(*_args, **_kwargs):
+        return True
+
+    async def identity_fails(*_args, **_kwargs):
+        raise GithubWorkspaceConfigError("synthetic identity failure")
+
+    async def restore(_workspace, _snapshot):
+        if restore_fails:
+            raise GithubWorkspaceConfigError("synthetic restore failure", restoration_failed=True)
+
+    monkeypatch.setattr(github_workspace_service, "snapshot_worktree_config", snapshot)
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", revoke)
+    monkeypatch.setattr(github_workspace_service, "apply_slot_identity", identity_fails)
+    monkeypatch.setattr(github_workspace_service, "restore_worktree_config", restore)
+
+    response = await client.post(
+        "/api/v1/agent-teams/dispatch-status", headers=_session_headers(_OTHER),
+        json={"work_item_id": 125, "status": "handoff_accepted"})
+
+    assert response.status_code == 409
+    facts = await _facts(store, event_kind="handoff_acceptance")
+    assert [f["action_outcome"] for f in facts] == [outcome]
+    reason = facts[0]["sanitized_reason"]
+    assert "push_access revoked_or_not_held" in reason
+    assert "worktree_identity unknown" in reason
+    assert ("restoration restore_failed" if restore_fails else "restoration restored") in reason
+    after = await _authority(store, 125)
+    assert after["item"] == before["item"]
+
+
+@pytest.mark.parametrize("case", ["success", "notice_failure", "audit_failure", "refused"])
+async def test_r07_abandon_records_action_then_notice(store, client, monkeypatch, case):
+    """R07 (Astra F08): the abandon escalation and its fact commit together;
+    an audit failure commits neither; a broadcast failure after the commit is
+    an uncertain notice and never undoes or replays the action."""
+    from app.services import factory_audit_service as _audit
+    from app.services.github_dispatch_service import github_dispatch_service
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=126, status="merged" if case == "refused" else "dispatched")
+    if case == "notice_failure":
+        async def failing_broadcast(*_args, **_kwargs):
+            raise RuntimeError("synthetic broadcast failure")
+
+        monkeypatch.setattr(github_dispatch_service, "_send_escalation_broadcast", failing_broadcast)
+    if case == "audit_failure":
+        original = _audit.record_event
+
+        async def failing(db, **fields):
+            if fields.get("event_kind") == "operator_escalation":
+                raise RuntimeError("synthetic audit insert failure")
+            return await original(db, **fields)
+
+        monkeypatch.setattr(_audit, "record_event", failing)
+
+    response = await client.post(
+        "/api/v1/agent-teams/github-work-items/126/abandon", headers=_OPERATOR_HEADERS,
+        json={"reason": "operator stop"})
+
+    actions = await _facts(store, event_kind="operator_escalation")
+    notices = await _facts(store, event_kind="operator_escalation_notification")
+    async with store() as db:
+        status = (await db.execute(text(
+            "SELECT dispatch_status FROM github_work_items WHERE id = 126"))).scalar_one()
+    if case == "audit_failure":
+        assert response.status_code == 500
+        assert (actions, notices, status) == ([], [], "dispatched")
+        return
+    if case == "refused":
+        assert response.status_code == 409
+        assert [(f["action_outcome"], f["sanitized_reason"], f["item_id"]) for f in actions] == [
+            ("rejected", "work_item_not_abandonable", 126)]
+        assert (notices, status) == ([], "merged")
+        return
+    assert response.status_code == 200, response.text
+    assert [f["action_outcome"] for f in actions] == ["applied"]
+    assert [f["action_outcome"] for f in notices] == (
+        ["applied"] if case == "success" else ["uncertain"])
+    assert status == "escalated"
+
+
+async def test_r08_recovery_counts_revision_results_and_actions_exclude_notices(db):
+    """R08 (B4 F11, Astra F06): an applied cancellation is not a recovery
+    success; a completed revision result is. One action with an uncertain
+    and an applied notice is one intervention."""
+    actor = audit.derive_actor(actor_kind="operator")
+    await _seed_item(db, 40)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
+        " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
+        " allowed_actions, allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha,"
+        " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
+        " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
+        " delivery_attempt_count, approval_request_id, created_at)"
+        " VALUES (40, 40, 'n', 1, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]',"
+        " '{}', 'a', 'b', 'r', 1, 'h', 2, 0, 'active', 0, NULL, CURRENT_TIMESTAMP)"))
+    await db.commit()
+    await audit.record_event(
+        db, event_kind="recovery_cancellation", source="test", occurred_at=_now(), actor=actor,
+        item_id=40, revision_id=40, action_outcome="applied", operation_id="cancel:40")
+    for outcome in ("uncertain", "applied"):
+        await audit.record_event(
+            db, event_kind="recovery_cancellation_notification", source="test",
+            occurred_at=_now(), actor=actor, item_id=40, revision_id=40,
+            action_outcome=outcome, operation_id=f"cancel:40:notice:{outcome}")
+    await db.commit()
+
+    async def window():
+        result = await metrics.build_metrics_window(
+            db, window_start=_now() - timedelta(hours=1), window_end=datetime.utcnow() + timedelta(hours=1))
+        return {s.name: s for s in result.metrics}
+
+    by_name = await window()
+    assert (by_name["recovery_success"].value, by_name["recovery_success"].sample_count) == (0.0, 0)
+    assert by_name["operator_interventions"].value == 1.0
+
+    await audit.record_revision_outcome(
+        db, item_id=40, revision_id=40, status="completed", source="test")
+    await db.commit()
+    by_name = await window()
+    assert (by_name["recovery_success"].value, by_name["recovery_success"].sample_count) == (1.0, 1)
+    assert by_name["operator_interventions"].value == 1.0
+
+
+async def test_r01_audit_get_current_id_filters_never_write(store, client):
+    """R01 (B4 F07, Astra F04): current-ID filters resolve the active key
+    without allocation. Known, unseen and nonexistent IDs leave the key table
+    unchanged; only the known lifetime returns its events."""
+    from app.services import factory_audit_service as _audit
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=70, status="pending")
+    async with store() as db:
+        await _audit.record_event(
+            db, event_kind="policy_change", source="test", occurred_at=_now(),
+            actor=_audit.derive_actor(actor_kind="operator"), scope_id=5,
+            action_outcome="applied")
+        await db.commit()
+
+    async def key_rows():
+        async with store() as db:
+            return (await db.execute(text(
+                "SELECT COUNT(*) FROM factory_context_keys"))).scalar_one()
+
+    before = await key_rows()
+    known = await client.get("/api/v1/factory/audit-events?scope_id=5", headers=_OPERATOR_HEADERS)
+    unseen = await client.get("/api/v1/factory/audit-events?item_id=70", headers=_OPERATOR_HEADERS)
+    missing = await client.get("/api/v1/factory/audit-events?item_id=999", headers=_OPERATOR_HEADERS)
+
+    assert [r.status_code for r in (known, unseen, missing)] == [200, 200, 200]
+    assert known.json()["total"] == 1
+    assert (unseen.json()["total"], missing.json()["total"]) == (0, 0)
+    assert await key_rows() == before
 
 
 # ---------------------------------------------------------------------------
@@ -3198,8 +3684,10 @@ async def test_c12_durations_pair_only_same_launch_boundaries(db):
     await db.commit()
     starts = (await db.execute(select(FactoryAuditEvent).where(
         FactoryAuditEvent.event_kind == "work_lifecycle"))).scalars().all()
-    assert [event.context_snapshot for event in starts] == [
-        {"launch_attempt": "item:21:launch:121"}, {"launch_attempt": "item:22:launch:122"}]
+    assert [event.context_snapshot["launch_attempt"] for event in starts] == [
+        "item:21:launch:121", "item:22:launch:122"]
+    # R04: the real writer also captures the event-time issue identity.
+    assert [event.context_snapshot["issue_number"] for event in starts] == [21, 22]
     assert [event.scope_id for event in starts] == [1, 1]
     for event in starts:
         event.occurred_at = _now()

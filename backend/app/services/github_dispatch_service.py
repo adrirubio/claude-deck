@@ -126,6 +126,24 @@ class PartiallyPreparedAttempt(ValueError):
         super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
 
 
+class HandoffExternalEffectError(ValueError):
+    """R07: handoff acceptance failed after an external stage began.
+
+    The SQL acceptance rolled back. ``effects`` keeps each known external
+    stage: push access, worktree identity and restoration.
+    """
+
+    def __init__(self, detail: str, effects: dict[str, str]):
+        self.effects = dict(effects)
+        super().__init__(detail)
+
+    @property
+    def uncertain(self) -> bool:
+        return (self.effects.get("restoration") == "restore_failed"
+                or (self.effects.get("worktree_identity") == "unknown"
+                    and self.effects.get("restoration") != "restored"))
+
+
 async def observe_work_lifecycle(
     db, *, item, from_status: str | None, to_status: str, source: str
 ) -> None:
@@ -2218,18 +2236,28 @@ class GithubDispatchService:
                     operation_id=acceptance,
                     correlation_id=acceptance,
                 )
+            # R07: each external stage is tracked so a failure after it keeps
+            # the known effect and its uncertainty.
+            effects = {"push_access": "not_attempted",
+                       "worktree_identity": "not_attempted",
+                       "restoration": "not_needed"}
             try:
                 await github_workspace_service.revoke_push_token(
                     scope,
                     workspace,
                     owner_slot_id=old_owner_slot_id,
                 )
+                # R07: the push-access revocation is an external effect that
+                # the SQL rollback below cannot undo.
+                effects["push_access"] = "revoked_or_not_held"
                 if workspace.kind != "primary":
+                    effects["worktree_identity"] = "unknown"
                     await github_workspace_service.apply_slot_identity(
                         config_workspace,
                         display_name=target.display_name,
                         slot_id=target.id,
                     )
+                    effects["worktree_identity"] = "applied"
                 await db.commit()
             except BaseException as exc:
                 await db.rollback()
@@ -2239,7 +2267,9 @@ class GithubDispatchService:
                             config_workspace,
                             snapshot,
                         )
+                        effects["restoration"] = "restored"
                     except GithubWorkspaceConfigError as restore_exc:
+                        effects["restoration"] = "restore_failed"
                         detail = (
                             "Handoff failed and the prior worktree identity could "
                             f"not be restored: {restore_exc}"
@@ -2252,12 +2282,13 @@ class GithubDispatchService:
                         )
                         if not isinstance(exc, Exception):
                             raise exc from restore_exc
-                        raise ValueError(detail) from restore_exc
+                        raise HandoffExternalEffectError(detail, effects) from restore_exc
                 if not isinstance(exc, Exception):
                     raise
                 if isinstance(exc, GithubWorkspaceCredentialRevokeError):
                     raise
-                raise ValueError(f"handoff identity update failed: {exc}") from exc
+                raise HandoffExternalEffectError(
+                    f"handoff identity update failed: {exc}", effects) from exc
         await db.refresh(item)
         await db.refresh(workspace)
 
@@ -3281,6 +3312,64 @@ class GithubDispatchService:
             )
             await db.rollback()
             self._apply_escalation(item, reason, note, preserve_existing_reason=False)
+
+    async def abandon_by_operator(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        note: str,
+        *,
+        actor: dict,
+    ) -> None:
+        """R07: the operator abandon action, its fact, then its broadcast.
+
+        The escalation and its audit fact commit together; an audit failure
+        commits neither. The broadcast follows with its own notice fact. A
+        notice failure records uncertainty and never replays the action.
+        """
+        from app.services import factory_audit_service as _audit
+
+        owner_may_be_active = (
+            item.dispatch_status == "dispatched" and item.owner_slot_id is not None
+        )
+        self._apply_escalation(item, "abandoned_by_operator", note, preserve_existing_reason=False)
+        item_id, scope_id = item.id, item.scope_id
+        operation = f"operator_escalation:item:{item_id}:at:{item.updated_at.isoformat()}"
+        await _audit.record_event(
+            db,
+            event_kind="operator_escalation",
+            source="agent_teams.abandon_github_work_item",
+            occurred_at=datetime.utcnow(),
+            actor=actor,
+            scope_id=scope_id,
+            item_id=item_id,
+            after_values={"dispatch_status": "escalated"},
+            action_outcome="applied",
+            sanitized_reason=note,
+            operation_id=operation,
+            correlation_id=operation,
+        )
+        await db.commit()
+        notice_fields = dict(
+            event_kind="operator_escalation_notification",
+            source="agent_teams.abandon_github_work_item",
+            actor=actor, scope_id=scope_id, item_id=item_id,
+            correlation_id=f"{operation}:notice")
+        try:
+            await self._send_escalation_broadcast(
+                db, item, "abandoned_by_operator", note,
+                owner_may_be_active=owner_may_be_active)
+            await _audit.record_event(
+                db, occurred_at=datetime.utcnow(), action_outcome="applied",
+                sanitized_reason="abandon notice delivered",
+                operation_id=f"{operation}:notice:applied", **notice_fields)
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to send the abandon notification for item %s", item_id)
+            await _audit.record_observation(
+                db, occurred_at=datetime.utcnow(), action_outcome="uncertain",
+                sanitized_reason="abandon notice unsettled after the committed escalation",
+                operation_id=f"{operation}:notice:uncertain", **notice_fields)
 
     async def escalate_without_notification(
         self,

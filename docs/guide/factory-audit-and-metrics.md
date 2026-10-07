@@ -34,17 +34,21 @@ A window wholly before the marker has no ledger values: they are unknown, not ze
 
 ## How to read the metrics
 
+Each outcome metric counts **one current result per tracked attempt**. A delivered result outranks sourced non-delivery, which outranks unknown, so later evidence can resolve an unknown result but never lowers a delivered one. Repeated evidence counts once. A known fact time places the result in a window; otherwise the record time does.
+
 | Metric | Meaning |
 | --- | --- |
-| `terminal_tracking_in_window` | Work items with a terminal tracking fact. Terminal tracking is not delivery. |
-| `delivered_in_window` | Tracked attempts with sourced delivery evidence. |
-| `closed_without_delivery` | Attempts with sourced proof that they ended without delivery. |
-| `unknown_outcomes` | Terminal tracking without result evidence, for example a closed issue with no merge evidence. |
-| `independently_human_reviewed_design` | Only validated independent human review of the exact artifact and version. A merge or Leader approval is not human review. |
+| `terminal_tracking_in_window` | Tracked attempts with a terminal fact. Terminal tracking is not delivery. Deleting the live item does not change the count. |
+| `delivered_in_window` | Attempts whose current result is delivered. A merged pull request, observed by the verification merge paths, records this result with the PR merge time. |
+| `closed_without_delivery` | Attempts with sourced proof that they ended without delivery: GitHub closed the issue as not planned or duplicate, with no pull request. |
+| `unknown_outcomes` | Terminal tracking without result evidence, for example an ordinary issue closure with no merge evidence. |
+| `independently_human_reviewed_design` | Delivered design attempts with a validated independent human review of the exact artifact, counted once per attempt. The evidence must name a human actor and attest independence; an agent member or the operator credential never qualifies. A merge or Leader approval is not human review. |
 | `elapsed_attempt_duration` | The median seconds from dispatch to terminal tracking of the same launched attempt. It is not execution time or operator hands-on time. Unpaired facts are unknown. |
 | `implementation_retries`, `diagnostic_retries` | Recorded retry charges by class. |
 | `implementation_retry_counters`, `diagnostic_retry_counters` | The authoritative budget counters now. An authorized retry can reset them, so they are not charge counts. |
-| `recovery_success`, `operator_interventions`, `harness_failures` | Ledger facts with their own units and coverage. |
+| `recovery_success` | Preserved revision results that completed. A cancellation or resume request is not a recovery success. |
+| `operator_interventions` | Distinct applied operator actions. Notification facts are not actions; rejected and uncertain actions are excluded and reported. |
+| `harness_failures` | Failed launch transitions only. |
 | `current_queue`, `total_tracked_attempts`, `pending_reviews`, `active_revisions` | Present state from live records, labelled with their population. |
 | `cost` | Unknown. There is no measured usage attribution. |
 
@@ -52,7 +56,7 @@ Tracked attempts in separate scopes stay distinct. A count is never a unique-PR 
 
 ## Filters
 
-Both reads use the same applied team and scope context keys. Context keys address retained history after a team, scope or item is deleted. A key of the wrong kind, an unknown key, or a scope of another team has no current population: present-state values are then unknown, never global.
+Both reads use the same applied team and scope context keys. A context key belongs to one resource lifetime. When a team, scope or item is deleted, its key is retired; a later resource with the same numeric ID receives a new key, so old history never attaches to it. A retired key still addresses the retained history, but it has no current population. A key of the wrong kind, an unknown key, or a scope of another team also has no current population: present-state values are then unknown, never global. Reading the audit events never creates a key.
 
 Each section names the filters, page and observation time of the data it shows. When a newer read is pending, fails or is cancelled, the section labels its data as retained. Paging waits while the rows on screen belong to another selection.
 
@@ -63,6 +67,8 @@ The event list uses the operator token for this browser tab. If no token is stor
 ## Limits
 
 - Facts before the coverage marker are not available and are not reconstructed.
+- No producer records independent human review or exact artifact acceptance yet, so reviewed-design counts stay at zero with explicit unknowns.
+- An escalated item whose pull request was closed without merge has no terminal result until another guarded consumer records one.
 - Human benefit measurements and operator hands-on minutes are not measured (V14 NOT_PERFORMED).
 - Cost stays unknown without measured usage attribution.
 - Events are retained for the life of the database. No automatic purge exists.

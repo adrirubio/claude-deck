@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiHttpError } from "@/lib/api";
 import type { AuditEventPage, AuditEventRead, MetricsWindow } from "./auditApi";
@@ -105,10 +105,18 @@ export function AuditMetricsPage() {
   const auditEpochRef = useRef(0);
   const applyEpochRef = useRef(0);
 
+  // R11: focus returns to the invoking control, or to Apply filters, after
+  // the token dialog closes by Escape, Cancel or submission.
+  const focusReturnRef = useRef<HTMLElement | null>(null);
+  const applyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const dialogWasOpenRef = useRef(false);
+
   const requestToken = useCallback((message: string | null = null): Promise<string | null> => {
     const stored = getOperatorToken();
     if (stored) return Promise.resolve(stored);
     if (tokenPromiseRef.current) return tokenPromiseRef.current;
+    const active = document.activeElement;
+    focusReturnRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
     const pending = new Promise<string | null>((resolve) => {
       tokenResolverRef.current = resolve;
     });
@@ -117,6 +125,23 @@ export function AuditMetricsPage() {
     setTokenDialogOpen(true);
     return pending;
   }, []);
+
+  useEffect(() => {
+    if (tokenDialogOpen) {
+      dialogWasOpenRef.current = true;
+      return;
+    }
+    if (!dialogWasOpenRef.current) return;
+    dialogWasOpenRef.current = false;
+    // Runs after the dialog's own unmount focus handling.
+    const timer = window.setTimeout(() => {
+      const preferred = focusReturnRef.current;
+      const target = preferred && preferred.isConnected ? preferred : applyButtonRef.current;
+      focusReturnRef.current = null;
+      target?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [tokenDialogOpen]);
 
   function settleToken(token: string | null) {
     tokenResolverRef.current?.(token);
@@ -371,17 +396,19 @@ export function AuditMetricsPage() {
           present-state population. Both reads use the same applied filters.
         </p>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="text-sm">
+          {/* R10: inputs stay inside the card at narrow widths. */}
+          <label className="w-full min-w-0 text-sm sm:w-auto">
             <span className={labelClass}>Team context key</span>
-            <input className="mt-1 w-64 max-w-full rounded-md border bg-background px-3 py-2"
+            <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64"
               value={teamKey} onChange={(event) => setTeamKey(event.target.value)} />
           </label>
-          <label className="text-sm">
+          <label className="w-full min-w-0 text-sm sm:w-auto">
             <span className={labelClass}>Scope context key</span>
-            <input className="mt-1 w-64 max-w-full rounded-md border bg-background px-3 py-2"
+            <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64"
               value={scopeKey} onChange={(event) => setScopeKey(event.target.value)} />
           </label>
-          <Button onClick={() => void applyReads({ teamKey: teamKey.trim(), scopeKey: scopeKey.trim() }, 1)}>
+          <Button ref={applyButtonRef}
+            onClick={() => void applyReads({ teamKey: teamKey.trim(), scopeKey: scopeKey.trim() }, 1)}>
             Apply filters
           </Button>
           <Button variant="outline" onClick={() => void loadMetrics(applied)}>Reload safe metrics</Button>
@@ -421,59 +448,62 @@ export function AuditMetricsPage() {
             </thead>
             <tbody>
               {events.map((event) => (
-                <Fragment key={event.id}>
-                  <tr className="border-t align-top">
-                    <td className="p-2">{event.occurred_at}</td>
-                    <td className="p-2 break-words">{event.event_kind}</td>
-                    <td className="p-2 break-words">{event.actor_kind}</td>
-                    <td className="p-2">{event.action_outcome ?? "unknown"}</td>
-                    <td className="p-2">{event.delivery_outcome ?? "null"}</td>
-                    <td className="p-2">{event.live_links_available ? "available" : "unavailable"}</td>
-                    <td className="p-2">
-                      <Button variant="outline" aria-expanded={expanded === event.id}
-                        onClick={() => setExpanded(expanded === event.id ? null : event.id)}>
-                        {expanded === event.id ? "Hide detail" : "Show detail"}
-                      </Button>
-                    </td>
-                  </tr>
-                  {expanded === event.id && (
-                    <tr>
-                      <td colSpan={7} className="bg-muted/40 p-3">
-                        <dl className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
-                          <div><span className={labelClass}>Source</span>{event.source}</div>
-                          <div><span className={labelClass}>Record kind</span>{event.record_kind}</div>
-                          <div><span className={labelClass}>Fact source</span>{event.fact_source ?? "unavailable"}</div>
-                          <div><span className={labelClass}>Fact time</span>{event.fact_time ?? "unavailable"}</div>
-                          <div><span className={labelClass}>Actor reference</span>{event.actor_reference ?? "none"}</div>
-                          <div><span className={labelClass}>Reason</span>{event.sanitized_reason ?? "none"}</div>
-                          <div><span className={labelClass}>Completion kind</span>{event.completion_kind ?? "null"}</div>
-                          <div><span className={labelClass}>Revision</span>{event.revision_id ?? "none"}</div>
-                          <div className="sm:col-span-2">
-                            <span className={labelClass}>Context keys</span>
-                            team {event.team_context_key ?? "none"}; scope {event.scope_context_key ?? "none"};
-                            item {event.item_context_key ?? "none"}
-                          </div>
-                          <div className="sm:col-span-2">
-                            <span className={labelClass}>Stored snapshot labels</span>
-                            {namedSnapshotValues(event).length
-                              ? namedSnapshotValues(event).map(({ name, text }) => (
-                                  <div key={name} className="break-words">{name}: {text}</div>
-                                ))
-                              : "none named in this event"}
-                          </div>
-                          <div className="sm:col-span-2 break-words">
-                            <span className={labelClass}>Before / after (allowlisted)</span>
-                            {JSON.stringify(event.before_values ?? {})} → {JSON.stringify(event.after_values ?? {})}
-                          </div>
-                        </dl>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                <tr key={event.id} className="border-t align-top">
+                  <td className="p-2">{event.occurred_at}</td>
+                  <td className="p-2 break-words">{event.event_kind}</td>
+                  <td className="p-2 break-words">{event.actor_kind}</td>
+                  <td className="p-2">{event.action_outcome ?? "unknown"}</td>
+                  <td className="p-2">{event.delivery_outcome ?? "null"}</td>
+                  <td className="p-2">{event.live_links_available ? "available" : "unavailable"}</td>
+                  <td className="p-2">
+                    <Button variant="outline" aria-expanded={expanded === event.id}
+                      aria-controls="audit-event-detail"
+                      onClick={() => setExpanded(expanded === event.id ? null : event.id)}>
+                      {expanded === event.id ? "Hide detail" : "Show detail"}
+                    </Button>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {/* R10: the detail is outside the horizontally scrolled table, so it
+            stays readable in the visible area at every width. */}
+        {events.filter((event) => event.id === expanded).map((event) => (
+          <section key={event.id} id="audit-event-detail" aria-label="Event detail"
+            className="min-w-0 rounded border bg-muted/40 p-3">
+            <p className="mb-2 text-sm font-medium break-words">
+              Detail for event {event.id}
+            </p>
+            <dl className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+              <div className="break-words"><span className={labelClass}>Source</span>{event.source}</div>
+              <div><span className={labelClass}>Record kind</span>{event.record_kind}</div>
+              <div className="break-words"><span className={labelClass}>Fact source</span>{event.fact_source ?? "unavailable"}</div>
+              <div><span className={labelClass}>Fact time</span>{event.fact_time ?? "unavailable"}</div>
+              <div className="break-words"><span className={labelClass}>Actor reference</span>{event.actor_reference ?? "none"}</div>
+              <div className="break-words"><span className={labelClass}>Reason</span>{event.sanitized_reason ?? "none"}</div>
+              <div><span className={labelClass}>Completion kind</span>{event.completion_kind ?? "null"}</div>
+              <div><span className={labelClass}>Revision</span>{event.revision_id ?? "none"}</div>
+              <div className="break-words sm:col-span-2">
+                <span className={labelClass}>Context keys</span>
+                team {event.team_context_key ?? "none"}; scope {event.scope_context_key ?? "none"};
+                item {event.item_context_key ?? "none"}
+              </div>
+              <div className="sm:col-span-2">
+                <span className={labelClass}>Stored snapshot labels</span>
+                {namedSnapshotValues(event).length
+                  ? namedSnapshotValues(event).map(({ name, text }) => (
+                      <div key={name} className="break-words">{name}: {text}</div>
+                    ))
+                  : "none named in this event"}
+              </div>
+              <div className="break-words sm:col-span-2">
+                <span className={labelClass}>Before / after (allowlisted)</span>
+                {JSON.stringify(event.before_values ?? {})} → {JSON.stringify(event.after_values ?? {})}
+              </div>
+            </dl>
+          </section>
+        ))}
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="outline" disabled={pagingBlocked || page <= 1}
             onClick={() => eventsResult && void loadAudit(eventsResult.filters, eventsResult.page - 1)}>

@@ -52,10 +52,15 @@ the rollback; observation failure never masks the refusal.
 
 ## Replay behavior
 
-A non-secret operation identity tied to the action and resource deduplicates
-replays: duplicate delivery cannot duplicate an accepted action or terminal
-event. The optional operation identity preserves legacy callers and all
-authorization, nonce, lease and revision guards.
+A non-secret operation identity tied to the action and to the resource
+lifetimes (context keys, not numeric IDs) deduplicates replays: duplicate
+delivery cannot duplicate an accepted action or terminal event. Only an
+exact replay returns the existing fact; a changed canonical payload is
+refused (`ReplayConflictError`) and the conflicting change is never
+committed. Delivery facts include the fact itself in their identity, so
+later evidence is appended and never suppressed. The optional operation
+identity preserves legacy callers and all authorization, nonce, lease and
+revision guards.
 
 ## Delivery and review evidence rules
 
@@ -110,8 +115,10 @@ import time. Unknown historical times remain unavailable. Generic row
 timestamps never supply merge, execution or human-review times. Ledger rows
 survive legitimate deletion of teams, scopes, items, revisions and requests;
 live references use deletion-safe nulling and never cascade events away or
-add deletion blocks after completed guards. Immutable context keys defeat
-numeric ID reuse. Renames, provider changes and slot reconfiguration never
+add deletion blocks after completed guards. Context keys belong to one
+resource lifetime: SQLite triggers retire a deleted team, scope or item's
+key, so numeric ID reuse allocates a new key. Reads resolve keys without
+allocation. Metrics reconcile one current result per immutable attempt. Renames, provider changes and slot reconfiguration never
 rewrite past facts. Configured-at-event and observed-runtime providers stay
 distinct; absent runtime evidence stays unknown. Aggregations never depend
 on inner joins to live operational rows. The ledger is retained for the life

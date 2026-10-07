@@ -387,16 +387,33 @@ async def list_factory_audit_events(
 
     from app.models.database import FactoryAuditEvent
     from app.models.schemas import FactoryAuditEventPage, FactoryAuditEventRead
-    from app.services.factory_audit_service import context_key_for as _audit_context_key
+    from app.services.factory_audit_service import current_context_key as _current_key
 
-    # C05: current-ID filters resolve the current resource context key so
-    # history stays addressable after deletion and numeric ID reuse.
-    if team_id is not None and team_context_key is None:
-        team_context_key = await _audit_context_key(db, "team", team_id)
-    if scope_id is not None and scope_context_key is None:
-        scope_context_key = await _audit_context_key(db, "scope", scope_id)
-    if item_id is not None and item_context_key is None:
-        item_context_key = await _audit_context_key(db, "item", item_id)
+    # C05/R01: current-ID filters resolve the active key of the current
+    # resource lifetime. The read never allocates a key and performs no write.
+    # A current ID with no recorded lifetime key selects no events.
+    unresolved = False
+    for numeric, kind, supplied in (
+        (team_id, "team", team_context_key),
+        (scope_id, "scope", scope_context_key),
+        (item_id, "item", item_context_key),
+    ):
+        if numeric is None or supplied is not None:
+            continue
+        resolved = await _current_key(db, kind, numeric)
+        if resolved is None:
+            unresolved = True
+        elif kind == "team":
+            team_context_key = resolved
+        elif kind == "scope":
+            scope_context_key = resolved
+        else:
+            item_context_key = resolved
+    if unresolved:
+        return FactoryAuditEventPage(
+            items=[], total=0, page=page, page_size=page_size,
+            team_context_key=team_context_key, scope_context_key=scope_context_key,
+            event_kind=event_kind, snapshot_labels=[])
 
     stmt = select(FactoryAuditEvent)
     count_stmt = select(func.count()).select_from(FactoryAuditEvent)

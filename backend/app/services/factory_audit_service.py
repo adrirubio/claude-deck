@@ -36,6 +36,10 @@ SAFE_VALUE_FIELDS = {
     "continuation_enabled", "max_continuation_revisions",
     "max_continuation_failed_heads", "max_failed_heads_per_revision",
     "max_scope_paths", "max_scope_commands",
+    # R05: every audited finite scope policy setting. Command hints and
+    # templates are free text that can hold commands; they stay excluded.
+    "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+    "max_auto_merges_per_day", "max_build_parallelism", "builds_out_of_tree",
 }
 
 # C10: typed, named fields for event-time snapshots. Values are primitive
@@ -51,7 +55,8 @@ SAFE_SNAPSHOT_FIELDS = {
 }
 
 # C10/C03: the typed fields of a human review evidence record.
-SAFE_REVIEW_FIELDS = {"fact_kind", "artifact", "version", "actor", "source"}
+SAFE_REVIEW_FIELDS = {"fact_kind", "artifact", "version", "actor", "source",
+                      "actor_kind", "independent"}
 
 _MAX_TEXT = 200
 _MAX_REASON = 500
@@ -109,6 +114,14 @@ _REDACTIONS = (
 
 class AuditWriteError(RuntimeError):
     """An audit write failed; the caller must roll back its own change."""
+
+
+class ReplayConflictError(AuditWriteError):
+    """R09: a replayed operation identity carries a different canonical fact.
+
+    The existing fact stands. The caller's transaction must roll back, so the
+    conflicting action is never committed and never misreported.
+    """
 
 
 def sanitize_text(value: str, *, limit: int = _MAX_TEXT) -> str:
@@ -227,20 +240,212 @@ def derive_actor(
     }
 
 
-async def context_key_for(db: AsyncSession, key_kind: str, numeric_id: int) -> str:
-    """Allocate or reuse one immutable context key for a logical identity."""
-    existing = (await db.scalars(
-        select(FactoryContextKey).where(
+async def current_context_key(
+    db: AsyncSession, key_kind: str, numeric_id: int
+) -> str | None:
+    """R01: the active key of the current resource lifetime, read-only.
+
+    Reads use this. It never allocates, so a factory GET performs no write.
+    None means no event has been recorded for the current lifetime.
+    """
+    return (await db.scalars(
+        select(FactoryContextKey.context_key).where(
             FactoryContextKey.key_kind == key_kind,
             FactoryContextKey.numeric_id == numeric_id,
+            FactoryContextKey.retired_at.is_(None),
         ).limit(1)
     )).first()
+
+
+async def context_key_for(db: AsyncSession, key_kind: str, numeric_id: int) -> str:
+    """Allocate or reuse the context key of the current resource lifetime.
+
+    Only authorized write and migration transactions call this. A deleted
+    resource's key is retired by trigger, so a reused numeric ID receives a
+    new key and never joins the old history.
+    """
+    existing = await current_context_key(db, key_kind, numeric_id)
     if existing is not None:
-        return existing.context_key
+        return existing
     key = f"{key_kind}:{numeric_id}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
     db.add(FactoryContextKey(key_kind=key_kind, numeric_id=numeric_id, context_key=key))
     await db.flush()
     return key
+
+
+async def context_key_is_current(db: AsyncSession, key: str, key_kind: str) -> int | None:
+    """R01: the numeric ID of a key only while its lifetime is current."""
+    return (await db.scalars(
+        select(FactoryContextKey.numeric_id).where(
+            FactoryContextKey.context_key == key,
+            FactoryContextKey.key_kind == key_kind,
+            FactoryContextKey.retired_at.is_(None),
+        ).limit(1)
+    )).first()
+
+
+def _canonical_fact(**fields: Any) -> tuple:
+    """R09: the fact payload an exact replay must repeat."""
+    return tuple(
+        (name, tuple(sorted(value.items())) if isinstance(value, dict) else value)
+        for name, value in sorted(fields.items()))
+
+
+async def _resolve_parents(
+    db: AsyncSession,
+    *,
+    team_preset_id: int | None,
+    scope_id: int | None,
+    item_id: int | None,
+) -> tuple[int | None, int | None]:
+    """R04: the live scope of an item and the live team of a scope.
+
+    Only missing parents are resolved, from the current live rows. An
+    explicitly supplied parent is kept. A deleted parent stays unknown.
+    """
+    from app.models.database import GithubWorkItem, TeamGithubScope
+
+    if scope_id is None and item_id is not None:
+        scope_id = (await db.scalars(
+            select(GithubWorkItem.scope_id).where(GithubWorkItem.id == item_id).limit(1)
+        )).first()
+    if team_preset_id is None and scope_id is not None:
+        team_preset_id = (await db.scalars(
+            select(TeamGithubScope.preset_id).where(TeamGithubScope.id == scope_id).limit(1)
+        )).first()
+    return team_preset_id, scope_id
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if isinstance(value, datetime) else None
+
+
+async def event_time_snapshot(
+    db: AsyncSession,
+    *,
+    team_preset_id: int | None,
+    scope_id: int | None,
+    item_id: int | None,
+) -> dict[str, Any]:
+    """R04: safe identity labels of the live resources at event time.
+
+    The configured harness is the trusted slot configuration: the item's
+    owner slot, or the team's Leader slot for team and scope facts. GitHub
+    authentication mode is its own label. The observed runtime provider stays
+    unknown (None): no runtime proof is available at these writers.
+    """
+    from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubWorkItem, TeamGithubScope
+
+    snapshot: dict[str, Any] = {}
+    slot_id = None
+    if item_id is not None:
+        item = await db.get(GithubWorkItem, item_id)
+        if item is not None:
+            snapshot.update({
+                "issue_number": item.issue_number, "issue_type": item.issue_type,
+                "pr_number": item.pr_number})
+            slot_id = item.owner_slot_id
+    if scope_id is not None:
+        scope = await db.get(TeamGithubScope, scope_id)
+        if scope is not None:
+            snapshot.update({
+                "repo_owner": scope.repo_owner, "repo_name": scope.repo_name,
+                "github_auth_mode": scope.github_auth_mode,
+                "scope_created_at": _iso(scope.created_at),
+                "scope_updated_at": _iso(scope.updated_at)})
+    if team_preset_id is not None:
+        preset = await db.get(AgentTeamPreset, team_preset_id)
+        if preset is not None:
+            snapshot.update({
+                "team_display_name": preset.name, "team_created_at": _iso(preset.created_at)})
+            if slot_id is None:
+                slot_id = preset.leader_slot_id
+    if slot_id is not None:
+        slot = await db.get(AgentTeamSlot, slot_id)
+        if slot is not None:
+            snapshot.update({
+                "slot_display_name": slot.display_name, "configured_provider": slot.provider})
+    if snapshot:
+        snapshot.setdefault("observed_runtime_provider", None)
+        snapshot["event_time_labels"] = sorted(
+            key for key in snapshot if key != "observed_runtime_provider")
+    return snapshot
+
+
+async def item_attempt(db: AsyncSession, item: Any) -> tuple[str, int | None, str]:
+    """R02: the attempt, revision and launch identity of an item now.
+
+    Matches the watcher's identity: the revision row of this item, dispatch
+    attempt and active revision number.
+    """
+    from app.models.database import GithubAttemptScopeRevision
+
+    revision_id = None
+    if item.dispatch_nonce is not None:
+        revision_id = (await db.scalars(
+            select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == item.active_scope_revision,
+            ).limit(1)
+        )).first()
+    attempt = f"item:{item.id}:launch:{item.launch_id}:revision:{revision_id}"
+    return attempt, revision_id, launch_attempt_key(item.id, item.launch_id)
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+async def record_merged_delivery(
+    db: AsyncSession, item: Any, pull: dict | None, *, source: str
+) -> FactoryAuditEvent:
+    """R02: the sourced delivery fact of a merged pull request.
+
+    Called by the verification merge paths in the merge transaction. The
+    PR's own merge time is the fact time; an absent time stays unknown.
+    Independent human review is not inferred from a merge.
+    """
+    from app.models.database import TeamGithubScope
+
+    attempt, revision_id, launch = await item_attempt(db, item)
+    pull = pull if isinstance(pull, dict) else {}
+    pr_number = pull.get("number") or item.pr_number
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    # The artifact names the repository and pull request, so equal PR numbers
+    # in different repositories never collide.
+    artifact = None
+    if pr_number:
+        repository = f"{scope.repo_owner}/{scope.repo_name}" if scope is not None else "unknown"
+        artifact = f"{repository}/pull/{pr_number}"
+    return await record_delivery_fact(
+        db, item_id=item.id, revision_id=revision_id, scope_id=item.scope_id,
+        delivery_outcome="delivered",
+        completion_kind="merged_design" if item.issue_type == "design" else "merged_code",
+        fact_source="github_pull_request_merged",
+        fact_time=_parse_time(pull.get("merged_at")),
+        artifact=artifact,
+        actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        attempt=attempt, launch_attempt=launch, source=source)
+
+
+async def record_revision_outcome(
+    db: AsyncSession, *, item_id: int, revision_id: int, status: str, source: str
+) -> FactoryAuditEvent:
+    """R08: one preserved revision result fact, in the result's transaction."""
+    operation_id = f"revision_outcome:{revision_id}:{status}"
+    return await record_event(
+        db, event_kind="revision_outcome", source=source, occurred_at=datetime.utcnow(),
+        actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=item_id, revision_id=revision_id, after_values={"status": status},
+        action_outcome="applied", sanitized_reason=f"revision {status}",
+        operation_id=operation_id, correlation_id=operation_id)
 
 
 def replay_key_for(
@@ -312,23 +517,51 @@ async def record_event(
     only when an explicit operation id is supplied; legacy callers keep their
     existing guards and are never blocked by missing ledger state.
     """
-    replay_key = None
-    if operation_id:
-        replay_key = replay_key_for(
-            operation_id, event_kind, team_preset_id=team_preset_id,
-            team_slot_id=team_slot_id, scope_id=scope_id, item_id=item_id,
-            revision_id=revision_id, request_id=request_id)
-        existing = await find_by_operation(db, replay_key)
-        if existing is not None:
-            return existing
-    # C05: every event site allocates immutable context keys for any live
-    # identity it records. Numeric ID reuse can never reattach old history.
+    # R04: resolve parent identities from the live child before allocation,
+    # so team and scope filters include item- and scope-level facts.
+    team_preset_id, scope_id = await _resolve_parents(
+        db, team_preset_id=team_preset_id, scope_id=scope_id, item_id=item_id)
+    # C05/R01: every event site allocates the context keys of the current
+    # resource lifetime. Numeric ID reuse can never reattach old history.
     if team_preset_id is not None and team_context_key is None:
         team_context_key = await context_key_for(db, "team", team_preset_id)
     if scope_id is not None and scope_context_key is None:
         scope_context_key = await context_key_for(db, "scope", scope_id)
     if item_id is not None and item_context_key is None:
         item_context_key = await context_key_for(db, "item", item_id)
+    # R04: one typed event-time snapshot from the actual live resources. The
+    # caller's known values win; missing labels are filled before commit.
+    enriched = await event_time_snapshot(
+        db, team_preset_id=team_preset_id, scope_id=scope_id, item_id=item_id)
+    for key, value in (context_snapshot or {}).items():
+        if value is not None or key not in enriched:
+            enriched[key] = value
+    projected_snapshot = project_snapshot(enriched)
+    projected_before = allowlist_values(before_values)
+    projected_after = allowlist_values(after_values)
+    replay_key = None
+    if operation_id:
+        # R09: the replay identity binds the operation to immutable resource
+        # lifetimes (context keys), not to reusable numeric IDs.
+        replay_key = replay_key_for(
+            operation_id, event_kind, team_preset_id=team_context_key,
+            team_slot_id=team_slot_id, scope_id=scope_context_key, item_id=item_context_key,
+            revision_id=revision_id, request_id=request_id)
+        existing = await find_by_operation(db, replay_key)
+        if existing is not None:
+            canonical = _canonical_fact(
+                action_outcome=action_outcome, delivery_outcome=delivery_outcome,
+                completion_kind=completion_kind, fact_source=fact_source,
+                before_values=projected_before, after_values=projected_after)
+            if canonical != _canonical_fact(
+                    action_outcome=existing.action_outcome,
+                    delivery_outcome=existing.delivery_outcome,
+                    completion_kind=existing.completion_kind,
+                    fact_source=existing.fact_source,
+                    before_values=existing.before_values,
+                    after_values=existing.after_values):
+                raise ReplayConflictError(f"replay conflict for {event_kind}")
+            return existing
     event = FactoryAuditEvent(
         occurred_at=occurred_at,
         event_kind=event_kind,
@@ -350,13 +583,13 @@ async def record_event(
         scope_context_key=scope_context_key,
         item_context_key=item_context_key,
         # C10: every stored value passes a typed, bounded projection.
-        context_snapshot=project_snapshot(context_snapshot),
+        context_snapshot=projected_snapshot,
         correlation_id=correlation_id,
         operation_id=operation_id,
         replay_key=replay_key,
         sanitized_reason=sanitize_reason(sanitized_reason),
-        before_values=allowlist_values(before_values),
-        after_values=allowlist_values(after_values),
+        before_values=projected_before,
+        after_values=projected_after,
         action_outcome=action_outcome,
         delivery_outcome=delivery_outcome,
         completion_kind=completion_kind,
@@ -606,6 +839,13 @@ def validated_review_evidence(evidence: dict | None) -> bool:
     actor = evidence.get("actor")
     if not isinstance(actor, str) or actor in {"shared-operator-credential", "operator"}:
         return False
+    # R06: independence is never inferred from a non-operator string. The
+    # evidence must attest a human actor and independence, and an agent
+    # member reference never qualifies.
+    if actor.startswith("member:") or evidence.get("actor_kind") != "human":
+        return False
+    if evidence.get("independent") is not True:
+        return False
     if not evidence.get("source"):
         return False
     return True
@@ -627,6 +867,8 @@ async def record_delivery_fact(
     actor: dict[str, Any] | None = None,
     attempt: str | None = None,
     launch_attempt: str | None = None,
+    snapshot: dict[str, Any] | None = None,
+    source: str | None = None,
 ) -> FactoryAuditEvent:
     """A28-A35: record one sourced delivery outcome fact per tracked attempt.
 
@@ -639,29 +881,36 @@ async def record_delivery_fact(
     distinct fields. C12: ``launch_attempt`` binds the terminal boundary to
     the launch that started the attempt, for same-attempt durations.
     """
-    if attempt:
-        operation_id = f"delivery:{attempt}:{artifact or 'attempt'}"
-    else:
-        operation_id = f"delivery:{item_id}:{artifact or 'attempt'}"
-    context_snapshot: dict[str, Any] = {}
+    # R03: the operation identity includes the fact itself, so a repeated
+    # identical fact deduplicates while later, different evidence for the same
+    # attempt and artifact is appended, never suppressed.
+    attempt_identity = attempt or f"item:{item_id}"
+    operation_id = (f"delivery:{attempt_identity}:{artifact or 'attempt'}:"
+                    f"{delivery_outcome}:{completion_kind}:{fact_source}")
+    context_snapshot: dict[str, Any] = dict(snapshot or {})
+    context_snapshot["attempt"] = attempt_identity
+    context_snapshot["fact_source"] = fact_source
     if artifact:
-        context_snapshot.update({"artifact": artifact, "fact_source": fact_source})
-    if attempt:
-        context_snapshot["attempt"] = attempt
+        context_snapshot["artifact"] = artifact
     if launch_attempt:
         context_snapshot["launch_attempt"] = launch_attempt
     return await record_event(
         db,
         event_kind="delivery_evidence",
-        source=fact_source,
-        occurred_at=fact_time or datetime.utcnow(),
+        source=source or fact_source,
+        # R02/F09: the observation time is the occurrence of this record; the
+        # sourced fact keeps its own source and time, and an unknown fact time
+        # stays null.
+        occurred_at=datetime.utcnow(),
+        fact_source=fact_source,
+        fact_time=fact_time,
         actor=actor or derive_actor(actor_kind="scheduler", scheduler="github_watcher"),
         item_id=item_id,
         revision_id=revision_id,
         scope_id=scope_id,
         team_context_key=team_context_key,
         scope_context_key=scope_context_key,
-        context_snapshot=context_snapshot or None,
+        context_snapshot=context_snapshot,
         delivery_outcome=delivery_outcome,
         completion_kind=completion_kind,
         action_outcome="applied",

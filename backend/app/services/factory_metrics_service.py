@@ -45,12 +45,11 @@ async def _resolve_context_numeric(
     """
     if not key:
         return None
-    from app.models.database import AgentTeamPreset, FactoryContextKey, TeamGithubScope
-    row = (await db.scalars(
-        select(FactoryContextKey.numeric_id).where(
-            FactoryContextKey.context_key == key,
-            FactoryContextKey.key_kind == key_kind).limit(1)
-    )).first()
+    from app.models.database import AgentTeamPreset, TeamGithubScope
+    from app.services.factory_audit_service import context_key_is_current
+    # R01: a retired key (its resource was deleted) never selects the live
+    # resource that now reuses the numeric ID.
+    row = await context_key_is_current(db, key, key_kind)
     if row is None:
         return None
     model = TeamGithubScope if key_kind == "scope" else AgentTeamPreset
@@ -143,36 +142,67 @@ async def build_metrics_window(
             select(func.count()).select_from(GithubAttemptScopeRevision)
             .where(GithubAttemptScopeRevision.status.not_in(_ACTIVE_REVISION_STATES)))
 
-    delivered = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.delivery_outcome == _DELIVERED)))
-    non_delivery = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.delivery_outcome == _NON_DELIVERY)))
-    terminal_unknown = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.delivery_outcome == _UNKNOWN)))
-    review_rows = (await db.execute(ledger_scoped(
-        select(FactoryAuditEvent.human_review_evidence).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.human_review_evidence.is_not(None))))).scalars().all()
-    review_evidenced = sum(
-        1 for evidence in review_rows if _audit.validated_review_evidence(evidence))
-    recovery_applied = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
-               FactoryAuditEvent.action_outcome == "applied",
-               FactoryAuditEvent.revision_id.is_not(None))))
-    recovery_rejected = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
-               FactoryAuditEvent.action_outcome == "rejected")))
+    def ledger_keyed(stmt):
+        """Context-key selection only; the caller applies its own time bound."""
+        if team_context_key:
+            stmt = stmt.where(FactoryAuditEvent.team_context_key == team_context_key)
+        if scope_context_key:
+            stmt = stmt.where(FactoryAuditEvent.scope_context_key == scope_context_key)
+        return stmt
+
+    # R03: one current result per immutable scoped attempt, reconciled from
+    # every retained outcome fact up to the window end. Retained context keys
+    # and snapshots identify the attempt, so deletion never changes history.
+    # A known sourced fact time places the result; otherwise the observation
+    # time does.
+    effective_time = func.coalesce(FactoryAuditEvent.fact_time, FactoryAuditEvent.occurred_at)
+    outcome_rows = (await db.execute(ledger_keyed(
+        select(FactoryAuditEvent.id, effective_time.label("occurred_at"),
+               FactoryAuditEvent.delivery_outcome, FactoryAuditEvent.completion_kind,
+               FactoryAuditEvent.context_snapshot, FactoryAuditEvent.item_context_key)
+        .where(FactoryAuditEvent.delivery_outcome.is_not(None),
+               effective_time <= window_end)))).all()
+    attempts = _reconcile_attempts(
+        outcome_rows, _naive_utc(window_start), _naive_utc(window_end))
+    in_window = [state for state in attempts.values() if state["in_window"]]
+    delivered = sum(1 for state in in_window if state["outcome"] == _DELIVERED)
+    non_delivery = sum(1 for state in in_window if state["outcome"] == _NON_DELIVERY)
+    terminal_unknown = sum(1 for state in in_window if state["outcome"] == _UNKNOWN)
+    terminal_tracked = len(in_window)
+
+    # R06: independent review of the exact design artifact, once per eligible
+    # delivered design attempt. Code deliveries are not in the population.
+    review_rows = (await db.execute(ledger_keyed(
+        select(FactoryAuditEvent.id, FactoryAuditEvent.human_review_evidence,
+               FactoryAuditEvent.context_snapshot, FactoryAuditEvent.item_context_key)
+        .where(FactoryAuditEvent.human_review_evidence.is_not(None),
+               FactoryAuditEvent.occurred_at <= window_end)))).all()
+    eligible_design = [state for state in in_window
+                       if state["outcome"] == _DELIVERED and state["design"]]
+    reviewed_design = _reviewed_design_attempts(eligible_design, review_rows, _audit)
+
+    # R08: recovery counts preserved revision results, not action requests.
+    recovery_rows = (await db.execute(ledger_scoped(
+        select(func.json_extract(FactoryAuditEvent.after_values, '$.status'))
+        .select_from(FactoryAuditEvent)
+        .where(FactoryAuditEvent.event_kind == "revision_outcome")))).scalars().all()
+    recovery_applied = sum(1 for status in recovery_rows if status == "completed")
+    recovery_total = len(recovery_rows)
     recovery_uncertain = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
                FactoryAuditEvent.action_outcome == "uncertain")))
-    interventions = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.actor_kind == "operator")))
+    # R08: interventions are distinct applied operator actions. Notification
+    # facts are not actions; rejected and uncertain actions are excluded and
+    # reported.
+    operator_rows = (await db.execute(ledger_scoped(
+        select(FactoryAuditEvent.id, FactoryAuditEvent.operation_id,
+               FactoryAuditEvent.event_kind, FactoryAuditEvent.action_outcome)
+        .where(FactoryAuditEvent.actor_kind == "operator")))).all()
+    action_rows = [row for row in operator_rows if not row.event_kind.endswith("_notification")]
+    interventions = len({row.operation_id or f"event:{row.id}"
+                         for row in action_rows if row.action_outcome == "applied"})
+    intervention_excluded = sum(1 for row in action_rows if row.action_outcome != "applied")
     # Real harness failures only: launch lifecycle transitions that recorded
     # the failed dispatch state. Successful dispatches never count.
     harness_failures = await _count(db, ledger_scoped(
@@ -194,7 +224,7 @@ async def build_metrics_window(
         select(func.coalesce(func.sum(GithubWorkItem.retry_count), 0))))
     diagnostic_counter = await _count(db, live_scoped(
         select(func.coalesce(func.sum(GithubWorkItem.diagnostic_retry_count), 0))))
-    duration = await _same_attempt_durations(db, ledger_scoped)
+    duration = await _same_attempt_durations(db, ledger_keyed, window_start, window_end)
 
     instrumentation = await _audit.instrumentation_start(db)
     coverage, available, missing = _coverage(
@@ -212,7 +242,7 @@ async def build_metrics_window(
 
     def windowed(name: str, unit: str, value: float | None, sample_count: int,
                  unknown: int = 0, reasons: list[str] | None = None,
-                 note: str | None = None) -> FactoryMetricSample:
+                 note: str | None = None, excluded: int = 0) -> FactoryMetricSample:
         """C12: a ledger fact count labelled with the window's real coverage."""
         reasons = list(reasons or [])
         label = coverage if note is None else f"{coverage}; {note}"
@@ -222,8 +252,8 @@ async def build_metrics_window(
                           coverage=label)
         if coverage == "partial":
             reasons.append("part of the requested window precedes instrumentation start")
-        return sample(name, unit, value, sample_count, unknown=unknown, reasons=reasons,
-                      coverage=label)
+        return sample(name, unit, value, sample_count, unknown=unknown, excluded=excluded,
+                      reasons=reasons, coverage=label)
 
     def present(name: str, unit: str, value: int, *, coverage_note: str = "",
                 reasons: list[str] | None = None) -> FactoryMetricSample:
@@ -235,36 +265,35 @@ async def build_metrics_window(
         return sample(name, unit, float(value), value, source=live_source, coverage=label,
                       reasons=reasons)
 
-    terminal_tracked = await _count(db, ledger_scoped(
-        select(func.count(func.distinct(FactoryAuditEvent.item_id)))
-        .select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.event_kind == "delivery_evidence")))
+    review_unknown = len(eligible_design) - reviewed_design
 
     metrics = [
         present("current_queue", "work_items", current_queue),
         present("total_tracked_attempts", "work_items", total_attempts),
         present("pending_reviews", "approval_requests", pending_approvals),
         present("active_revisions", "scope_revisions", active_revisions),
-        # C13: terminal tracking is reported apart from delivery and review.
-        windowed("terminal_tracking_in_window", "work_items", float(terminal_tracked),
+        # C13/R03: terminal tracking is reported apart from delivery and
+        # review, per retained attempt identity.
+        windowed("terminal_tracking_in_window", "tracked_attempts", float(terminal_tracked),
                  terminal_tracked, note="terminal tracking is not delivery"),
         windowed("delivered_in_window", "tracked_attempts", float(delivered), delivered,
                  unknown=terminal_unknown,
                  reasons=["terminal tracking without result evidence"] if terminal_unknown else []),
-        windowed("independently_human_reviewed_design", "artifacts", float(review_evidenced),
-                 review_evidenced, unknown=max(delivered - review_evidenced, 0),
-                 reasons=(["no attributable independent human acceptance"]
-                          if delivered > review_evidenced else [])),
+        windowed("independently_human_reviewed_design", "design_attempts",
+                 float(reviewed_design), len(eligible_design), unknown=review_unknown,
+                 reasons=(["no attributable independent human review of the exact artifact"]
+                          if review_unknown else [])),
         windowed("closed_without_delivery", "tracked_attempts", float(non_delivery), non_delivery),
         windowed("unknown_outcomes", "tracked_attempts", float(terminal_unknown), terminal_unknown,
                  reasons=["terminal status without result evidence"] if terminal_unknown else []),
         windowed("recovery_success", "preserved_revision_outcomes", float(recovery_applied),
-                 recovery_applied + recovery_rejected + recovery_uncertain,
-                 unknown=recovery_uncertain,
-                 reasons=(["transport or external effects need reconciliation"]
+                 recovery_total, unknown=recovery_uncertain,
+                 reasons=(["recovery actions with unsettled transport or external effects"]
                           if recovery_uncertain else [])),
         windowed("operator_interventions", "authenticated_actions", float(interventions),
-                 interventions),
+                 interventions, excluded=intervention_excluded,
+                 reasons=(["rejected or uncertain operator actions are excluded"]
+                          if intervention_excluded else [])),
         windowed("harness_failures", "launch_lifecycle_events", float(harness_failures),
                  harness_failures, note="failed launch transitions only"),
         windowed("elapsed_attempt_duration", "seconds_median", duration.value,
@@ -294,6 +323,77 @@ async def build_metrics_window(
         instrumentation_start=instrumentation,
         metrics=metrics,
     )
+
+
+_OUTCOME_RANK = {_UNKNOWN: 1, _NON_DELIVERY: 2, _DELIVERED: 3}
+_DESIGN_COMPLETION_KINDS = ("merged_design", "design_artifact_accepted")
+
+
+def _snapshot(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _attempt_identity(item_context_key: str | None, snapshot: dict, event_id: int) -> str:
+    """R03: the immutable scoped attempt identity of an outcome fact."""
+    attempt = snapshot.get("attempt")
+    if attempt:
+        # The item context key is a resource lifetime; numeric ID reuse can
+        # never merge two attempts.
+        return f"{item_context_key or 'item:unknown'}|{attempt}"
+    return f"event:{event_id}"
+
+
+def _reconcile_attempts(rows, window_start: datetime, window_end: datetime) -> dict:
+    """R03: one current outcome per attempt; no downgrade, no duplicates.
+
+    A delivered fact outranks sourced non-delivery, which outranks unknown.
+    Repeated or weaker later facts never lower the current outcome.
+    """
+    attempts: dict[str, dict] = {}
+    for row in rows:
+        snapshot = _snapshot(row.context_snapshot)
+        identity = _attempt_identity(row.item_context_key, snapshot, row.id)
+        state = attempts.setdefault(identity, {
+            "identity": identity, "outcome": None, "in_window": False,
+            "design": False, "artifacts": set()})
+        if row.delivery_outcome in _OUTCOME_RANK and (
+                state["outcome"] is None
+                or _OUTCOME_RANK[row.delivery_outcome] > _OUTCOME_RANK[state["outcome"]]):
+            state["outcome"] = row.delivery_outcome
+        when = row.occurred_at
+        if isinstance(when, str):
+            when = datetime.fromisoformat(when)
+        if when is not None and window_start <= when <= window_end:
+            state["in_window"] = True
+        if (row.completion_kind in _DESIGN_COMPLETION_KINDS
+                or snapshot.get("issue_type") == "design"):
+            state["design"] = True
+        if snapshot.get("artifact"):
+            state["artifacts"].add(snapshot["artifact"])
+    return attempts
+
+
+def _reviewed_design_attempts(eligible: list[dict], review_rows, audit) -> int:
+    """R06: eligible design attempts with a validated exact-artifact review.
+
+    Each attempt counts once, however many times its review is repeated.
+    """
+    reviews: list[tuple[str, str]] = []
+    for row in review_rows:
+        evidence = row.human_review_evidence
+        if not audit.validated_review_evidence(evidence):
+            continue
+        identity = _attempt_identity(row.item_context_key, _snapshot(row.context_snapshot), row.id)
+        reviews.append((identity, evidence["artifact"]))
+    count = 0
+    for state in eligible:
+        # The review names this attempt's exact artifact, or it is recorded on
+        # the attempt's own fact for the artifact it names.
+        if any(artifact in state["artifacts"]
+               or (identity == state["identity"] and not state["artifacts"])
+               for identity, artifact in reviews):
+            count += 1
+    return count
 
 
 def _naive_utc(value: datetime) -> datetime:
@@ -331,7 +431,9 @@ class _Duration:
         self.reasons = reasons
 
 
-async def _same_attempt_durations(db: AsyncSession, ledger_scoped) -> _Duration:
+async def _same_attempt_durations(
+    db: AsyncSession, ledger_keyed, window_start: datetime, window_end: datetime
+) -> _Duration:
     """C12: elapsed time only between boundaries of one launched attempt.
 
     The start is the first dispatched lifecycle fact of a launch. The end is
@@ -351,10 +453,13 @@ async def _same_attempt_durations(db: AsyncSession, ledger_scoped) -> _Duration:
             starts[key] = occurred_at
     ends: dict[str, datetime] = {}
     unbound: set[str] = set()
-    for event_id, item_id, occurred_at, fact_time, snapshot in (await db.execute(ledger_scoped(
+    # The terminal boundary is the sourced fact time when known.
+    effective_time = func.coalesce(FactoryAuditEvent.fact_time, FactoryAuditEvent.occurred_at)
+    for event_id, item_id, occurred_at, fact_time, snapshot in (await db.execute(ledger_keyed(
         select(FactoryAuditEvent.id, FactoryAuditEvent.item_id, FactoryAuditEvent.occurred_at,
                FactoryAuditEvent.fact_time, FactoryAuditEvent.context_snapshot)
-        .where(FactoryAuditEvent.event_kind == "delivery_evidence")
+        .where(FactoryAuditEvent.event_kind == "delivery_evidence",
+               effective_time >= window_start, effective_time <= window_end)
     ))).all():
         key = _launch_key(snapshot)
         end = fact_time or occurred_at

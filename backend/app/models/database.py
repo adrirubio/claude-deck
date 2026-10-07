@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -827,9 +828,10 @@ class GithubAttemptScopeRevision(Base):
 class FactoryContextKey(Base):
     """Immutable context key allocation for audit history.
 
-    A context key is allocated once per logical resource identity so that
-    reused numeric database IDs can never attach old events to a new record.
-    The key survives legitimate deletion of the live resource.
+    A context key belongs to one resource lifetime. Deleting the live team,
+    scope or work item retires its active key (SQLite trigger), so a reused
+    numeric ID allocates a new key and old events stay with the old key. A
+    retired key survives as the address of the retained history.
     """
 
     __tablename__ = "factory_context_keys"
@@ -839,6 +841,53 @@ class FactoryContextKey(Base):
     numeric_id: Mapped[int] = mapped_column(Integer, nullable=False)
     context_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # R01: set when the live resource is deleted; NULL for the active lifetime.
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# R01: lifetime retirement of context keys. One active key per kind and ID;
+# deleting the resource retires it, whatever route performs the deletion.
+CONTEXT_KEY_LIFETIME_DDL = (
+    (("factory_context_keys",),
+     "CREATE UNIQUE INDEX IF NOT EXISTS uix_factory_context_keys_active"
+     " ON factory_context_keys (key_kind, numeric_id) WHERE retired_at IS NULL"),
+    (("factory_context_keys", "agent_team_presets"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_team"
+     " AFTER DELETE ON agent_team_presets BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'team' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+    (("factory_context_keys", "team_github_scopes"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_scope"
+     " AFTER DELETE ON team_github_scopes BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'scope' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+    (("factory_context_keys", "github_work_items"),
+     "CREATE TRIGGER IF NOT EXISTS trg_factory_context_keys_retire_item"
+     " AFTER DELETE ON github_work_items BEGIN"
+     " UPDATE factory_context_keys SET retired_at = CURRENT_TIMESTAMP"
+     " WHERE key_kind = 'item' AND numeric_id = OLD.id AND retired_at IS NULL; END"),
+)
+
+
+def _install_context_key_lifetime_ddl(_metadata, connection, **_kwargs) -> None:
+    """Create the lifetime index and triggers for the tables that exist."""
+    if connection.dialect.name != "sqlite":
+        return
+    tables = {row[0] for row in connection.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+    if "factory_context_keys" not in tables:
+        return
+    columns = {row[1] for row in connection.exec_driver_sql(
+        "PRAGMA table_info(factory_context_keys)").fetchall()}
+    if "retired_at" not in columns:
+        # A legacy table; the compatibility migration adds the column first.
+        return
+    for required, statement in CONTEXT_KEY_LIFETIME_DDL:
+        if set(required) <= tables:
+            connection.exec_driver_sql(statement)
+
+
+event.listen(Base.metadata, "after_create", _install_context_key_lifetime_ddl)
 
 
 class FactoryAuditEvent(Base):
