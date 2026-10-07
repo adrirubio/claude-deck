@@ -1199,13 +1199,11 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
 
 
 @pytest.mark.xfail(
-    reason="C09 v8 matrix in progress per Mail2917/2927: fixture now seeds "
-           "distinct slot and member ids, a Leader slot with role and "
-           "leader_slot_id, the real revision row and populated protected "
-           "state; the low-level send_direct_message injection still yields "
-           "no uncertain fact, so the notifier's internal early-return "
-           "guards and escalated-payload preconditions remain under "
-           "diagnosis; no production guard is relaxed",
+    reason="C09 v8 matrix in progress: the real-notifier low-level transport "
+           "injection raises MissingGreenlet at the aiosqlite execute "
+           "boundary inside the notifier chain; the exact tainted-session "
+           "semantics at that boundary remain under diagnosis; no production "
+           "guard is relaxed",
     strict=False)
 async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
     """C09 v8: low-level transport failure inside the real notifier leaves the
@@ -1258,10 +1256,8 @@ async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
         async def get_issues_by_number(self, owner, name, numbers):
             return {number: {"state": "closed"} for number in numbers}
 
-    async def failing_transport(*_args, **_kwargs):
-        raise RuntimeError("low-level transport failure")
-
-    monkeypatch.setattr(_mail, "send_direct_message", AsyncMock(side_effect=failing_transport))
+    monkeypatch.setattr(_mail, "send_direct_message",
+                        AsyncMock(side_effect=RuntimeError("low-level transport failure")))
     scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
     await _watcher.github_watcher_service._reconcile_closed_issues(db, scope_obj, FakeClient())
