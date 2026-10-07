@@ -1110,7 +1110,7 @@ async def test_c08_owner_release_records_exact_actor_identity(db, tmp_path):
     assert workspace[0] is None and workspace[1] is None
 
 
-async def test_c09_production_notification_observer_records_uncertainty(db):
+async def test_c09_production_notification_observer_records_uncertainty(db, monkeypatch):
     """C09: the watcher's own failure observer records explicit uncertainty
     with one fact per operation identity and no replay."""
     from app.services import github_watcher_service as _watcher
@@ -1167,7 +1167,8 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
         raise RuntimeError("notification transport failed")
 
     monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", failing_notify)
-    _watcher.github_watcher_service.observer_session_factory = lambda: db.info["session_maker"]()
+    monkeypatch.setattr(_watcher.github_watcher_service, "observer_session_factory",
+                        lambda: db.info["session_maker"](), raising=False)
     scope_obj = await db.get(TeamGithubScope, 1)
     await _watcher.github_watcher_service._reconcile_closed_issues(
         db, scope_obj, FakeClient())

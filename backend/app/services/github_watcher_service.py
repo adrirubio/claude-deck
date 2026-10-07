@@ -65,7 +65,10 @@ async def observe_notification_uncertainty(
         logger.exception(
             "Failed to record notification uncertainty for work item %s", item_id)
     finally:
-        await fresh.close()
+        try:
+            await fresh.close()
+        except Exception:
+            pass
 
 
 class GithubWatcherService:
@@ -192,16 +195,21 @@ class GithubWatcherService:
         ]
         if not stalled:
             return
+        pending_items = [
+            (item.id, item.issue_number, item.pr_number) for item in stalled
+        ]
         current = await client.get_issues_by_number(
             scope.repo_owner,
             scope.repo_name,
-            [item.issue_number for item in stalled],
+            [issue_number for _id, issue_number, _pr in pending_items],
         )
+        pending_by_id = {entry[0]: entry for entry in pending_items}
         for item in stalled:
-            issue = current.get(item.issue_number)
+            _captured_id, issue_number, pr_number = pending_by_id[item.id]
+            issue = current.get(issue_number)
             if issue is None or issue.get("state") != "closed":
                 continue
-            if item.pr_number is not None:
+            if pr_number is not None:
                 logger.info(
                     "Work item %s (issue #%s) has a closed issue but an unresolved "
                     "PR #%s; leaving it for the verification path",
@@ -233,10 +241,12 @@ class GithubWatcherService:
             fact_source="github_watcher_service._reconcile_closed_issues",
             fact_time=datetime.utcnow(),
         )
+        captured_active_revision = item.active_scope_revision
         captured_revision_id = (await db.scalars(
             select(GithubAttemptScopeRevision.id).where(
-                GithubAttemptScopeRevision.work_item_id == item.id,
-            ).order_by(GithubAttemptScopeRevision.id.desc()).limit(1)
+                GithubAttemptScopeRevision.work_item_id == captured_item_id,
+                GithubAttemptScopeRevision.revision == captured_active_revision,
+            ).limit(1)
         )).first()
         item.dispatch_status = "completed"
         item.escalation_reason = None
