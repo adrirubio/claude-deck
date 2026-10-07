@@ -89,6 +89,7 @@ ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "owner_observation_unavailable",
+        "integration_update_conflict",
         "retry_count_exhausted",
         "continuation_revision_exhausted",
         "continuation_budget_exhausted",

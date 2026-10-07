@@ -18,6 +18,7 @@ from app.models.database import (
 from app.services import agent_activity_service as activity
 from app.services.factory_delivery_policy import effective_policy
 from app.services.github_approval_service import github_approval_service
+from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS
 
 REASON = "owner_observation_unavailable"
 _GAPS = {"observation_unavailable", "observation_incomplete", "native_log_unavailable",
@@ -46,6 +47,8 @@ def _process_identity(slot, session, workspace):
             or registered > datetime.now(timezone.utc) + timedelta(seconds=5)):
         raise ValueError("owner_generation_unavailable")
     options = slot.launch_options or {}
+    if slot.provider in {"claude-code", "codex-cli"} and not activity._canonical_session_id(options.get("session_id")):
+        raise ValueError("owner_native_identity_changed")
     if slot.provider == "claude-code":
         from app.services.claude_activity_service import _identity
         if not _identity(pid, options.get("session_id")):
@@ -77,7 +80,7 @@ async def bound_authority(db, scope, item):
     await db.refresh(item)
     await db.refresh(scope)
     if (item.dispatch_status not in {"dispatched", "escalated"} or not item.dispatch_nonce
-            or item.handoff_state or not scope.enabled):
+            or item.handoff_state == "pending" or not scope.enabled):
         raise ValueError("observation_pause_context_changed")
     slot = await db.get(AgentTeamSlot, item.owner_slot_id, populate_existing=True)
     if slot is None or not slot.enabled or slot.preset_id != scope.preset_id:
@@ -108,7 +111,7 @@ async def bound_authority(db, scope, item):
     if (session.provider != slot.provider or session.bound_pane_pid != workspace.leased_owner_pid
             or session.bound_pane_proc_start != workspace.leased_owner_proc_start or not session.cwd
             or Path(session.cwd).resolve() != Path(workspace.path).resolve()
-            or not session.last_seen_at or not 0 <= (datetime.utcnow() - session.last_seen_at).total_seconds() <= 180):
+            or not session.last_seen_at or not 0 <= (datetime.utcnow() - session.last_seen_at).total_seconds() <= MCP_HEARTBEAT_TTL_SECONDS):
         raise ValueError("owner_generation_unavailable")
     bindings = list((await db.scalars(select(AgentPaneBinding).where(
         AgentPaneBinding.preset_id == scope.preset_id, AgentPaneBinding.slot_id == slot.id,
@@ -268,7 +271,8 @@ async def resume_observation_pause(db, item, scope, pause_id, reason):
     await db.refresh(record)
     current, _workspace, _session = await bound_authority(db, scope, item)
     if (record.status != "paused" or current != record.authority_sha256
-            or item.dispatch_status != "escalated" or item.escalation_reason != REASON):
+            or item.dispatch_status != "escalated" or item.escalation_reason != REASON
+            or record.resume_deadline is None or datetime.utcnow() >= record.resume_deadline):
         raise ValueError("observation_pause_context_changed")
     now = datetime.utcnow()
     record.status = "resumed"

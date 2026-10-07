@@ -580,3 +580,81 @@ async def test_observation_pause_does_not_overwrite_context_changed_during_read(
     await db.refresh(item)
     await db.refresh(revision)
     assert item.dispatch_status == "completed" and revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_operator_pause_routes_require_operator_and_exclude_private_context(db,monkeypatch,tmp_path):
+    from fastapi import FastAPI
+    import httpx
+    from app.api.v1.factory_maintenance import router
+    from app.database import get_db
+    from app.config import settings
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope,item,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    await pause.handle_observation_gap(db,scope,item)
+    app=FastAPI();app.include_router(router)
+    async def fixture_db(): yield db
+    app.dependency_overrides[get_db]=fixture_db
+    monkeypatch.setattr(settings,'operator_token','fixture-operator')
+    preset_id,item_id=scope.preset_id,item.id
+    url=f'/presets/{preset_id}/work-items/{item_id}'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
+        assert (await client.get(url+'/observation-pauses')).status_code==401
+        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        observed=await client.get(url+'/observation-pauses',headers=headers)
+        assert observed.status_code==200 and observed.json()['pauses'][0]['status']=='paused'
+        assert all(value not in observed.text for value in ('fixture-lease','fixture-hash','authority_sha256','wait_key'))
+        body={'pause_id':record.id,'reason':'Inspect complete'}
+        assert (await client.post(url+'/resume-observation',json=body)).status_code==401
+        result=await client.post(url+'/resume-observation',json=body,headers=headers)
+        assert result.status_code==200 and result.json()['status']=='resumed'
+        assert (await client.post(url+'/resume-observation',json=body,headers=headers)).json()['status']=='already_resumed'
+        assert (await client.post(url+'/resume-observation',json=body|{'reason':'changed'},headers=headers)).status_code==409
+        assert (await client.get(f'/presets/{preset_id+1}/work-items/{item_id}/observation-pauses',headers=headers)).status_code==404
+
+
+@pytest.mark.asyncio
+async def test_integration_failure_route_retains_approval_budget_and_rejects_conflicting_replay(db,monkeypatch,tmp_path):
+    from fastapi import FastAPI
+    import httpx
+    from app.api.v1.factory_maintenance import router
+    from app.database import get_db
+    from app.config import settings
+    scope,item,_workspace,revision,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    protected=(revision.status,revision.approval_request_id,revision.acknowledged_at,revision.max_failed_heads,revision.failed_head_count,item.retry_count)
+    app=FastAPI();app.include_router(router)
+    async def fixture_db(): yield db
+    app.dependency_overrides[get_db]=fixture_db
+    monkeypatch.setattr(settings,'operator_token','fixture-operator')
+    url=f'/presets/{scope.preset_id}/work-items/{item.id}/integration-outcome'
+    body={'operation_id':'fixture-update','expected_dispatch_nonce':item.dispatch_nonce,
+          'expected_scope_revision':item.active_scope_revision,'expected_owner_slot':item.owner_slot_id,'outcome':'needs_coordination'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
+        assert (await client.post(url,json=body)).status_code==401
+        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        assert (await client.post(url,json=body|{'expected_dispatch_nonce':'stale'},headers=headers)).status_code==409
+        result=await client.post(url,json=body,headers=headers)
+        assert result.status_code==200 and result.json()['status']=='recorded'
+        assert (await client.post(url,json=body,headers=headers)).json()['status']=='already_recorded'
+        assert (await client.post(url,json=body|{'outcome':'completed'},headers=headers)).status_code==409
+    await db.refresh(item);await db.refresh(revision)
+    assert item.escalation_reason=='integration_update_conflict'
+    assert (revision.status,revision.approval_request_id,revision.acknowledged_at,revision.max_failed_heads,revision.failed_head_count,item.retry_count)==protected
+
+
+@pytest.mark.asyncio
+async def test_failed_pause_notice_does_not_undo_the_committed_pause(db,monkeypatch,tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope,item,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    async def fail(*_args,**_kwargs): raise OSError('synthetic unavailable notice')
+    monkeypatch.setattr(github_dispatch_service,'notify_team',fail)
+    assert await pause.handle_observation_gap(db,scope,item)
+    assert item.dispatch_status=='escalated' and record.status=='paused' and record.notice_status=='uncertain'

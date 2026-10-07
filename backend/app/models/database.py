@@ -422,6 +422,19 @@ class GithubDeliveryPolicyEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class GithubMaintenanceEvent(Base):
+    """An operator reports a maintenance outcome without granting execution authority."""
+
+    __tablename__ = "github_maintenance_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class GithubOwnerObservationPause(Base):
     """A bounded observation wait and an operator recovery of unchanged authority."""
 

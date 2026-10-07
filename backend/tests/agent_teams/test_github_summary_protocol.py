@@ -33,7 +33,7 @@ def test_replaces_only_owned_block_and_repeated_render_is_unchanged():
 
 
 @pytest.mark.parametrize("body", [START, END, END + START, START + END + START + END,
-    "```\n" + START + END, "<!--\n" + START + END,
+    "```\n" + START + END, "<!--\n" + START + END, "<details>\n" + START + END,
     START + "<!-- deck:operator-actions:start -->" + END])
 def test_ambiguous_or_hidden_markers_are_refused(body):
     with pytest.raises(ValueError):

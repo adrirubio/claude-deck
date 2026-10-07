@@ -89,7 +89,8 @@ def render_summary(body: str, summary: CurrentSummary, *, expected_body_sha256: 
         prefix = body[:begin]
         if (finish < begin or begin > 4096 or (prefix and not prefix.endswith("\n"))
                 or prefix.count("```") % 2 or prefix.count("~~~") % 2
-                or prefix.count("<!--") != prefix.count("-->")):
+                or prefix.count("<!--") != prefix.count("-->")
+                or re.search(r"<(?!\!--)[^>]+>", prefix)):
             raise ValueError("summary_markers_invalid")
         old = body[begin:finish + len(END)]
         # Another Deck section inside this block belongs to another writer.
