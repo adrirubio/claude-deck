@@ -328,11 +328,16 @@ def test_upgrade_rechecks_real_checkpoint_age_after_backup_before_cutover(tmp_pa
     calls=[]
     def checkpoint(*args):
         calls.append(True)
-        if len(calls)==2:
+        return Maintenance.checkpoint(service,*args)
+    accepted=service.accepted;reads=[]
+    def age_after_backup(pull):
+        reads.append(True)
+        if len(reads)==2:
             with sqlite3.connect(service.profile.database) as db:
                 db.execute('UPDATE mail_messages SET created_at=?',((datetime.now(timezone.utc)-timedelta(seconds=901)).isoformat(),))
-        return Maintenance.checkpoint(service,*args)
+        return accepted(pull)
     monkeypatch.setattr(service,'checkpoint',checkpoint)
+    monkeypatch.setattr(service,'accepted',age_after_backup)
     with pytest.raises(ValueError,match='owner_checkpoint_changed'): service.upgrade(request)
     assert len(calls)==2 and service.current=='a'*40
     assert ('systemctl','stop','deck.service') not in service.commands

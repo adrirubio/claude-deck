@@ -508,6 +508,7 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
     direct_literals = [write for write in writes if write.field == "escalation_reason"
                        and write.form == "assignment" and write.value is not None]
     assert [(write.path.as_posix(),write.value) for write in direct_literals] == [
+        ("services/github_dispatch_service.py","continuation_revision_exhausted"),
         ("services/owner_observation_pause.py","owner_observation_unavailable")
     ]
     assert _escalation_call_reasons() | {write.value for write in direct_literals} | {
