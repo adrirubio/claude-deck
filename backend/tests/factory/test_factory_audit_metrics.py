@@ -67,7 +67,7 @@ async def _seed_workspace(db, workspace_id: int = 1, scope_id: int = 1, path: st
         "INSERT OR IGNORE INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
         " leased_item_id, lease_token, leased_owner_pid, leased_owner_proc_start,"
         " push_token_expires_at, leased_at, released_at, created_at, updated_at)"
-        " VALUES (:workspace, :scope, :path, 'primary', 1, 1, NULL, NULL, NULL, NULL, NULL,"
+        " VALUES (:workspace, :scope, :path, 'worktree', 1, 1, NULL, NULL, NULL, NULL, NULL,"
         " NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
         {"workspace": workspace_id, "scope": scope_id, "path": path})
 
@@ -1056,8 +1056,18 @@ async def test_c08_owner_release_records_exact_actor_identity(db, tmp_path):
 
     await _seed_scope(db, 1, preset_id=7)
     await _seed_slot_member(db, slot_id=5, member_id=8, preset_id=7)
-    await _seed_workspace(db, path=str(tmp_path / "ws"))
-    (tmp_path / "ws").mkdir()
+    # Controlled external-I/O fixture: a real managed git worktree so the
+    # worktree-config snapshot path executes its actual commands.
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "fixture@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Fixture"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-q", "-m", "base"], check=True)
+    worktree = tmp_path / "ws"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(worktree), "-b", "fixture-branch"], check=True)
+    await _seed_workspace(db, path=str(worktree))
     await _seed_item(db, 1)
     await db.execute(text(
         "UPDATE github_work_items SET dispatch_status = 'merged', owner_slot_id = 5, retry_count = 2,"
