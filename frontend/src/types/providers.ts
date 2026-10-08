@@ -1,5 +1,54 @@
 export type AgentProviderId = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
 
+export const providerOperationKeys = [
+  'launch', 'observe_session', 'mail_identity', 'receive_work', 'report_work_status',
+  'approval_participation', 'workspace_association', 'resume_exact', 'interactive_terminal', 'execution_controls',
+] as const
+export type ProviderOperationKey = typeof providerOperationKeys[number]
+export interface ProviderOperation {
+  state: 'supported' | 'conditional' | 'unsupported' | 'unknown'
+  reason: string
+  conditions: string[]
+  evidence: string[]
+}
+export interface ProviderNativeSurface {
+  state: 'available' | 'unavailable' | 'unknown'
+  adapter_id: string | null
+  access: 'none' | 'read_only' | 'read_write'
+  reason: string
+  conditions: string[]
+}
+export interface ProviderOperations {
+  schema_version: 1
+  provider: AgentProviderId
+  provider_display_name: string
+  operations: Record<ProviderOperationKey, ProviderOperation>
+  native_capabilities: Record<string, AgentProviderCapabilityDetail>
+  native_surfaces: Record<string, ProviderNativeSurface>
+  readiness: {
+    configuration: {
+      state: 'ready' | 'blocked' | 'unknown'
+      checks: Array<{ state: 'ready' | 'blocked' | 'unknown'; code: string; reason: string; source: string }>
+    }
+    credentials: { state: 'ready' | 'blocked' | 'unknown'; reason: string; source: string | null; observed_at: string | null }
+    session: {
+      state: 'bound' | 'offline' | 'ambiguous' | 'unknown'
+      reason: string
+      team_id: number | null
+      slot_id: number | null
+      member_id: number | null
+      session_id: number | null
+      observed_provider: string | null
+    }
+    observed_at: string
+    observation_started_at: string | null
+    probe_state: 'observed' | 'pending' | 'failed'
+    cache_ttl_seconds: number
+    request_wait_seconds: number
+    aggregate_probe_seconds: number
+  }
+}
+
 export interface AgentProviderCapabilities {
   config: boolean
   sessions: boolean

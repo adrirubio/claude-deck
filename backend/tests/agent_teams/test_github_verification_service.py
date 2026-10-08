@@ -100,7 +100,9 @@ async def _item(db, scope, **kwargs):
                 )
                 db.add(slot)
                 slots.append(slot)
-            await db.flush()
+        await db.flush()
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        preset.leader_slot_id = slots[0].id
         leader_slot, owner_slot = slots[:2]
         members = {}
         for slot in (leader_slot, owner_slot):
@@ -147,6 +149,27 @@ def capability_enforcement(monkeypatch):
 
 
 async def _owner(db, scope):
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    leader_slot = await db.get(AgentTeamSlot, preset.leader_slot_id) if preset.leader_slot_id else None
+    if leader_slot is None:
+        leader_slot = AgentTeamSlot(
+            preset_id=scope.preset_id,
+            position=1,
+            display_name="Leader",
+            role="Leader",
+            provider="codex-cli",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+        )
+        db.add(leader_slot)
+        await db.flush()
+        preset.leader_slot_id = leader_slot.id
+        db.add(MailTeamMember(
+            identity_key=f"slot:{leader_slot.id}", repo_id="r", repo_path="/tmp/r",
+            repo_name="r", display_name="Leader", participant_kind="team_slot",
+            team_preset_id=scope.preset_id, team_slot_id=leader_slot.id,
+        ))
     slot = AgentTeamSlot(
         preset_id=scope.preset_id,
         position=0,
@@ -3299,6 +3322,79 @@ async def test_transient_merge_failure_falls_back_to_human_after_budget(db):
     assert "Auto-merge retry budget exhausted" in messages[0].body_markdown
 
 
+@pytest.mark.asyncio
+async def test_missing_checks_timeout_survives_polling_and_reload(db, monkeypatch):
+    import app.services.github_verification_service as verification_module
+
+    class Clock(datetime):
+        now = datetime(2026, 10, 2, 12, 0, 0)
+
+        @classmethod
+        def utcnow(cls):
+            return cls.now
+
+    monkeypatch.setattr(verification_module, "datetime", Clock)
+    monkeypatch.setattr(settings, "github_check_signal_grace_seconds", 60)
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5,
+                       updated_at=Clock.now)
+    item_id = item.id
+    client = _Client(check_runs=[])
+    await github_verification_service.process_scope(db, scope, client=client)
+    initial_start = item.verification_started_at
+    assert initial_start == Clock.now
+    assert item.verification_head_sha == "sha"
+    for elapsed in (20, 40):
+        Clock.now = initial_start + timedelta(seconds=elapsed)
+        await github_verification_service.process_scope(db, scope, client=client)
+        assert item.dispatch_status == "verifying"
+        assert item.verification_started_at == initial_start
+        assert item.updated_at == Clock.now
+    db.expunge_all()
+    item = await db.get(GithubWorkItem, item_id)
+    Clock.now = initial_start + timedelta(seconds=60)
+    await github_verification_service.process_scope(db, scope, client=client)
+    assert item.dispatch_status == "escalated"
+    assert "No GitHub check-runs or commit statuses" in item.status_note
+    assert item.verification_started_at == initial_start
+
+
+@pytest.mark.asyncio
+async def test_new_head_starts_fresh_missing_check_grace(db):
+    scope = await _scope(db)
+    old_start = datetime.utcnow() - timedelta(minutes=5)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5,
+                       verification_head_sha="old-head",
+                       verification_started_at=old_start, updated_at=old_start)
+    client = _Client(check_runs=[])
+    await github_verification_service.process_scope(db, scope, client=client)
+    assert item.dispatch_status == "verifying"
+    assert item.verification_head_sha == "sha"
+    assert item.verification_started_at > old_start
+
+
+@pytest.mark.asyncio
+async def test_repeated_pr_report_does_not_renew_grace(db):
+    scope = await _scope(db)
+    started = datetime.utcnow() - timedelta(seconds=30)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5,
+                       verification_head_sha="sha", verification_started_at=started)
+    await github_verification_service._record_selected_pull(
+        db, scope, item, _Client().pull, "open")
+    assert item.verification_started_at == started
+    pull = dict(_Client().pull, number=6)
+    await github_verification_service._record_selected_pull(db, scope, item, pull, "open")
+    assert item.verification_started_at > started
+
+
+@pytest.mark.asyncio
+async def test_fresh_dispatch_retry_clears_verification_clock(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="escalated", pr_number=5,
+                       verification_head_sha="sha", verification_started_at=datetime.utcnow())
+    await github_dispatch_service.reset_for_retry(db, item)
+    assert item.verification_head_sha is None
+    assert item.verification_started_at is None
 @pytest.mark.parametrize("state", ["missing", "pending", "cancelled", "failure", "skipped", "neutral"])
 @pytest.mark.asyncio
 async def test_required_job_cannot_be_replaced_by_other_green_checks_or_status(db, state):

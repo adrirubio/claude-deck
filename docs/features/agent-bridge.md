@@ -1,10 +1,10 @@
 # Agent Bridge
 
-Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI sessions in the same view.
+Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions in the same view.
 
 ## Overview
 
-The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code`, `codex-cli`, `copilot-cli`, or `opencode-cli`. The UI can show all sessions together or filter to one provider.
+The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code`, `codex-cli`, `copilot-cli`, `opencode-cli`, or `pi-cli`. The UI can show all sessions together or filter to one provider.
 
 Session cards include:
 
@@ -20,15 +20,24 @@ The terminal grid is shared across providers. Read-only and interactive modes wo
 
 Provider filters are explicit:
 
-- **All** — mixed Claude Code, Codex, Copilot, and OpenCode sessions
+- **All agents** — mixed Claude Code, Codex, Copilot, OpenCode, and Pi sessions
 - **Claude Code** — Claude Code panes only
 - **Codex** — Codex panes only
 - **Copilot** — GitHub Copilot CLI panes only
 - **OpenCode** — OpenCode CLI panes only
+- **Pi** — Pi panes only
 
 When Agent Team sessions are running, Agent Bridge also shows a team filter row. Team filters compose with provider filters, so selecting a team and a provider shows only matching session cards. Selecting a specific team also detaches any open terminal panes that do not belong to that team; it does not auto-attach that team's sessions or kill any tmux sessions. New sessions launched from Agent Bridge remain standalone and are not attached while a specific team filter is active.
 
 With a specific team selected, the **Team lanes** action opens a fullscreen vertical-lane layout for that team. Lane mode shows up to four live team sessions side by side, ordered by configured team slot position, without changing the normal grid attachments. Press `Esc` or the exit button to return to the previous grid; if more than four members are live, Agent Bridge shows how many are not displayed.
+
+## Live sessions in Work context
+
+Work can open read-only session context. A terminal is selected only after a unique current team/slot/member/MCP-session match; ambiguous, offline or failed observations show filtered candidates without selecting a terminal. Navigation sends no input, launches nothing and claims no work. The contextual terminal is locked read-only.
+
+Open manual Live sessions separately for standalone launch and explicit interactive controls. An offline actor's Teams link requires a current authenticated slot launch-plan review; it is not an automatic restart. Session controls, operator protection and provider-specific constraints are separate from factory observation. Native activity is not proof of progress on a particular issue.
+
+See [Work](/features/work) and [Teams](/features/agent-teams).
 
 ## Keyboard Controls
 
@@ -84,4 +93,4 @@ The backend keeps `/api/v1/cc-bridge/*` for existing callers and adds `/api/v1/a
 
 ## Smoke Coverage
 
-Multi-provider smoke checks should cover mixed discovery, provider filters, attach/read-only/interactive terminal behavior, Codex spawn/resume/fork options, and the legacy `/cc-bridge` compatibility route. Claude-only transcript, usage, context, plugin, permission, hook, agent, skill, and memory pages should stay hidden or disabled when Codex is the selected provider until provider-aware equivalents exist.
+Multi-provider smoke checks should cover mixed discovery, provider filters, attach/read-only/interactive terminal behavior, Codex spawn/resume/fork options, and the legacy `/cc-bridge` compatibility route. Native pages mount only for a checked-in adapter whose catalog access permits them; see [Harnesses](/features/harnesses). Codex has configuration, MCP, plugin and read-only Plans adapters; Claude-only transcript, usage, context, permission, hook, agent, skill, and memory pages stay unavailable for Codex. The saved native harness preference does not filter factory work.

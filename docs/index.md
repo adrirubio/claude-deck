@@ -1,49 +1,48 @@
 ---
 layout: home
-
 hero:
   name: Claude Deck
-  text: Documentation
-  tagline: Local agent coordination, live session control, and provider-aware configuration
+  text: Observe work. Review interventions.
+  tagline: A self-hosted workspace for bounded coding-agent attempts on GitHub issues
   actions:
     - theme: brand
-      text: Get Started
-      link: /guide/
+      text: Start with work
+      link: /guide/quick-start
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/adrirubio/claude-deck
-
+      text: View product source
+      link: https://github.com/adrirubio/claude-deck/tree/master
 features:
-  - icon: 🌉
-    title: Agent Bridge
-    details: Monitor, spawn, resume, fork, and attach to live Claude Code, Codex CLI, and GitHub Copilot CLI tmux sessions from the browser.
-  - icon: ✉️
-    title: Agent Mail
-    details: Route structured context requests, handoffs, replies, and inbox state between local Claude Code, Codex, and Copilot agents.
-  - icon: 👥
-    title: Agent Teams
-    details: Save project, DevOps, release, or same-repo rosters and launch or reuse the sessions that belong to them.
-  - icon: 🎛️
-    title: Provider-Aware Configuration
-    details: Manage Claude Code JSON settings and safe Codex TOML settings, profiles, runtime options, and feature flags.
-  - icon: 📊
-    title: Dashboard & Usage
-    details: See configuration status, context windows, session activity, project state, and Claude Code token usage in one place.
-  - icon: 🤖
-    title: Agents & Skills
-    details: Create custom agent configurations and discover skills from the community.
-  - icon: 💾
-    title: Backup & Export
-    details: Protect Claude Code setups with backup and restore, and create redacted export-only Codex backups.
-  - icon: 🧭
-    title: Project Discovery
-    details: Discover project directories from local agent state or add them with the directory browser.
+  - title: Overview and Work
+    details: Inspect mixed-team tracking, waiting reasons and PR context with explicit filters.
+    link: /features/work
+  - title: Repositories
+    details: Distinguish configured enablement from effective intake, polling and advisory overlaps.
+    link: /features/repositories
+  - title: Teams and recovery
+    details: Configure rosters, review launch plans and use authorized remedies within finite policies.
+    link: /features/agent-teams
+  - title: Harnesses and manual sessions
+    details: Retain native settings and standalone sessions without enabling backlog dispatch.
+    link: /features/harnesses
+  - title: Agent Mail
+    details: Inspect durable context requests and handoffs; agent decisions remain separate from human PR review.
+    link: /features/agent-mail
 ---
 
-## Release Focus: 2.x Team Coordination
+## Daily observation and intervention
 
-Claude Deck 2.0.0 makes Agent Mail and Agent Teams the main coordination layer for local coding agents. Agents can keep durable per-repository or per-team-slot identities, ask each other for context, hand work across repositories, and keep an inspectable mailbox without turning Claude Deck into a general chat product.
+Start at [Overview](/features/dashboard), follow [Work](/features/work), and inspect [Repositories](/features/repositories) for paused, blocked or unknown intake. Opening observations does not dispatch, send Mail or launch a session. Protected actions have separate confirmation, authorization and state checks.
 
-Claude Deck 2.0.1 stabilizes that release with provider-aware dashboard fixes, current Claude Code usage-cost calculations, and broader coverage for recent Claude Code configuration settings.
+Factory filters are independent of the saved native harness preference and local project. [Harnesses](/features/harnesses), [Teams](/features/agent-teams), [Live sessions](/features/agent-bridge) and [Agent Mail](/features/agent-mail) remain useful for manual and configuration-only work.
 
-Presence has been removed. Agent Bridge, Agent Mail, and Agent Teams are now the supported surfaces for live session visibility, communication, and reusable rosters. Codex support still keeps provider boundaries explicit: usage metrics, context charts, and transcript browsing are not shown as if they were Claude Code data, and Codex backups remain redacted exports.
+## Available scope
+
+This reference describes the integrated product source candidate. Earlier packaged releases and separately pinned runtime or pilot environments can retain previous navigation and capabilities; integrating source does not upgrade those environments.
+
+[Harnesses](/features/harnesses) includes the versioned operations/readiness catalog for all five harnesses, bounded local configuration observations and guarded native pages. See the [Providers API](/api/providers) for the catalog contract. Native adapters remain provider-specific; catalog support does not create an editor or grant authority.
+
+Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
+
+The integrated source includes guided repository configuration, explicit Leader selection through the team's `leader_slot_id`, and the delivery [audit ledger and metrics](/guide/factory-audit-and-metrics). The operator accepted M1b; that decision does not supply missing observations. This source does not establish M2 or M3 acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
+
+Finished tracking does not establish reviewed delivery.

@@ -1,0 +1,15 @@
+[Unit]
+Description=Persistent isolated product agent session server
+[Service]
+Type=simple
+User=deckproduct
+Group=deckproduct
+SupplementaryGroups=deckproduct-work
+WorkingDirectory=/home/deckproduct
+Environment=HOME=/home/deckproduct
+Environment=PATH=/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin
+ExecStart=/usr/bin/tmux -D -S /home/deckproduct/.local/state/claude-deck-product/tmux.sock
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

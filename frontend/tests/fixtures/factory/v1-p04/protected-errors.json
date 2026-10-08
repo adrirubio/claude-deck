@@ -1,0 +1,32 @@
+{
+  "state_conflict": {
+    "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+    "http_status": 409,
+    "method": "POST",
+    "query": {},
+    "response": {
+      "detail": {
+        "block_code": "not_escalated",
+        "message": "Only escalated work items can be retried"
+      }
+    }
+  },
+  "unauthenticated": {
+    "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+    "http_status": 401,
+    "method": "POST",
+    "query": {},
+    "response": {
+      "detail": "operator_token_required"
+    }
+  },
+  "wrong_actor": {
+    "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+    "http_status": 403,
+    "method": "POST",
+    "query": {},
+    "response": {
+      "detail": "current_leader_required"
+    }
+  }
+}

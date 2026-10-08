@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -27,6 +27,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
+    AgentTeamPreset,
     AgentPaneBinding,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
@@ -44,6 +45,7 @@ from app.models.schemas import (
     AgentTeamLaunchPlan,
     AgentTeamLaunchRequest,
     AgentTeamLaunchResult,
+    AgentTeamLeaderUpdateRequest,
     AgentTeamPresetCreate,
     AgentTeamPresetListResponse,
     AgentTeamPresetResponse,
@@ -88,12 +90,203 @@ from app.services.agent_mail_service import (
 from app.services.agent_activity_service import observe_team
 from app.services.github_approval_service import (
     CONTINUABLE_ESCALATIONS,
+    ActiveCancellationNoticeError,
     GithubApprovalError,
     github_approval_service,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_initial_approval_recovery import cancel_stranded_initial_approval
-from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
+from app.services.github_dispatch_service import (
+    HandoffExternalEffectError,
+    ResumeAttemptError,
+    github_dispatch_service,
+)
+
+
+_CONTINUATION_POLICY_FIELDS = (
+    "continuation_enabled",
+    "max_continuation_revisions",
+    "max_continuation_failed_heads",
+    "max_failed_heads_per_revision",
+    "max_scope_paths",
+    "max_scope_commands",
+)
+
+
+def _operator_actor() -> dict:
+    """C08: the shared operator credential is a role, never a named person."""
+    from app.services import factory_audit_service as _audit
+    return _audit.derive_actor(actor_kind="operator")
+
+
+def _session_actor(session) -> dict:
+    """C08: an authenticated Mail session acts as its member and session.
+
+    The member and session IDs come from the authenticated session row, never
+    from request fields. A slot ID is not a session ID.
+    """
+    from app.services import factory_audit_service as _audit
+    return _audit.derive_actor(
+        actor_kind="member", member_id=session.member_id, session_id=session.id)
+
+
+async def _observe_refusal(
+    db,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    code: str,
+    team_preset_id: int | None = None,
+    scope_id: int | None = None,
+    item_id: int | None = None,
+    revision_id: int | None = None,
+    request_id: int | None = None,
+) -> None:
+    """C09: record a refused action with its actual resource context.
+
+    The caller's refused transaction ends first. The refusal stands;
+    observation failure never masks it and no action is ever replayed.
+    """
+    from app.services import factory_audit_service as _audit
+    resource = ":".join(str(value) for value in (
+        team_preset_id, scope_id, item_id, revision_id, request_id))
+    await _audit.record_observation(
+        db,
+        event_kind=event_kind,
+        source=source,
+        occurred_at=datetime.now(timezone.utc),
+        actor=actor,
+        team_preset_id=team_preset_id,
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        request_id=request_id,
+        action_outcome="rejected",
+        sanitized_reason=code,
+        correlation_id=f"{event_kind}:rejected:{resource}:{code}",
+    )
+
+
+def _policy_event_snapshot(scope, request) -> dict:
+    """C06: event-time identity and provider labels for a policy change.
+
+    GitHub authentication mode is recorded as its own label and is never a
+    harness provider. The configured harness provider is the event-time
+    leader slot provider. The observed runtime provider stays null without
+    runtime evidence. Creation times and non-secret identity are preserved.
+    """
+    configured_provider = None
+    for attribute in ("provider", "harness_provider"):
+        if hasattr(request, attribute) and getattr(request, attribute):
+            configured_provider = getattr(request, attribute)
+            break
+    return {
+        "github_auth_mode": scope.github_auth_mode,
+        "configured_provider": configured_provider,
+        "observed_runtime_provider": None,
+        "repo_owner": scope.repo_owner,
+        "repo_name": scope.repo_name,
+        "scope_created_at": scope.created_at.isoformat() if scope.created_at else None,
+        "scope_updated_at": scope.updated_at.isoformat() if scope.updated_at else None,
+        "event_time_labels": ("github_auth_mode", "configured_provider",
+                              "observed_runtime_provider", "repo_owner", "repo_name"),
+    }
+
+
+async def _observe_policy_rejection(db, code: str, *, scope_id: int | None) -> None:
+    """C09: an optimistic-concurrency policy refusal with its scope."""
+    await _observe_refusal(
+        db,
+        event_kind="policy_change",
+        source="agent_teams.update_github_scope",
+        actor=_operator_actor(),
+        code=code,
+        scope_id=scope_id,
+    )
+
+
+async def _observe_resume_rejection(db, item_id: int, code: str) -> None:
+    """C09: an operator resume refusal on the operator-protected route."""
+    await _observe_refusal(
+        db,
+        event_kind="prepared_attempt_resume",
+        source="agent_teams.resume_github_work_item_attempt",
+        actor=_operator_actor(),
+        code=code,
+        item_id=item_id,
+    )
+
+
+async def _record_notice(
+    db,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int | None,
+    revision_id: int | None,
+    outcome: str,
+    reason: str,
+) -> None:
+    """C09: one notice fact per outcome; it never masks or replays the action."""
+    from app.services import factory_audit_service as _audit
+    operation_id = f"{event_kind}:request:{request_id}:{outcome}"
+    try:
+        await _audit.record_event(
+            db,
+            event_kind=event_kind,
+            source=source,
+            occurred_at=datetime.now(timezone.utc),
+            actor=actor,
+            scope_id=scope_id,
+            item_id=item_id,
+            revision_id=revision_id,
+            request_id=request_id,
+            action_outcome=outcome,
+            sanitized_reason=reason,
+            operation_id=operation_id,
+            correlation_id=operation_id,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
+_HANDOFF_ACCEPTANCE_CODES = (
+    ("cannot accept a handoff targeted", "not_handoff_target"),
+    ("is unavailable", "handoff_context_unavailable"),
+    ("continuation authority changed", "handoff_authority_changed"),
+    ("state changed before acceptance", "handoff_state_changed"),
+    ("could not be restored", "identity_restore_failed"),
+    ("identity update failed", "identity_update_failed"),
+)
+
+
+def _handoff_acceptance_code(message: str) -> str:
+    """A fixed refusal code; raw exception text never enters the ledger."""
+    for fragment, code in _HANDOFF_ACCEPTANCE_CODES:
+        if fragment in message:
+            return code
+    return "handoff_acceptance_refused"
+
+
+async def _observe_handoff_rejection(db, session, *, item_id: int, scope_id: int, code: str) -> None:
+    """C08: an invalid member handoff is a member handoff refusal.
+
+    It is neither an operator action nor a prepared-attempt resume.
+    """
+    await _observe_refusal(
+        db,
+        event_kind="handoff_reassignment",
+        source="agent_teams.report_dispatch_status.handoff_initiated",
+        actor=_session_actor(session),
+        code=code,
+        scope_id=scope_id,
+        item_id=item_id,
+    )
 from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
@@ -114,11 +307,17 @@ from app.services.github_verification_service import (
     ContinuationCompletionError,
     github_verification_service,
 )
-from app.services.agent_team_service import PlanConflictError, agent_team_service
+from app.services.agent_team_service import PlanConflictError, TeamDeletionConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
+from app.services.github_work_item_projection import (
+    _WorkItemAuthorityProjection,
+    _load_work_item_authority,
+    _reload_work_item_response,
+    _work_item_response,
+)
 from app.api.v1.factory_delivery import router as delivery_router
-from app.services.factory_delivery_policy import effective_policy, scope_policy
+from app.services.factory_delivery_policy import scope_policy
 
 router = APIRouter()
 router.include_router(delivery_router)
@@ -300,141 +499,6 @@ def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
     )
 
 
-def _work_item_response(
-    item: GithubWorkItem,
-    scope: TeamGithubScope,
-    workspace_path: str | None = None,
-    *,
-    active_revision: GithubAttemptScopeRevision | None = None,
-    pending_approval: GithubApprovalRequest | None = None,
-    pending_revision: GithubAttemptScopeRevision | None = None,
-    continuation_revision_count: int = 0,
-    continuation_failed_head_count: int = 0,
-) -> GithubWorkItemResponse:
-    retry_eligibility = github_dispatch_service.retry_eligibility(
-        item,
-        pending_approval=pending_approval is not None,
-    )
-    current_revision = active_revision or pending_revision
-    checkpoint_revision = pending_revision or active_revision
-    if not scope.continuation_enabled:
-        continuation_block_code = "continuation_disabled"
-    elif pending_approval is not None:
-        continuation_block_code = "approval_pending"
-    elif pending_revision is not None and pending_revision.delivery_message_id is None:
-        continuation_block_code = "continuation_delivery_pending"
-    elif pending_revision is not None:
-        continuation_block_code = "continuation_ack_required"
-    elif active_revision is not None and active_revision.status == "active":
-        continuation_block_code = None
-    elif item.dispatch_status != "escalated":
-        continuation_block_code = "continuation_not_escalated"
-    elif item.escalation_reason not in CONTINUABLE_ESCALATIONS:
-        continuation_block_code = "continuation_reason_not_allowed"
-    elif item.pr_number is None:
-        continuation_block_code = "continuation_pr_required"
-    elif workspace_path is None:
-        continuation_block_code = "workspace_lease_required"
-    elif (
-        continuation_revision_count >= scope.max_continuation_revisions
-        or continuation_failed_head_count >= scope.max_continuation_failed_heads
-    ):
-        continuation_block_code = "continuation_budget_exhausted"
-    else:
-        continuation_block_code = None
-    return GithubWorkItemResponse(
-        id=item.id,
-        scope_id=item.scope_id,
-        delivery_policy=effective_policy(item, scope),
-        delivery_policy_revision=item.delivery_policy_revision,
-        repo_owner=scope.repo_owner,
-        repo_name=scope.repo_name,
-        issue_number=item.issue_number,
-        issue_title=item.issue_title,
-        issue_url=item.issue_url,
-        github_updated_at=item.github_updated_at,
-        issue_type=item.issue_type,
-        dispatch_status=item.dispatch_status,
-        pending_reason=item.pending_reason,
-        launch_id=item.launch_id,
-        owner_slot_id=item.owner_slot_id,
-        routing_method=item.routing_method,
-        handoff_state=item.handoff_state,
-        handoff_target_slot_id=item.handoff_target_slot_id,
-        approval_round_count=item.approval_round_count,
-        ack_approver_member_id=item.ack_approver_member_id,
-        ack_evidence_message_id=item.ack_evidence_message_id,
-        dispatch_nonce=item.dispatch_nonce,
-        ack_enforcement_epoch=item.ack_enforcement_epoch,
-        ack_approval_round=item.ack_approval_round,
-        dispatch_head_ref=item.dispatch_head_ref,
-        pr_number=item.pr_number,
-        retry_count=item.retry_count,
-        last_verified_sha=item.last_verified_sha,
-        retry_requested_at=item.retry_requested_at,
-        escalation_reason=item.escalation_reason,
-        status_note=item.status_note,
-        auto_merged_at=item.auto_merged_at,
-        active_scope_revision=item.active_scope_revision,
-        active_scope_summary=(
-            active_revision.summary if active_revision is not None else None
-        ),
-        active_scope_status=(
-            active_revision.status if active_revision is not None else None
-        ),
-        pending_approval_request_id=(
-            pending_approval.id if pending_approval is not None else None
-        ),
-        pending_approval_kind=(
-            pending_approval.request_kind if pending_approval is not None else None
-        ),
-        pending_approval_status=(
-            pending_approval.status if pending_approval is not None else None
-        ),
-        recovery_checkpoint_stage=(
-            checkpoint_revision.recovery_checkpoint_stage
-            if checkpoint_revision is not None
-            and checkpoint_revision.status in {"proposed", "approved"}
-            and item.dispatch_status == "escalated" else None
-        ),
-        pending_approval_request_message_id=(
-            pending_approval.request_message_id if pending_approval is not None else None
-        ),
-        pending_approval_delivery_status=(
-            ("linked" if pending_approval.request_message_id is not None else "delivery_pending")
-            if pending_approval is not None else None
-        ),
-        attempt_phase=item.attempt_phase,
-        diagnostic_retry_count=item.diagnostic_retry_count,
-        diagnostic_last_verified_sha=item.diagnostic_last_verified_sha,
-        revision_failed_head_count=(
-            current_revision.failed_head_count
-            if current_revision is not None
-            else None
-        ),
-        revision_failed_head_budget=(
-            current_revision.max_failed_heads if current_revision is not None else None
-        ),
-        revision_approved_at=(
-            current_revision.approved_at if current_revision is not None else None
-        ),
-        revision_delivered_at=(
-            current_revision.delivered_at if current_revision is not None else None
-        ),
-        revision_acknowledged_at=(
-            current_revision.acknowledged_at if current_revision is not None else None
-        ),
-        continuation_block_code=continuation_block_code,
-        retry_allowed=retry_eligibility.allowed,
-        retry_block_code=retry_eligibility.block_code,
-        continuation_nudged_at=item.continuation_nudged_at,
-        continuation_activated_at=item.continuation_activated_at,
-        workspace_path=workspace_path,
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-    )
-
-
 def _approval_authority_response(
     approval: GithubApprovalRequest,
 ) -> GithubApprovalRequestResponse:
@@ -510,126 +574,6 @@ def _scope_revision_response(
     )
 
 
-class _WorkItemAuthorityProjection(NamedTuple):
-    active_revision: GithubAttemptScopeRevision | None
-    pending_approval: GithubApprovalRequest | None
-    pending_revision: GithubAttemptScopeRevision | None
-    revision_count: int
-    failed_head_count: int
-
-
-async def _load_work_item_authority(
-    db: AsyncSession,
-    items: list[GithubWorkItem],
-) -> dict[int, _WorkItemAuthorityProjection]:
-    if not items:
-        return {}
-    item_ids = [item.id for item in items]
-    approvals = (
-        await db.execute(
-            select(GithubApprovalRequest).where(
-                GithubApprovalRequest.work_item_id.in_(item_ids),
-                GithubApprovalRequest.status == "pending",
-            )
-        )
-    ).scalars().all()
-    revisions = (
-        await db.execute(
-            select(GithubAttemptScopeRevision)
-            .where(GithubAttemptScopeRevision.work_item_id.in_(item_ids))
-            .order_by(
-                GithubAttemptScopeRevision.work_item_id,
-                GithubAttemptScopeRevision.revision.desc(),
-            )
-        )
-    ).scalars().all()
-    approval_by_item = {approval.work_item_id: approval for approval in approvals}
-    revision_by_id = {revision.id: revision for revision in revisions}
-    revision_by_attempt = {
-        (revision.work_item_id, revision.dispatch_nonce, revision.revision): revision
-        for revision in revisions
-    }
-    approved_by_attempt: dict[tuple[int, str], GithubAttemptScopeRevision] = {}
-    revision_count_by_attempt: dict[tuple[int, str], int] = {}
-    failed_head_count_by_attempt: dict[tuple[int, str], int] = {}
-    for revision in revisions:
-        attempt_key = (revision.work_item_id, revision.dispatch_nonce)
-        revision_count_by_attempt[attempt_key] = (
-            revision_count_by_attempt.get(attempt_key, 0) + 1
-        )
-        failed_head_count_by_attempt[attempt_key] = (
-            failed_head_count_by_attempt.get(attempt_key, 0)
-            + revision.failed_head_count
-        )
-        if revision.status == "approved":
-            approved_by_attempt.setdefault(
-                attempt_key,
-                revision,
-            )
-
-    projections: dict[int, _WorkItemAuthorityProjection] = {}
-    for item in items:
-        active_revision = None
-        if item.dispatch_nonce is not None and item.active_scope_revision > 0:
-            active_revision = revision_by_attempt.get(
-                (item.id, item.dispatch_nonce, item.active_scope_revision)
-            )
-        pending_approval = approval_by_item.get(item.id)
-        pending_revision = None
-        if (
-            pending_approval is not None
-            and pending_approval.scope_revision_id is not None
-        ):
-            pending_revision = revision_by_id.get(pending_approval.scope_revision_id)
-        elif active_revision is None and item.dispatch_nonce is not None:
-            pending_revision = approved_by_attempt.get((item.id, item.dispatch_nonce))
-        projections[item.id] = _WorkItemAuthorityProjection(
-            active_revision=active_revision,
-            pending_approval=pending_approval,
-            pending_revision=pending_revision,
-            revision_count=(
-                revision_count_by_attempt.get((item.id, item.dispatch_nonce), 0)
-                if item.dispatch_nonce is not None
-                else 0
-            ),
-            failed_head_count=(
-                failed_head_count_by_attempt.get((item.id, item.dispatch_nonce), 0)
-                if item.dispatch_nonce is not None
-                else 0
-            ),
-        )
-    return projections
-
-
-async def _reload_work_item_response(
-    db: AsyncSession,
-    item_id: int,
-) -> GithubWorkItemResponse:
-    row = (
-        await db.execute(
-            select(GithubWorkItem, TeamGithubScope, GithubWorkspace.path)
-            .join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id)
-            .outerjoin(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
-            .where(GithubWorkItem.id == item_id)
-            .execution_options(populate_existing=True)
-        )
-    ).one_or_none()
-    if row is None:
-        raise HTTPException(status_code=404, detail="GitHub work item not found")
-    item, scope, workspace_path = row
-    authority = (await _load_work_item_authority(db, [item]))[item.id]
-    return _work_item_response(
-        item,
-        scope,
-        workspace_path,
-        active_revision=authority.active_revision,
-        pending_approval=authority.pending_approval,
-        pending_revision=authority.pending_revision,
-        continuation_revision_count=authority.revision_count,
-        continuation_failed_head_count=authority.failed_head_count,
-    )
-
-
 def _retry_conflict(item: GithubWorkItem, block_code: str) -> HTTPException:
     if block_code == "not_escalated":
         message = "Only escalated work items can be retried"
@@ -690,6 +634,90 @@ async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
     return active_attempt is not None
 
 
+_SCOPE_CONFIGURATION_FIELDS = (
+    "preset_id", "repo_owner", "repo_name", "repo_path", "dispatch_label", "design_label",
+    "merge_policy", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+    "max_auto_merges_per_day", "base_ref", "builds_out_of_tree", "build_dir_template",
+    "build_command_hint", "max_build_parallelism", "github_auth_mode", "github_app_installation_id",
+    "continuation_enabled", "max_continuation_revisions", "max_continuation_failed_heads",
+    "max_failed_heads_per_revision", "max_scope_paths", "max_scope_commands", "enabled",
+)
+
+
+def _scope_configuration(scope: TeamGithubScope) -> tuple[object, ...]:
+    return tuple(getattr(scope, field) for field in _SCOPE_CONFIGURATION_FIELDS)
+
+
+async def _scope_residual_workspace_authority(db: AsyncSession, scope_id: int) -> bool:
+    """Residual workspace lease authority for a scope.
+
+    A released workspace with residual lease fields, or an unreleased lease,
+    is residual authority that must block effective changes.
+    """
+    residual = (await db.execute(select(GithubWorkspace.id).where(
+        GithubWorkspace.scope_id == scope_id,
+        or_(GithubWorkspace.leased_item_id.is_not(None),
+            GithubWorkspace.lease_token.is_not(None),
+            GithubWorkspace.leased_owner_pid.is_not(None),
+            GithubWorkspace.leased_owner_proc_start.is_not(None),
+            GithubWorkspace.push_token_expires_at.is_not(None),
+            and_(GithubWorkspace.leased_at.is_not(None),
+                 GithubWorkspace.released_at.is_(None))),
+    ).limit(1))).scalar_one_or_none()
+    return residual is not None
+
+
+async def _reserve_scope_writer(db: AsyncSession, scope_id: int) -> TeamGithubScope:
+    """Acquire the SQLite writer before authoritative scope-use checks."""
+    if db.get_bind().dialect.name != "sqlite":
+        raise HTTPException(status_code=503, detail="scope_update_serialization_unavailable")
+    try:
+        result = await db.execute(
+            update(TeamGithubScope)
+            .where(TeamGithubScope.id == scope_id)
+            .values(id=TeamGithubScope.id)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as exc:
+        await db.rollback()
+        await _observe_policy_rejection(
+            db, "scope_changed_during_update", scope_id=scope_id)
+        raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
+    if result.rowcount != 1:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    return (await db.execute(
+        select(TeamGithubScope)
+        .where(TeamGithubScope.id == scope_id)
+        .execution_options(populate_existing=True)
+    )).scalar_one()
+
+
+async def _resolve_app_installation_for_repository(owner: str, repo: str) -> int:
+    try:
+        github_app_auth_service.require_configuration(require_bot_login=True)
+        installation_id = await github_app_auth_service.resolve_installation(
+            owner, repo
+        )
+    except GithubAppAuthError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": "GitHub App access could not be verified."},
+        ) from exc
+    if installation_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "app_installation_missing",
+                "message": "The configured GitHub App is not installed for this repository.",
+            },
+        )
+    return installation_id
+
+
+async def _resolve_scope_app_installation(scope: TeamGithubScope) -> int:
+    return await _resolve_app_installation_for_repository(scope.repo_owner, scope.repo_name)
+
+
 def _apply_scope_create(
     scope: TeamGithubScope,
     request: TeamGithubScopeCreate | TeamGithubScopeUpdate,
@@ -717,6 +745,8 @@ def _apply_scope_create(
         scope.max_auto_merges_per_day = request.max_auto_merges_per_day
     if request.base_ref is not None:
         scope.base_ref = _clean_required(request.base_ref, "Base ref")
+    if request.github_auth_mode is not None:
+        scope.github_auth_mode = request.github_auth_mode
     if request.builds_out_of_tree is not None:
         scope.builds_out_of_tree = request.builds_out_of_tree
     if request.build_dir_template is not None:
@@ -1034,6 +1064,10 @@ async def report_dispatch_status(
             raise HTTPException(status_code=400, detail="reassign_to_slot_id required")
         if session is None:
             raise HTTPException(status_code=401, detail="session_token_required")
+        # The route's actual item and scope identity is captured before any
+        # await; a refusal may roll back and expire the loaded rows.
+        handoff_item_id = item.id
+        handoff_scope_id = item.scope_id
         try:
             await github_dispatch_service.initiate_handoff(
                 db,
@@ -1041,8 +1075,16 @@ async def report_dispatch_status(
                 scope,
                 initiating_slot_id=require_session_slot(session),
                 target_slot_id=report.reassign_to_slot_id,
+                actor=_session_actor(session),
             )
         except ResumeAttemptError as exc:
+            await _observe_handoff_rejection(
+                db,
+                session,
+                item_id=handoff_item_id,
+                scope_id=handoff_scope_id,
+                code=exc.block_code,
+            )
             status_code = 403 if exc.block_code == "not_item_owner" else 409
             raise HTTPException(status_code=status_code, detail=exc.block_code) from exc
     elif report.status == "handoff_accepted":
@@ -1051,6 +1093,11 @@ async def report_dispatch_status(
         accepting_slot_id = require_session_slot(session)
         if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
             raise HTTPException(status_code=403, detail="bind_unverifiable")
+        acceptance_item_id = item.id
+        acceptance_scope_id = item.scope_id
+        # The actor is captured before the service call: a refusal rolls
+        # back and expires the loaded session row.
+        acceptance_actor = _session_actor(session)
         try:
             await github_dispatch_service.accept_handoff(
                 db,
@@ -1058,10 +1105,54 @@ async def report_dispatch_status(
                 accepting_slot_id,
                 accepting_pane_pid=session.bound_pane_pid,
                 accepting_pane_proc_start=session.bound_pane_proc_start,
+                actor=acceptance_actor,
             )
         except GithubWorkspaceCredentialRevokeError as exc:
+            # C09: the old owner's push access revocation is unproved; the
+            # acceptance rolled back.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_observation(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                occurred_at=datetime.now(timezone.utc),
+                actor=acceptance_actor,
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+                action_outcome="uncertain",
+                sanitized_reason="push access revocation unproved; acceptance rolled back",
+                correlation_id=f"handoff_acceptance:uncertain:{acceptance_item_id}",
+            )
             raise HTTPException(status_code=503, detail=exc.block_code) from exc
+        except HandoffExternalEffectError as exc:
+            # R07: the acceptance rolled back after an external stage began.
+            # The known effects are kept; an unproved identity state is
+            # uncertain, never an ordinary rejection.
+            from app.services import factory_audit_service as _audit
+            effects = "; ".join(f"{name} {state}" for name, state in sorted(exc.effects.items()))
+            await _audit.record_observation(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                occurred_at=datetime.now(timezone.utc),
+                actor=acceptance_actor,
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+                action_outcome="uncertain" if exc.uncertain else "rejected",
+                sanitized_reason=f"acceptance rolled back after external effects: {effects}",
+                correlation_id=f"handoff_acceptance:external:{acceptance_item_id}",
+            )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
+            await _observe_refusal(
+                db,
+                event_kind="handoff_acceptance",
+                source="agent_teams.report_dispatch_status.handoff_accepted",
+                actor=acceptance_actor,
+                code=_handoff_acceptance_code(str(exc)),
+                scope_id=acceptance_scope_id,
+                item_id=acceptance_item_id,
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
         await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
@@ -1198,18 +1289,33 @@ async def report_dispatch_status(
         await db.commit()
     elif report.status == "workspace_released":
         item_id = item.id
+        release_scope_id = item.scope_id
         owner_slot_id = item.owner_slot_id
-        if report.reporting_slot_id != owner_slot_id:
-            raise HTTPException(
-                status_code=403,
-                detail="only the owner slot may release its workspace",
+
+        async def refuse_release(status_code: int, code: str, detail: str):
+            # C09: an authenticated owner-release remedy refusal is recorded
+            # for the actual item before the guard refuses. Guards are kept.
+            await _observe_refusal(
+                db,
+                event_kind="workspace_release",
+                source="agent_teams.report_dispatch_status.workspace_released",
+                actor=_session_actor(session),
+                code=code,
+                scope_id=release_scope_id,
+                item_id=item_id,
             )
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        if report.reporting_slot_id != owner_slot_id:
+            await refuse_release(
+                403, "not_owner_slot", "only the owner slot may release its workspace")
         if report.lease_token is None:
-            raise HTTPException(status_code=400, detail="lease_token required")
+            await refuse_release(400, "lease_token_required", "lease_token required")
         if item.dispatch_status not in _RELEASABLE_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=(
+            await refuse_release(
+                409,
+                "status_not_releasable",
+                (
                     f"workspace cannot be released while the item is "
                     f"{item.dispatch_status}; release is legal only from "
                     f"{', '.join(_RELEASABLE_STATUSES)}"
@@ -1225,22 +1331,28 @@ async def report_dispatch_status(
                 )
             ).scalar_one()
             if current_owner != report.reporting_slot_id:
-                raise HTTPException(status_code=403, detail="not_item_owner")
+                await refuse_release(403, "not_item_owner", "not_item_owner")
         else:
             blocker = await github_workspace_service.release_blocker(scope, workspace, item)
             if blocker is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
+                await refuse_release(
+                    409,
+                    "release_blocked",
+                    (
                         f"workspace will not be released: {blocker}. Commit and "
                         "push, or report the situation in status_note and leave "
                         "the lease held."
                     ),
                 )
             try:
+                # C08: _authorize_dispatch_report proved this session. Its
+                # member and session IDs are the trusted actor references.
                 released = await github_workspace_service.release_by_owner(
                     db,
                     item_id,
+                    actor_kind="member",
+                    actor_member_id=session.member_id,
+                    actor_session_id=session.id,
                     lease_token=report.lease_token,
                     workspace_id=workspace.id,
                     scope_id=scope.id,
@@ -1314,6 +1426,12 @@ async def request_github_work_item_continuation(
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="scope_not_found")
+    request_scope_id = item.scope_id
+    # Captured before the service call: a refusal may roll back and expire
+    # the loaded session row.
+    request_actor = _session_actor(session)
+    # R07: once the request commits, a later failure concerns only its notice.
+    committed_request: tuple[int, int] | None = None
     try:
         revision, approval, _created = (
             await github_approval_service.create_continuation_request(
@@ -1336,8 +1454,10 @@ async def request_github_work_item_continuation(
                     for name, fallback in request.tool_fallbacks.items()
                 },
                 lease_token=request.lease_token,
+                actor=request_actor,
             )
         )
+        committed_request = (approval.id, revision.id)
         async with github_approval_service.continuation_transport_lock(approval.id):
             if await github_approval_service.expire_continuation_if_needed(
                 db,
@@ -1356,6 +1476,20 @@ async def request_github_work_item_continuation(
             if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
             if linked:
+                # C09: the request notice is settled; its fact is separate
+                # from the request fact.
+                await _record_notice(
+                    db,
+                    event_kind="continuation_request_notification",
+                    source="agent_teams.request_github_work_item_continuation",
+                    actor=request_actor,
+                    scope_id=request_scope_id,
+                    item_id=item_id,
+                    request_id=approval.id,
+                    revision_id=revision.id,
+                    outcome="applied",
+                    reason="continuation request notice delivered",
+                )
                 await github_approval_service.nudge_pending_continuation_leader(
                     db,
                     approval,
@@ -1371,17 +1505,70 @@ async def request_github_work_item_continuation(
             revision=_scope_revision_response(revision),
         )
     except GithubApprovalError as exc:
+        if committed_request is not None:
+            # R07: the request stands; its notice is known not settled.
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="rejected", reason=exc.detail)
+        elif exc.status_code != 404:
+            # C09: an authenticated owner request refusal is recorded.
+            await _observe_refusal(
+                db,
+                event_kind="continuation_request",
+                source="agent_teams.request_github_work_item_continuation",
+                actor=request_actor,
+                code=exc.detail,
+                scope_id=request_scope_id,
+                item_id=item_id,
+            )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except GithubAppAuthError as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc
     except GithubClientResponseError as exc:
         raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
-    except MailAuthorityError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except MailDeliveryIntegrityError as exc:
+    except (MailAuthorityError, MailDeliveryIntegrityError) as exc:
+        if committed_request is not None:
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="uncertain",
+                reason="continuation request notice unsettled after commit")
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    except Exception:
+        if committed_request is not None:
+            # R07: a transport failure after the request commit is uncertain;
+            # the committed request is never replayed.
+            await _observe_committed_request_notice(
+                db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                item_id=item_id, outcome="uncertain",
+                reason="continuation request notice unsettled after commit")
+        raise
+
+
+async def _observe_committed_request_notice(
+    db, committed_request: tuple[int, int], *, actor: dict, scope_id: int | None,
+    item_id: int, outcome: str, reason: str,
+) -> None:
+    """R07: the notice result of a committed continuation request."""
+    from app.services import factory_audit_service as _audit
+    request_id, revision_id = committed_request
+    operation_id = f"continuation_request_notification:request:{request_id}:{outcome}"
+    await _audit.record_observation(
+        db,
+        event_kind="continuation_request_notification",
+        source="agent_teams.request_github_work_item_continuation",
+        occurred_at=datetime.now(timezone.utc),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        request_id=request_id,
+        revision_id=revision_id,
+        action_outcome=outcome,
+        sanitized_reason=reason,
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
 
 
 @router.get(
@@ -1492,16 +1679,29 @@ async def cancel_github_work_item_initial_approval(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        # C09: the service records the applied fact with its guarded
+        # mutation; an exact replay records nothing.
         approval = await cancel_stranded_initial_approval(
             db,
             work_item_id=item_id,
             request_id=request_id,
             dispatch_nonce=request.dispatch_nonce,
             reason=request.reason,
+            actor=_operator_actor(),
         )
         return _approval_authority_response(approval)
     except GithubApprovalError as exc:
         await db.rollback()
+        if exc.status_code != 404:
+            await _observe_refusal(
+                db,
+                event_kind="recovery_cancellation",
+                source="agent_teams.cancel_github_work_item_initial_approval",
+                actor=_operator_actor(),
+                code=exc.detail,
+                item_id=item_id,
+                request_id=request_id,
+            )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -1522,20 +1722,34 @@ async def cancel_github_work_item_continuation_request(
         or approval.request_kind != "continuation"
     ):
         raise HTTPException(status_code=404, detail="approval_request_not_found")
+    # C08: the operator route and the authenticated requester act as
+    # themselves. The service records one fact only for a changed request.
+    actor = _operator_actor() if principal is None else _session_actor(principal)
     try:
         if principal is None:
             cancelled, _changed = await github_approval_service._cancel_authorized(
                 db,
                 approval,
+                actor=actor,
             )
         else:
             cancelled, _changed = await github_approval_service.cancel(
                 db,
                 approval,
                 requester_member_id=principal.member_id,
+                actor=actor,
             )
         return _approval_authority_response(cancelled)
     except GithubApprovalError as exc:
+        await _observe_refusal(
+            db,
+            event_kind="request_cancellation",
+            source="agent_teams.cancel_github_work_item_continuation_request",
+            actor=actor,
+            code=exc.detail,
+            item_id=item_id,
+            request_id=request_id,
+        )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -1561,8 +1775,19 @@ async def release_github_recovery_checkpoint(
             dispatch_nonce=request.dispatch_nonce,
             approval_request_id=request.approval_request_id,
             stage=request.stage,
+            actor=_operator_actor(),
         )
     except GithubApprovalError as exc:
+        # C09: stale stage, lease, approval and CAS refusals are recorded;
+        # the refused release never changes the hold.
+        await _observe_refusal(
+            db,
+            event_kind="recovery_checkpoint_release",
+            source="agent_teams.release_github_recovery_checkpoint",
+            actor=_operator_actor(),
+            code=exc.detail,
+            item_id=item_id,
+        )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return _scope_revision_response(revision)
 
@@ -1582,18 +1807,35 @@ async def cancel_active_github_work_item_scope_revision(
     if item is None:
         raise HTTPException(status_code=404, detail="work_item_not_found")
     try:
+        # C07/C09: the service records the applied action fact in the
+        # cancellation transaction and the notice result separately. The
+        # returned changed flag distinguishes the first cancellation from a
+        # replay, which records no second action fact.
         await github_approval_service.cancel_active_continuation(
             db,
             item,
             revision_number=revision_number,
             dispatch_nonce=request.dispatch_nonce,
             reason=request.reason,
+            actor=_operator_actor(),
         )
+    except ActiveCancellationNoticeError as exc:
+        # The cancellation is committed; only its notice failed and the
+        # service already recorded that result.
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except GithubApprovalError as exc:
+        await _observe_refusal(
+            db,
+            event_kind="recovery_cancellation",
+            source="agent_teams.cancel_active_github_work_item_scope_revision",
+            actor=_operator_actor(),
+            code=exc.detail,
+            item_id=item_id,
+        )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailDeliveryIntegrityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return await _reload_work_item_response(db, item.id)
+    return await _reload_work_item_response(db, item_id)
 
 
 @router.post(
@@ -1627,6 +1869,10 @@ async def acknowledge_github_work_item_scope_revision(
     ).scalar_one_or_none()
     if revision is None:
         raise HTTPException(status_code=404, detail="scope_revision_not_found")
+    # Captured before any await; a refusal may roll back and expire rows.
+    ack_scope_id = item.scope_id
+    ack_revision_id = revision.id
+    ack_actor = _session_actor(session)
     try:
         await github_dispatch_service.activate_continuation_revision(
             db,
@@ -1637,6 +1883,7 @@ async def acknowledge_github_work_item_scope_revision(
             authenticated_owner_slot_id=slot_id,
             dispatch_nonce=request.dispatch_nonce,
             lease_token=request.lease_token,
+            actor=ack_actor,
         )
     except GithubAppAuthError as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc
@@ -1646,9 +1893,21 @@ async def acknowledge_github_work_item_scope_revision(
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
     except ValueError as exc:
         detail = str(exc)
+        # C09: an authenticated owner ACK refusal is recorded for the actual
+        # revision; the attempt is unchanged.
+        await _observe_refusal(
+            db,
+            event_kind="continuation_ack",
+            source="agent_teams.acknowledge_github_work_item_scope_revision",
+            actor=ack_actor,
+            code=detail,
+            scope_id=ack_scope_id,
+            item_id=item_id,
+            revision_id=ack_revision_id,
+        )
         status_code = 403 if detail in {"not_item_owner", "lease_token_mismatch"} else 409
         raise HTTPException(status_code=status_code, detail=detail) from exc
-    return await _reload_work_item_response(db, item.id)
+    return await _reload_work_item_response(db, item_id)
 
 
 @router.post(
@@ -1729,6 +1988,7 @@ async def claim_github_work_item_continuation(
         if claimed.rowcount != 1:
             await db.rollback()
             raise HTTPException(status_code=409, detail="continuation_context_changed")
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
     leader = github_dispatch_service._leader_slot(
         list(
             (
@@ -1738,7 +1998,7 @@ async def claim_github_work_item_continuation(
                     .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
                 )
             ).scalars().all()
-        )
+        ), preset.leader_slot_id if preset is not None else None
     )
     leader_member = (
         await github_dispatch_service._slot_member(db, leader.id)
@@ -1869,6 +2129,100 @@ async def claim_github_work_item_continuation(
     return result
 
 
+_CONFIGURATION_OBSERVATION_PRESET_LIMIT = 64
+_CONFIGURATION_OBSERVATION_SCOPE_LIMIT = 256
+_CONFIGURATION_OBSERVATION_SLOT_LIMIT = 64
+
+
+@router.get("/configuration-observation")
+async def read_configuration_observation(
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bounded bulk configuration observation for overlap review. Read-only.
+
+    Row bounds keep the read finite. An incomplete or failed read is reported
+    as incomplete and must block readiness without omitting observed rows.
+    """
+    observed_at = datetime.now(timezone.utc).isoformat()
+    complete = True
+    presets: list = []
+    scopes: list = []
+    scope_payload: list = []
+    try:
+        presets = list((await db.scalars(
+            select(AgentTeamPreset)
+            .order_by(AgentTeamPreset.id)
+            .limit(_CONFIGURATION_OBSERVATION_PRESET_LIMIT + 1)
+        )).all())
+        if len(presets) > _CONFIGURATION_OBSERVATION_PRESET_LIMIT:
+            complete = False
+            presets = presets[:_CONFIGURATION_OBSERVATION_PRESET_LIMIT]
+        # Nested roster projection is bounded by the per-preset query itself.
+        # No count step exists, so concurrent roster growth cannot widen work.
+        hydrate_presets = list(presets)
+        preset_ids = [preset.id for preset in presets]
+        scopes = list((await db.scalars(
+            select(TeamGithubScope)
+            .where(TeamGithubScope.preset_id.in_(preset_ids))
+            .order_by(TeamGithubScope.id)
+            .limit(_CONFIGURATION_OBSERVATION_SCOPE_LIMIT + 1)
+        )).all()) if preset_ids else []
+        if len(scopes) > _CONFIGURATION_OBSERVATION_SCOPE_LIMIT:
+            complete = False
+            scopes = scopes[:_CONFIGURATION_OBSERVATION_SCOPE_LIMIT]
+        scope_payload = [_scope_response(scope) for scope in scopes]
+    except Exception:
+        # Partial failure: keep the rows already observed and mark incomplete.
+        return {
+            "observed_at": observed_at,
+            "complete": False,
+            "presets": [],
+            "scopes": [_scope_response(scope) for scope in scopes],
+        }
+    incomplete_presets: list = []
+    try:
+        preset_payload = []
+        for preset in hydrate_presets:
+            bounded_slots, bound_hit = await agent_team_service.bounded_slots_for_preset(
+                db, preset.id, _CONFIGURATION_OBSERVATION_SLOT_LIMIT)
+            if bound_hit:
+                complete = False
+                incomplete_presets.append({
+                    "id": preset.id,
+                    "roster_omitted": True,
+                    "slot_bound": _CONFIGURATION_OBSERVATION_SLOT_LIMIT,
+                })
+                continue
+            preset_payload.append(AgentTeamPresetResponse(
+                id=preset.id,
+                name=preset.name,
+                description=preset.description,
+                created_by=preset.created_by,
+                created_at=preset.created_at,
+                updated_at=preset.updated_at,
+                autonomy_enabled=preset.autonomy_enabled,
+                leader_slot_id=preset.leader_slot_id,
+                slots=[agent_team_service._slot_response(slot) for slot in bounded_slots],
+            ))
+    except Exception:
+        # Preset projection failed; the observed scopes are preserved truthfully.
+        return {
+            "observed_at": observed_at,
+            "complete": False,
+            "presets": [],
+            "incomplete_presets": incomplete_presets,
+            "scopes": scope_payload,
+        }
+    return {
+        "observed_at": observed_at,
+        "complete": complete,
+        "presets": preset_payload,
+        "incomplete_presets": incomplete_presets,
+        "scopes": scope_payload,
+    }
+
+
 @router.get("/presets", response_model=AgentTeamPresetListResponse)
 async def list_presets(db: AsyncSession = Depends(get_db)):
     return AgentTeamPresetListResponse(presets=await agent_team_service.list_presets(db))
@@ -1877,6 +2231,7 @@ async def list_presets(db: AsyncSession = Depends(get_db)):
 @router.post("/presets", response_model=AgentTeamPresetResponse)
 async def create_preset(
     request: AgentTeamPresetCreate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1888,6 +2243,7 @@ async def create_preset(
 @router.post("/presets/from-agent-mail", response_model=AgentTeamPresetResponse)
 async def create_preset_from_agent_mail(
     request: AgentTeamCreateFromMailRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1899,6 +2255,7 @@ async def create_preset_from_agent_mail(
 @router.post("/presets/from-agent-bridge", response_model=AgentTeamPresetResponse)
 async def create_preset_from_agent_bridge(
     request: AgentTeamCreateFromBridgeRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1941,10 +2298,54 @@ async def update_preset(
             autonomy_enabled=request.autonomy_enabled,
         )
     except ValueError as exc:
+        if str(exc) == "leader_assignment_required":
+            # C09: an authenticated autonomy refusal is recorded for its team;
+            # the policy is unchanged.
+            await _observe_refusal(
+                db,
+                event_kind="policy_change",
+                source="agent_team_service.update_preset",
+                actor=_operator_actor(),
+                code="leader_assignment_required",
+                team_preset_id=preset_id,
+            )
         raise _bad_request(exc) from exc
     if request.autonomy_enabled is not None:
         await _sync_github_jobs(db)
     return response
+
+
+@router.put("/presets/{preset_id}/leader", response_model=AgentTeamPresetResponse)
+async def set_preset_leader(
+    preset_id: int,
+    request: AgentTeamLeaderUpdateRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await agent_team_service.set_leader(
+            db,
+            preset_id,
+            leader_slot_id=request.leader_slot_id,
+            expected_leader_slot_id=request.expected_leader_slot_id,
+            expected_updated_at=request.expected_updated_at,
+            reason=request.reason,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status = 404 if code == "team_not_found" else 409
+        if status == 409:
+            # C09: a stale Leader CAS or guard refusal records its rejected
+            # outcome for the actual team; the Leader is never changed.
+            await _observe_refusal(
+                db,
+                event_kind="leader_assignment",
+                source="agent_teams.set_preset_leader",
+                actor=_operator_actor(),
+                code=code,
+                team_preset_id=preset_id,
+            )
+        raise HTTPException(status_code=status, detail={"code": code}) from exc
 
 
 @router.delete("/presets/{preset_id}", status_code=204)
@@ -1957,6 +2358,11 @@ async def delete_preset(
         await agent_team_service.delete_preset(db, preset_id)
         await _sync_github_jobs(db)
         return Response(status_code=204)
+    except TeamDeletionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "block_code": exc.block_code, "blockers": exc.blockers},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -2002,6 +2408,8 @@ async def create_github_scope(
             repo_path="",
         )
         _apply_scope_create(scope, request)
+        if scope.github_auth_mode == "app" and scope.enabled:
+            scope.github_app_installation_id = await _resolve_scope_app_installation(scope)
         db.add(scope)
         await db.commit()
         await db.refresh(scope)
@@ -2021,27 +2429,105 @@ async def update_github_scope(
     _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    scope = await db.get(TeamGithubScope, scope_id)
-    if scope is None:
+    observed = await db.get(TeamGithubScope, scope_id)
+    if observed is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     try:
+        observed_configuration = _scope_configuration(observed)
+        proposed_owner = _clean_repo_part(request.repo_owner, "Repo owner") if request.repo_owner is not None else observed.repo_owner
+        proposed_repo = _clean_repo_part(request.repo_name, "Repo name") if request.repo_name is not None else observed.repo_name
         identity_change = (
-            (request.repo_owner is not None and _clean_repo_part(request.repo_owner, "Repo owner") != scope.repo_owner)
-            or (request.repo_name is not None and _clean_repo_part(request.repo_name, "Repo name") != scope.repo_name)
+            proposed_owner != observed.repo_owner
+            or proposed_repo != observed.repo_name
             or (
                 request.repo_path is not None
-                and agent_team_service.normalize_repo_path(request.repo_path)[0] != scope.repo_path
+                and agent_team_service.normalize_repo_path(request.repo_path)[0] != observed.repo_path
             )
-            or (request.base_ref is not None and _clean_required(request.base_ref, "Base ref") != scope.base_ref)
+            or (request.base_ref is not None and _clean_required(request.base_ref, "Base ref") != observed.base_ref)
         )
+        auth_change = (
+            request.github_auth_mode is not None
+            and request.github_auth_mode != observed.github_auth_mode
+        )
+        target_auth_mode = request.github_auth_mode or observed.github_auth_mode
+        target_enabled = observed.enabled if request.enabled is None else request.enabled
+        resolve_app = target_auth_mode == "app" and target_enabled and (
+            auth_change or identity_change or (not observed.enabled and target_enabled)
+        )
+
+        # Remote discovery must finish before reserving the SQLite writer.
+        # Drop the read snapshot so the later reservation sees concurrent commits.
+        await db.rollback()
+        installation_id = None
+        if resolve_app:
+            installation_id = await _resolve_app_installation_for_repository(proposed_owner, proposed_repo)
+
+        scope = await _reserve_scope_writer(db, scope_id)
+        if _scope_configuration(scope) != observed_configuration:
+            raise HTTPException(status_code=409, detail="scope_changed_during_app_lookup")
         if identity_change and await _scope_identity_in_use(db, scope_id):
             raise HTTPException(status_code=409, detail="scope_identity_in_use")
+        if auth_change and await _scope_identity_in_use(db, scope_id):
+            raise HTTPException(status_code=409, detail="scope_auth_in_use")
+        effective_installation_change = (
+            installation_id is not None and installation_id != scope.github_app_installation_id
+        )
+        if effective_installation_change and await _scope_identity_in_use(db, scope_id):
+            # Effective App installation replacement is an authority change.
+            # Active attempts, approvals and revisions block it even without a
+            # workspace lease.
+            raise HTTPException(status_code=409, detail="scope_auth_in_use")
+        if (identity_change or auth_change or effective_installation_change) \
+                and await _scope_residual_workspace_authority(db, scope_id):
+            # Residual workspace authority blocks effective changes. Unchanged
+            # safe resumes are not affected.
+            raise HTTPException(status_code=409, detail="scope_workspace_authority_in_use")
         _apply_scope_create(scope, request)
+        if scope.github_auth_mode == "app":
+            if installation_id is not None:
+                scope.github_app_installation_id = installation_id
+            elif identity_change:
+                # A disabled App scope can retain its dispatch preference while
+                # keeping the installation unresolved for later activation.
+                scope.github_app_installation_id = None
+        elif request.github_auth_mode is not None:
+            scope.github_app_installation_id = None
+        # A02: the policy event persists in the same transaction as the
+        # policy change. An audit-write failure rolls back the change.
+        from app.services import factory_audit_service as _audit
+        _policy_before = dict(zip(_SCOPE_CONFIGURATION_FIELDS, observed_configuration))
+        _policy_after = dict(zip(_SCOPE_CONFIGURATION_FIELDS, _scope_configuration(scope)))
+        await _audit.record_event(
+            db,
+            event_kind="policy_change",
+            source="agent_teams.update_github_scope",
+            occurred_at=datetime.now(timezone.utc),
+            actor=_operator_actor(),
+            scope_id=scope.id,
+            context_snapshot=_policy_event_snapshot(scope, request),
+            before_values=_policy_before,
+            after_values=_policy_after,
+            sanitized_reason="scope configuration update",
+            action_outcome="applied",
+            correlation_id=f"policy:scope:{scope.id}:{scope.updated_at.isoformat()}",
+        )
         await db.commit()
         await db.refresh(scope)
+    except HTTPException as exc:
+        await db.rollback()
+        # C09: guarded CAS and authority refusals record their rejected
+        # outcome. _reserve_scope_writer already observed its own refusal.
+        if exc.status_code == 409 and exc.detail != "scope_changed_during_update":
+            await _observe_policy_rejection(db, str(exc.detail), scope_id=scope_id)
+        raise
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="GitHub scope already exists for this repo") from exc
+    except OperationalError as exc:
+        await db.rollback()
+        await _observe_policy_rejection(
+            db, "scope_changed_during_update", scope_id=scope_id)
+        raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
     await _sync_github_jobs(db)
@@ -2061,12 +2547,35 @@ async def update_github_scope_continuation_policy(
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
+    # C11: capture every setting this route changes, before and after.
+    before_values = {
+        field: getattr(scope, field) for field in _CONTINUATION_POLICY_FIELDS
+    }
     scope.continuation_enabled = request.continuation_enabled
     scope.max_continuation_revisions = request.max_continuation_revisions
     scope.max_continuation_failed_heads = request.max_continuation_failed_heads
     scope.max_failed_heads_per_revision = request.max_failed_heads_per_revision
     scope.max_scope_paths = request.max_scope_paths
     scope.max_scope_commands = request.max_scope_commands
+    after_values = {
+        field: getattr(scope, field) for field in _CONTINUATION_POLICY_FIELDS
+    }
+    # A02: the policy event persists in the same transaction as the policy
+    # change. An audit-write failure rolls back the change.
+    from app.services import factory_audit_service as _audit
+    await _audit.record_event(
+        db,
+        event_kind="policy_change",
+        source="agent_teams.update_github_scope_continuation_policy",
+        occurred_at=datetime.now(timezone.utc),
+        actor=_operator_actor(),
+        scope_id=scope.id,
+        before_values=before_values,
+        after_values=after_values,
+        sanitized_reason="continuation policy update",
+        action_outcome="applied",
+        correlation_id=f"policy:continuation:{scope.id}",
+    )
     await db.commit()
     await db.refresh(scope)
     return _scope_response(scope)
@@ -2272,6 +2781,16 @@ async def force_release_github_workspace(
     if workspace is None or workspace.scope_id != scope_id:
         raise HTTPException(status_code=404, detail="GitHub workspace not found")
     if workspace.leased_item_id is None:
+        # C09: an authenticated operator refusal is recorded for the scope;
+        # no item lease exists to bind.
+        await _observe_refusal(
+            db,
+            event_kind="workspace_release",
+            source="agent_teams.force_release_github_workspace",
+            actor=_operator_actor(),
+            code="workspace_not_leased",
+            scope_id=scope_id,
+        )
         raise _conflict(
             "Workspace is not leased",
             block_code="workspace_not_leased",
@@ -2285,8 +2804,11 @@ async def force_release_github_workspace(
     )
 
     try:
+        # C08: require_operator proved the shared operator role. Identity is
+        # never derived from requested_by, the reason or another request field.
         released = await github_workspace_service.force_release_acquisition(
             db,
+            actor_kind="operator",
             workspace_id=workspace_id,
             scope_id=scope_id,
             item_id=released_item_id,
@@ -2401,7 +2923,10 @@ async def retry_github_work_item(
                 .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
             )
         ).scalars().all()
-        leader = github_dispatch_service._leader_slot(list(slots))
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = github_dispatch_service._leader_slot(
+            list(slots), preset.leader_slot_id if preset is not None else None
+        )
         leader_member = (
             await github_dispatch_service._slot_member(db, leader.id)
             if leader is not None
@@ -2471,6 +2996,7 @@ async def resume_github_work_item_attempt(
             reassign_to_slot_id=request.reassign_to_slot_id,
         )
     except ResumeAttemptError as exc:
+        await _observe_resume_rejection(db, item_id, exc.block_code)
         raise _conflict(str(exc), exc.block_code) from exc
     return await _reload_work_item_response(db, item.id)
 
@@ -2497,8 +3023,19 @@ async def abandon_github_work_item(
         "dispatched",
         "verifying",
     }:
+        # R07: an authenticated operator refusal is recorded with its item.
+        refused_status = item.dispatch_status
+        await _observe_refusal(
+            db,
+            event_kind="operator_escalation",
+            source="agent_teams.abandon_github_work_item",
+            actor=_operator_actor(),
+            code="work_item_not_abandonable",
+            scope_id=item.scope_id,
+            item_id=item.id,
+        )
         raise _conflict(
-            f"Work item in status {item.dispatch_status} cannot be abandoned",
+            f"Work item in status {refused_status} cannot be abandoned",
             block_code="work_item_not_abandonable",
         )
     note = (
@@ -2509,20 +3046,21 @@ async def abandon_github_work_item(
             "owner session is offline."
         )
     )
-    await github_dispatch_service.escalate(
-        db,
-        item,
-        "abandoned_by_operator",
-        note=note,
-    )
-    await db.commit()
-    return await _reload_work_item_response(db, item.id)
+    # A06/A31/R07: the abandon action and its operator escalation fact commit
+    # together, then the broadcast records its own notice result.
+    # delivery_outcome stays null: an escalation is never a terminal delivery
+    # outcome and later retries never inflate non-delivery counts.
+    abandoned_item_id = item.id
+    await github_dispatch_service.abandon_by_operator(
+        db, item, note, actor=_operator_actor())
+    return await _reload_work_item_response(db, abandoned_item_id)
 
 
 @router.post("/presets/{preset_id}/duplicate", response_model=AgentTeamPresetResponse)
 async def duplicate_preset(
     preset_id: int,
     request: AgentTeamPresetUpdate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -2611,6 +3149,395 @@ def _require_safe_agent_launch(
         )
 
 
+@router.get("/github-scopes/{scope_id}/activation-readiness")
+async def read_activation_readiness(
+    scope_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Server-derived shared readiness for guided activation. Read-only.
+
+    Pure and bounded: every identity-set query is capped before any hydration,
+    fanout or native work. Native evidence is matched from recorded pane binding
+    rows. No planner execution and no session synchronization run here. An
+    incomplete observation blocks readiness and omits nothing silently.
+    """
+    from app.services.github_coordination_service import MCP_HEARTBEAT_TTL_SECONDS
+
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    blockers: list[dict[str, object]] = []
+    # Stored capability hashes do not prove enforcement remains enabled.
+    from app.config import settings as app_settings
+    if not app_settings.mail_capability_tokens_required:
+        blockers.append({"code": "capability_tokens_not_required",
+                         "message": "Mail capability-token enforcement must be enabled."})
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    # Bounded roster query first: nothing hydrates before this bound.
+    slots = list((await db.scalars(
+        select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id)
+        .order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(65)
+    )).all())
+    if len(slots) > 64:
+        slots = slots[:64]
+        blockers.append({"code": "readiness_context_limit",
+                         "message": "The roster exceeds the bounded readiness observation."})
+    # C2: one immutable authoritative selection snapshot, taken from the
+    # roster query rows themselves. No later read may widen or replace it.
+    selection_roster = tuple(
+        (slot.id, slot.enabled, slot.provider) for slot in slots)
+    enabled = [slot for slot in slots if slot.enabled]
+    if any(blocker["code"] == "readiness_context_limit" for blocker in blockers):
+        # B05: overflow stops member, session and native work entirely.
+        return {
+            "status": "blocked",
+            "observed_at": observed_at,
+            "blockers": blockers,
+        }
+    heartbeat_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=MCP_HEARTBEAT_TTL_SECONDS)
+
+    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None, int | None, str | None]:
+        """Current authenticated binding for one slot from bounded queries only."""
+        # Select the latest member by slot first, then validate that member's
+        # preset and kind. Prefiltering by preset or kind would skip the
+        # newest invalid member and accept historical authority.
+        candidates = list((await db.scalars(
+            select(MailTeamMember).where(
+                MailTeamMember.team_slot_id == slot.id,
+            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
+        )).all())
+        if not candidates:
+            return False, "missing", None, None, None
+        member = candidates[0]
+        if member.team_preset_id != scope.preset_id:
+            return False, "member_preset", member.id, None, None
+        if member.participant_kind != "team_slot":
+            return False, "member_kind", member.id, None, None
+        sessions = list((await db.scalars(
+            select(MailAgentSession).where(
+                MailAgentSession.member_id == member.id,
+                MailAgentSession.team_preset_id == scope.preset_id,
+                MailAgentSession.team_slot_id == slot.id,
+                MailAgentSession.source == "mcp",
+                MailAgentSession.closed_at.is_(None),
+                MailAgentSession.mailbox_status == "connected",
+                MailAgentSession.capability_token_hash.is_not(None),
+            ).order_by(MailAgentSession.id).limit(9)
+            .execution_options(populate_existing=True)
+        )).all())
+        if len(sessions) > 8:
+            return False, "context_limit", member.id, None, None
+        qualifying = []
+        for session in sessions:
+            if not session.wake_enabled:
+                continue
+            if session.provider != slot.provider:
+                continue
+            if session.last_seen_at is None or session.last_seen_at < heartbeat_cutoff:
+                continue
+            if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+                continue
+            binding = (await db.scalars(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == session.bound_pane_pid,
+                    AgentPaneBinding.pane_proc_start == session.bound_pane_proc_start,
+                    AgentPaneBinding.slot_id == slot.id,
+                    AgentPaneBinding.preset_id == scope.preset_id,
+                ).limit(2)
+            )).first()
+            if binding is None:
+                return False, "native_mismatch", member.id, None, None
+            # Multiple live pane bindings for one member are never resolved
+            # silently: the qualifying list below refuses the ambiguity, which
+            # also covers replaced or retired panes still bound in records.
+            # Strict native identity: confirm the pane process start-time
+            # lifetime before and after a bounded command read. One probe per
+            # candidate, capped by the bounded session query.
+            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
+            if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
+                return False, "native_lifetime", member.id, None, None
+            # Actual native provider/agent identity from the preserved
+            # argument vector. argv[0] must be the registered executable;
+            # supported argument positions are exact. Provider text anywhere
+            # else, shell wrappers, arbitrary scripts and oversized commands
+            # never confirm identity.
+            argv = pane_agent_argv(session.bound_pane_pid, session.bound_pane_proc_start)
+            if argv is None:
+                return False, "native_identity", member.id, None, None
+            argv0 = argv[0].rsplit("/", 1)[-1]
+            marker = {
+                "claude-code": "claude",
+                "codex-cli": "codex",
+                "copilot-cli": "copilot",
+                "opencode-cli": "opencode",
+                "pi-cli": "pi",
+            }.get(slot.provider, slot.provider)
+            if argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
+                return False, "native_identity", member.id, None, None
+            if slot.provider in {"pi", "pi-cli"}:
+                # Registered Pi recognizer semantics
+                # (app/services/providers/pi_cli.py::_pi_command): the pi
+                # executable, or node with the registered CLI script exactly
+                # at argument position 1.
+                import re as _re
+                pi_identity = argv0 == "pi" or (
+                    argv0 == "node" and len(argv) > 1
+                    and bool(_re.search(r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
+                )
+                if not pi_identity:
+                    return False, "native_identity", member.id, None, None
+            elif not (argv0 == marker or argv0 == slot.provider):
+                return False, "native_identity", member.id, None, None
+            # Authenticated MCP process: when the session process differs
+            # from the pane process it must not be confirmed dead. This is the
+            # separate current process check, not connected or heartbeat
+            # alone. The conservative wake-helper semantics are unchanged.
+            from app.utils.peer_process import (
+                pane_agent_argv,
+                process_is_confirmed_dead,
+                read_proc_stat,
+            )
+            if (session.pid != session.bound_pane_pid
+                    and process_is_confirmed_dead(session.pid)):
+                return False, "mcp_process", member.id, None, None
+            # C3: bounded positive auxiliary MCP process and lifetime proof.
+            # Missing, denied, malformed, oversized or reused process
+            # identities refuse with a safe gap. Identity is tied to the
+            # authenticated session and the current pane through the bounded
+            # parent chain (at most four hops).
+            observed_tick = None
+            if session.pid != session.bound_pane_pid:
+                # A2: tie the auxiliary process lifetime to its authenticated
+                # registration evidence. A process that started after the
+                # session registration is a post-registration reuse; an
+                # uncertain clock identity refuses as well.
+                from app.services.agent_activity_service import _process_started_at
+                registered_at = session.created_at
+                if registered_at is not None and registered_at.tzinfo is None:
+                    registered_at = registered_at.replace(tzinfo=timezone.utc)
+                first_stat = read_proc_stat(session.pid)
+                if first_stat is None:
+                    return False, "mcp_process_gap", member.id, None, None
+                first_start = first_stat[1]
+                observed_tick = first_start
+                try:
+                    started_at = _process_started_at(first_start)
+                except (OSError, ValueError, TypeError, OverflowError):
+                    return False, "mcp_process_gap", member.id, None, None
+                if (registered_at is None
+                        or registered_at > datetime.now(timezone.utc) + timedelta(seconds=5)
+                        or started_at > registered_at):
+                    return False, "mcp_process_gap", member.id, None, None
+                current_pid = session.pid
+                anchored = False
+                for _hop in range(4):
+                    stat = read_proc_stat(current_pid)
+                    if stat is None or not isinstance(stat[1], str) or not stat[1]:
+                        return False, "mcp_process_gap", member.id, None, None
+                    ppid, start_time = stat
+                    # Retain the first authenticated start tick through the
+                    # leaf checks. A reused PID whose tick changed across the
+                    # reads refuses; invalid ticks refuse as the safe gap.
+                    if current_pid == session.pid and start_time != first_start:
+                        return False, "mcp_process_gap", member.id, None, None
+                    argv = pane_agent_argv(current_pid, start_time)
+                    if argv is None:
+                        # Oversized, malformed or identity changed across the
+                        # bounded read window: refuse with the safe gap.
+                        return False, "mcp_process_gap", member.id, None, None
+                    # Reused or unknown identity: the auxiliary process must
+                    # be the registered provider executable family, not
+                    # another child that reused the PID. The current start
+                    # tick alone cannot authenticate an older Mail session;
+                    # the command identity is required alongside the
+                    # authenticated session evidence.
+                    aux_name = argv[0].rsplit("/", 1)[-1]
+                    if aux_name in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
+                        return False, "mcp_process_gap", member.id, None, None
+                    if slot.provider in {"pi", "pi-cli"}:
+                        import re as _re_aux
+                        aux_identity = aux_name == "pi" or (
+                            aux_name == "node" and len(argv) > 1
+                            and bool(_re_aux.search(
+                                r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
+                        )
+                    else:
+                        aux_identity = aux_name == marker or aux_name == slot.provider
+                    if not aux_identity:
+                        return False, "mcp_process_gap", member.id, None, None
+                    if ppid == session.bound_pane_pid:
+                        anchored = True
+                        break
+                    current_pid = ppid
+                if not anchored:
+                    return False, "mcp_process_gap", member.id, None, None
+            # Actual lifecycle retirement: a retired pane lifecycle row means
+            # the pane is retired. Newest binding order is not equivalent.
+            from app.models.database import MailPaneLifecycle
+            retired = (await db.scalars(
+                select(MailPaneLifecycle.pane_pid).where(
+                    MailPaneLifecycle.pane_pid == session.bound_pane_pid,
+                    MailPaneLifecycle.pane_proc_start == session.bound_pane_proc_start,
+                    MailPaneLifecycle.retired_at.is_not(None),
+                ).limit(1)
+            )).first()
+            if retired is not None:
+                return False, "native_retired", member.id, None, None
+            qualifying.append(session)
+        if len(qualifying) > 1:
+            # Two or more simultaneously live bindings are never resolved
+            # silently.
+            return False, "ambiguous", member.id, None, None
+        if not qualifying:
+            return False, "stale", member.id, None, None
+        return True, None, member.id, qualifying[0].id, observed_tick
+
+    async def identity_signature(slot: AgentTeamSlot) -> tuple:
+        """Fresh bounded immutable identity signature for one slot.
+
+        Covers preset Leader assignment, roster slot state, current member
+        identity and kind, complete session capability/wake/provider/freshness
+        and pane lifetime fields, and pane binding rows with retirement order.
+        """
+        # Scalar-column rows and explicit fresh reads only: cached ORM
+        # entities cannot hide changed identity fields from this comparison.
+        slot_row = (await db.execute(select(
+            AgentTeamSlot.enabled, AgentTeamSlot.provider,
+        ).where(AgentTeamSlot.id == slot.id).limit(1))).first()
+        preset_row = (await db.execute(select(
+            AgentTeamPreset.leader_slot_id,
+        ).where(AgentTeamPreset.id == scope.preset_id).limit(1))).first()
+        member_row = (await db.execute(select(
+            MailTeamMember.id, MailTeamMember.participant_kind, MailTeamMember.updated_at,
+            MailTeamMember.team_preset_id,
+        ).where(
+            MailTeamMember.team_preset_id == scope.preset_id,
+            MailTeamMember.team_slot_id == slot.id,
+        ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
+        session_rows = list((await db.execute(select(
+            MailAgentSession.id, MailAgentSession.member_id, MailAgentSession.pid,
+            MailAgentSession.created_at,
+            MailAgentSession.provider, MailAgentSession.wake_enabled,
+            MailAgentSession.mailbox_status, MailAgentSession.capability_token_hash,
+            MailAgentSession.last_seen_at, MailAgentSession.bound_pane_pid,
+            MailAgentSession.bound_pane_proc_start,
+        ).where(
+            MailAgentSession.team_preset_id == scope.preset_id,
+            MailAgentSession.team_slot_id == slot.id,
+            MailAgentSession.closed_at.is_(None),
+        ).order_by(MailAgentSession.id).limit(9))).all())
+        binding_rows = list((await db.execute(select(
+            AgentPaneBinding.id, AgentPaneBinding.pane_pid, AgentPaneBinding.pane_proc_start,
+        ).where(
+            AgentPaneBinding.slot_id == slot.id,
+            AgentPaneBinding.preset_id == scope.preset_id,
+        ).order_by(AgentPaneBinding.id.desc()).limit(3))).all())
+        # The complete roster snapshot catches added enabled slots that
+        # per-slot checks alone would miss.
+        roster_rows = list((await db.execute(select(
+            AgentTeamSlot.id, AgentTeamSlot.enabled, AgentTeamSlot.provider,
+        ).where(AgentTeamSlot.preset_id == scope.preset_id)
+          .order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(65))).all())
+        return (
+            slot_row if slot_row else None,
+            preset_row[0] if preset_row else None,
+            member_row if member_row else None,
+            tuple(tuple(row) for row in session_rows),
+            tuple(tuple(row) for row in binding_rows),
+            tuple(tuple(row) for row in roster_rows),
+        )
+
+    # C-2: one complete immutable baseline is captured BEFORE any
+    # validation. Validation runs against that baseline; a change between the
+    # baseline and validation reads is refused, never absorbed.
+    baselines: dict[int, tuple] = {}
+    for slot in enabled[:64]:
+        baselines[slot.id] = await identity_signature(slot)
+        if baselines[slot.id][5] != selection_roster:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The roster changed after the authoritative selection snapshot.",
+                             "slot_ids": [slot.id]})
+    states: dict[int, tuple[bool, str | None, int | None, int | None, str | None]] = {}
+    signatures: dict[int, tuple] = {}
+    for slot in enabled[:64]:
+        states[slot.id] = await binding_state(slot)
+        signatures[slot.id] = await identity_signature(slot)
+        if signatures[slot.id] != baselines[slot.id]:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The binding state changed between baseline and validation.",
+                             "slot_ids": [slot.id]})
+
+    leader = next((slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id), None)
+    if leader is None:
+        blockers.append({"code": "leader_assignment_missing",
+                         "message": "An enabled explicit Leader assignment is required."})
+    elif not states[leader.id][0]:
+        blockers.append({"code": f"leader_binding_{states[leader.id][1]}",
+                         "message": "The current authenticated Leader binding is not confirmed."})
+
+    owner_slots = [slot for slot in enabled if leader is None or slot.id != leader.id]
+    eligible_owner_slot_ids: set[int] = set()
+    for slot in owner_slots[:64]:
+        ok, reason, _bound_member_id, _bound_session_id, _bound_tick = states[slot.id]
+        if ok:
+            eligible_owner_slot_ids.add(slot.id)
+        elif reason == "ambiguous":
+            blockers.append({"code": "owner_binding_ambiguous",
+                             "message": "One member has more than one live owner binding.",
+                             "slot_ids": [slot.id]})
+        elif reason != "missing":
+            # A slot with no member is covered by the aggregate eligibility
+            # blocker below; other gaps are named per slot.
+            blockers.append({"code": f"owner_binding_{reason}",
+                             "message": "An owner session binding is not current and authenticated.",
+                             "slot_ids": [slot.id]})
+    if not eligible_owner_slot_ids:
+        blockers.append({"code": "owner_binding_missing",
+                         "message": "A distinct eligible owner binding is required."})
+
+    unbound_slots = [slot.display_name for slot in enabled[:64] if not states[slot.id][0]]
+    if unbound_slots:
+        blockers.append({"code": "provider_mail_not_ready",
+                         "message": "Provider and Agent Mail readiness require existing authenticated sessions.",
+                         "slot_names": sorted(set(unbound_slots))})
+
+    # Post-observation revalidation: bindings must not change during the reads.
+    # Gap 2: revalidate the complete current binding after the slow
+    # observation: Leader assignment, roster membership and the current member.
+    current_preset = await db.get(AgentTeamPreset, scope.preset_id)
+    if (current_preset is not None and preset is not None
+            and current_preset.leader_slot_id != preset.leader_slot_id):
+        blockers.append({"code": "binding_changed_during_observation",
+                         "message": "The Leader assignment changed during the observation."})
+    for slot in enabled[:64]:
+        # Fresh full re-evaluation: membership, session identity, wake state,
+        # capability, provider, heartbeat freshness, pane identity, binding row
+        # and native liveness must all still hold. The final complete snapshot
+        # must equal both the post-validation signature and the immutable
+        # baseline; scalar-column reads make it fresh, never cached.
+        fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id, fresh_tick = await binding_state(slot)
+        fresh_signature = await identity_signature(slot)
+        if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
+                or fresh_session_id != states[slot.id][3]
+                or fresh_tick != states[slot.id][4]
+                or fresh_signature != signatures[slot.id]
+                or fresh_signature != baselines[slot.id]
+                or fresh_signature[5] != selection_roster):
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The complete binding state changed during the observation.",
+                             "slot_ids": [slot.id]})
+
+    return {
+        "status": "blocked" if blockers else "ready",
+        "observed_at": observed_at,
+        "blockers": blockers,
+    }
+
+
 @router.post("/presets/{preset_id}/plan-launch", response_model=AgentTeamLaunchPlan)
 async def plan_launch(
     preset_id: int,
@@ -2650,7 +3577,13 @@ async def launch_preset(
     try:
         return await agent_team_service.launch(db, preset_id, request)
     except PlanConflictError as exc:
-        detail: dict[str, object] = {"message": str(exc)}
+        # The plan check refuses before any launch row or session action. The
+        # structured marker makes this a proven non-write for clients.
+        detail: dict[str, object] = {
+            "message": str(exc),
+            "code": "plan_conflict",
+            "proven_non_write": bool(exc.proven_non_write),
+        }
         if exc.plan is not None:
             detail["plan"] = jsonable_encoder(exc.plan)
         raise HTTPException(status_code=409, detail=detail) from exc

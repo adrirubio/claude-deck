@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Lane B supervision every ten seconds
+[Timer]
+OnBootSec=10
+OnUnitActiveSec=10
+AccuracySec=1
+Unit=claude-deck-product-supervisor.service
+[Install]
+WantedBy=timers.target

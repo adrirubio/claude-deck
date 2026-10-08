@@ -1,0 +1,755 @@
+{
+  "filtered_overlap": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {
+      "team_id": 1
+    },
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": 1
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "intake_eligible",
+            "state": "eligible",
+            "summary": "Configured intake is available; work eligibility still applies."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "fresh",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 2
+    }
+  },
+  "first_page": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {
+      "limit": 2
+    },
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": true,
+      "next_cursor": "eyJmaWx0ZXJzIjp7InByb3ZpZGVyIjpudWxsLCJzY29wZV9pZCI6bnVsbCwidGVhbV9pZCI6bnVsbH0sImlkIjoyLCJraW5kIjoicmVwb3NpdG9yaWVzIiwidXBkYXRlZF9hdCI6IjIwMjYtMDktMzBUMTI6MDA6MDArMDA6MDAiLCJ2IjoxfQ",
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "intake_eligible",
+            "state": "eligible",
+            "summary": "Configured intake is available; work eligibility still applies."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "never_polled",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "last_page": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {
+      "cursor": "eyJmaWx0ZXJzIjp7InByb3ZpZGVyIjpudWxsLCJzY29wZV9pZCI6bnVsbCwidGVhbV9pZCI6bnVsbH0sImlkIjoyLCJraW5kIjoicmVwb3NpdG9yaWVzIiwidXBkYXRlZF9hdCI6IjIwMjYtMDktMzBUMTI6MDA6MDArMDA6MDAiLCJ2IjoxfQ",
+      "limit": 2
+    },
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "intake_eligible",
+            "state": "eligible",
+            "summary": "Configured intake is available; work eligibility still applies."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "fresh",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "missing_job": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "job_not_scheduled",
+            "state": "blocked",
+            "summary": "Repository intake is not scheduled."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "job_not_scheduled",
+            "state": "blocked",
+            "summary": "Repository intake is not scheduled."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T11:57:59Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "normal": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "intake_eligible",
+            "state": "eligible",
+            "summary": "Configured intake is available; work eligibility still applies."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "never_polled",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "intake_eligible",
+            "state": "eligible",
+            "summary": "Configured intake is available; work eligibility still applies."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "fresh",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "recovery_only": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "recovery_only_gate",
+            "state": "blocked",
+            "summary": "Normal intake is blocked while recovery mode is active."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "recovery_only_gate",
+            "state": "blocked",
+            "summary": "Normal intake is blocked while recovery mode is active."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "stopped": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scheduler_stopped",
+            "state": "blocked",
+            "summary": "The scheduler is stopped."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scheduler_stopped",
+            "state": "blocked",
+            "summary": "The scheduler is stopped."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  },
+  "unknown": {
+    "endpoint": "/api/v1/factory/repositories",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "has_more": false,
+      "next_cursor": null,
+      "repositories": [
+        {
+          "configured_enabled": false,
+          "github": {
+            "name": "paused",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "scope_paused",
+            "state": "blocked",
+            "summary": "Repository intake is paused."
+          },
+          "overlap": {
+            "other_scope_ids": [],
+            "state": "none"
+          },
+          "poll": {
+            "freshness": "suspended",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": false,
+          "scope_id": 3,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "runtime_not_observed",
+            "state": "unknown",
+            "summary": "Runtime availability has not been observed."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              1
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "unknown",
+            "interval_seconds": 60,
+            "last_polled_at": null
+          },
+          "scope_enabled": true,
+          "scope_id": 2,
+          "team": {
+            "id": 2,
+            "name": "Fixture team 2"
+          },
+          "team_automation_enabled": true
+        },
+        {
+          "configured_enabled": true,
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "intake": {
+            "reason_code": "runtime_not_observed",
+            "state": "unknown",
+            "summary": "Runtime availability has not been observed."
+          },
+          "overlap": {
+            "other_scope_ids": [
+              2
+            ],
+            "state": "warning"
+          },
+          "poll": {
+            "freshness": "unknown",
+            "interval_seconds": 60,
+            "last_polled_at": "2026-09-30T12:00:00Z"
+          },
+          "scope_enabled": true,
+          "scope_id": 1,
+          "team": {
+            "id": 1,
+            "name": "Fixture team 1"
+          },
+          "team_automation_enabled": true
+        }
+      ],
+      "schema_version": 1,
+      "total": 3
+    }
+  }
+}

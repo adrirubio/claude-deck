@@ -9,7 +9,8 @@ from dataclasses import fields
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -18,8 +19,13 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
+    GithubWorkItem,
+    GithubWorkspace,
     MailAgentSession,
     MailTeamMember,
+    TeamGithubScope,
 )
 from app.models.schemas import (
     AgentTeamCreateFromBridgeRequest,
@@ -39,6 +45,7 @@ from app.services import agent_mail_install_service
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
 from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service
+from app.services.github_recovery_gate import configured_recovery_only_attempt
 from app.services.providers import get_provider, get_providers
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.providers.launch_contract import (
@@ -55,11 +62,33 @@ from app.services.team_communication_policy import team_communication_guidance
 
 
 class PlanConflictError(ValueError):
-    """Raised when a launch request confirms an outdated launch plan."""
+    """Raised when a launch request confirms an outdated launch plan.
 
-    def __init__(self, message: str, plan: AgentTeamLaunchPlan | None = None):
+    proven_non_write is True only for refusals checked before any launch
+    action. Conflicts raised while executing plan items can follow session
+    actions and must never claim a proven non-write.
+    """
+
+    def __init__(self, message: str, plan: AgentTeamLaunchPlan | None = None,
+                 proven_non_write: bool = False):
         super().__init__(message)
         self.plan = plan
+        self.proven_non_write = proven_non_write
+
+
+class TeamDeletionConflictError(ValueError):
+    """A safe refusal shared by direct service callers and the operator API."""
+
+    def __init__(self, blockers: list[dict], block_code: str = "team_in_use"):
+        message = (
+            "Team cannot be deleted while automation or blocking work, approvals, revisions, "
+            "workspace leases, or recovery authority remain. Pause automation and inspect team activity."
+            if block_code == "team_in_use" else
+            "Team deletion cannot verify safe state. Inspect team activity before deleting."
+        )
+        super().__init__(message)
+        self.block_code = block_code
+        self.blockers = blockers
 
 
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
@@ -98,6 +127,7 @@ class AgentTeamService:
             name=name,
             description=self._clean_optional(request.description),
             created_by=self._clean_optional(request.created_by),
+            autonomy_enabled=False,
         )
         db.add(preset)
         await db.flush()
@@ -109,6 +139,98 @@ class AgentTeamService:
         for slot_data in normalized_slots:
             db.add(AgentTeamSlot(preset_id=preset.id, **slot_data))
 
+        await db.commit()
+        await db.refresh(preset)
+        return await self._preset_response(db, preset)
+
+    async def set_leader(
+        self,
+        db: AsyncSession,
+        preset_id: int,
+        *,
+        leader_slot_id: int,
+        expected_leader_slot_id: int | None,
+        expected_updated_at: datetime,
+        reason: str,
+    ) -> AgentTeamPresetResponse:
+        """Change Leader authority only while the team is stopped and quiescent."""
+        preset = await self._lock_preset_for_slot_mutation(db, preset_id)
+        expected_time = expected_updated_at.replace(tzinfo=None)
+        if (preset.leader_slot_id != expected_leader_slot_id
+                or preset.updated_at != expected_time):
+            await db.rollback()
+            raise ValueError("leader_assignment_changed")
+        if preset.autonomy_enabled:
+            await db.rollback()
+            raise ValueError("leader_assignment_team_active")
+        slot = (await db.execute(select(AgentTeamSlot).where(
+            AgentTeamSlot.id == leader_slot_id,
+            AgentTeamSlot.preset_id == preset_id,
+            AgentTeamSlot.enabled.is_(True),
+        ))).scalar_one_or_none()
+        if slot is None:
+            await db.rollback()
+            raise ValueError("leader_slot_unavailable")
+
+        scope_ids = select(TeamGithubScope.id).where(TeamGithubScope.preset_id == preset_id)
+        item_ids = select(GithubWorkItem.id).where(GithubWorkItem.scope_id.in_(scope_ids))
+        active_item = (await db.execute(select(GithubWorkItem.id).where(
+            GithubWorkItem.id.in_(item_ids),
+            GithubWorkItem.dispatch_status.in_(("dispatched", "verifying")),
+        ).limit(1))).scalar_one_or_none()
+        pending_approval = (await db.execute(select(GithubApprovalRequest.id).where(
+            GithubApprovalRequest.work_item_id.in_(item_ids),
+            GithubApprovalRequest.status == "pending",
+        ).limit(1))).scalar_one_or_none()
+        active_revision = (await db.execute(select(GithubAttemptScopeRevision.id).where(
+            GithubAttemptScopeRevision.work_item_id.in_(item_ids),
+            GithubAttemptScopeRevision.status.not_in(
+                ("completed", "exhausted", "rejected", "superseded", "expired")
+            ),
+        ).limit(1))).scalar_one_or_none()
+        active_workspace = (await db.execute(select(GithubWorkspace.id).where(
+            GithubWorkspace.scope_id.in_(scope_ids),
+            or_(GithubWorkspace.leased_item_id.is_not(None),
+                GithubWorkspace.lease_token.is_not(None),
+                GithubWorkspace.leased_owner_pid.is_not(None),
+                GithubWorkspace.leased_owner_proc_start.is_not(None),
+                GithubWorkspace.push_token_expires_at.is_not(None),
+                and_(GithubWorkspace.leased_at.is_not(None),
+                     GithubWorkspace.released_at.is_(None))),
+        ).limit(1))).scalar_one_or_none()
+        if active_item is not None or pending_approval is not None or active_revision is not None or active_workspace is not None:
+            await db.rollback()
+            raise ValueError("leader_assignment_team_not_quiescent")
+        if not reason.strip():
+            await db.rollback()
+            raise ValueError("leader_assignment_reason_required")
+        preset.leader_slot_id = slot.id
+        preset.updated_at = datetime.utcnow()
+        # A03: the Leader event persists in the same transaction as the
+        # Leader change. An audit-write failure rolls back the change.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="leader_assignment",
+            source="agent_team_service.set_leader",
+            occurred_at=datetime.utcnow(),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            team_preset_id=preset.id,
+            before_values={"leader_slot_id": expected_leader_slot_id},
+            after_values={"leader_slot_id": slot.id},
+            context_snapshot={
+                "team_created_at": preset.created_at.isoformat() if preset.created_at else None,
+                "configured_provider": slot.provider,
+                "observed_runtime_provider": None,
+                "github_auth_mode": None,
+                "slot_display_name": slot.display_name,
+                "event_time_labels": ("configured_provider", "observed_runtime_provider",
+                                      "slot_display_name", "team_created_at"),
+            },
+            sanitized_reason=reason,
+            action_outcome="applied",
+            correlation_id=f"leader-assignment:{preset.id}:{slot.id}",
+        )
         await db.commit()
         await db.refresh(preset)
         return await self._preset_response(db, preset)
@@ -129,6 +251,31 @@ class AgentTeamService:
         if description is not None:
             preset.description = self._clean_optional(description)
         if autonomy_enabled is not None:
+            if autonomy_enabled:
+                leader = await db.execute(select(AgentTeamSlot.id).where(
+                    AgentTeamSlot.id == preset.leader_slot_id,
+                    AgentTeamSlot.preset_id == preset.id,
+                    AgentTeamSlot.enabled.is_(True),
+                ))
+                if leader.scalar_one_or_none() is None:
+                    raise ValueError("leader_assignment_required")
+            # C09: team autonomy policy changes persist their event in the
+            # same transaction. An audit-write failure rolls back the change.
+            # update_preset is the real autonomy method.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_event(
+                db,
+                event_kind="policy_change",
+                source="agent_team_service.update_preset",
+                occurred_at=datetime.utcnow(),
+                actor=_audit.derive_actor(actor_kind="operator"),
+                team_preset_id=preset.id,
+                before_values={"autonomy_enabled": preset.autonomy_enabled},
+                after_values={"autonomy_enabled": autonomy_enabled},
+                sanitized_reason="team autonomy policy change",
+                action_outcome="applied",
+                correlation_id=f"policy:autonomy:{preset.id}:{int(autonomy_enabled)}",
+            )
             preset.autonomy_enabled = autonomy_enabled
         preset.updated_at = datetime.utcnow()
         await db.commit()
@@ -136,7 +283,130 @@ class AgentTeamService:
         return await self._preset_response(db, preset)
 
     async def delete_preset(self, db: AsyncSession, preset_id: int) -> None:
-        preset = await self._require_preset(db, preset_id)
+        try:
+            # SQLite is the supported persistence engine. A row lock alone on
+            # another dialect would not serialize inserts into child tables.
+            if db.get_bind().dialect.name != "sqlite":
+                raise TeamDeletionConflictError([], "team_deletion_protection_unavailable")
+            # Reserve the SQLite writer before ANY authoritative guard reads.
+            # Keep it until deletion commits, so competing dispatch/approval/
+            # lease writes either precede the checks or follow the cascade.
+            # A no-op UPDATE also works in an existing SQLAlchemy transaction;
+            # a stale WAL snapshot fails closed instead of being upgraded.
+            with db.no_autoflush:
+                result = await db.execute(
+                    update(AgentTeamPreset)
+                    .where(AgentTeamPreset.id == preset_id)
+                    .values(id=AgentTeamPreset.id)
+                    .execution_options(synchronize_session=False)
+                )
+            if result.rowcount != 1:
+                raise ValueError("Agent team preset not found")
+            await db.flush()
+            preset = (
+                await db.execute(
+                    select(AgentTeamPreset)
+                    .where(AgentTeamPreset.id == preset_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            await self._guard_preset_deletion(db, preset)
+            await self._delete_quiescent_preset(db, preset)
+        except OperationalError as exc:
+            await db.rollback()
+            raise TeamDeletionConflictError([], "team_deletion_state_busy") from exc
+        except Exception:
+            await db.rollback()
+            raise
+
+    async def _guard_preset_deletion(self, db: AsyncSession, preset: AgentTeamPreset) -> None:
+        """Only known terminal authority is deletable; never expose private rows."""
+        preset_id = preset.id
+        scope_ids = select(TeamGithubScope.id).where(TeamGithubScope.preset_id == preset_id)
+        slot_ids = select(AgentTeamSlot.id).where(AgentTeamSlot.preset_id == preset_id)
+        item_ids = select(GithubWorkItem.id).where(
+            or_(
+                GithubWorkItem.scope_id.in_(scope_ids),
+                GithubWorkItem.owner_slot_id.in_(slot_ids),
+                GithubWorkItem.handoff_target_slot_id.in_(slot_ids),
+            )
+        )
+        workspace_ids = select(GithubWorkspace.id).where(GithubWorkspace.scope_id.in_(scope_ids))
+        work_href = f"/api/v1/agent-teams/presets/{preset_id}/github-work-items"
+        blockers = []
+        if preset.autonomy_enabled:
+            blockers.append({"kind": "automation", "id": preset_id, "scope_id": None,
+                             "href": f"/api/v1/agent-teams/presets/{preset_id}"})
+
+        # The existing scope-deletion predicate includes queued, review,
+        # escalated and failed work. Only merged/completed are known safe.
+        items = (await db.execute(
+            select(GithubWorkItem.id, GithubWorkItem.scope_id)
+            .where(GithubWorkItem.id.in_(item_ids),
+                   GithubWorkItem.dispatch_status.not_in(("merged", "completed")))
+            .order_by(GithubWorkItem.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "work_item", "id": row.id, "scope_id": row.scope_id,
+                         "href": work_href} for row in items)
+
+        # Residual identity is authority too, even without a leased item FK.
+        workspaces = (await db.execute(
+            select(GithubWorkspace.id, GithubWorkspace.scope_id).where(
+                or_(GithubWorkspace.scope_id.in_(scope_ids),
+                    GithubWorkspace.leased_item_id.in_(item_ids)),
+                or_(GithubWorkspace.leased_item_id.is_not(None),
+                    GithubWorkspace.lease_token.is_not(None),
+                    GithubWorkspace.leased_owner_pid.is_not(None),
+                    GithubWorkspace.leased_owner_proc_start.is_not(None),
+                    GithubWorkspace.push_token_expires_at.is_not(None),
+                    and_(GithubWorkspace.leased_at.is_not(None),
+                         GithubWorkspace.released_at.is_(None))),
+            ).order_by(GithubWorkspace.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "workspace", "id": row.id, "scope_id": row.scope_id,
+                         "href": f"/api/v1/agent-teams/github-scopes/{row.scope_id}/workspaces"}
+                        for row in workspaces)
+
+        approvals = (await db.execute(
+            select(GithubApprovalRequest.id).where(
+                GithubApprovalRequest.work_item_id.in_(item_ids),
+                GithubApprovalRequest.status.not_in(("approved", "rejected", "superseded", "expired")),
+            ).order_by(GithubApprovalRequest.id).limit(25)
+        )).scalars().all()
+        blockers.extend({"kind": "approval", "id": approval_id, "scope_id": None,
+                         "href": work_href} for approval_id in approvals)
+        revisions = (await db.execute(
+            select(GithubAttemptScopeRevision.id, GithubAttemptScopeRevision.work_item_id).where(
+                or_(GithubAttemptScopeRevision.work_item_id.in_(item_ids),
+                    GithubAttemptScopeRevision.owner_slot_id.in_(slot_ids),
+                    GithubAttemptScopeRevision.expected_workspace_id.in_(workspace_ids)),
+                GithubAttemptScopeRevision.status.not_in(
+                    ("completed", "exhausted", "rejected", "superseded", "expired")
+                ),
+            ).order_by(GithubAttemptScopeRevision.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "revision", "id": row.id, "scope_id": None,
+                         "href": f"/api/v1/agent-teams/github-work-items/{row.work_item_id}/scope-revisions"}
+                        for row in revisions)
+        try:
+            recovery = configured_recovery_only_attempt()
+        except ValueError:
+            raise TeamDeletionConflictError([], "team_deletion_protection_unavailable") from None
+        if recovery is not None:
+            affected = (await db.execute(
+                select(TeamGithubScope.id).where(
+                    TeamGithubScope.id.in_(scope_ids), TeamGithubScope.id == recovery.scope_id
+                )
+            )).scalar_one_or_none()
+            if affected is not None:
+                # Do not disclose the protected recovery target or identity.
+                blockers.append({"kind": "recovery", "id": preset_id, "scope_id": None,
+                                 "href": "/api/v1/agent-teams/github-recovery-gate/active"})
+        if blockers:
+            raise TeamDeletionConflictError(blockers)
+
+    async def _delete_quiescent_preset(self, db: AsyncSession, preset: AgentTeamPreset) -> None:
+        preset_id = preset.id
         slots = await self._slots_for_preset(db, preset_id)
         slot_ids = [slot.id for slot in slots]
         session_condition = MailAgentSession.team_preset_id == preset_id
@@ -197,6 +467,15 @@ class AgentTeamService:
                     enabled=slot.enabled,
                 )
             )
+        if source.leader_slot_id is not None:
+            mapped_leader_index = next(
+                (index for index, slot in enumerate(slots) if slot.id == source.leader_slot_id),
+                None,
+            )
+            if mapped_leader_index is not None:
+                await db.flush()
+                cloned_slots = await self._slots_for_preset(db, clone.id)
+                clone.leader_slot_id = cloned_slots[mapped_leader_index].id
         await db.commit()
         await db.refresh(clone)
         return await self._preset_response(db, clone)
@@ -325,8 +604,7 @@ class AgentTeamService:
         slot_id: int,
         request: AgentTeamSlotUpdate,
     ) -> AgentTeamPresetResponse:
-        slot = await self._require_slot(db, slot_id)
-        preset = await self._require_preset(db, slot.preset_id)
+        slot, preset = await self._lock_slot_and_preset(db, slot_id)
         updates: dict[str, Any] = {}
 
         if request.display_name is not None:
@@ -363,6 +641,8 @@ class AgentTeamService:
                 provider=provider_for_options,
             )
         if request.enabled is not None:
+            if request.enabled is False and preset.leader_slot_id == slot.id:
+                raise ValueError("leader_slot_replacement_required")
             updates["enabled"] = request.enabled
         if request.position is not None:
             updates["position"] = request.position
@@ -388,8 +668,9 @@ class AgentTeamService:
         return await self._preset_response(db, preset)
 
     async def delete_slot(self, db: AsyncSession, slot_id: int) -> AgentTeamPresetResponse:
-        slot = await self._require_slot(db, slot_id)
-        preset = await self._require_preset(db, slot.preset_id)
+        slot, preset = await self._lock_slot_and_preset(db, slot_id)
+        if preset.leader_slot_id == slot.id:
+            raise ValueError("leader_slot_replacement_required")
         await self._move_sessions_to_repo_members(db, MailAgentSession.team_slot_id == slot.id)
         await db.delete(slot)
         preset.updated_at = datetime.utcnow()
@@ -421,6 +702,8 @@ class AgentTeamService:
         db: AsyncSession,
         preset_id: int,
         request: AgentTeamLaunchRequest | None = None,
+        *,
+        synchronize: bool = True,
     ) -> AgentTeamLaunchPlan:
         request = request or AgentTeamLaunchRequest()
         preset = await self._require_preset(db, preset_id)
@@ -430,7 +713,8 @@ class AgentTeamService:
             request.slot_ids,
             include_disabled=request.include_disabled,
         )
-        await agent_mail_service.sync_observed_sessions(db)
+        if synchronize:
+            await agent_mail_service.sync_observed_sessions(db)
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
         reuse_group_counts = self._reuse_group_counts(preset_slots)
@@ -508,9 +792,13 @@ class AgentTeamService:
 
         if not request.skip_plan_confirmation:
             if not request.confirm_plan_hash:
-                raise PlanConflictError("confirm_plan_hash is required unless skip_plan_confirmation is true")
+                raise PlanConflictError(
+                    "confirm_plan_hash is required unless skip_plan_confirmation is true",
+                    proven_non_write=True)
             if request.confirm_plan_hash != plan.plan_hash:
-                raise PlanConflictError("Launch plan changed; review the latest plan before launching", plan)
+                raise PlanConflictError(
+                    "Launch plan changed; review the latest plan before launching", plan,
+                    proven_non_write=True)
         if not plan.can_launch:
             raise ValueError("Launch plan is blocked; resolve blocked slots before launching")
 
@@ -944,41 +1232,9 @@ class AgentTeamService:
         )
 
     def _agent_mail_ready_reason(self, provider: str, install_status: Any) -> str | None:
-        if provider == "pi-cli":
-            return None if getattr(install_status, "pi_mail_ready", False) else (
-                getattr(install_status, "pi_mail_reason", None) or "Pi Agent Mail extension is not ready"
-            )
-        if provider == "claude-code":
-            if not install_status.claude_code_mcp_installed:
-                return "Claude Code Agent Mail MCP is not installed"
-            if install_status.claude_code_hooks_missing:
-                return "Claude Code Agent Mail hooks are missing"
-            return None
-        if provider == "codex-cli":
-            if not install_status.codex_cli_available:
-                return "Codex CLI is not available on this machine"
-            if not install_status.codex_mcp_installed:
-                return "Codex Agent Mail MCP is not installed"
-            if install_status.codex_hooks_missing:
-                return "Codex Agent Mail hooks are missing"
-            return None
-        if provider == "copilot-cli":
-            if not getattr(install_status, "copilot_cli_available", False):
-                return "GitHub Copilot CLI is not available on this machine"
-            if not getattr(install_status, "copilot_mcp_installed", False):
-                return "GitHub Copilot CLI Agent Mail MCP is not installed"
-            if getattr(install_status, "copilot_hooks_missing", []):
-                return "GitHub Copilot CLI Agent Mail hooks are missing"
-            return None
-        if provider == "opencode-cli":
-            if not getattr(install_status, "opencode_cli_available", False):
-                return "OpenCode CLI is not available on this machine"
-            if not getattr(install_status, "opencode_mcp_installed", False):
-                return "OpenCode Agent Mail MCP is not installed"
-            if getattr(install_status, "opencode_plugin_events_missing", []):
-                return "OpenCode Agent Mail plugin is missing or incomplete"
-            return None
-        return None
+        from app.services.provider_readiness_service import agent_mail_ready_reason
+
+        return agent_mail_ready_reason(provider, install_status)
 
     def _unsafe_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
         groups: dict[tuple[str, str], list[AgentTeamSlot]] = {}
@@ -1409,17 +1665,7 @@ class AgentTeamService:
         preset: AgentTeamPreset,
         slot: AgentTeamSlot,
     ) -> bool:
-        first = (
-            await db.execute(
-                select(AgentTeamSlot)
-                .where(
-                    AgentTeamSlot.preset_id == preset.id,
-                    AgentTeamSlot.enabled.is_(True),
-                )
-                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-            )
-        ).scalars().first()
-        return first is not None and first.id == slot.id
+        return preset.leader_slot_id == slot.id and slot.enabled
 
     def _discover_sessions(self) -> list[dict[str, Any]]:
         try:
@@ -1471,6 +1717,7 @@ class AgentTeamService:
             created_at=preset.created_at,
             updated_at=preset.updated_at,
             autonomy_enabled=preset.autonomy_enabled,
+            leader_slot_id=preset.leader_slot_id,
             slots=[self._slot_response(slot) for slot in slots],
         )
 
@@ -1510,6 +1757,69 @@ class AgentTeamService:
         if slot is None:
             raise ValueError("Agent team slot not found")
         return slot
+
+    async def _lock_preset_for_slot_mutation(
+        self, db: AsyncSession, preset_id: int
+    ) -> AgentTeamPreset:
+        """Serialize slot changes with authority assignment before reading state."""
+        if db.get_bind().dialect.name != "sqlite":
+            raise ValueError("leader_assignment_protection_unavailable")
+        if not db.in_transaction():
+            await db.execute(text("BEGIN IMMEDIATE"))
+        result = await db.execute(
+            update(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .values(id=AgentTeamPreset.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            raise ValueError("team_not_found")
+        return (await db.execute(
+            select(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .execution_options(populate_existing=True)
+        )).scalar_one()
+
+    async def _lock_slot_and_preset(
+        self, db: AsyncSession, slot_id: int
+    ) -> tuple[AgentTeamSlot, AgentTeamPreset]:
+        if db.get_bind().dialect.name != "sqlite":
+            raise ValueError("leader_assignment_protection_unavailable")
+        # Acquire the SQLite writer before reading slot or authority state.
+        # This prevents a deferred-read snapshot from bypassing Leader guards.
+        if not db.in_transaction():
+            await db.execute(text("BEGIN IMMEDIATE"))
+        preset_id = (await db.execute(
+            select(AgentTeamSlot.preset_id).where(AgentTeamSlot.id == slot_id)
+        )).scalar_one_or_none()
+        if preset_id is None:
+            raise ValueError("Agent team slot not found")
+        preset = await self._lock_preset_for_slot_mutation(db, preset_id)
+        slot = (await db.execute(
+            select(AgentTeamSlot).where(
+                AgentTeamSlot.id == slot_id,
+                AgentTeamSlot.preset_id == preset.id,
+            ).execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if slot is None:
+            await db.rollback()
+            raise ValueError("Agent team slot not found")
+        return slot, preset
+
+    async def bounded_slots_for_preset(
+        self, db: AsyncSession, preset_id: int, limit: int
+    ) -> tuple[list[AgentTeamSlot], bool]:
+        """Bounded roster projection. The query itself carries the bound.
+
+        Returns the observed slots within the bound and whether the bound was
+        hit. Work is bounded regardless of concurrent roster growth.
+        """
+        rows = list((await db.scalars(
+            select(AgentTeamSlot)
+            .where(AgentTeamSlot.preset_id == preset_id)
+            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            .limit(limit + 1)
+        )).all())
+        return rows[:limit], len(rows) > limit
 
     async def _slots_for_preset(self, db: AsyncSession, preset_id: int) -> list[AgentTeamSlot]:
         return (

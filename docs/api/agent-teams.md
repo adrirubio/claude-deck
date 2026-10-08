@@ -1,6 +1,27 @@
 # Agent Teams API
 
-Saved rosters for launching or reusing local Claude Code, Codex CLI, and GitHub Copilot CLI sessions.
+Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.
+
+## Authorization
+
+"Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
+
+- A route marked **Operator token** accepts only the operator token. A session token never opens it. Without a configured backend operator token the route returns 503 `operator_token_unconfigured`; a missing or wrong header returns 401 `operator_token_required` or `operator_token_invalid`.
+- A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
+- A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected.
+
+| Route | Access |
+| --- | --- |
+| GET `/api/v1/agent-teams/presets`, GET `/api/v1/agent-teams/presets/{preset_id}`, GET `/api/v1/agent-teams/presets/{preset_id}/activity`, GET `/api/v1/agent-teams/presets/{preset_id}/github-scopes` | None |
+| POST `/api/v1/agent-teams/presets`, `/api/v1/agent-teams/presets/from-agent-mail`, `/api/v1/agent-teams/presets/from-agent-bridge`, `/api/v1/agent-teams/presets/{preset_id}/duplicate` | Operator token |
+| PATCH and DELETE `/api/v1/agent-teams/presets/{preset_id}` | Operator token |
+| PUT `/api/v1/agent-teams/presets/{preset_id}/leader` | Operator token |
+| POST `/api/v1/agent-teams/presets/{preset_id}/slots`, PATCH and DELETE `/api/v1/agent-teams/slots/{slot_id}`, POST `/api/v1/agent-teams/presets/{preset_id}/slots/reorder` | Operator token |
+| POST `/api/v1/agent-teams/presets/{preset_id}/github-scopes` | Operator token |
+| POST `/api/v1/agent-teams/presets/{preset_id}/plan-launch`, POST `/api/v1/agent-teams/presets/{preset_id}/launch` | Operator token, or a qualifying Mail session |
+| POST `/api/v1/agent-teams/github-work-items/{work_item_id}/retry` | Operator token, or the qualifying Mail session of the team's current enabled Leader slot |
+
+A Mail session that plans or launches cannot use prompt or path overrides, include disabled slots, force a respawn, adopt unbound sessions or skip plan confirmation. Those requests return 403 `operator_launch_override_required`. For plan and launch, a session that does not qualify returns 403 `authenticated_mcp_session_required`. For retry, a session that does not qualify or is not the current Leader returns 403 `current_leader_required`.
 
 ## Presets
 
@@ -63,6 +84,23 @@ PATCH /api/v1/agent-teams/presets/{preset_id}
 POST /api/v1/agent-teams/presets/{preset_id}/duplicate
 DELETE /api/v1/agent-teams/presets/{preset_id}
 ```
+
+### Set Leader
+
+```http
+PUT /api/v1/agent-teams/presets/{preset_id}/leader
+```
+
+```json
+{
+  "leader_slot_id": 2,
+  "expected_leader_slot_id": 1,
+  "expected_updated_at": "2026-10-01T12:00:00Z",
+  "reason": "Assign the reviewed Leader slot."
+}
+```
+
+Sets the team's explicit `leader_slot_id`. It needs the operator token. `expected_leader_slot_id` (nullable) and `expected_updated_at` must match the current team; `reason` has 1–500 characters. An absent team returns 404 `{"code": "team_not_found"}`. A stale expectation or a guard refusal returns 409 with its `code` and records a rejected audit event; the Leader stays unchanged. Slot order and Role text never select the Leader.
 
 ## Slots
 
@@ -269,6 +307,30 @@ POST /api/v1/agent-teams/presets/{preset_id}/launch
 }
 ```
 
-Use `confirm_plan_hash` after reviewing a plan. Local automation can pass `skip_plan_confirmation: true` when it intentionally wants a one-step launch; stale plans return `409` with the updated plan.
+Use `confirm_plan_hash` after reviewing a plan. Only the operator token can pass `skip_plan_confirmation: true` for an intentional one-step launch; a Mail session receives 403 `operator_launch_override_required`. Stale plans return `409` `plan_conflict` with the updated plan.
 
 After launch, agents register through Agent Mail and receive team-slot role and charter context.
+
+## Operator delivery policy and maintenance routes
+
+These routes need the operator token. They are generic references; IDs in paths are placeholders. They grant no authority beyond each route's own checks and do not restart work, acknowledge Mail, reset budgets, merge or accept a milestone.
+
+### Delivery policy
+
+| Route | Behavior |
+| --- | --- |
+| PATCH `/api/v1/agent-teams/github-scopes/{scope_id}/delivery-policy` | Changes the scope's default delivery policy. The body has `expected_revision`, `policy` and `reason`. A changed revision returns 409 `delivery_policy_revision_changed`. New dispatch attempts record the new defaults. |
+| PATCH `/api/v1/agent-teams/github-work-items/{item_id}/delivery-policy` | Applies the current scope policy to one existing attempt. The body has `expected_dispatch_nonce`, `expected_scope_revision`, `expected_policy_revision`, `target_policy_revision` and `reason`. A changed context returns 409 `attempt_delivery_policy_context_changed`. |
+| GET `/api/v1/agent-teams/github-scopes/{scope_id}/delivery-policy/history` | Lists the latest 100 policy change events for the scope. The history is append-only. |
+
+### Maintenance
+
+| Route | Behavior |
+| --- | --- |
+| POST `/api/v1/agent-teams/presets/{preset_id}/work-items/{item_id}/accepted-source-imports` | Records one accepted-source import for the item. Inconclusive evidence returns 409 `source_import_evidence_inconclusive`; a changed context returns 409 `source_import_context_changed`; another refusal returns 409 with its reason. The original owner scope, baseline and budgets remain. |
+| GET `/api/v1/agent-teams/presets/{preset_id}/work-items/{item_id}/accepted-source-imports` | Lists at most 64 recorded imports, with `truncated` when more exist. |
+| GET `/api/v1/agent-teams/presets/{preset_id}/work-items/{item_id}/observation-pauses` | Lists the latest 20 recorded owner observation pauses. |
+| POST `/api/v1/agent-teams/presets/{preset_id}/work-items/{item_id}/resume-observation` | Resumes one unchanged recorded pause. The body has `pause_id` and `reason`. It does not restart work, acknowledge Mail, retry or reset a budget. |
+| POST `/api/v1/agent-teams/presets/{preset_id}/work-items/{item_id}/integration-outcome` | Records one idempotent integration outcome (`completed` or `needs_coordination`) for the expected dispatch nonce, scope revision and owner slot. `needs_coordination` escalates the item. A replay with different content returns 409 `maintenance_replay_conflict`; a changed context returns 409 `maintenance_context_changed`. |
+
+Responses from the maintenance routes use `Cache-Control: no-store`. An item outside the named team returns 404.

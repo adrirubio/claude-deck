@@ -315,9 +315,9 @@ export function ConfigViewerPage() {
         </TabsContent>
 
         <TabsContent value="scopes" className="flex-1 overflow-auto mt-4">
-          <ScopeResolver
+          {selectedProviderId === 'claude-code' ? <ScopeResolver
             onOverride={activeProject ? handleOverrideInLocal : undefined}
-          />
+          /> : <p>Claude scope resolution has no Codex native adapter. Use the Codex profile resolver in the editor.</p>}
         </TabsContent>
 
         <TabsContent value="viewer" className="flex-1 overflow-hidden mt-4">

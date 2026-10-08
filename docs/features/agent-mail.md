@@ -1,6 +1,6 @@
 # Agent Mail
 
-Agent Mail lets local Claude Code, Codex CLI, and GitHub Copilot CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
+Agent Mail lets local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
 Broadcasts require an explicit audience: an Agent Team preset, repository, or GitHub work item. Deck stores that audience with the message and creates receipts only for members in it. Direct messages and replies retain their addressed recipients. An all-member maintenance broadcast requires the operator credential and explicit global intent; a missing audience never means “everyone.” Historical messages keep their original receipts.
 
@@ -10,6 +10,14 @@ Broadcasts require an explicit audience: an Agent Team preset, repository, or Gi
 - Hand work from one repository agent to another with touched files and next steps.
 - Keep short-lived agent sessions attached to a durable repo or Agent Team slot participant, so role and charter survive restarts and context compaction.
 - Inspect team communication from Claude Deck without turning the product into a general chat app.
+
+## Mail context inside Work
+
+Work context reads relevant messages/threads using verified team/slot/member identity. Missing or mismatched associations do not guess a recipient. Reading context does not check an agent inbox, acknowledge a request, send a message, approve a plan or launch a session.
+
+Standalone Agent Mail retains coordination/install workflows. Ordinary context replies and handoffs are separate from normalized agent plan approvals; operator remedies and human PR review remain distinct. A Role label, visible message or eligible action grants no authority. Durable handoffs should identify issue, PR and exact head without credentials.
+
+See [Work](/features/work) and [Teams](/features/agent-teams). Existing install, wake and visibility limits still apply; factory navigation does not change them.
 
 ## How Agents Connect
 
@@ -22,6 +30,10 @@ Claude Code gets both MCP tools and command hooks:
 Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for session registration, activity updates, and inbox reminders. Codex agents should still check their inbox through the MCP tools when starting and finishing work because hook delivery is a reminder path, not a replacement for agent action.
 
 GitHub Copilot CLI gets the MCP server through `copilot mcp add` and user-level hook JSON for session registration, activity updates, and idle inbox reminders.
+
+OpenCode CLI gets the MCP server entry and a lifecycle plugin from the Install tab. A backup is attempted first.
+
+Pi uses the repository-local Agent Mail extension. Deck passes it explicitly on Deck launches and changes no global Pi configuration. The Install tab shows only its readiness; it has no Pi install action.
 
 ## Delivery Nudges
 
@@ -44,7 +56,7 @@ See [External Agent Orchestration](./external-agent-orchestration.md) for token 
 ## Setup Checklist
 
 1. Open **Agent Mail** in Claude Deck.
-2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, or any combination of them.
+2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, or any combination of them. For Pi, check that the **Pi Agent Mail** card shows **Extension ready**, then launch Pi from Deck.
 3. Restart or resume the affected agent sessions so their MCP configuration is loaded.
 4. Have each agent call `deck_whoami` once from its repository.
 5. Ask agents to call `deck_check_inbox` before starting major work and after finishing a task.

@@ -12,6 +12,7 @@ handler. Once the response is sent the peer socket enters TIME_WAIT, its
 
 import logging
 import os
+from pathlib import Path
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -331,6 +332,49 @@ def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
         return current_start == pane_proc_start
     except (OSError, ValueError, IndexError):
         return None
+
+
+PANE_COMMAND_BYTE_CAP = 4096
+
+
+def pane_agent_argv(pane_pid: int, pane_proc_start: str) -> Optional[list[str]]:
+    """Return the pane process argument vector when its lifetime identity is
+    confirmed before and after the read; otherwise None.
+
+    NUL argument boundaries are preserved. At most PANE_COMMAND_BYTE_CAP
+    command bytes are read (cap plus one probe byte); an oversized command
+    refuses with None and is never silently truncated. A missing, denied or
+    malformed process also returns None; callers refuse rather than infer.
+    """
+    stat = read_proc_stat(pane_pid)
+    if stat is None:
+        return None
+    # read_proc_stat returns (ppid, starttime). Only the start-time field
+    # establishes the process lifetime identity.
+    _ppid, current_start = stat
+    if current_start != pane_proc_start:
+        return None
+    try:
+        with open(f"{_PROC_ROOT}/{pane_pid}/cmdline", "rb") as handle:
+            raw = handle.read(PANE_COMMAND_BYTE_CAP + 1)
+    except OSError:
+        return None
+    if len(raw) > PANE_COMMAND_BYTE_CAP:
+        return None
+    # Post-read lifetime recheck: the process must be the same one.
+    stat_after = read_proc_stat(pane_pid)
+    if stat_after is None or stat_after[1] != pane_proc_start:
+        return None
+    # A3: preserve every argument position. Only the final NUL record
+    # terminator is removed; interior empty arguments stay in place. An empty
+    # argv[0] refuses.
+    parts = raw.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts = parts[:-1]
+    argv = [part.decode("utf-8", "replace") for part in parts]
+    if not argv or not argv[0]:
+        return None
+    return argv
 
 
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:

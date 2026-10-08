@@ -1,0 +1,260 @@
+"""Frozen cross-lane contract responses from disposable API requests only."""
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+
+from app.api.v1.deps import require_mail_session_or_operator
+from app.main import app
+from app.models import factory_schemas as wire
+from app.models.database import GithubWorkItem, MailAgentSession, TeamGithubScope
+from app.services import factory_projection_service as projection
+
+pytestmark = pytest.mark.asyncio
+FIXTURES = Path(__file__).parent / "fixtures" / "v1-p04"
+LEGACY_FIXTURES = Path(__file__).parent / "fixtures" / "v1"
+FRONTEND_FIXTURES = Path(__file__).resolve().parents[3] / "frontend" / "tests" / "fixtures" / "factory" / "v1-p04"
+NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+
+
+FRONTEND_LEGACY_FIXTURES = FRONTEND_FIXTURES.parent / "v1"
+
+
+async def test_frontend_backend_fixture_parity():
+    """Both frozen contract copies must stay identical (cross-lane parity).
+
+    The P01 v1 copies and the P04 v1-p04 copies are each compared across lanes.
+    """
+    for backend_dir, frontend_dir in ((LEGACY_FIXTURES, FRONTEND_LEGACY_FIXTURES),
+                                      (FIXTURES, FRONTEND_FIXTURES)):
+        backend_files = sorted(path.name for path in backend_dir.glob("*.json"))
+        frontend_files = sorted(path.name for path in frontend_dir.glob("*.json"))
+        assert backend_files == frontend_files
+        for name in backend_files:
+            assert json.loads((frontend_dir / name).read_text()) == json.loads((backend_dir / name).read_text()), f"Fixture parity changed: {name}"
+    for name in ("work-item.json", "work-items.json"):
+        p04_text = (FRONTEND_FIXTURES / name).read_text()
+        assert '\"source\": \"explicit_assignment\"' in p04_text
+        assert "first_enabled_slot" not in p04_text
+        p01_text = (FRONTEND_LEGACY_FIXTURES / name).read_text()
+        assert "first_enabled_slot" in p01_text
+        assert "explicit_assignment" not in p01_text
+
+
+async def test_frozen_response_contract(factory_client, factory_store, monkeypatch, request):
+    files = {}
+    ids = factory_store.ids
+
+    async def record(file, scenario, endpoint, query=None, status=200, method="GET", **kwargs):
+        response = await factory_client.request(method, endpoint, params=query, **kwargs)
+        assert response.status_code == status, response.text
+        files.setdefault(file, {})[scenario] = {
+            "endpoint": endpoint, "query": query or {}, "method": method,
+            "http_status": status, "response": response.json(),
+        }
+        return response.json()
+
+    await record("overview", "normal", "/api/v1/factory/overview")
+    await record("overview", "team_filter", "/api/v1/factory/overview", {"team_id": ids.teams[0]})
+    for mode, state, jobs in (("recovery_only", "running", True), ("normal", "stopped", False),
+                               ("unknown", "unknown", False)):
+        runtime = projection.RuntimeSnapshot(wire.RuntimeObservation(mode=mode, scheduler_state=state,
+            observed_at=None if mode == "unknown" else NOW - timedelta(seconds=1),
+            reason_code="runtime_not_observed" if mode == "unknown" else None),
+            factory_store.runtime.job_ids if jobs else frozenset())
+        monkeypatch.setattr(projection, "observe_runtime", lambda: runtime)
+        name = "unknown" if mode == "unknown" else mode if mode == "recovery_only" else "stopped"
+        await record("overview", name, "/api/v1/factory/overview")
+        await record("repositories", name, "/api/v1/factory/repositories")
+    monkeypatch.setattr(projection, "observe_runtime", lambda: factory_store.runtime)
+
+    first = await record("work-items", "first_page", "/api/v1/factory/work-items", {"limit": 2})
+    await record("work-items", "next_page", "/api/v1/factory/work-items",
+                 {"limit": 2, "cursor": first["next_cursor"]})
+    for category in (*projection.CATEGORY_STATUSES, "unknown"):
+        await record("work-items", category, "/api/v1/factory/work-items", {"category": category, "limit": 1})
+    await record("work-items", "provider_filter", "/api/v1/factory/work-items", {"provider": "codex-cli", "limit": 2})
+    await record("work-items", "empty", "/api/v1/factory/work-items", {"scope_id": ids.scopes[2], "category": "review"})
+    for status, item_id in ids.by_status.items():
+        await record("work-item", status, f"/api/v1/factory/work-items/{item_id}")
+    await record("repositories", "normal", "/api/v1/factory/repositories")
+    first_repo = await record("repositories", "first_page", "/api/v1/factory/repositories", {"limit": 2})
+    await record("repositories", "last_page", "/api/v1/factory/repositories",
+                 {"limit": 2, "cursor": first_repo["next_cursor"]})
+    await record("repositories", "filtered_overlap", "/api/v1/factory/repositories", {"team_id": ids.teams[0]})
+    for name, scope in zip(("fresh_overlap", "never_polled_overlap", "paused"), ids.scopes):
+        await record("repository", name, f"/api/v1/factory/repositories/{scope}")
+    async with factory_store.maker() as db:
+        scope = await db.get(TeamGithubScope, ids.scopes[0])
+        scope.last_polled_at = (NOW - timedelta(seconds=121)).replace(tzinfo=None)
+        await db.commit()
+    await record("repository", "stale", f"/api/v1/factory/repositories/{ids.scopes[0]}")
+    await record("overview", "stale", "/api/v1/factory/overview")
+    no_job = projection.RuntimeSnapshot(factory_store.runtime.public, frozenset())
+    monkeypatch.setattr(projection, "observe_runtime", lambda: no_job)
+    await record("repositories", "missing_job", "/api/v1/factory/repositories")
+    monkeypatch.setattr(projection, "observe_runtime", lambda: factory_store.runtime)
+
+    async with factory_store.maker() as db:
+        owner_session = (await db.execute(select(MailAgentSession).where(
+            MailAgentSession.team_slot_id == ids.owners[1]))).scalar_one()
+        owner_session.closed_at = NOW.replace(tzinfo=None)
+        await db.commit()
+    await record("work-item", "verified_offline_owner", f"/api/v1/factory/work-items/{ids.items[1]}")
+    async with factory_store.maker() as db:
+        owner_session = await db.get(MailAgentSession, owner_session.id)
+        owner_session.closed_at = None
+        db.add(MailAgentSession(member_id=owner_session.member_id, session_key="fixture-duplicate",
+            source="mcp", provider="codex-cli", team_preset_id=ids.teams[1], team_slot_id=ids.owners[1],
+            capability_token_hash="synthetic-private-forbidden", mailbox_status="connected",
+            last_seen_at=NOW.replace(tzinfo=None), bound_pane_pid=owner_session.bound_pane_pid,
+            bound_pane_proc_start=owner_session.bound_pane_proc_start))
+        await db.commit()
+    await record("work-item", "ambiguous_owner", f"/api/v1/factory/work-items/{ids.items[1]}")
+
+    async with factory_store.maker() as db:
+        escalated = await db.get(GithubWorkItem, ids.by_status["escalated"])
+        escalated.active_scope_revision = 0
+        escalated.last_verified_sha = "a" * 40
+        await db.commit()
+    await record("work-item", "preserved_pr", f"/api/v1/factory/work-items/{ids.by_status['escalated']}")
+    async with factory_store.maker() as db:
+        escalated = await db.get(GithubWorkItem, ids.by_status["escalated"])
+        escalated.pr_number = None
+        await db.commit()
+    await record("work-item", "operator_stop_retry_eligible", f"/api/v1/factory/work-items/{ids.by_status['escalated']}")
+
+    await record("errors", "missing_work_item", "/api/v1/factory/work-items/9999", status=404)
+    await record("errors", "missing_repository", "/api/v1/factory/repositories/9999", status=404)
+    await record("errors", "invalid_filter", "/api/v1/factory/work-items", {"limit": 0}, status=422)
+    await record("errors", "invalid_cursor", "/api/v1/factory/work-items", {"cursor": "invalid"}, status=422)
+    await record("errors", "incompatible_filters", "/api/v1/factory/overview",
+                 {"team_id": ids.teams[0], "scope_id": ids.scopes[1]}, status=422)
+    async def failed(*args, **kwargs):
+        raise RuntimeError("synthetic-private-forbidden")
+    with monkeypatch.context() as patch:
+        patch.setattr(projection, "overview", failed)
+        await record("errors", "projection_failed", "/api/v1/factory/overview", status=500)
+
+    # Protected write routes retain their existing error envelopes. Every call
+    # below fails before mutation; none is a factory remedy or authority grant.
+    retry_path = f"/api/v1/agent-teams/github-work-items/{ids.items[1]}/retry"
+    await record("protected-errors", "unauthenticated", retry_path, status=401, method="POST", json={})
+    await record("protected-errors", "state_conflict", retry_path, status=409, method="POST", json={},
+                 headers={"X-Deck-Operator-Token": "synthetic-factory-operator"})
+    monkeypatch.setattr(projection.settings, "mail_capability_tokens_required", True)
+    async def synthetic_owner():
+        return owner_session
+    app.dependency_overrides[require_mail_session_or_operator] = synthetic_owner
+    try:
+        await record("protected-errors", "wrong_actor", retry_path, status=403, method="POST", json={})
+    finally:
+        app.dependency_overrides.pop(require_mail_session_or_operator)
+
+    schemas = {name: getattr(wire, name).model_json_schema() for name in (
+        "OverviewResponse", "WorkListResponse", "WorkDetailResponse", "RepositoryListResponse",
+        "RepositoryDetailResponse", "FactoryErrorResponse")}
+    files["schema"] = {"schema_version": 1, "models": schemas}
+    files["mapping"] = {"schema_version": 1, "categories": projection.CATEGORY_STATUSES,
+                        "reason_summaries": projection.REASON_SUMMARIES,
+                        "action_sources": {
+                            "retry": {"source": "GithubDispatchService.retry_eligibility",
+                                      "path": "backend/app/services/github_dispatch_service.py",
+                                      "projection": "shared legacy _work_item_response.retry_allowed/retry_block_code",
+                                      "required_actor": "leader", "states": ["eligible", "blocked", "unknown"]},
+                            **{name: {"source": source,
+                                      "eligibility": "protected existing route; full preconditions not evaluated by read",
+                                      "path": "backend/app/api/v1/agent_teams.py",
+                                      "required_actor": actor, "states": ["unknown"],
+                                      "block_code": "unknown",
+                                      "reason": "Open attempt recovery to check available actions."}
+                               for name, actor, source in (
+                                  ("resume_attempt", "operator", "resume_github_work_item_attempt"),
+                                  ("escalate_attempt", "operator", "abandon_github_work_item"),
+                                  ("cancel_continuation_request", "owner", "cancel_github_work_item_continuation_request / GithubApprovalService.cancel"),
+                                  ("cancel_active_revision", "operator", "cancel_active_github_work_item_scope_revision"),
+                                  ("release_recovery_checkpoint", "operator", "release_github_recovery_checkpoint"))}},
+                        "fallback_category": "unknown", "unknown_reason_summary": projection.REASON_SUMMARIES["unknown"]}
+    for name, value in files.items():
+        # JSON normalization turns immutable status tuples into artifact arrays.
+        value = json.loads(json.dumps(value))
+        assert "synthetic-private-forbidden" not in json.dumps(value)
+        path = FIXTURES / f"{name}.json"
+        if request.config.getoption("--freeze-factory-fixtures"):
+            FIXTURES.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        else:
+            assert json.loads(path.read_text()) == value, f"Contract changed: {path.name}"
+
+
+V13_FORBIDDEN_FIELDS = {
+    "dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref", "lease_token",
+    "capability_token_hash", "private_key", "private_key_path", "repo_path",
+    "workspace_path", "bootstrap_prompt", "launch_options", "credential",
+    "operator_token", "github_token",
+}
+
+
+async def test_v13_frozen_responses_enforce_explicit_field_allowlist():
+    """V13: projections omit nonce/head identity, workspace paths, and raw summaries.
+
+    The frozen files equal live responses (checked above), so the allowlist
+    assertions here also cover the live read routes.
+    """
+    safe_item_keys = set(wire.SafeWorkItem.model_fields)
+    for name in ("work-item.json", "work-items.json", "repositories.json", "repository.json",
+                 "overview.json", "errors.json", "protected-errors.json", "mapping.json", "manifest.json"):
+        data = json.loads((FIXTURES / name).read_text())
+        found: set = set()
+        summaries: list = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                found.update(node)
+                for key, value in node.items():
+                    if key in {"summary", "reason", "remedy"} and isinstance(value, str):
+                        summaries.append(value)
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(data)
+        assert not (found & V13_FORBIDDEN_FIELDS), f"{name} exposes private fields: {found & V13_FORBIDDEN_FIELDS}"
+        for value in summaries:
+            assert "/" not in value and "\\" not in value, value
+            assert "synthetic-private" not in value
+
+    work_items = json.loads((FIXTURES / "work-item.json").read_text())
+    for scenario in work_items.values():
+        assert set(scenario["response"]["work_item"]["item"]) == safe_item_keys
+    work_list = json.loads((FIXTURES / "work-items.json").read_text())
+    for scenario in work_list.values():
+        for projection in scenario["response"]["items"]:
+            assert set(projection["item"]) == safe_item_keys
+
+
+
+async def test_contract_versions_manifest_hashes():
+    """Finding 8: every versioned artifact hash is verified against its manifest.
+
+    The P01 v1 manifest stays immutable with its original identity. The P04
+    v1-p04 manifest verifies each artifact hash in both lanes.
+    """
+    import hashlib
+
+    legacy_manifest = json.loads((LEGACY_FIXTURES / "manifest.json").read_text())
+    assert legacy_manifest["source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
+    legacy_digest = hashlib.sha256((LEGACY_FIXTURES / "manifest.json").read_bytes()).hexdigest()
+    assert legacy_digest == "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706"
+    for directory in (FIXTURES, FRONTEND_FIXTURES):
+        manifest = json.loads((directory / "manifest.json").read_text())
+        assert manifest["contract_version"] == "p04"
+        assert manifest["reviewed_head"] == "7a032daf3147c03f0c030137973b292d05224bf6"
+        assert manifest["p01_source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
+        assert manifest["changed_from_p01"] == ["work-item.json", "work-items.json"]
+        for name, digest in manifest["artifact_sha256"].items():
+            actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+            assert actual == digest, f"Artifact hash mismatch: {directory}/{name}"

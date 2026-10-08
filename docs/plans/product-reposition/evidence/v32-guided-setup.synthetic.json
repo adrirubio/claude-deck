@@ -1,0 +1,86 @@
+{
+  "fixture_version": "V32",
+  "fixture_kind": "synthetic_configuration_review",
+  "fixture_date": "2026-10-05",
+  "evidence_limit": "Illustrative fixture only. It does not report live host state, human observation, or task timing.",
+  "repository": {
+    "owner": "example",
+    "name": "synthetic-product",
+    "primary_checkout": "/synthetic/primary-checkout",
+    "base_branch": "origin/main"
+  },
+  "authority": {
+    "leader_slot": "synthetic-leader-1",
+    "worker_slots": ["synthetic-worker-1", "synthetic-worker-2"],
+    "owner_constraint": "dispatch owner must differ from approver",
+    "approver_constraint": "designated Leader approves normalized plan",
+    "leader_assignment_explicit": true
+  },
+  "routing": {
+    "dispatch_label": "synthetic-dispatch-ready",
+    "design_label": "synthetic-design",
+    "area_labels": ["backend", "frontend"],
+    "expertise": "synthetic product delivery"
+  },
+  "authentication": {
+    "selected_mode": "github_app",
+    "app_configuration_present": false,
+    "polling_credential_present": false,
+    "secret_values_included": false
+  },
+  "policies": {
+    "merge_policy": "human",
+    "max_approval_rounds": 3,
+    "max_concurrent_dispatched": 1,
+    "max_verification_retries": 1,
+    "max_auto_merges_per_day": 0,
+    "max_continuation_revisions": 2,
+    "max_failed_heads": 4,
+    "max_paths": 12,
+    "max_commands": 8
+  },
+  "team": {
+    "team_name": "Synthetic product team",
+    "autonomy_enabled": false,
+    "leader_slot": "synthetic-leader-1",
+    "worker_slots": ["synthetic-worker-1", "synthetic-worker-2"]
+  },
+  "scope": {
+    "repo_owner": "example",
+    "repo_name": "synthetic-product",
+    "enabled": false
+  },
+  "preflight": {
+    "checked_at": "2026-10-05T00:00:00Z",
+    "fixture_only": true,
+    "status": "blocked",
+    "gaps": [
+      {"check": "checkout_identity", "status": "unknown", "code": "synthetic_checkout_not_observed"},
+      {"check": "polling_credential", "status": "blocked", "code": "polling_credential_missing"},
+      {"check": "dispatch_auth", "status": "blocked", "code": "github_app_configuration_missing"}
+    ]
+  },
+  "separate_decisions": {
+    "save_configuration": "selected",
+    "launch_workers": "not_selected",
+    "launch_plan_reviewed": false,
+    "team_activation": "not_selected",
+    "scope_activation": "not_selected",
+    "merge": "human approval required"
+  },
+  "overlap": {
+    "matching_enabled_scopes": [
+      {"team": "synthetic-existing-team", "scope": "synthetic-scope-9"}
+    ],
+    "repeated_dispatch_warning": "This can dispatch the same issue more than once",
+    "operator_acknowledged": false
+  },
+  "interruption_checkpoint": {
+    "team_recorded": false,
+    "scope_recorded": false,
+    "uncertain_create_requires_fresh_read": true,
+    "blind_create_retry_allowed": false,
+    "human_observations": "unavailable",
+    "task_timing": "unavailable"
+  }
+}

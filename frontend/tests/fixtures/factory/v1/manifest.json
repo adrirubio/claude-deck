@@ -1,0 +1,586 @@
+{
+  "action_sources": {
+    "cancel_active_revision": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "cancel_active_github_work_item_scope_revision",
+      "states": [
+        "unknown"
+      ]
+    },
+    "cancel_continuation_request": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "owner",
+      "source": "cancel_github_work_item_continuation_request / GithubApprovalService.cancel",
+      "states": [
+        "unknown"
+      ]
+    },
+    "escalate_attempt": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "abandon_github_work_item",
+      "states": [
+        "unknown"
+      ]
+    },
+    "release_recovery_checkpoint": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "release_github_recovery_checkpoint",
+      "states": [
+        "unknown"
+      ]
+    },
+    "resume_attempt": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "resume_github_work_item_attempt",
+      "states": [
+        "unknown"
+      ]
+    },
+    "retry": {
+      "path": "backend/app/services/github_dispatch_service.py",
+      "projection": "shared legacy _work_item_response.retry_allowed/retry_block_code",
+      "required_actor": "leader",
+      "source": "GithubDispatchService.retry_eligibility",
+      "states": [
+        "eligible",
+        "blocked",
+        "unknown"
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "path": "backend/tests/factory/fixtures/v1/errors.json",
+      "scenarios": {
+        "incompatible_filters": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 422,
+          "method": "GET",
+          "query": {
+            "scope_id": 2,
+            "team_id": 1
+          }
+        },
+        "invalid_cursor": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 422,
+          "method": "GET",
+          "query": {
+            "cursor": "invalid"
+          }
+        },
+        "invalid_filter": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 422,
+          "method": "GET",
+          "query": {
+            "limit": 0
+          }
+        },
+        "missing_repository": {
+          "endpoint": "/api/v1/factory/repositories/9999",
+          "http_status": 404,
+          "method": "GET",
+          "query": {}
+        },
+        "missing_work_item": {
+          "endpoint": "/api/v1/factory/work-items/9999",
+          "http_status": 404,
+          "method": "GET",
+          "query": {}
+        },
+        "projection_failed": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 500,
+          "method": "GET",
+          "query": {}
+        }
+      },
+      "sha256": "e43899ff499409803e28ba4b005d408602aeb231a708d0b4d5f9dfbbb58c3a52",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/mapping.json",
+      "sha256": "580765070548e2f6c119099a50badaba103e4f98b88b59ba21b0bdd98cf03ca3",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/overview.json",
+      "scenarios": {
+        "normal": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "recovery_only": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "stale": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "stopped": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "team_filter": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "team_id": 1
+          }
+        },
+        "unknown": {
+          "endpoint": "/api/v1/factory/overview",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        }
+      },
+      "sha256": "a5d86cdcd60af362b6a2cf65caae16554e741df0a940dc215df7e7b6e3794da5",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/protected-errors.json",
+      "scenarios": {
+        "state_conflict": {
+          "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+          "http_status": 409,
+          "method": "POST",
+          "query": {}
+        },
+        "unauthenticated": {
+          "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+          "http_status": 401,
+          "method": "POST",
+          "query": {}
+        },
+        "wrong_actor": {
+          "endpoint": "/api/v1/agent-teams/github-work-items/2/retry",
+          "http_status": 403,
+          "method": "POST",
+          "query": {}
+        }
+      },
+      "sha256": "dd54587e32b53c33ddde27b43bcd8be413662cc2153bf4dfba5a9e93be518151",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/repositories.json",
+      "scenarios": {
+        "filtered_overlap": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "team_id": 1
+          }
+        },
+        "first_page": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "limit": 2
+          }
+        },
+        "last_page": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "cursor": "eyJmaWx0ZXJzIjp7InByb3ZpZGVyIjpudWxsLCJzY29wZV9pZCI6bnVsbCwidGVhbV9pZCI6bnVsbH0sImlkIjoyLCJraW5kIjoicmVwb3NpdG9yaWVzIiwidXBkYXRlZF9hdCI6IjIwMjYtMDktMzBUMTI6MDA6MDArMDA6MDAiLCJ2IjoxfQ",
+            "limit": 2
+          }
+        },
+        "missing_job": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "normal": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "recovery_only": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "stopped": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "unknown": {
+          "endpoint": "/api/v1/factory/repositories",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        }
+      },
+      "sha256": "1749e1b194b71859891d28adf7d1c2e8683ef0c6ac0ab7000b27fce00e6d9559",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/repository.json",
+      "scenarios": {
+        "fresh_overlap": {
+          "endpoint": "/api/v1/factory/repositories/1",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "never_polled_overlap": {
+          "endpoint": "/api/v1/factory/repositories/2",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "paused": {
+          "endpoint": "/api/v1/factory/repositories/3",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "stale": {
+          "endpoint": "/api/v1/factory/repositories/1",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        }
+      },
+      "sha256": "0bb10513a04713b1ffefb5897bd765c1b5bea8596e50f3f968913bf02cde61d1",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/schema.json",
+      "sha256": "6816e998fe803098bc5a0b9d9dc88ae79e377dea14d300e28b41dc024a9ff7d5",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/work-item.json",
+      "scenarios": {
+        "ambiguous_owner": {
+          "endpoint": "/api/v1/factory/work-items/2",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "awaiting_human_review": {
+          "endpoint": "/api/v1/factory/work-items/4",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "completed": {
+          "endpoint": "/api/v1/factory/work-items/9",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "dispatched": {
+          "endpoint": "/api/v1/factory/work-items/2",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "escalated": {
+          "endpoint": "/api/v1/factory/work-items/6",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "failed": {
+          "endpoint": "/api/v1/factory/work-items/7",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "future_status": {
+          "endpoint": "/api/v1/factory/work-items/10",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "merged": {
+          "endpoint": "/api/v1/factory/work-items/8",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "operator_stop_retry_eligible": {
+          "endpoint": "/api/v1/factory/work-items/6",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "pending": {
+          "endpoint": "/api/v1/factory/work-items/1",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "preserved_pr": {
+          "endpoint": "/api/v1/factory/work-items/6",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "ready_for_review": {
+          "endpoint": "/api/v1/factory/work-items/5",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "verified_offline_owner": {
+          "endpoint": "/api/v1/factory/work-items/2",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        },
+        "verifying": {
+          "endpoint": "/api/v1/factory/work-items/3",
+          "http_status": 200,
+          "method": "GET",
+          "query": {}
+        }
+      },
+      "sha256": "b9ed44fd8e20e8d81b8abbf7bcb5963bc0bb2866e9c37c14fda72de92b2e294c",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    },
+    {
+      "path": "backend/tests/factory/fixtures/v1/work-items.json",
+      "scenarios": {
+        "active": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "active",
+            "limit": 1
+          }
+        },
+        "attention": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "attention",
+            "limit": 1
+          }
+        },
+        "empty": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "review",
+            "scope_id": 3
+          }
+        },
+        "finished": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "finished",
+            "limit": 1
+          }
+        },
+        "first_page": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "limit": 2
+          }
+        },
+        "next_page": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "cursor": "eyJmaWx0ZXJzIjp7ImNhdGVnb3J5IjoiYWxsIiwicHJvdmlkZXIiOm51bGwsInNjb3BlX2lkIjpudWxsLCJ0ZWFtX2lkIjpudWxsfSwiaWQiOjEzMSwia2luZCI6IndvcmsiLCJ1cGRhdGVkX2F0IjoiMjAyNi0wOS0zMFQxMjowMDowMCswMDowMCIsInYiOjF9",
+            "limit": 2
+          }
+        },
+        "provider_filter": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "limit": 2,
+            "provider": "codex-cli"
+          }
+        },
+        "queued": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "queued",
+            "limit": 1
+          }
+        },
+        "review": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "review",
+            "limit": 1
+          }
+        },
+        "unknown": {
+          "endpoint": "/api/v1/factory/work-items",
+          "http_status": 200,
+          "method": "GET",
+          "query": {
+            "category": "unknown",
+            "limit": 1
+          }
+        }
+      },
+      "sha256": "ca184e5192e3265d3c074c962e14c4dc8d500fcdf3737e365758ba201e9dce3d",
+      "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad"
+    }
+  ],
+  "integration_base_sha": "860da85c00a636ed9690f22f5d50a4cc0e2bc00d",
+  "integration_target": "feature/software-delivery-product-reposition",
+  "issue_number": 6,
+  "limits": [
+    "GETs use only local records and bounded runtime properties; no live GitHub/provider/Bridge/Mail observations.",
+    "Only retry eligibility is evaluated. Other remedy states are unknown; current route authority is still enforced on write.",
+    "Current-state finished/attention tracking is not a historical delivery outcome.",
+    "Database reads share one response snapshot; pages are eventually consistent across requests.",
+    "Provider work filtering uses configured owner; repository filtering uses configured team roster.",
+    "Missing/invalid/cross-team actors, stale process evidence or ambiguous sessions do not grant concrete terminal targets."
+  ],
+  "nullable_fields": {
+    "ApproverReference": [
+      "member_id",
+      "slot_id"
+    ],
+    "FactoryAction": [
+      "block_code"
+    ],
+    "FactoryFilters": [
+      "provider",
+      "scope_id",
+      "team_id"
+    ],
+    "LinkHints": [
+      "bridge_target",
+      "launch_plan",
+      "mail"
+    ],
+    "OwnerReference": [
+      "configured_provider",
+      "member_id",
+      "provider_label"
+    ],
+    "PollObservation": [
+      "last_polled_at"
+    ],
+    "RepositoryListResponse": [
+      "next_cursor"
+    ],
+    "RuntimeObservation": [
+      "observed_at",
+      "reason_code"
+    ],
+    "SafeWorkItem": [
+      "active_scope_status",
+      "last_verified_sha",
+      "pending_approval_kind",
+      "pending_approval_status",
+      "pr_number"
+    ],
+    "SessionAssociation": [
+      "bridge_target",
+      "observed_provider"
+    ],
+    "WorkFilters": [
+      "provider",
+      "scope_id",
+      "team_id"
+    ],
+    "WorkListResponse": [
+      "next_cursor"
+    ],
+    "WorkProjection": [
+      "approver",
+      "owner",
+      "waiting",
+      "workspace"
+    ]
+  },
+  "review_policy": "B4 independently reviews exact head; B3 acknowledges accepted fixtures before #7 consumption. Final implementation CI/review and human merge are separate.",
+  "schema_inventory": [
+    "FactoryErrorResponse",
+    "OverviewResponse",
+    "RepositoryDetailResponse",
+    "RepositoryListResponse",
+    "WorkDetailResponse",
+    "WorkListResponse"
+  ],
+  "schema_version": 1,
+  "source_branch": "deck/slot-2/issue-6-2aca75ad766bd4c7",
+  "source_repository": "juanrubio/claude-deck",
+  "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad",
+  "validation": {
+    "combined_current_source_run": "Pending at manifest creation; independent review/CI receipts must identify their exact head.",
+    "current_source_factory_and_namespace_tests": {
+      "passed": 76,
+      "seconds": 17.96
+    },
+    "prior_combined_run": {
+      "limit": "Before final cancellation-actor mapping, additional scenario and side-effect spy changes; not exact source acceptance.",
+      "passed": 921,
+      "seconds": 104.34
+    },
+    "reproduce": "From a non-project cwd: PYTHONPATH=<checkout>/backend DATABASE_URL=sqlite+aiosqlite:///:memory: python -m pytest <checkout>/backend/tests/factory <checkout>/backend/tests/agent_teams/test_dispatch_state_namespaces.py -q --tb=short --disable-warnings",
+    "shared_legacy_extraction": "Four extracted function/class ASTs equal integration base, preserving legacy wire/predicate behavior.",
+    "source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad",
+    "work_list_sql_statements": {
+      "includes_explicit_snapshot_BEGIN": true,
+      "limit_1": 11,
+      "limit_100": 11
+    }
+  },
+  "work_item_id": 2
+}

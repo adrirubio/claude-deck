@@ -179,6 +179,18 @@ def _routes(scope_id: int, workspace_id: int, item_id: int):
         ("slot-update", "patch", "/api/v1/agent-teams/slots/999999", {"enabled": False}),
         ("slot-delete", "delete", "/api/v1/agent-teams/slots/999999", None),
         ("slot-reorder", "post", "/api/v1/agent-teams/presets/999999/slots/reorder", {"slot_ids": []}),
+        ("leader-update", "put", "/api/v1/agent-teams/presets/999999/leader",
+         {"leader_slot_id": 1, "expected_leader_slot_id": None,
+          "expected_updated_at": "2000-01-01T00:00:00", "reason": "operator auth boundary test"}),
+        ("create-family-ordinary", "post", "/api/v1/agent-teams/presets",
+         {"name": "Auth create family", "slots": []}),
+        ("create-family-mail-import", "post", "/api/v1/agent-teams/presets/from-agent-mail",
+         {"name": "Auth mail import", "member_ids": [999999]}),
+        ("create-family-bridge-import", "post", "/api/v1/agent-teams/presets/from-agent-bridge",
+         {"name": "Auth bridge import"}),
+        ("create-family-duplicate", "post", "/api/v1/agent-teams/presets/999999/duplicate",
+         {"name": "Auth duplicate"}),
+        ("configuration-observation", "get", "/api/v1/agent-teams/configuration-observation", None),
     ]
     return [listing, force_release, cancel_active_continuation, abandon, *arming]
 
@@ -188,6 +200,8 @@ async def _call(client, method, url, body, headers):
         return await client.get(url, headers=headers)
     if method == "patch":
         return await client.patch(url, json=body, headers=headers)
+    if method == "put":
+        return await client.put(url, json=body, headers=headers)
     if method == "delete":
         return await client.delete(url, headers=headers)
     return await client.post(url, json=body, headers=headers)
@@ -246,6 +260,8 @@ async def test_retry_requires_current_bound_leader_or_operator(
         )
         db.add_all([leader_slot, other_slot])
         await db.flush()
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        preset.leader_slot_id = leader_slot.id
         tokens = {}
         members = {}
         for name, slot in (("leader", leader_slot), ("other", other_slot)):

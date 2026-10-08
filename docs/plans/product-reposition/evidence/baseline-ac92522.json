@@ -1,0 +1,68 @@
+{
+  "issue": 11,
+  "repository": "juanrubio/claude-deck",
+  "source_sha": "ac9252242fcf436c3ea9997add5d32416cad2cd1",
+  "artifact_branch": "product/validation-bootstrap",
+  "pr_target": "feature/software-delivery-product-reposition",
+  "observation_date_utc": "2026-10-02",
+  "evidence_class": [
+    "source_inspection",
+    "isolated_jsdom_fixtures"
+  ],
+  "reviewer": {
+    "mail_member_id": 5,
+    "slot_id": 4
+  },
+  "tests": {
+    "command": "product-heavy npm run test -- tests/autonomy-panel.test.tsx tests/agent-teams-plan-token.test.tsx tests/agent-teams-help-dialog.test.tsx --maxWorkers=1 --no-file-parallelism --reporter=verbose",
+    "cwd": "frontend",
+    "start_utc": "2026-10-02T00:35:41Z",
+    "files_passed": 3,
+    "tests_passed": 20,
+    "exit_code": 0,
+    "runner_duration_seconds": 5.61,
+    "duration_is_human_timing": false,
+    "warnings": [
+      "Existing dialog Description/aria-describedby warnings"
+    ]
+  },
+  "environment": {
+    "node": "24.19.0",
+    "vitest_actual": "3.2.7",
+    "vitest_lock_declared": "3.2.4",
+    "jsdom": "26.1.0",
+    "react": "19.2.7",
+    "testing_library_react": "16.3.3",
+    "dependencies": "local copy of pinned controller installed node_modules; identical lockfile; not clean-lock reproduction"
+  },
+  "human_participants_observed": 0,
+  "human_task_results": null,
+  "human_timing": null,
+  "human_navigation_counts": null,
+  "human_credential_prompt_counts": null,
+  "human_intervention_counts": null,
+  "independent_operators": null,
+  "browser_viewport_results": null,
+  "screenshots": null,
+  "first_reviewable_pr_duration": null,
+  "benefit_measures": null,
+  "v31": "unavailable_pending_operator_comparison",
+  "v32": "unavailable_pending_future_milestone",
+  "self_accepted": false,
+  "independent_baseline_review": "pending B1 distinct reviewer at artifact commit",
+  "source_sha256": {
+    "frontend/src/App.tsx": "385eda258b7e8d1533a618a2ea3c44b9986215ee128f5f0a04306d9abb7bae11",
+    "frontend/src/components/layout/Sidebar.tsx": "7f4948e89822bf7e6b958021048bec9f90180759aad755d269acc27cf2709309",
+    "frontend/src/features/dashboard/DashboardPage.tsx": "e971bf4ebfc425d0cf895c09aa41902f1d7b9818f190bf8b1b644443f2235ee4",
+    "frontend/src/features/config/ConfigViewerPage.tsx": "ea2857fadf99a9db91c60075aa164294b4f58d57f84b474d60deee51f0e3fbe1",
+    "frontend/src/features/agent-teams/AgentTeamsPage.tsx": "776bb24709024411cf73e7da827fe568c99f425b9185c0d3089f14f620e1456d",
+    "frontend/src/features/agent-teams/AutonomyPanel.tsx": "9ded313875259de9098a3e09a4513ef50125aeedcf35a53d2c857ff7137e19f9",
+    "frontend/src/features/agent-teams/api.ts": "f95b456052ef3a2f8771d281d504cdeb553a5b5440e3ec35ea455c82a2ebaa74",
+    "frontend/src/features/agent-teams/operatorAuth.ts": "bf735bd9e285766f02a74d388d9ffe6353fa02600eb9d589258c760c5cd25ada",
+    "backend/app/api/v1/agent_teams.py": "9152ec27520992d7f08ac24dc97aed5837f0907119b3ca7deb84daec528abdc1",
+    "frontend/tests/autonomy-panel.test.tsx": "bd4d4378cc4a4330ec6e1b59adcb49645e7238a2885aa921b5d03426b37c943f",
+    "frontend/tests/agent-teams-plan-token.test.tsx": "7f1ab504c0db14254b329fb6e441b850c9e9421a05ac2c5b3ceb705aeb6c06b5",
+    "frontend/tests/agent-teams-help-dialog.test.tsx": "68c90f68e536cabf5079058dea125871cfcb3dc5ad889ec87829100dacc911b1",
+    "frontend/package-lock.json": "e586c653fde550fb8d52f22dfd5d59c4f5c6970d34ab449080561729c2c6cb91"
+  }
+}

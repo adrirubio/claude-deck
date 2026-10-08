@@ -2,6 +2,8 @@
 
 Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
+Older packaged releases can show the earlier configuration home page. Use the current source to evaluate the Overview and Work pages. The installation prerequisites still apply.
+
 ## Native Installation
 
 ### Prerequisites
@@ -13,6 +15,15 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
   - Codex CLI
   - GitHub Copilot CLI
   - OpenCode CLI
+  - Pi
+
+Pi has additional requirements:
+
+- Pi 0.87.1
+- Node.js 22.19.0 or later
+- The dependencies of the repository-local Agent Mail extension in `integrations/pi-agent-mail`, prepared before you launch Pi from Deck
+
+Agent Mail has no Pi install action. Its **Pi Agent Mail** card on the Install tab only checks whether the extension is ready.
 
 ### Steps
 
@@ -57,7 +68,7 @@ Claude Deck starts the backend at `http://localhost:8000` and the frontend dev s
 
 ## Configuration
 
-Claude Deck requires no configuration files — all settings have sensible defaults defined in `backend/app/config.py`. The SQLite database is created automatically on first run at `backend/claude_registry.db`.
+The dashboard and native pages start with the code defaults in `backend/app/config.py`. Settings can also come from environment variables or `backend/.env`. Factory polling (`github_token`) and operator-protected actions (`operator_token`) need host settings; see [Autonomous GitHub dispatch](/autonomy). The SQLite database is created automatically on first run at `backend/claude_registry.db`.
 
 ## Remote Use
 

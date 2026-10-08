@@ -106,6 +106,49 @@ async def test_existing_watcher_call_keeps_ambient_authorization():
 
 
 @pytest.mark.asyncio
+async def test_repository_labels_follow_safe_pagination_links():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.params.get("page") == "2":
+            return httpx.Response(200, request=request, json=[{"name": "design"}])
+        return httpx.Response(
+            200,
+            request=request,
+            json=[{"name": "dispatch"}],
+            headers={"Link": '<https://api.github.com/repos/owner/repo/labels?per_page=100&page=2>; rel="next"'},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        client = GithubClient(http=http)
+        labels = await client.list_repo_labels("owner", "repo")
+
+    assert labels == ["dispatch", "design"]
+    assert [request.url.params.get("page", "1") for request in seen] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_repository_labels_reject_unsafe_pagination_links():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json=[{"name": "dispatch"}],
+            headers={"Link": '<https://attacker.invalid/repos/owner/repo/labels?per_page=100&page=2>; rel="next"'},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        client = GithubClient(http=http)
+        with pytest.raises(GithubClientResponseError, match="Unsafe GitHub label pagination"):
+            await client.list_repo_labels("owner", "repo")
+
+
+@pytest.mark.asyncio
 async def test_app_transport_uses_explicit_token_and_payloads():
     seen: list[httpx.Request] = []
 

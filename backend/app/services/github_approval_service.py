@@ -29,6 +29,7 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.models.schemas import MailMessageCreate
+from app.services import factory_audit_service as audit
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
@@ -81,6 +82,88 @@ class GithubApprovalError(ValueError):
         self.detail = detail
         self.status_code = status_code
         super().__init__(detail)
+
+
+async def _record_decision_fact(
+    db: AsyncSession,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    request_id: int,
+    revision_id: int | None,
+    request_kind: str,
+    decision: str,
+) -> None:
+    """C09/A12: one applied request or decision fact in its owning commit.
+
+    The replay identity binds the action to the immutable request row.
+    """
+    operation_id = f"{event_kind}:request:{request_id}"
+    await audit.record_event(
+        db,
+        event_kind=event_kind,
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        request_id=request_id,
+        after_values={"request_kind": request_kind, "decision": decision},
+        action_outcome="applied",
+        sanitized_reason=f"{request_kind} {decision}",
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
+
+
+class ActiveCancellationNoticeError(GithubApprovalError):
+    """The cancellation stands, but its owner notice was refused.
+
+    Callers must not record or report the committed cancellation as refused.
+    """
+
+
+async def _record_checkpoint_fact(
+    db: AsyncSession,
+    *,
+    event_kind: str,
+    source: str,
+    actor: dict,
+    scope_id: int | None,
+    item_id: int,
+    revision_id: int,
+    request_id: int | None,
+    before_stage: str | None,
+    after_stage: str,
+) -> None:
+    """C09: record one persisted recovery checkpoint transition.
+
+    The fact is written in the transaction that owns the transition, so it
+    commits or rolls back with it. Its replay identity binds the action to
+    the immutable revision row and the resulting stage.
+    """
+    operation_id = f"{event_kind}:{after_stage}:revision:{revision_id}"
+    await audit.record_event(
+        db,
+        event_kind=event_kind,
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=actor,
+        scope_id=scope_id,
+        item_id=item_id,
+        revision_id=revision_id,
+        request_id=request_id,
+        before_values={"recovery_checkpoint_stage": before_stage},
+        after_values={"recovery_checkpoint_stage": after_stage},
+        action_outcome="applied",
+        sanitized_reason=f"recovery checkpoint {after_stage}",
+        operation_id=operation_id,
+        correlation_id=operation_id,
+    )
 
 
 class GithubApprovalService:
@@ -271,7 +354,13 @@ class GithubApprovalService:
         max_failed_heads: int,
         tool_fallbacks: dict,
         lease_token: str,
+        actor: dict | None = None,
     ) -> tuple[GithubAttemptScopeRevision, GithubApprovalRequest, bool]:
+        """Create one bounded continuation request.
+
+        ``actor`` is the trusted actor of the authenticated caller. Without
+        it, the hold fact names the authenticated owner member only.
+        """
         if not scope.continuation_enabled:
             raise GithubApprovalError("continuation_disabled")
         if item.scope_id != scope.id:
@@ -579,6 +668,38 @@ class GithubApprovalService:
         try:
             await db.flush()
             revision.approval_request_id = approval.id
+            request_actor = actor or audit.derive_actor(
+                actor_kind="member", member_id=authenticated_owner_member_id)
+            await _record_decision_fact(
+                db,
+                event_kind="continuation_request",
+                source="github_approval_service.create_continuation_request",
+                actor=request_actor,
+                scope_id=scope.id,
+                item_id=item.id,
+                request_id=approval.id,
+                revision_id=revision.id,
+                request_kind="continuation",
+                decision="requested",
+            )
+            if checkpoint_stage is not None:
+                # C09: the decision hold is a persisted transition by the
+                # requesting owner, not an operator action.
+                await _record_checkpoint_fact(
+                    db,
+                    event_kind="recovery_hold",
+                    source="github_approval_service.create_continuation_request",
+                    actor=actor or audit.derive_actor(
+                        actor_kind="member",
+                        member_id=authenticated_owner_member_id,
+                    ),
+                    scope_id=scope.id,
+                    item_id=item.id,
+                    revision_id=revision.id,
+                    request_id=approval.id,
+                    before_stage=None,
+                    after_stage=checkpoint_stage,
+                )
             await db.commit()
             await db.refresh(revision)
             await db.refresh(approval)
@@ -1625,7 +1746,15 @@ class GithubApprovalService:
         decision: str,
         reason: str,
         request_id: int,
+        actor: dict | None = None,
     ) -> tuple[GithubApprovalRequest, bool]:
+        """Decide one initial-plan request as its designated Leader.
+
+        A caller that supplies its trusted ``actor`` gets one applied decision
+        fact in the decision commit. An exact replay records nothing.
+        """
+        decision_item_id = item.id
+        decision_scope_id = item.scope_id
         request = await self.resolve_for_decision(
             db,
             item,
@@ -1710,6 +1839,19 @@ class GithubApprovalService:
             )
             .execution_options(synchronize_session=False)
         )
+        if result.rowcount == 1 and actor is not None:
+            await _record_decision_fact(
+                db,
+                event_kind="approval_decision",
+                source="github_approval_service.decide",
+                actor=actor,
+                scope_id=decision_scope_id,
+                item_id=decision_item_id,
+                request_id=request_id,
+                revision_id=None,
+                request_kind="initial_plan",
+                decision=decision,
+            )
         await db.commit()
         await db.refresh(request)
         if result.rowcount == 1:
@@ -1736,7 +1878,13 @@ class GithubApprovalService:
         decision: str,
         reason: str,
         request_id: int,
+        actor: dict | None = None,
     ) -> tuple[GithubApprovalRequest, GithubAttemptScopeRevision, bool]:
+        """Decide one continuation request as its designated Leader.
+
+        ``actor`` is the trusted actor of the authenticated caller. Without
+        it, the hold fact names the authenticated Leader member only.
+        """
         request = await self.resolve_for_decision(
             db,
             item,
@@ -1798,9 +1946,17 @@ class GithubApprovalService:
         now = datetime.utcnow()
         if revision.expires_at is not None and revision.expires_at <= now:
             raise GithubApprovalError("continuation_request_expired")
+        # Scalars for the hold fact are captured before the guarded updates.
+        entering_ack_hold = (
+            decision == "approved"
+            and revision.recovery_checkpoint_stage == "decision_open"
+        )
+        hold_scope_id = item.scope_id
+        hold_revision_id = revision.id
+        hold_request_id = request.id
 
         leader_slot = aliased(AgentTeamSlot)
-        earlier_slot = aliased(AgentTeamSlot)
+        leader_preset = aliased(AgentTeamPreset)
         leader_member = aliased(MailTeamMember)
         newer_leader_member = aliased(MailTeamMember)
         current_leader_exists = exists(
@@ -1810,26 +1966,18 @@ class GithubApprovalService:
                 TeamGithubScope.preset_id == leader_slot.preset_id,
             )
             .join(
+                leader_preset,
+                leader_preset.id == TeamGithubScope.preset_id,
+            )
+            .join(
                 leader_member,
                 leader_member.team_slot_id == leader_slot.id,
             )
             .where(
                 TeamGithubScope.id == item.scope_id,
+                leader_preset.leader_slot_id == leader_slot.id,
                 leader_slot.enabled.is_(True),
                 leader_member.id == authenticated_leader_member_id,
-                ~exists(
-                    select(earlier_slot.id).where(
-                        earlier_slot.preset_id == leader_slot.preset_id,
-                        earlier_slot.enabled.is_(True),
-                        or_(
-                            earlier_slot.position < leader_slot.position,
-                            and_(
-                                earlier_slot.position == leader_slot.position,
-                                earlier_slot.id < leader_slot.id,
-                            ),
-                        ),
-                    )
-                ),
                 ~exists(
                     select(newer_leader_member.id).where(
                         newer_leader_member.team_slot_id == leader_slot.id,
@@ -1927,6 +2075,38 @@ class GithubApprovalService:
             if current_leader.id != authenticated_leader_member_id:
                 raise GithubApprovalError("stale_approval_recipient")
             raise GithubApprovalError("approval_request_already_decided")
+        decision_actor = actor or audit.derive_actor(
+            actor_kind="member", member_id=authenticated_leader_member_id)
+        await _record_decision_fact(
+            db,
+            event_kind="continuation_decision",
+            source="github_approval_service.decide_continuation",
+            actor=decision_actor,
+            scope_id=hold_scope_id,
+            item_id=work_item_id,
+            request_id=hold_request_id,
+            revision_id=hold_revision_id,
+            request_kind="continuation",
+            decision=decision,
+        )
+        if entering_ack_hold:
+            # C09: the ack hold is a persisted transition by the deciding
+            # Leader, not an operator action.
+            await _record_checkpoint_fact(
+                db,
+                event_kind="recovery_hold",
+                source="github_approval_service.decide_continuation",
+                actor=actor or audit.derive_actor(
+                    actor_kind="member",
+                    member_id=authenticated_leader_member_id,
+                ),
+                scope_id=hold_scope_id,
+                item_id=work_item_id,
+                revision_id=hold_revision_id,
+                request_id=hold_request_id,
+                before_stage="decision_open",
+                after_stage="ack_hold",
+            )
         await db.commit()
         await db.refresh(request)
         await db.refresh(revision)
@@ -1941,7 +2121,13 @@ class GithubApprovalService:
         dispatch_nonce: str,
         approval_request_id: int,
         stage: str,
+        actor: dict | None = None,
     ) -> GithubAttemptScopeRevision:
+        """Release one recovery checkpoint hold.
+
+        ``actor`` is the trusted actor of the authenticated caller. The
+        release fact is recorded only for a caller that supplies it.
+        """
         recovery_attempt = configured_recovery_only_attempt()
         await db.refresh(item)
         if recovery_attempt is None or not recovery_attempt.matches_item(item):
@@ -2086,6 +2272,19 @@ class GithubApprovalService:
         if result.rowcount != 1:
             await db.rollback()
             raise GithubApprovalError("recovery_checkpoint_context_changed")
+        if actor is not None:
+            await _record_checkpoint_fact(
+                db,
+                event_kind="recovery_checkpoint_release",
+                source="github_approval_service.release_recovery_checkpoint",
+                actor=actor,
+                scope_id=item.scope_id,
+                item_id=item.id,
+                revision_id=revision.id,
+                request_id=approval.id,
+                before_stage=expected_hold,
+                after_stage=next_stage,
+            )
         await db.commit()
         await db.refresh(revision)
         return revision
@@ -2096,10 +2295,11 @@ class GithubApprovalService:
         request: GithubApprovalRequest,
         *,
         requester_member_id: int,
+        actor: dict | None = None,
     ) -> tuple[GithubApprovalRequest, bool]:
         if requester_member_id != request.owner_member_id:
             raise GithubApprovalError("not_approval_requester", status_code=403)
-        return await self._cancel_authorized(db, request)
+        return await self._cancel_authorized(db, request, actor=actor)
 
     @staticmethod
     def active_cancellation_delivery_key(
@@ -2251,7 +2451,14 @@ class GithubApprovalService:
         revision_number: int,
         dispatch_nonce: str,
         reason: str,
+        actor: dict | None = None,
     ) -> tuple[GithubWorkItem, GithubAttemptScopeRevision, bool]:
+        """Cancel one active continuation revision.
+
+        A caller that supplies its trusted ``actor`` gets one action fact in
+        the cancellation transaction and a separate notification fact. A
+        notice failure after commit never erases the committed cancellation.
+        """
         canonical_reason = reason.strip()
         if not canonical_reason:
             raise GithubApprovalError(
@@ -2284,7 +2491,7 @@ class GithubApprovalService:
                 reason=canonical_reason,
             ):
                 raise GithubApprovalError("active_continuation_cancel_conflict")
-            await self.ensure_active_cancellation_notice(db, item, revision)
+            await self._notify_active_cancellation(db, item, revision, actor=actor)
             return item, revision, False
 
         approval = (
@@ -2498,10 +2705,11 @@ class GithubApprovalService:
                     reason=canonical_reason,
                 )
             ):
-                await self.ensure_active_cancellation_notice(
+                await self._notify_active_cancellation(
                     db,
                     fresh_item,
                     fresh_revision,
+                    actor=actor,
                 )
                 return fresh_item, fresh_revision, False
             raise GithubApprovalError("active_continuation_cancel_conflict")
@@ -2511,17 +2719,122 @@ class GithubApprovalService:
         except GithubApprovalError:
             await db.rollback()
             raise
+        if actor is not None:
+            # C07/C09: one action fact per real revision, in the transaction
+            # that owns the cancellation.
+            operation_id = f"active_cancellation:revision:{revision_id}"
+            await audit.record_event(
+                db,
+                event_kind="recovery_cancellation",
+                source="github_approval_service.cancel_active_continuation",
+                occurred_at=now,
+                actor=actor,
+                scope_id=scope.id,
+                item_id=item_id,
+                revision_id=revision_id,
+                request_id=approval.id,
+                before_values={"status": "active", "dispatch_status": "dispatched"},
+                after_values={
+                    "status": "superseded",
+                    "dispatch_status": "escalated",
+                    "failed_head_count": revision.failed_head_count + int(charge_head),
+                },
+                action_outcome="applied",
+                sanitized_reason="active continuation cancelled",
+                operation_id=operation_id,
+                correlation_id=operation_id,
+            )
         await db.commit()
         await db.refresh(item)
         await db.refresh(revision)
-        await self.ensure_active_cancellation_notice(db, item, revision)
+        await self._notify_active_cancellation(db, item, revision, actor=actor)
         return item, revision, True
+
+    async def _notify_active_cancellation(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        *,
+        actor: dict | None,
+    ) -> None:
+        """Send the stable-key cancellation notice and record its result.
+
+        The notice identity is distinct from the action identity. A failed
+        notice is observed as rejected when no send was attempted, otherwise
+        as uncertain. The committed cancellation is never replayed.
+        """
+        item_id = item.id
+        scope_id = item.scope_id
+        revision_id = revision.id
+        request_id = revision.approval_request_id
+        notice = f"active_cancellation_notice:revision:{revision_id}"
+        fields = {
+            "event_kind": "recovery_cancellation_notification",
+            "source": "github_approval_service.ensure_active_cancellation_notice",
+            "scope_id": scope_id,
+            "item_id": item_id,
+            "revision_id": revision_id,
+            "request_id": request_id,
+            "correlation_id": notice,
+        }
+        try:
+            await self.ensure_active_cancellation_notice(db, item, revision)
+        except Exception as exc:
+            not_attempted = isinstance(exc, GithubApprovalError)
+            outcome = "rejected" if not_attempted else "uncertain"
+            if actor is not None:
+                # One fact per notice outcome: an earlier uncertain result
+                # never suppresses a later settled one.
+                await audit.record_observation(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    actor=actor,
+                    operation_id=f"{notice}:{outcome}",
+                    action_outcome=outcome,
+                    sanitized_reason=(
+                        "cancellation notice refused before send"
+                        if not_attempted
+                        else "cancellation notice delivery unsettled after commit"
+                    ),
+                    **fields,
+                )
+            if not_attempted:
+                raise ActiveCancellationNoticeError(
+                    exc.detail, status_code=exc.status_code
+                ) from exc
+            raise
+        if actor is None:
+            return
+        try:
+            await audit.record_event(
+                db,
+                occurred_at=datetime.utcnow(),
+                actor=actor,
+                operation_id=f"{notice}:applied",
+                action_outcome="applied",
+                sanitized_reason="cancellation notice delivered",
+                **fields,
+            )
+            await db.commit()
+        except Exception:
+            # The notice is already settled; a missing observation never
+            # replays it or changes the cancellation result.
+            await db.rollback()
 
     async def _cancel_authorized(
         self,
         db: AsyncSession,
         request: GithubApprovalRequest,
+        *,
+        actor: dict | None = None,
     ) -> tuple[GithubApprovalRequest, bool]:
+        """Supersede one pending request.
+
+        A changed cancellation by an authenticated caller that supplies
+        ``actor`` records one action fact in the cancellation transaction.
+        A replay changes nothing and records nothing.
+        """
         if request.status == "superseded":
             return request, False
         if request.status != "pending":
@@ -2559,6 +2872,24 @@ class GithubApprovalService:
             root = await db.get(MailMessage, request.request_message_id)
             if root is not None:
                 root.request_status = "superseded"
+        if actor is not None:
+            operation_id = f"request_cancellation:request:{request.id}"
+            await audit.record_event(
+                db,
+                event_kind="request_cancellation",
+                source="github_approval_service.cancel",
+                occurred_at=now,
+                actor=actor,
+                item_id=request.work_item_id,
+                revision_id=revision.id if revision is not None else None,
+                request_id=request.id,
+                before_values={"status": "pending", "request_kind": request.request_kind},
+                after_values={"status": "superseded"},
+                action_outcome="applied",
+                sanitized_reason="pending request cancelled",
+                operation_id=operation_id,
+                correlation_id=operation_id,
+            )
         await db.commit()
         await db.refresh(request)
         return request, True

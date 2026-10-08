@@ -2,9 +2,14 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'Claude Deck',
-  description: 'Documentation for Claude Deck — Web dashboard for local AI coding agents',
+  description: 'Documentation for Claude Deck — observe and intervene in bounded coding-agent work on GitHub',
   appearance: 'force-dark',
   base: '/docs/',
+  srcExclude: [
+    'plans/**',
+    'superpowers/**',
+    'deploy/**',
+  ],
   head: [
     ['link', { rel: 'icon', href: '/docs/favicon.ico' }],
   ],
@@ -18,8 +23,8 @@ export default defineConfig({
       { text: 'Features', link: '/features/dashboard' },
       { text: 'API Reference', link: '/api/' },
       {
-        text: 'v2.0.0',
-        link: 'https://github.com/adrirubio/claude-deck/blob/master/CHANGELOG.md',
+        text: 'Product source',
+        link: 'https://github.com/adrirubio/claude-deck/tree/master',
       },
     ],
 
@@ -31,9 +36,12 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
+            { text: 'Autonomous GitHub Dispatch', link: '/autonomy' },
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
+            { text: 'Factory Audit & Metrics', link: '/guide/factory-audit-and-metrics' },
             { text: 'Contributing', link: '/guide/contributing' },
+            { text: 'Changelog', link: '/changelog' },
           ],
         },
       ],
@@ -41,7 +49,10 @@ export default defineConfig({
         {
           text: 'Features',
           items: [
-            { text: 'Dashboard', link: '/features/dashboard' },
+            { text: 'Overview', link: '/features/dashboard' },
+            { text: 'Work', link: '/features/work' },
+            { text: 'Repositories', link: '/features/repositories' },
+            { text: 'Harnesses', link: '/features/harnesses' },
             { text: 'Config', link: '/features/config' },
             { text: 'MCP Servers', link: '/features/mcp-servers' },
             { text: 'Commands', link: '/features/commands' },
@@ -68,6 +79,7 @@ export default defineConfig({
           text: 'API Reference',
           items: [
             { text: 'Overview', link: '/api/' },
+            { text: 'Factory', link: '/api/factory' },
             { text: 'Config', link: '/api/config' },
             { text: 'Providers', link: '/api/providers' },
             { text: 'MCP Servers', link: '/api/mcp' },
@@ -92,11 +104,6 @@ export default defineConfig({
         },
       ],
     },
-
-    srcExclude: [
-      'plans/**',
-      'superpowers/**',
-    ],
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/adrirubio/claude-deck' },
