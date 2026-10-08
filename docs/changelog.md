@@ -2,7 +2,9 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 3.0.0 — Unreleased
+
+The release date is set when the release is published.
 
 ### Added
 
@@ -12,10 +14,22 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 - The factory audit ledger and delivery metrics record observed actions and outcomes. See [Factory audit and metrics](/guide/factory-audit-and-metrics).
 - Agent Bridge can launch Codex CLI sessions on Amazon Bedrock with a provider-aware platform selector, a per-session Codex `model_provider = "amazon-bedrock"` override, and optional AWS region/profile/model fields.
 
+### Changed
+
+- The runtime version response and the application package metadata report 3.0.0.
+- Product CI also runs for pull requests and pushes on `release/v3.0.0`.
+- Existing databases upgrade in place. Back up `backend/claude_registry.db` before the upgrade. See [Installation](/guide/installation#upgrade-and-rollback).
+
 ### Fixed
 
 - Agent Teams now blocks unsafe multi-slot Codex `resume --last` launches in the same repository and keeps Codex hook session keys distinct per team slot.
 - Agent Mail Compose now labels offline and not-wakeable recipients clearly before storing mail for later delivery.
+
+### Evidence limits
+
+- Finished is a tracking state. It is not independently reviewed delivery, reliability, cost or time saved.
+- Cost is unknown. This release makes no performance, cost or time-saving claim.
+- The manual Bridge trial (V14) is not performed. Pilot participants, comparisons and human benefit measurements are not available.
 
 ## 2.0.1 — 2026-06-20
 

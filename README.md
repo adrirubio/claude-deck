@@ -68,6 +68,18 @@ Native features vary by harness and registered page access. See [Harnesses](docs
 - **Backup & Restore** — Create and manage Claude Code backups with selective restore, plus redacted export-only Codex backups
 - **Projects** — Discover and manage project directories
 
+## What's New in 3.0.0
+
+Claude Deck 3.0.0 makes the delivery interface the main product surface:
+
+- Overview, Work and Repositories show complete filtered work counts, owners, waiting reasons, PR context and watched-scope intake across teams.
+- Harnesses shows the operations and readiness catalog for all five harnesses, with guarded native pages.
+- Guided repository configuration keeps draft, saved configuration, reviewed launch and activation separate. Teams sets the Leader explicitly through `leader_slot_id`.
+- The factory audit ledger and delivery metrics record observed actions and outcomes. Coverage starts at the first start after the upgrade.
+- Existing databases upgrade in place. Back up the database first. See [Upgrade and rollback](docs/guide/installation.md#upgrade-and-rollback).
+
+The limits below still apply: cost is unknown, finished is a tracking state, and this release makes no performance or time-saving claim. See the [changelog](CHANGELOG.md) for details.
+
 ## What's New in 2.0.1
 
 Claude Deck 2.0.1 is a stabilization release for the 2.x coordination work:

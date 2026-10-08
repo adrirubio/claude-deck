@@ -13,6 +13,9 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 VERSION_FILE="$PROJECT_ROOT/VERSION"
 PACKAGE_JSON="$PROJECT_ROOT/frontend/package.json"
 PYPROJECT_TOML="$PROJECT_ROOT/backend/pyproject.toml"
+PACKAGE_LOCK="$PROJECT_ROOT/frontend/package-lock.json"
+UV_LOCK="$PROJECT_ROOT/backend/uv.lock"
+APP_CONFIG="$PROJECT_ROOT/backend/app/config.py"
 
 # Colors for output
 RED='\033[0;31m'
@@ -80,6 +83,34 @@ else
     log_warn "File not found: $PYPROJECT_TOML"
 fi
 
+# Update frontend/package-lock.json (root version and the root package entry)
+if [ -f "$PACKAGE_LOCK" ]; then
+    if command -v jq &> /dev/null; then
+        jq --arg v "$VERSION" '.version = $v | .packages[""].version = $v' "$PACKAGE_LOCK" > "$PACKAGE_LOCK.tmp" && mv "$PACKAGE_LOCK.tmp" "$PACKAGE_LOCK"
+        log_info "Updated $PACKAGE_LOCK to version $VERSION"
+    else
+        log_warn "jq not found: update $PACKAGE_LOCK manually"
+    fi
+else
+    log_warn "File not found: $PACKAGE_LOCK"
+fi
+
+# Update the backend package entry in backend/uv.lock
+if [ -f "$UV_LOCK" ]; then
+    sed -i.bak '/^name = "claude-code-registry-backend"$/{n;s/^version = "[^"]*"/version = "'"$VERSION"'"/;}' "$UV_LOCK" && rm -f "$UV_LOCK.bak"
+    log_info "Updated $UV_LOCK to version $VERSION"
+else
+    log_warn "File not found: $UV_LOCK"
+fi
+
+# Update the runtime version reported by the backend
+if [ -f "$APP_CONFIG" ]; then
+    sed -i.bak "s/^\(    app_version: str = \)\"[^\"]*\"/\1\"$VERSION\"/" "$APP_CONFIG" && rm -f "$APP_CONFIG.bak"
+    log_info "Updated $APP_CONFIG to version $VERSION"
+else
+    log_warn "File not found: $APP_CONFIG"
+fi
+
 log_info "Version sync complete: v$VERSION"
 
 # Display current versions for verification
@@ -91,4 +122,13 @@ if [ -f "$PACKAGE_JSON" ]; then
 fi
 if [ -f "$PYPROJECT_TOML" ]; then
     echo "  pyproject.toml:  $(grep '^version' "$PYPROJECT_TOML" | sed 's/version = "\([^"]*\)"/\1/')"
+fi
+if [ -f "$PACKAGE_LOCK" ] && command -v jq &> /dev/null; then
+    echo "  package-lock:    $(jq -r '.version' "$PACKAGE_LOCK")"
+fi
+if [ -f "$UV_LOCK" ]; then
+    echo "  uv.lock:         $(grep -A1 '^name = "claude-code-registry-backend"$' "$UV_LOCK" | sed -n 's/^version = "\(.*\)"/\1/p')"
+fi
+if [ -f "$APP_CONFIG" ]; then
+    echo "  config.py:       $(sed -n 's/^    app_version: str = "\(.*\)"/\1/p' "$APP_CONFIG")"
 fi
