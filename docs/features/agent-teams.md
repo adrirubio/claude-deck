@@ -14,6 +14,14 @@ Team/scope enablement controls intake. Pausing retains configuration; inspect cu
 
 Build directory, command and parallelism fields are hints in the owner's brief; Deck does not run those build commands. Editable numeric drafts validate on save; clearing a field does not silently increase a budget or authorize recovery.
 
+### Continuation path scope
+
+A continuation request must list its allowed paths explicitly. `README.md` permits changes to that exact file. `docs/` permits changes below that directory, including nested files. It does not permit changes below `docs-old/`. It does not permit replacement of the directory itself with a file.
+
+Directory permission requires the trailing slash in the approved request. Existing entries such as `docs` keep their exact-file meaning. Use a new approved revision to change the scope. Globs, absolute paths, parent paths and the repository root are not valid scopes.
+
+The path limit counts entries in the approved request. Each directory entry grants the stated subtree. Tree observations, commands, actions, ownership, workspace leases and failed-head budgets retain their own limits. Completion checks each changed file against the approved scope. An accepted-source import records only exact accepted files outside that scope. It does not grant edit permission.
+
 ## Authorization, reuse and deletion
 
 Roster, watched-repository, autonomy and recovery settings/remedies require the configured operator token. Browser launch planning uses the existing per-tab flow. Protected reads and constrained agent launch APIs have separate authenticated Mail-session principal rules; credentials are separate from GitHub polling and are not a role/bootstrap prompt.

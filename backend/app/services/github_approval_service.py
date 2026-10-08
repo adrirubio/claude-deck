@@ -240,18 +240,27 @@ class GithubApprovalService:
             allow_empty=False,
         )
         for path in paths:
-            candidate = PurePosixPath(path)
-            parts = path.split("/")
+            relative = path.removesuffix("/")
+            candidate = PurePosixPath(relative)
+            parts = relative.split("/")
             if (
-                path in {".", "./"}
+                relative == "."
                 or path.startswith("/")
                 or "\\" in path
                 or any(part in {"", ".", ".."} for part in parts)
                 or any(character in path for character in _PATH_GLOB_CHARACTERS)
-                or str(candidate) != path
+                or str(candidate) != relative
             ):
                 raise GithubApprovalError("allowed_paths_invalid", status_code=400)
         return paths
+
+    @staticmethod
+    def path_is_allowed(path: str, allowed_paths: list[str]) -> bool:
+        """A trailing slash grants descendants; other entries grant one file."""
+        return any(
+            path.startswith(scope) if scope.endswith("/") else path == scope
+            for scope in allowed_paths
+        )
 
     @classmethod
     def _canonical_tool_fallbacks(
