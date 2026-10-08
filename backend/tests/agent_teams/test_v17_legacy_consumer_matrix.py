@@ -1,5 +1,6 @@
 """V17: real consumer behavior over migrated legacy authority scenarios."""
 import pytest
+from datetime import datetime
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -417,6 +418,11 @@ async def test_v17_dispatch_brief_names_reordered_designated_leader(monkeypatch)
             await session.flush()
 
             async def fake_acquire(_db, _scope, _item):
+                # The dispatch authority gate requires a committed acquisition.
+                workspace.leased_item_id = _item.id
+                workspace.leased_at = datetime.utcnow()
+                workspace.lease_token = "v17-brief-lease"
+                await _db.commit()
                 return workspace
 
             async def fake_configure(_workspace, *_args, **_kwargs):
@@ -444,12 +450,52 @@ async def test_v17_dispatch_brief_names_reordered_designated_leader(monkeypatch)
                 issue_details_by_number={1: {"body": "migrated brief"}},
             )
             request = launched.get("request")
-            assert request is not None
+            assert request is not None, (item.dispatch_status, item.pending_reason,
+                                        item.escalation_reason, item.status_note)
             prompts = getattr(request, "slot_prompt_overrides", {}) or {}
             joined = "\n".join(str(value) for value in prompts.values())
             # The brief names the reordered designated Leader, not first position.
             assert "tied-b" in joined
             assert "tied-a" not in joined.split("Team leader / approver:")[-1].splitlines()[0]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(("stored", "expected", "matches"), [
+    ("2026-10-08 11:00:00", "2026-10-08 11:00:00.000000", True),
+    ("2026-10-08 11:00:00.000000", "2026-10-08 11:00:00", True),
+    ("2026-10-08 11:00:00.000001", "2026-10-08 11:00:00", False),
+    ("2026-10-08 11:00:00", "2026-10-08 11:00:00.000001", False),
+    ("2026-10-08 11:00:00.123456", "2026-10-08 11:00:00.123456", True),
+    ("2026-10-08 11:00:01", "2026-10-08 11:00:00", False),
+])
+async def test_v17_start_identity_preserves_legacy_timestamp_precision(stored, expected, matches):
+    from app.services.github_dispatch_service import _identity_value_clause
+
+    engine = await _migrated_store()
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            await session.execute(text(
+                "UPDATE github_work_items SET created_at = :stamp, dispatched_at = :stamp WHERE id = 1"
+            ), {"stamp": stored})
+            workspace = GithubWorkspace(scope_id=1, path="/tmp/v17-time-lease", kind="worktree")
+            session.add(workspace)
+            await session.flush()
+            await session.execute(text(
+                "UPDATE github_workspaces SET leased_at = :stamp WHERE id = :id"
+            ), {"stamp": stored, "id": workspace.id})
+            await session.commit()
+            for model, column, row_id in (
+                (GithubWorkItem, GithubWorkItem.created_at, 1),
+                (GithubWorkItem, GithubWorkItem.dispatched_at, 1),
+                (GithubWorkspace, GithubWorkspace.leased_at, workspace.id),
+            ):
+                found = await session.scalar(select(model.id).where(
+                    model.id == row_id,
+                    _identity_value_clause(column, datetime.fromisoformat(expected)),
+                ))
+                assert (found is not None) == matches
     finally:
         await engine.dispose()
 

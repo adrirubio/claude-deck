@@ -327,6 +327,86 @@ def _app_writes() -> list[Write]:
     return writes
 
 
+def _guarded_dispatch_write_lines(source: str | None = None) -> tuple[set[int], list[Write]]:
+    """Check each payload before allowing the conditional SQL forwarding helper.
+
+    Unknown helpers and unknown mappings remain forbidden. This exception binds
+    to one helper in one module, and checks both alternatives of a launch result.
+    """
+    path = APP_ROOT / "services/github_dispatch_service.py"
+    tree = ast.parse(path.read_text() if source is None else source)
+    service = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                   and node.name == "GithubDispatchService")
+    methods = [node for node in service.body if isinstance(node, ast.AsyncFunctionDef)]
+    helper = next(node for node in methods if node.name == "_update_current_item")
+    assert helper.args.kwarg.arg == "values"
+    forwarding = [node for node in ast.walk(helper) if isinstance(node, ast.Call)
+                  and any(keyword.arg is None for keyword in node.keywords)]
+    assert len(forwarding) == 1
+    forward = forwarding[0]
+    assert isinstance(forward.func, ast.Attribute) and forward.func.attr == "values"
+    assert [keyword.arg for keyword in forward.keywords] == [None, "updated_at"]
+    assert isinstance(forward.keywords[0].value, ast.Name)
+    assert forward.keywords[0].value.id == "values"
+    allowed_lines = {forward.lineno}
+    payload_writes: list[Write] = []
+
+    def check_value(field: str, value: ast.expr) -> None:
+        if field not in _FIELDS:
+            return
+        choices = [value.body, value.orelse] if isinstance(value, ast.IfExp) else [value]
+        namespace = {
+            "dispatch_status": DISPATCH_STATUSES,
+            "escalation_reason": ESCALATION_REASONS | {None},
+            # Existing routing refusal; PR2 queues use PENDING_REASONS.
+            "pending_reason": PENDING_REASONS | {None, "leader_unavailable"},
+        }[field]
+        for choice in choices:
+            assert isinstance(choice, ast.Constant), (field, ast.dump(choice))
+            assert choice.value in namespace, (field, choice.value)
+            payload_writes.append(Write(Path("services/github_dispatch_service.py"),
+                                        choice.lineno, field, choice.value, "guarded_payload"))
+
+    for method in methods:
+        for node in ast.walk(method):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "self"
+                    and node.func.attr == "_update_current_item"):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg is not None:
+                    check_value(keyword.arg, keyword.value)
+                    continue
+                assert isinstance(keyword.value, ast.Name)
+                name = keyword.value.id
+                assignments = [part for part in ast.walk(method)
+                               if isinstance(part, ast.Assign)
+                               and any(isinstance(target, ast.Name) and target.id == name
+                                       for target in part.targets)]
+                assert len(assignments) == 1
+                payload = assignments[0].value
+                assert isinstance(payload, ast.Call) and isinstance(payload.func, ast.Name)
+                assert payload.func.id == "dict" and not payload.args
+                for entry in payload.keywords:
+                    assert entry.arg is not None
+                    check_value(entry.arg, entry.value)
+                for part in ast.walk(method):
+                    if isinstance(part, ast.Subscript) and isinstance(part.value, ast.Name) \
+                            and part.value.id == name:
+                        assert isinstance(part.ctx, ast.Store)
+                        assert isinstance(part.slice, ast.Constant)
+                        assert part.slice.value not in _FIELDS
+                    if isinstance(part, ast.Attribute) and isinstance(part.value, ast.Name) \
+                            and part.value.id == name:
+                        assert method.name == "prepare_attempt" and part.attr == "items"
+                    if isinstance(part, ast.Call):
+                        assert not any(isinstance(arg, ast.Name) and arg.id == name
+                                       for arg in part.args)
+            allowed_lines.add(node.lineno)
+    return allowed_lines, payload_writes
+
+
 def _escalation_call_reasons() -> set[str]:
     reasons: set[str] = set()
     for path in APP_ROOT.rglob("*.py"):
@@ -338,9 +418,13 @@ def _escalation_call_reasons() -> set[str]:
                 "escalate",
                 "escalate_without_notification",
                 "_apply_escalation",
+                "_escalate_current_item",
             }:
                 continue
-            reason_index = 1 if node.func.attr == "_apply_escalation" else 2
+            reason_index = {
+                "_apply_escalation": 1,
+                "_escalate_current_item": 3,
+            }.get(node.func.attr, 2)
             if len(node.args) > reason_index and isinstance(
                 node.args[reason_index], ast.Constant
             ):
@@ -421,6 +505,8 @@ Unrelated(**payload)
 
 def test_whole_tree_writers_stay_inside_declared_namespaces():
     writes = _app_writes()
+    guarded_lines, payload_writes = _guarded_dispatch_write_lines()
+    writes.extend(payload_writes)
     forbidden = [
         write
         for write in writes
@@ -435,14 +521,15 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
             "helper_unknown",
             "helper",
         }
+        and not (write.path.as_posix() == "services/github_dispatch_service.py"
+                 and write.line in guarded_lines)
     ]
     assert forbidden == []
 
     dynamic_setattr = [write for write in writes if write.form == "setattr_unknown"]
-    assert len(dynamic_setattr) == 1
-    assert dynamic_setattr[0].path.as_posix() == (
-        "services/github_dispatch_service.py"
-    )
+    assert len(dynamic_setattr) == 2
+    assert all(write.path.as_posix() == "services/github_dispatch_service.py"
+               for write in dynamic_setattr)
 
     unrelated_dynamic_setattr = [
         write for write in writes if write.form == "setattr_other_unknown"
@@ -521,6 +608,25 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
         if write.field == "pending_reason" and write.value is not None
     }
     assert PENDING_REASONS <= pending_literals
+
+
+@pytest.mark.parametrize(("original", "replacement"), [
+    ('dispatch_status="failed" if failed else "dispatched"',
+     'dispatch_status="invented" if failed else "dispatched"'),
+    ('dispatch_status="failed" if failed else "dispatched"',
+     'dispatch_status=dynamic_status'),
+    ('pending_reason="queued_low_memory"', 'pending_reason="invented"'),
+    ('values["dispatched_at"] = datetime.utcnow()',
+     'values["dispatch_status"] = dynamic_status'),
+    ('values["dispatched_at"] = datetime.utcnow()',
+     'values.update(dynamic_values)'),
+])
+def test_guarded_payload_audit_rejects_unknown_states_and_mappings(original, replacement):
+    source = (APP_ROOT / "services/github_dispatch_service.py").read_text()
+    changed = source.replace(original, replacement)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        _guarded_dispatch_write_lines(changed)
 
 
 def test_apply_escalation_rejects_an_undeclared_reason():

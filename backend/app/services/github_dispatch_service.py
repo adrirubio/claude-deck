@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import String, and_, cast, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -73,8 +73,18 @@ def _item_identity(item: GithubWorkItem) -> tuple:
     return tuple(getattr(item, field) for field in _START_IDENTITY_FIELDS)
 
 
+def _identity_value_clause(column, value):
+    clause = column == value
+    if isinstance(value, datetime) and value.microsecond == 0:
+        # Legacy SQLite rows can store CURRENT_TIMESTAMP without a fraction.
+        # The DateTime bind uses .000000. Accept the equivalent representation
+        # only for an exact whole second; do not round nonzero microseconds.
+        clause |= cast(column, String) == value.strftime("%Y-%m-%d %H:%M:%S")
+    return clause
+
+
 def _item_identity_clause(identity: tuple):
-    return and_(*(getattr(GithubWorkItem, field) == value
+    return and_(*(_identity_value_clause(getattr(GithubWorkItem, field), value)
                   for field, value in zip(_START_IDENTITY_FIELDS, identity)))
 
 
@@ -890,7 +900,8 @@ class GithubDispatchService:
         )) & exists(select(GithubWorkspace.id).where(
             GithubWorkspace.id == acquisition[0], GithubWorkspace.scope_id == scope.id,
             GithubWorkspace.leased_item_id == acquisition[1],
-            GithubWorkspace.leased_at == acquisition[2], GithubWorkspace.lease_token == acquisition[3],
+            _identity_value_clause(GithubWorkspace.leased_at, acquisition[2]),
+            GithubWorkspace.lease_token == acquisition[3],
         ))
         result = await db.execute(update(GithubWorkItem).where(
             _item_identity_clause(identity), authority,
