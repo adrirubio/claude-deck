@@ -40,7 +40,7 @@ This reference describes the integrated product source candidate. Earlier packag
 
 Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
 
-Guided setup, explicit Leader selection and delivery audit/metrics are not included. This source candidate has not received M1b or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
+The integrated source includes guided repository configuration, explicit Leader selection through the team's `leader_slot_id`, and the delivery [audit ledger and metrics](docs/guide/factory-audit-and-metrics.md). Overview, Work and Repositories observations arrived with M1a; the Harnesses operations catalog arrived with M1b. The operator accepted M1b; that decision does not supply missing observations. This source does not establish M2 or M3 acceptance. The manual Bridge trial (V14) is unperformed; pilot participants, the V31/V32 comparisons, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
 ## Features
 
@@ -59,9 +59,9 @@ Native features vary by harness and registered page access. See [Harnesses](docs
 - **Memory** — View and edit Claude Code memory files
 - **Output Styles** — Configure response output formats
 - **Status Line** — Customize Claude Code status line display
-- **Agent Bridge** — Discover and monitor Claude Code, Codex CLI, and GitHub Copilot CLI sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
-- **Agent Mail** — Coordinate local Claude Code, Codex CLI, and GitHub Copilot CLI agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
-- **Agent Teams** — Save reusable rosters of Claude Code, Codex, and Copilot agents, launch or reuse their sessions, and keep same-repo roles distinct through Agent Mail slot identities
+- **Agent Bridge** — Discover and monitor Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
+- **Agent Mail** — Coordinate local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
+- **Agent Teams** — Save reusable rosters of Claude Code, Codex, Copilot, OpenCode, and Pi agents, launch or reuse their sessions, and keep same-repo roles distinct through Agent Mail slot identities
 - **Session Transcripts** — View conversation history with full message details and tool use
 - **Usage Tracking** — Monitor token usage, costs, and billing blocks with daily/monthly charts
 - **Plan History** — Browse and review Claude Code implementation plans
@@ -96,7 +96,7 @@ These existing screenshots show retained native/session pages; they do not depic
 | Agent Bridge | Dashboard |
 |--------------|-----------|
 | ![Agent Bridge](screenshots/cc-bridge.png) | ![Dashboard](screenshots/dashboard.png) |
-| Monitor and interact with Claude Code, Codex, and Copilot tmux sessions | Native configuration summary (existing screenshot) |
+| Monitor and interact with agent tmux sessions (existing screenshot) | Native configuration summary (existing screenshot) |
 
 | Config | MCP Servers |
 |--------|-------------|

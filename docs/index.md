@@ -43,6 +43,6 @@ This reference describes the integrated product source candidate. Earlier packag
 
 Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
 
-Guided setup, explicit Leader selection and delivery audit/metrics are not included. This source candidate has not received M1b or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
+The integrated source includes guided repository configuration, explicit Leader selection through the team's `leader_slot_id`, and the delivery [audit ledger and metrics](/guide/factory-audit-and-metrics). The operator accepted M1b; that decision does not supply missing observations. This source does not establish M2 or M3 acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
 Finished tracking does not establish reviewed delivery.

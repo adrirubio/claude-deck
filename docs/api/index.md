@@ -61,7 +61,7 @@ FastAPI generates interactive API docs at:
 
 | Module | Prefix | Description |
 |--------|--------|-------------|
-| [Factory](/api/factory) | `/factory` | Observational work counts/details and watched-scope intake, poll and overlap reads |
+| [Factory](/api/factory) | `/factory` | Observational work counts/details, watched-scope intake, poll and overlap reads, delivery metrics, protected audit events, protected review declarations and the protected setup preflight |
 | [Config](/api/config) | `/config` and `/codex-config` | Configuration management |
 | [Providers](/api/providers) | `/providers` | Provider metadata, status, diagnostics, and inventory |
 | [MCP Servers](/api/mcp) | `/mcp` | MCP server management |
