@@ -870,7 +870,37 @@ class GithubDispatchService:
             db, scope, require_autonomy=require_autonomy, owner_slot_id=item.owner_slot_id,
         ))
         await db.commit()
-        return current
+        if not current:
+            return False
+        # Authority reads can await. An operator can cancel during those
+        # reads. Recheck the complete start and authority in one final write.
+        await db.execute(update(AgentTeamPreset).where(
+            AgentTeamPreset.id == scope.preset_id,
+        ).values(updated_at=AgentTeamPreset.updated_at))
+        authority = exists(select(TeamGithubScope.id).join(
+            AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id,
+        ).join(AgentTeamSlot, AgentTeamSlot.id == AgentTeamPreset.leader_slot_id).where(
+            TeamGithubScope.id == scope.id, TeamGithubScope.preset_id == scope.preset_id,
+            TeamGithubScope.enabled.is_(True), AgentTeamSlot.enabled.is_(True),
+            AgentTeamSlot.preset_id == scope.preset_id,
+            AgentTeamPreset.autonomy_enabled.is_(True) if require_autonomy else True,
+        )) & exists(select(AgentTeamSlot.id).where(
+            AgentTeamSlot.id == identity[3], AgentTeamSlot.preset_id == scope.preset_id,
+            AgentTeamSlot.enabled.is_(True),
+        )) & exists(select(GithubWorkspace.id).where(
+            GithubWorkspace.id == acquisition[0], GithubWorkspace.scope_id == scope.id,
+            GithubWorkspace.leased_item_id == acquisition[1],
+            GithubWorkspace.leased_at == acquisition[2], GithubWorkspace.lease_token == acquisition[3],
+        ))
+        result = await db.execute(update(GithubWorkItem).where(
+            _item_identity_clause(identity), authority,
+        ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+        await db.commit()
+        if require_autonomy:
+            from app.services.github_coordination_service import hold_code
+            if hold_code():
+                return False
+        return result.rowcount == 1
 
     async def _claim_dispatch_start(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem,

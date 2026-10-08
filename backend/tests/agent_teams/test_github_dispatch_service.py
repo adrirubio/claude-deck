@@ -7496,7 +7496,7 @@ async def wal_dispatch_sessions(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["no_workspace", "auth_refusal", "authority_refusal", "brief",
-                                   "launch_result", "launch_error", "launch_value_error"])
+                                   "post_brief_authority", "launch_result", "launch_error", "launch_value_error"])
 async def test_operator_abandon_survives_delayed_dispatch(wal_dispatch_sessions, monkeypatch, stage):
     from app.services.factory_audit_service import derive_actor
     from app.services.github_workspace_service import GithubWorkspaceConfigError
@@ -7526,14 +7526,14 @@ async def test_operator_abandon_survives_delayed_dispatch(wal_dispatch_sessions,
             await pause()
             raise GithubWorkspaceConfigError("Fixture refusal")
         monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", auth_refusal)
-    elif stage == "authority_refusal":
+    elif stage in {"authority_refusal", "post_brief_authority"}:
         original, calls = github_dispatch_service._dispatch_authorized, 0
         async def authority_refusal(*args, **kwargs):
             nonlocal calls
             calls += 1
-            if calls == 2:
+            if calls == (3 if stage == "post_brief_authority" else 2):
                 await pause()
-                return False
+                return stage == "post_brief_authority"
             return await original(*args, **kwargs)
         monkeypatch.setattr(github_dispatch_service, "_dispatch_authorized", authority_refusal)
     elif stage == "brief":
@@ -7578,7 +7578,7 @@ async def test_operator_abandon_survives_delayed_dispatch(wal_dispatch_sessions,
         slots = list((await db.scalars(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == preset_id))).all())
         await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
             issue_labels_by_number={9040: ["area:backend"]})
-        if stage in {"auth_refusal", "authority_refusal", "brief", "launch_result", "launch_error", "launch_value_error"}:
+        if stage != "no_workspace":
             assert await db.scalar(select(func.count()).select_from(GithubWorkspace).where(
                 GithubWorkspace.leased_item_id == item_id)) == 1
     assert launcher.await_count == (1 if stage.startswith("launch_") else 0)
