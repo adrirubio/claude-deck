@@ -74,7 +74,7 @@ def occupied_work_condition():
         & GithubWorkItem.dispatch_nonce.is_not(None)
         & exists(select(GithubWorkspace.id).where(
             GithubWorkspace.leased_item_id == GithubWorkItem.id,
-        )),
+        ).correlate(GithubWorkItem)),
     )
 
 
@@ -816,7 +816,8 @@ class GithubDispatchService:
         held only through local checks and the durable start commit.
         """
         item_id, scope_id, preset_id = item.id, scope.id, scope.preset_id
-        expected_identity = (item.scope_id, item.dispatch_nonce, item.dispatch_head_ref, item.dispatch_base_ref)
+        expected_identity = (item.scope_id, item.dispatch_nonce, item.dispatch_head_ref, item.dispatch_base_ref,
+                             (item.owner_slot_id, item.routing_method) if item.dispatch_nonce is not None else None)
         await db.commit()
         await db.execute(update(AgentTeamPreset).where(
             AgentTeamPreset.id == preset_id,
@@ -828,6 +829,7 @@ class GithubDispatchService:
         # lease must remain intact, and its launch must not be repeated.
         if (item.dispatch_status != "pending" or expected_identity != (
             item.scope_id, item.dispatch_nonce, item.dispatch_head_ref, item.dispatch_base_ref,
+            (item.owner_slot_id, item.routing_method) if item.dispatch_nonce is not None else None,
         )):
             await db.commit()
             return False
