@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - Unreleased
+
+The release date is set when the release is published.
+
+### Added
+- **Overview, Work and Repositories**: Show factory work counts, owners, waiting reasons, pull request context, and watched-scope intake, polling and overlap observations across teams.
+- **Harnesses**: Show the versioned operations and readiness catalog for Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI and Pi, with guarded native pages. The catalog does not create an editor or grant authority.
+- **Guided repository configuration**: `/repositories/new` keeps the draft, the saved configuration, the reviewed launch and the activation as separate steps.
+- **Explicit Leader authority**: Teams sets the Leader through the team's `leader_slot_id`.
+- **Audit history and metrics**: The factory audit ledger and delivery metrics record observed actions and outcomes. See `docs/guide/factory-audit-and-metrics.md`.
+- **Agent Bridge**: Codex CLI sessions can launch on Amazon Bedrock with a provider-aware platform selector, a per-session `model_provider = "amazon-bedrock"` override, and optional AWS region, profile and model fields.
+- **Version sync**: `scripts/bump-version.sh` also syncs `frontend/package-lock.json`, `backend/uv.lock` and the backend `app_version`.
+
+### Changed
+- **Product positioning**: Claude Deck is a self-hosted workspace to observe and intervene in bounded coding-agent attempts on GitHub issues, with mixed harnesses, visible policies and recovery controls. Native configuration and manual sessions stay available without automatic dispatch.
+- **Version**: The runtime version response and all package metadata report 3.0.0.
+- **CI**: Product CI also runs for pull requests and pushes on `release/v3.0.0`.
+- **Upgrade**: Existing databases upgrade in place. Back up `backend/claude_registry.db` first. Downgrade restores that backup. See `docs/guide/installation.md`.
+
+### Fixed
+- **Agent Teams**: Unsafe multi-slot Codex `resume --last` launches in the same repository are blocked. Codex hook session keys stay distinct per team slot.
+- **Agent Mail**: Compose labels offline and not-wakeable recipients clearly before storing mail for later delivery.
+
+### Evidence limits
+- Finished is a tracking state. It is not independently reviewed delivery, reliability, cost or time saved.
+- Cost is unknown. This release makes no performance, cost or time-saving claim.
+- Native adapters stay provider-specific. Catalog support does not mean equal native capability across harnesses.
+- The manual Bridge trial (V14) is not performed. Pilot participants, comparisons and human benefit measurements are not available.
+
 ## [2.0.1] - 2026-06-20
 
 ### Added
