@@ -1982,6 +1982,51 @@ async def test_continuation_completion_submits_exact_tree_diff_for_verification(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("allowed_paths", "extra_path", "expected"),
+    [
+        (["src/"], "src/nested/example.py", 200),
+        (["src/", "README.md"], "README.md", 200),
+        (["src"], "src/nested/example.py", 409),
+        (["src/"], "src-other/example.py", 409),
+        (["src/example.py"], "src/example.py/child", 409),
+    ],
+)
+async def test_continuation_completion_requires_explicit_directory_authority(
+    client, db, tmp_path, monkeypatch, allowed_paths, extra_path, expected
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(db, tmp_path)
+    revision.allowed_paths = allowed_paths
+    await db.commit()
+    _stub_completion_github(monkeypatch, extra_current=[
+        GithubTreeEntry(extra_path, "100755", "blob", "f" * 40)
+    ])
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    response = await client.post(
+        "/api/v1/agent-teams/dispatch-status", json=_completion_report(item)
+    )
+    assert response.status_code == expected, response.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert workspace.lease_token == "lease-secret"
+    assert item.retry_count == 0
+    if expected == 200:
+        assert item.dispatch_status == "verifying"
+        assert revision.status == "submitted"
+        assert revision.submitted_head_sha == "d" * 40
+    else:
+        assert response.json()["detail"] == "continuation_paths_out_of_scope"
+        assert item.dispatch_status == "dispatched"
+        assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("failure", "detail"),
     [
         ("missing_actions", "continuation_actions_missing"),

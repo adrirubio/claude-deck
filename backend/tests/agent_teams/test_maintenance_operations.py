@@ -194,6 +194,47 @@ def test_source_import_integration_records_exact_storage_without_changing_approv
     assert not git(workspace,'status','--porcelain')
 
 
+@pytest.mark.parametrize('directory_scope', ['docs/', 'docs'])
+@pytest.mark.parametrize('import_external', [False, True])
+def test_maintenance_import_respects_explicit_directory_scope(tmp_path, directory_scope, import_external):
+    workspace, baseline, tip = repository(tmp_path)
+    if not import_external:
+        upstream = tmp_path/'upstream'
+        git(upstream, 'revert', '--no-edit', tip)
+        tip = git(upstream, 'rev-parse', 'HEAD')
+    (workspace/'docs/guide').mkdir(parents=True)
+    (workspace/'docs/index.md').write_text('Owner document\n')
+    (workspace/'docs/guide/install.md').write_text('Owner nested document\n')
+    git(workspace, 'add', 'docs'); git(workspace, 'commit', '-m', 'Owner documents')
+    before = git(workspace, 'rev-parse', 'HEAD')
+    service = StoredIntegrationFixture(profile(tmp_path), workspace, tip, baseline, 'merge')
+    with sqlite3.connect(service.profile.database) as db:
+        db.execute('UPDATE github_attempt_scope_revisions SET allowed_paths=?',
+                   (json.dumps([directory_scope]),))
+    original = service.rows('SELECT * FROM github_attempt_scope_revisions')
+    request = IntegrationRequest(operation_id='directory-import', work_item_id=1, expected_head=before,
+        accepted_pull=AcceptedPull(repository='fixture/repo', number=1, head=tip, base='integration', checks=['Tests']),
+        accepted_tip=tip, checkpoint_message=1)
+    if directory_scope == 'docs/':
+        service.integration_update(request)
+        record = read_json(tmp_path/'state/maintenance/directory-import.json')
+        assert record['status'] == 'completed'
+        imports = service.rows('SELECT * FROM github_accepted_source_imports')
+        if import_external:
+            assert record['source_import']['status'] == 'recorded'
+            assert set(json.loads(imports[0]['path_snapshots'])) == {'source.txt'}
+        else:
+            assert record['source_import'] == {'status': 'not_needed', 'paths': []}
+            assert imports == []
+    else:
+        with pytest.raises(ValueError, match='source_import_content_mismatch'):
+            service.integration_update(request)
+        assert service.rows('SELECT * FROM github_accepted_source_imports') == []
+    assert service.rows('SELECT * FROM github_attempt_scope_revisions') == original
+    git(workspace, 'merge-base', '--is-ancestor', before, 'HEAD')
+    assert (workspace/'docs/guide/install.md').read_text() == 'Owner nested document\n'
+
+
 def test_source_import_integration_refuses_unaccepted_outside_content_and_keeps_commits(tmp_path):
     workspace, baseline, tip = repository(tmp_path)
     (workspace/'outside.txt').write_text('Unaccepted owner change\n')
