@@ -22,7 +22,7 @@ The release date is set when the release is published.
 
 ### Changed
 - **Product positioning**: Claude Deck is a self-hosted workspace to observe and intervene in bounded coding-agent attempts on GitHub issues, with mixed harnesses, visible policies and recovery controls. Native configuration and manual sessions stay available without automatic dispatch.
-- **Version**: The runtime version response and all package metadata report 3.0.0.
+- **Version**: The runtime version response and the application package metadata report 3.0.0.
 - **CI**: Product CI also runs for pull requests and pushes on `release/v3.0.0`.
 - **Upgrade**: Existing databases upgrade in place. Back up `backend/claude_registry.db` first. Downgrade restores that backup. See `docs/guide/installation.md`.
 

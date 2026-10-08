@@ -44,6 +44,7 @@ jobs:
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify source binding
         run: |
@@ -62,6 +63,18 @@ jobs:
               exit 1
             fi
           done
+          TAG_REF="refs/tags/v${RELEASE_VERSION}"
+          TAG_LINE=$(git ls-remote origin "$TAG_REF" "${TAG_REF}^{}")
+          if [ -n "$TAG_LINE" ]; then
+            TAG_COMMIT=$(echo "$TAG_LINE" | tail -1 | cut -f1)
+            if [ "$TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+              echo "Error: tag v${RELEASE_VERSION} exists at $TAG_COMMIT, not at $RELEASE_COMMIT."
+              exit 1
+            fi
+            echo "Tag v${RELEASE_VERSION} exists and points to $RELEASE_COMMIT."
+          else
+            echo "Tag v${RELEASE_VERSION} does not exist yet."
+          fi
           if [ "$DRY_RUN" != "true" ]; then
             git fetch origin master
             if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/master; then

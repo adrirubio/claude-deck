@@ -16,7 +16,7 @@ The release date is set when the release is published.
 
 ### Changed
 
-- The runtime version response and all package metadata report 3.0.0.
+- The runtime version response and the application package metadata report 3.0.0.
 - Product CI also runs for pull requests and pushes on `release/v3.0.0`.
 - Existing databases upgrade in place. Back up `backend/claude_registry.db` before the upgrade. See [Installation](/guide/installation#upgrade-and-rollback).
 
