@@ -17,6 +17,14 @@ The new Overview/Work navigation described here belongs to the product integrati
   - OpenCode CLI
   - Pi
 
+Pi has additional requirements:
+
+- Pi 0.87.1
+- Node.js 22.19.0 or later
+- The dependencies of the repository-local Agent Mail extension in `integrations/pi-agent-mail`, prepared before you launch Pi from Deck
+
+Agent Mail has no Pi install action. Its **Pi Agent Mail** card on the Install tab only checks whether the extension is ready.
+
 ### Steps
 
 1. Clone the repository:

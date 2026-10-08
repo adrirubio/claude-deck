@@ -4,7 +4,11 @@ Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copi
 
 ## Authorization
 
-"Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`. When the session header is present, the route authenticates that session; otherwise it requires the operator token.
+"Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
+
+- A route marked **Operator token** accepts only the operator token. A session token never opens it. Without a configured backend operator token the route returns 503 `operator_token_unconfigured`; a missing or wrong header returns 401 `operator_token_required` or `operator_token_invalid`.
+- A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
+- A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected.
 
 | Route | Access |
 | --- | --- |
@@ -14,9 +18,10 @@ Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copi
 | PUT `/api/v1/agent-teams/presets/{preset_id}/leader` | Operator token |
 | POST `/api/v1/agent-teams/presets/{preset_id}/slots`, PATCH and DELETE `/api/v1/agent-teams/slots/{slot_id}`, POST `/api/v1/agent-teams/presets/{preset_id}/slots/reorder` | Operator token |
 | POST `/api/v1/agent-teams/presets/{preset_id}/github-scopes` | Operator token |
-| POST `/api/v1/agent-teams/presets/{preset_id}/plan-launch`, POST `/api/v1/agent-teams/presets/{preset_id}/launch` | Operator token, or a Mail session from MCP with a connected mailbox |
+| POST `/api/v1/agent-teams/presets/{preset_id}/plan-launch`, POST `/api/v1/agent-teams/presets/{preset_id}/launch` | Operator token, or a qualifying Mail session |
+| POST `/api/v1/agent-teams/github-work-items/{work_item_id}/retry` | Operator token, or the qualifying Mail session of the team's current enabled Leader slot |
 
-A Mail session that plans or launches cannot use prompt or path overrides, include disabled slots, force a respawn, adopt unbound sessions or skip plan confirmation. Those requests return 403 `operator_launch_override_required`. A session that is not from MCP or not connected returns 403 `authenticated_mcp_session_required`.
+A Mail session that plans or launches cannot use prompt or path overrides, include disabled slots, force a respawn, adopt unbound sessions or skip plan confirmation. Those requests return 403 `operator_launch_override_required`. For plan and launch, a session that does not qualify returns 403 `authenticated_mcp_session_required`. For retry, a session that does not qualify or is not the current Leader returns 403 `current_leader_required`.
 
 ## Presets
 

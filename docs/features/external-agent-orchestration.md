@@ -129,7 +129,7 @@ The broadcast endpoint also accepts `team_preset` or `work_item` with the corres
 
 ## Agent Teams Integration
 
-External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Deck-Operator-Token`) or an authenticated, connected MCP Mail session token (`X-Deck-Session-Token`). The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
+External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Deck-Operator-Token`) or an authenticated Mail session token (`X-Deck-Session-Token`). A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected; otherwise the route returns 403 `authenticated_mcp_session_required`. A non-empty session header is authenticated first, also when both headers are sent. The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
 
 ```bash
 curl -s "$DECK_API/agent-teams/presets"

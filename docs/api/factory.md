@@ -6,6 +6,8 @@ These five observational routes return versioned factory work and repository obs
 
 The classes below describe behavior and access, not the HTTP method. "Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
 
+A route with **Operator token** access accepts only the operator token; a session token never opens it. A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
+
 | Class | Route | Access | Behavior |
 | --- | --- | --- | --- |
 | Safe observation | GET `/api/v1/factory/overview`, `/api/v1/factory/work-items`, `/api/v1/factory/work-items/{item_id}`, `/api/v1/factory/repositories`, `/api/v1/factory/repositories/{scope_id}` | None | Reads local records and a bounded scheduler observation |
@@ -14,9 +16,15 @@ The classes below describe behavior and access, not the HTTP method. "Operator t
 | Protected observation | POST `/api/v1/factory/setup-preflight` | Operator token | Checks the checkout, GitHub access, labels, base branch and selected authentication presence; creates or changes no records |
 | Protected observation | GET `/api/v1/agent-teams/github-work-items/{item_id}/scope-revisions` | Operator token, or a Mail session of the same team | Reads revision history; private commands only for the operator or the matched current owner |
 | Protected declaration | POST `/api/v1/factory/review-acceptances` | Operator token | Records one audit declaration; never changes work state, approvals, merges, retries, leases or counters |
-| Protected mutation | POST `/api/v1/agent-teams/github-work-items/{work_item_id}/retry` | Operator token, or the connected MCP Mail session of the current Leader | Resets the item for retry after current state and eligibility checks |
+| Protected mutation | POST `/api/v1/agent-teams/github-work-items/{work_item_id}/retry` | Operator token, or the Mail session of the current Leader under the conditions below | Resets the item for retry after current state and eligibility checks |
 
-A Mail session for retry must come from MCP, have a connected mailbox and belong to the team's current enabled Leader slot. Otherwise the route returns 403 `current_leader_required`. Other team and recovery routes are in the [Agent Teams API](/api/agent-teams).
+A Mail session for retry qualifies only when all of these are true:
+
+- The backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`).
+- The session comes from MCP and its mailbox is connected.
+- The session belongs to the member of the team's current enabled Leader slot.
+
+Otherwise the route returns 403 `current_leader_required`. Other team and recovery routes are in the [Agent Teams API](/api/agent-teams).
 
 All paths below begin with `/api/v1/factory`. These GET routes read local factory records and a bounded scheduler observation. They do not dispatch, claim a lease, send or acknowledge Mail, launch a provider, change the active project, or fetch GitHub issues. They have no operator/session authentication dependency in this source. Protected recovery reads and mutations have their own authentication and state checks.
 
