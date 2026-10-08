@@ -194,6 +194,8 @@ To preview the documentation site:
 
 This starts VitePress at http://localhost:5174/docs/. Use `--host 0.0.0.0` if you need to reach it from another machine.
 
+For the source-to-website publishing steps, see the [documentation publishing playbook](DOCUMENTATION_PUBLISHING.md).
+
 For a release check, `./scripts/build.sh` builds both the app frontend and the documentation site.
 
 ## Configuration Files
