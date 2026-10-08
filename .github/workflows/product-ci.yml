@@ -2,10 +2,10 @@ name: Product CI
 
 on:
   pull_request:
-    branches: [feature/software-delivery-product-reposition]
+    branches: [master, feature/software-delivery-product-reposition]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [feature/software-delivery-product-reposition]
+    branches: [master, feature/software-delivery-product-reposition]
 
 permissions:
   contents: read

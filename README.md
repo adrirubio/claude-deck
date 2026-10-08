@@ -137,7 +137,7 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
 Pi integration requires Pi 0.87.1, Node >=22.19.0, and the repository-local Agent Mail extension dependencies. It supports OpenRouter (default model `moonshotai/kimi-k3`), plain launches and exact project-local resume. No global Pi configuration is installed, and Pi tools are not sandboxed by Deck. See [Pi rollout and team migration](docs/deploy/pi-provider-rollout.md) before deployment or replacing existing team sessions.
 
 ```bash
-git clone --branch feature/software-delivery-product-reposition https://github.com/juanrubio/claude-deck.git
+git clone https://github.com/adrirubio/claude-deck.git
 cd claude-deck
 ./scripts/install.sh
 ```

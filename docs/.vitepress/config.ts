@@ -24,7 +24,7 @@ export default defineConfig({
       { text: 'API Reference', link: '/api/' },
       {
         text: 'Product source',
-        link: 'https://github.com/juanrubio/claude-deck/tree/feature/software-delivery-product-reposition',
+        link: 'https://github.com/adrirubio/claude-deck/tree/master',
       },
     ],
 
@@ -106,7 +106,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/juanrubio/claude-deck' },
+      { icon: 'github', link: 'https://github.com/adrirubio/claude-deck' },
     ],
 
     search: {
@@ -114,7 +114,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/juanrubio/claude-deck/edit/feature/software-delivery-product-reposition/docs/:path',
+      pattern: 'https://github.com/adrirubio/claude-deck/edit/master/docs/:path',
       text: 'Edit this page on GitHub',
     },
 

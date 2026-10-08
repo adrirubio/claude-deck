@@ -2,7 +2,7 @@
 
 Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
-The new Overview/Work navigation described here belongs to the product integration build. Earlier packaged releases can retain the configuration-focused home page. Use the matching source when evaluating this build; native prerequisites and installation steps still apply.
+Older packaged releases can show the earlier configuration home page. Use the current source to evaluate the Overview and Work pages. The installation prerequisites still apply.
 
 ## Native Installation
 
@@ -30,7 +30,7 @@ Agent Mail has no Pi install action. Its **Pi Agent Mail** card on the Install t
 1. Clone the repository:
 
 ```bash
-git clone --branch feature/software-delivery-product-reposition https://github.com/juanrubio/claude-deck.git
+git clone https://github.com/adrirubio/claude-deck.git
 cd claude-deck
 ```
 

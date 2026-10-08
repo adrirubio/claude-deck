@@ -10,7 +10,7 @@ hero:
       link: /guide/quick-start
     - theme: alt
       text: View product source
-      link: https://github.com/juanrubio/claude-deck/tree/feature/software-delivery-product-reposition
+      link: https://github.com/adrirubio/claude-deck/tree/master
 features:
   - title: Overview and Work
     details: Inspect mixed-team tracking, waiting reasons and PR context with explicit filters.
