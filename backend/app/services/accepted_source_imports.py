@@ -100,7 +100,8 @@ def verified_import_snapshots(baseline, current, accepted, allowed_paths, paths)
     snapshots = {}
     for path in paths:
         value = file_identity(current, path)
-        if (path in allowed_paths or file_identity(baseline, path) == value
+        if (github_approval_service.path_is_allowed(path, allowed_paths)
+                or file_identity(baseline, path) == value
                 or file_identity(accepted, path) != value):
             raise ValueError("source_import_content_mismatch")
         snapshots[path] = value
