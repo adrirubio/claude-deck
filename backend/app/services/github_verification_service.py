@@ -215,7 +215,10 @@ class GithubVerificationService:
                 "continuation_diff_inconclusive"
             ) from exc
         changed_paths = self._changed_tree_paths(baseline_tree, current_tree)
-        outside_paths = changed_paths - set(revision.allowed_paths)
+        outside_paths = {
+            path for path in changed_paths
+            if not github_approval_service.path_is_allowed(path, revision.allowed_paths)
+        }
         import_conditions = []
         if outside_paths:
             import_conditions = source_import_claim_conditions(item, revision, workspace, scope)
