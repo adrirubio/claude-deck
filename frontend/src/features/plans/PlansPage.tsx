@@ -222,11 +222,11 @@ export function PlansPage() {
                   <Card
                     key={plan.filename}
                     className={CLICKABLE_CARD}
-                    onClick={() => navigate(`/plans/${encodeURIComponent(plan.filename)}`)}
+                    onClick={() => navigate(`/harnesses/${selectedProviderId}/plans/${encodeURIComponent(plan.filename)}`)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        navigate(`/plans/${encodeURIComponent(plan.filename)}`)
+                        navigate(`/harnesses/${selectedProviderId}/plans/${encodeURIComponent(plan.filename)}`)
                       }
                     }}
                     tabIndex={0}

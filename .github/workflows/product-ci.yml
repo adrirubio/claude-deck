@@ -1,0 +1,49 @@
+name: Product CI
+
+on:
+  pull_request:
+    branches: [feature/software-delivery-product-reposition]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [feature/software-delivery-product-reposition]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Product frontend tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  gate:
+    name: Product CI gate
+    if: always()
+    needs: [frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the frontend result
+        env:
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          test "$FRONTEND_RESULT" = success

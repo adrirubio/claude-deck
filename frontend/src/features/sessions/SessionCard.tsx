@@ -17,7 +17,7 @@ export function SessionCard({ session }: Props) {
   const timeAgo = formatDistanceToNow(new Date(session.modified_at), { addSuffix: true })
 
   const handleClick = (e: React.MouseEvent) => {
-    const url = `/sessions/${session.project_folder}/${session.id}`
+    const url = `/harnesses/claude-code/sessions/${encodeURIComponent(session.project_folder)}/${encodeURIComponent(session.id)}`
 
     if (e.ctrlKey || e.metaKey || e.button === 1) {
       // Ctrl+click, Cmd+click, or middle-click: open in new window
@@ -29,12 +29,15 @@ export function SessionCard({ session }: Props) {
 
   const handleOpenInNewWindow = (e: React.MouseEvent) => {
     e.stopPropagation()
-    const url = `/sessions/${session.project_folder}/${session.id}`
+    const url = `/harnesses/claude-code/sessions/${encodeURIComponent(session.project_folder)}/${encodeURIComponent(session.id)}`
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   return (
     <Card
+      role="link"
+      tabIndex={0}
+      onKeyDown={(event) => { if (event.key === 'Enter') navigate(`/harnesses/claude-code/sessions/${encodeURIComponent(session.project_folder)}/${encodeURIComponent(session.id)}`) }}
       className={`${CLICKABLE_CARD} group`}
       onClick={handleClick}
       onAuxClick={handleClick}

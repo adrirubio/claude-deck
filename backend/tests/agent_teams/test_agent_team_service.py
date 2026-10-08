@@ -1,11 +1,14 @@
 """Tests for Agent Team preset service behavior."""
+import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models.database import AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailTeamMember
+from app.database import Base
+from app.models.database import AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, GithubWorkspace, MailAgentSession, MailTeamMember, TeamGithubScope
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -176,6 +179,129 @@ async def test_slot_ui_color_rejects_unknown_palette_value(db, tmp_path):
         )
 
     assert "Unsupported ui_color: magenta" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_leader_cannot_be_disabled_or_deleted_after_explicit_assignment(db, tmp_path):
+    repo = tmp_path / "leader-guard-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Leader mutation guard",
+            slots=[
+                AgentTeamSlotCreate(display_name="Leader", provider="codex-cli", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Worker", provider="codex-cli", repo_path=str(repo)),
+            ],
+        ),
+    )
+    leader = preset.slots[0]
+    await agent_team_service.set_leader(
+        db, preset.id, leader_slot_id=leader.id, expected_leader_slot_id=None,
+        expected_updated_at=preset.updated_at, reason="Assign the test Leader.",
+    )
+
+    with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+        await agent_team_service.update_slot(db, leader.id, AgentTeamSlotUpdate(enabled=False))
+    await db.rollback()
+    with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+        await agent_team_service.delete_slot(db, leader.id)
+        await db.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["disable", "delete"])
+async def test_leader_mutation_rechecks_assignment_after_waiting_for_sqlite_writer(
+    tmp_path, mutation
+):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'leader-mutation-race.db'}",
+        connect_args={"timeout": 5},
+    )
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="Leader race", description="", created_by="test")
+            seed.add(preset)
+            await seed.flush()
+            current = AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="Current",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race",
+            )
+            candidate = AgentTeamSlot(
+                preset_id=preset.id, position=1, display_name="Candidate",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race",
+            )
+            seed.add_all([current, candidate])
+            await seed.flush()
+            preset.leader_slot_id = current.id
+            await seed.commit()
+            preset_id, candidate_id = preset.id, candidate.id
+
+        async with maker() as authority, maker() as mutator:
+            await authority.execute(text("BEGIN IMMEDIATE"))
+            await authority.execute(
+                update(AgentTeamPreset)
+                .where(AgentTeamPreset.id == preset_id)
+                .values(leader_slot_id=candidate_id)
+            )
+            if mutation == "delete":
+                attempt = asyncio.create_task(agent_team_service.delete_slot(mutator, candidate_id))
+            else:
+                attempt = asyncio.create_task(agent_team_service.update_slot(
+                    mutator, candidate_id, AgentTeamSlotUpdate(enabled=False)
+                ))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "guarded mutation must wait for the writer before reading authority"
+            await authority.commit()
+            with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await mutator.rollback()
+
+        async with maker() as verify:
+            fresh_preset = await verify.get(AgentTeamPreset, preset_id)
+            fresh_candidate = await verify.get(AgentTeamSlot, candidate_id)
+            assert fresh_preset.leader_slot_id == candidate_id
+            assert fresh_candidate is not None and fresh_candidate.enabled is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_leader_assignment_rejects_residual_push_capability(db, tmp_path):
+    repo = tmp_path / "push-capability-guard-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Push capability guard",
+            slots=[
+                AgentTeamSlotCreate(display_name="Current", provider="codex-cli", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Next", provider="codex-cli", repo_path=str(repo)),
+            ],
+        ),
+    )
+    scope = TeamGithubScope(
+        preset_id=preset.id, repo_owner="example", repo_name="synthetic",
+        repo_path=str(repo), enabled=False,
+    )
+    db.add(scope)
+    await db.flush()
+    db.add(GithubWorkspace(
+        scope_id=scope.id, path=str(repo / "workspace"),
+        push_token_expires_at=datetime.utcnow() + timedelta(minutes=5),
+    ))
+    await db.commit()
+
+    with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+        await agent_team_service.set_leader(
+            db, preset.id, leader_slot_id=preset.slots[1].id,
+            expected_leader_slot_id=None, expected_updated_at=preset.updated_at,
+            reason="Attempt a guarded assignment.",
+        )
 
 
 @pytest.mark.asyncio
@@ -1283,6 +1409,9 @@ async def test_launch_requires_confirmed_plan_hash_and_passes_team_env(db, tmp_p
             ],
         ),
     )
+    stored_preset = await db.get(AgentTeamPreset, preset.id)
+    stored_preset.leader_slot_id = preset.slots[0].id
+    await db.commit()
     plan = await agent_team_service.plan_launch(db, preset.id)
     assert plan.can_launch is True
     assert plan.items[0].action == "spawn"
@@ -1331,6 +1460,9 @@ async def test_launch_uses_custom_bootstrap_prompt(db, tmp_path, monkeypatch):
             ],
         ),
     )
+    stored_preset = await db.get(AgentTeamPreset, preset.id)
+    stored_preset.leader_slot_id = preset.slots[0].id
+    await db.commit()
     plan = await agent_team_service.plan_launch(db, preset.id)
     calls = []
 
@@ -2250,3 +2382,302 @@ async def test_only_live_bound_pane_is_reused_without_operator_adoption(db, tmp_
         await agent_team_service.launch(
             db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
         )
+
+
+@pytest.mark.asyncio
+async def test_v18_leader_update_races_attempt_and_lease_creation(tmp_path):
+    """V18: a protected Leader update races work and lease creation safely."""
+    from app.models.database import TeamGithubScope
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'v18-leader-creation-race.db'}",
+        connect_args={"timeout": 5},
+    )
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="V18 creation race", description="", created_by="test")
+            seed.add(preset)
+            await seed.flush()
+            slot = AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="Race",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race")
+            seed.add(slot)
+            await seed.flush()
+            scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="race",
+                                    repo_path="/tmp/race")
+            seed.add(scope)
+            await seed.flush()
+            stamp = preset.updated_at
+            await seed.commit()
+            preset_id, slot_id, scope_id = preset.id, slot.id, scope.id
+
+        async with maker() as writer, maker() as updater:
+            await writer.execute(text("BEGIN IMMEDIATE"))
+            attempt = asyncio.create_task(agent_team_service.set_leader(
+                updater, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=stamp,
+                reason="V18 creation race"))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "the Leader update must wait for the writer"
+            # A competing writer creates an active attempt and a workspace lease.
+            await writer.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, "
+                "github_updated_at, issue_type, dispatch_status, attempt_phase, approval_round_count, "
+                "retry_count, active_scope_revision, diagnostic_retry_count, created_at, updated_at) "
+                "VALUES (1, :scope, 1, 'race', 'https://example.invalid/1', CURRENT_TIMESTAMP, 'code', "
+                "'dispatched', 'implementation', 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {"scope": scope_id})
+            await writer.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, "
+                "leased_item_id, lease_token, created_at, updated_at) "
+                "VALUES (1, :scope, '/tmp/race-work', 'worktree', 1, 1, 1, 'race-lease', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {"scope": scope_id})
+            await writer.commit()
+            with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await updater.rollback()
+
+        async with maker() as verify:
+            fresh = await agent_team_service.get_preset(verify, preset_id)
+            assert fresh.leader_slot_id is None
+            # Clear the competing rows for the two-update race.
+            await verify.execute(text("DELETE FROM github_workspaces"))
+            await verify.execute(text("DELETE FROM github_work_items"))
+            await verify.commit()
+
+        async with maker() as first, maker() as second:
+            current = await agent_team_service.get_preset(first, preset_id)
+            shared_stamp = current.updated_at
+            winner = asyncio.create_task(agent_team_service.set_leader(
+                first, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=shared_stamp,
+                reason="V18 winner"))
+            loser = asyncio.create_task(agent_team_service.set_leader(
+                second, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=shared_stamp,
+                reason="V18 loser"))
+            outcomes = await asyncio.wait_for(
+                asyncio.gather(winner, loser, return_exceptions=True), timeout=2)
+            succeeded = [result for result in outcomes if not isinstance(result, Exception)]
+            refused = [result for result in outcomes if isinstance(result, ValueError)]
+            assert len(succeeded) == 1
+            assert len(refused) == 1
+            assert "leader_assignment_changed" in str(refused[0])
+
+        async with maker() as verify:
+            fresh = await agent_team_service.get_preset(verify, preset_id)
+            assert fresh.leader_slot_id == slot_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v17_leader_mutation_races_separate_approval_and_revision_acquisition(tmp_path):
+    """Independent acquisition races against Leader mutation on quiescent work.
+
+    Round one exercises the REAL approval acquisition service inside the writer
+    window. Round two is injected-authority lock-interleaving evidence: the real
+    continuation revision acquisition requires an escalated item with a PR and a
+    live lease binding, which contradicts the quiescent start required by the
+    Leader mutation, so no authority is fabricated for that call. Competing
+    protected Leader updates are proven separately in the second phase of
+    test_v18_leader_update_races_attempt_and_lease_creation.
+
+    Compared reference set, stated precisely: preset authority, slot identity,
+    member and session bindings including pane identity and synthetic capability
+    identity, pane bindings, item attempt identity, workspace lease and owner
+    references, approval identity and links, and revision identity and links.
+    Round one leaves the revision table empty except for the winner delta rule;
+    round two leaves the approval table empty after cleanup. The winner's delta
+    is asserted separately from the unchanged references.
+    """
+    from app.models.database import (
+        AgentPaneBinding,
+        GithubApprovalRequest,
+        GithubAttemptScopeRevision,
+        GithubWorkItem,
+        MailAgentSession,
+        MailTeamMember,
+        TeamGithubScope,
+    )
+    from app.services.github_approval_service import github_approval_service
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'acquisition-race.db'}",
+        connect_args={"timeout": 5},
+    )
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def authority_rows(session):
+        async def rows(sql):
+            return [dict(row) for row in (await session.execute(text(sql))).mappings().all()]
+        return {
+            "presets": await rows("SELECT id, name, autonomy_enabled, leader_slot_id FROM agent_team_presets ORDER BY id"),
+            "slots": await rows("SELECT id, preset_id, position, enabled FROM agent_team_slots ORDER BY id"),
+            "members": await rows("SELECT id, team_preset_id, team_slot_id, participant_kind FROM mail_team_members ORDER BY id"),
+            "sessions": await rows("SELECT id, member_id, team_preset_id, team_slot_id, mailbox_status, "
+                                   "bound_pane_pid, bound_pane_proc_start, capability_token_hash "
+                                   "FROM mail_agent_sessions ORDER BY id"),
+            "pane_bindings": await rows("SELECT pane_pid, pane_proc_start, slot_id, preset_id "
+                                        "FROM agent_pane_bindings ORDER BY pane_pid"),
+            "items": await rows("SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id, "
+                                "approval_round_count, dispatch_nonce FROM github_work_items ORDER BY id"),
+            "workspaces": await rows("SELECT id, scope_id, leased_item_id, lease_token, leased_owner_pid, "
+                                     "leased_owner_proc_start, push_token_expires_at, leased_at, released_at "
+                                     "FROM github_workspaces ORDER BY id"),
+            "approvals": await rows("SELECT id, work_item_id, request_kind, dispatch_nonce, approval_round, "
+                                    "owner_member_id, leader_member_id, request_fingerprint, request_message_id, "
+                                    "scope_revision_id, status FROM github_approval_requests ORDER BY id"),
+            "revisions": await rows("SELECT id, work_item_id, dispatch_nonce, approval_request_id, revision, "
+                                    "owner_slot_id, owner_member_id, phase, expected_workspace_id, "
+                                    "expected_lease_token_hash, status FROM github_attempt_scope_revisions ORDER BY id"),
+        }
+
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="Acquisition race", description="", created_by="test")
+            seed.add(preset)
+            await seed.flush()
+            current = AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="Current",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race")
+            candidate = AgentTeamSlot(
+                preset_id=preset.id, position=1, display_name="Candidate",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race")
+            owner_slot = AgentTeamSlot(
+                preset_id=preset.id, position=2, display_name="Owner",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race")
+            seed.add_all([current, candidate, owner_slot])
+            await seed.flush()
+            scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="race",
+                                    repo_path="/tmp/race")
+            seed.add(scope)
+            await seed.flush()
+            item = GithubWorkItem(
+                scope_id=scope.id, issue_number=1, issue_title="review-stage",
+                issue_url="https://example.invalid/1", github_updated_at=datetime.utcnow(),
+                dispatch_status="ready_for_review", dispatch_nonce="race-nonce",
+                approval_round_count=1, owner_slot_id=owner_slot.id)
+            seed.add(item)
+            await seed.flush()
+            leader_member = MailTeamMember(
+                identity_key="slot:leader-race", repo_id="race", repo_path="/tmp/race", repo_name="race",
+                display_name="Race leader", team_preset_id=preset.id, team_slot_id=current.id)
+            owner_member = MailTeamMember(
+                identity_key="slot:owner-race", repo_id="race", repo_path="/tmp/race", repo_name="race",
+                display_name="Race owner", team_preset_id=preset.id, team_slot_id=owner_slot.id)
+            seed.add_all([leader_member, owner_member])
+            await seed.flush()
+            seed.add_all([
+                MailAgentSession(member_id=leader_member.id, provider="codex-cli", source="mcp",
+                                 session_key="mcp:race-leader", team_preset_id=preset.id,
+                                 team_slot_id=current.id, mailbox_status="connected",
+                                 bound_pane_pid=2001, bound_pane_proc_start="1",
+                                 capability_token_hash="race-cap-leader"),
+                MailAgentSession(member_id=owner_member.id, provider="codex-cli", source="mcp",
+                                 session_key="mcp:race-owner", team_preset_id=preset.id,
+                                 team_slot_id=owner_slot.id, mailbox_status="connected",
+                                 bound_pane_pid=2002, bound_pane_proc_start="1",
+                                 capability_token_hash="race-cap-owner"),
+            ])
+            await seed.flush()
+            seed.add_all([
+                AgentPaneBinding(pane_pid=2001, pane_proc_start="1", slot_id=current.id, preset_id=preset.id),
+                AgentPaneBinding(pane_pid=2002, pane_proc_start="1", slot_id=owner_slot.id, preset_id=preset.id),
+            ])
+            preset.leader_slot_id = current.id
+            stamp = preset.updated_at
+            await seed.commit()
+            preset_id, candidate_id, item_id = preset.id, candidate.id, item.id
+            owner_member_id = owner_member.id
+            owner_slot_id = owner_slot.id
+
+        # Round one: real approval acquisition wins the race.
+        async with maker() as writer, maker() as updater:
+            before = await authority_rows(writer)
+            await writer.execute(text("BEGIN IMMEDIATE"))
+            attempt = asyncio.create_task(agent_team_service.set_leader(
+                updater, preset_id, leader_slot_id=candidate_id,
+                expected_leader_slot_id=current.id, expected_updated_at=stamp,
+                reason="V17 acquisition race"))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "the Leader mutation must wait for the writer"
+            writer_item = await writer.get(GithubWorkItem, item_id, populate_existing=True)
+            _request, created = await github_approval_service.create_initial_request(
+                writer, writer_item, authenticated_owner_member_id=owner_member_id,
+                summary="v17 acquisition race")
+            assert created is True
+            with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await updater.rollback()
+
+            # Full snapshots around the losing operation. The winner's request is
+            # legitimate concurrent work; the loser changed no authority.
+            async with maker() as verify:
+                after = await authority_rows(verify)
+                for key in ("presets", "slots", "members", "sessions", "pane_bindings", "items",
+                            "workspaces", "revisions"):
+                    assert after[key] == before[key], key
+                assert len(after["approvals"]) == len(before["approvals"]) + 1
+                new_requests = [row for row in after["approvals"] if row not in before["approvals"]]
+                assert len(new_requests) == 1
+                winner = new_requests[0]
+                assert winner["work_item_id"] == item_id
+                assert winner["request_kind"] == "initial_plan"
+                assert winner["status"] == "pending"
+                assert winner["dispatch_nonce"] == "race-nonce"
+                assert winner["owner_member_id"] == owner_member_id
+                assert winner["scope_revision_id"] is None
+                await verify.execute(text("DELETE FROM github_approval_requests"))
+                await verify.commit()
+
+        # Round two: injected-authority lock-interleaving evidence for the
+        # revision acquisition path.
+        async with maker() as writer, maker() as updater:
+            before = await authority_rows(writer)
+            await writer.execute(text("BEGIN IMMEDIATE"))
+            attempt = asyncio.create_task(agent_team_service.set_leader(
+                updater, preset_id, leader_slot_id=candidate_id,
+                expected_leader_slot_id=current.id, expected_updated_at=stamp,
+                reason="V17 revision race"))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "the Leader mutation must wait for the writer"
+            await writer.execute(text(
+                "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, "
+                "revision, owner_slot_id, owner_member_id, phase, execution_target, summary, "
+                "allowed_paths, allowed_actions, allowed_commands, prohibited_actions, "
+                "tool_fallbacks, baseline_head_sha, baseline_tree_sha, originating_escalation_reason, "
+                "expected_workspace_id, expected_lease_token_hash, max_failed_heads, "
+                "failed_head_count, status, delivery_attempt_count, created_at) VALUES "
+                "(70, :item, 'race-nonce', 0, :owner_slot, :owner, 'implementation', '/work', 'race', '[]', "
+                "'[]', '[]', '[]', '{}', :head, :tree, 'fixture', 0, 'hash-race', 2, 0, "
+                "'proposed', 0, CURRENT_TIMESTAMP)"
+            ), {"item": item_id, "owner_slot": owner_slot_id, "owner": owner_member_id,
+                "head": "a" * 40, "tree": "b" * 40})
+            await writer.commit()
+            with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await updater.rollback()
+
+            async with maker() as verify:
+                after = await authority_rows(verify)
+                for key in ("presets", "slots", "members", "sessions", "pane_bindings", "items",
+                            "workspaces", "approvals"):
+                    assert after[key] == before[key], key
+                assert len(after["revisions"]) == len(before["revisions"]) + 1
+                injected = [row for row in after["revisions"] if row not in before["revisions"]]
+                assert len(injected) == 1
+                assert injected[0]["id"] == 70
+                assert injected[0]["work_item_id"] == item_id
+                assert injected[0]["status"] == "proposed"
+                assert injected[0]["approval_request_id"] is None
+    finally:
+        await engine.dispose()

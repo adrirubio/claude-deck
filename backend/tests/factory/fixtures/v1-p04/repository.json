@@ -1,0 +1,160 @@
+{
+  "fresh_overlap": {
+    "endpoint": "/api/v1/factory/repositories/1",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "repository": {
+        "configured_enabled": true,
+        "github": {
+          "name": "shared",
+          "owner": "fixture"
+        },
+        "intake": {
+          "reason_code": "intake_eligible",
+          "state": "eligible",
+          "summary": "Configured intake is available; work eligibility still applies."
+        },
+        "overlap": {
+          "other_scope_ids": [
+            2
+          ],
+          "state": "warning"
+        },
+        "poll": {
+          "freshness": "fresh",
+          "interval_seconds": 60,
+          "last_polled_at": "2026-09-30T12:00:00Z"
+        },
+        "scope_enabled": true,
+        "scope_id": 1,
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "team_automation_enabled": true
+      },
+      "schema_version": 1
+    }
+  },
+  "never_polled_overlap": {
+    "endpoint": "/api/v1/factory/repositories/2",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "repository": {
+        "configured_enabled": true,
+        "github": {
+          "name": "shared",
+          "owner": "fixture"
+        },
+        "intake": {
+          "reason_code": "intake_eligible",
+          "state": "eligible",
+          "summary": "Configured intake is available; work eligibility still applies."
+        },
+        "overlap": {
+          "other_scope_ids": [
+            1
+          ],
+          "state": "warning"
+        },
+        "poll": {
+          "freshness": "never_polled",
+          "interval_seconds": 60,
+          "last_polled_at": null
+        },
+        "scope_enabled": true,
+        "scope_id": 2,
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "team_automation_enabled": true
+      },
+      "schema_version": 1
+    }
+  },
+  "paused": {
+    "endpoint": "/api/v1/factory/repositories/3",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "repository": {
+        "configured_enabled": false,
+        "github": {
+          "name": "paused",
+          "owner": "fixture"
+        },
+        "intake": {
+          "reason_code": "scope_paused",
+          "state": "blocked",
+          "summary": "Repository intake is paused."
+        },
+        "overlap": {
+          "other_scope_ids": [],
+          "state": "none"
+        },
+        "poll": {
+          "freshness": "suspended",
+          "interval_seconds": 60,
+          "last_polled_at": null
+        },
+        "scope_enabled": false,
+        "scope_id": 3,
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "team_automation_enabled": true
+      },
+      "schema_version": 1
+    }
+  },
+  "stale": {
+    "endpoint": "/api/v1/factory/repositories/1",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "repository": {
+        "configured_enabled": true,
+        "github": {
+          "name": "shared",
+          "owner": "fixture"
+        },
+        "intake": {
+          "reason_code": "intake_eligible",
+          "state": "eligible",
+          "summary": "Configured intake is available; work eligibility still applies."
+        },
+        "overlap": {
+          "other_scope_ids": [
+            2
+          ],
+          "state": "warning"
+        },
+        "poll": {
+          "freshness": "stale",
+          "interval_seconds": 60,
+          "last_polled_at": "2026-09-30T11:57:59Z"
+        },
+        "scope_enabled": true,
+        "scope_id": 1,
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "team_automation_enabled": true
+      },
+      "schema_version": 1
+    }
+  }
+}

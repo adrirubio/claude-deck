@@ -1,0 +1,739 @@
+// Isolated P01/P03 fixture UI checks. Run only through product-heavy.
+import fs from "node:fs/promises";
+import http from "node:http";
+import path from "node:path";
+import { spawn, execFileSync } from "node:child_process";
+import assert from "node:assert/strict";
+const evidence = process.env.P02_EVIDENCE_DIR;
+assert(evidence, "P02_EVIDENCE_DIR is required");
+const beforeCapture = process.env.P42_BEFORE_DIR
+  ? JSON.parse(await fs.readFile(path.join(process.env.P42_BEFORE_DIR, "browser.json"), "utf8"))
+  : null;
+await fs.mkdir(evidence, { recursive: true });
+const fixtures = async (name) =>
+  JSON.parse(await fs.readFile(`tests/fixtures/factory/v1/${name}.json`));
+const [overview, work, detail, repos, repo] = await Promise.all(
+  ["overview", "work-items", "work-item", "repositories", "repository"].map(
+    fixtures,
+  ),
+);
+const operationFixtures = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/catalog.json"));
+const operationManifest = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/manifest.json"));
+if (beforeCapture) {
+  assert.equal(beforeCapture.fixture_source, "eb31749bcae8f456d6df6709273afd5921d094ad");
+  assert.equal(beforeCapture.manifest_sha256, "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706");
+  assert.equal(beforeCapture.operations_catalog_sha256, operationManifest.catalog_sha256);
+  assert.equal(beforeCapture.operations_manifest_sha256, "0ac33401f6a36ce92c1264884fec87d5999a105f8fb4520f74ca18ea4b1d3173");
+}
+const providers = [
+  "claude-code",
+  "codex-cli",
+  "copilot-cli",
+  "opencode-cli",
+  "pi-cli",
+].map((id) => ({
+  id,
+  display_name: id,
+  installed: true,
+  version: "fixture",
+  capabilities: {
+    config: true,
+    plugins: true,
+    usage: true,
+    plans: true,
+    sessions: true,
+  },
+  capability_matrix: {
+    ...operationFixtures.providers[id].native_capabilities,
+    config: { state: "write_capable" },
+    plugins: { state: "write_capable" },
+    usage: { state: "supported" },
+  },
+  config_paths: {},
+}));
+const stamp = "2026-09-30T12:00:00Z";
+const preset = {
+  id: 1,
+  name: "Fixture team 1",
+  description: "Fixture roster",
+  created_at: stamp,
+  updated_at: stamp,
+  autonomy_enabled: false,
+  slots: [1, 2].map((id) => ({
+    id,
+    preset_id: 1,
+    display_name: id === 1 ? "Leader" : "Owner",
+    provider: "codex-cli",
+    repo_path: "/fixture/product",
+    role: id === 1 ? "Leader" : "Implementer",
+    charter: "Fixture",
+    launch_mode: "plain",
+    launch_options: {},
+    enabled: true,
+    position: id - 1,
+    created_at: stamp,
+    updated_at: stamp,
+  })),
+};
+const requests = [],
+  unknown = [];
+function respond(req) {
+  const url = new URL(req.url, "http://fixture.test"),
+    key = url.pathname.replace("/api/v1/", "");
+  requests.push({
+    path: key,
+    method: req.method,
+    query: Object.fromEntries(url.searchParams),
+    page: new URL(req.headers.referer ?? "/", "http://fixture.test").pathname + new URL(req.headers.referer ?? "/", "http://fixture.test").search,
+  });
+  assert.equal(req.method, "GET", "Fixture browser must never mutate");
+  if (key === "factory/overview") return overview.normal.response;
+  if (key === "factory/work-items") {
+    const cat = url.searchParams.get("category");
+    return work[
+      cat && cat !== "all"
+        ? cat
+        : url.searchParams.has("cursor")
+          ? "next_page"
+          : "first_page"
+    ].response;
+  }
+  if (key === "factory/work-items/6") return detail.operator_stop_retry_eligible.response;
+  if (key === "factory/work-items/2") return detail.verified_offline_owner.response;
+  if (key.startsWith("factory/work-items/")) return detail.completed.response;
+  if (key === "factory/repositories") return repos.normal.response;
+  if (key.startsWith("factory/repositories/"))
+    return repo.fresh_overlap.response;
+  if (key === "codex-config/files") return { files: [], count: 0 };
+  if (key === "codex-config")
+    return {
+      provider: "codex-cli",
+      path: "/fixture/config.toml",
+      exists: true,
+      parse_error: null,
+      summary: { projects: {}, profiles: {}, features: {} },
+      profile_resolution: null,
+    };
+  if (key === "providers/codex-cli/doctor")
+    return {
+      provider: "codex-cli",
+      provider_display_name: "Codex",
+      exit_code: 0,
+      report: { overallStatus: "ok", checks: {} },
+      parse_error: null,
+      stderr: "",
+    };
+  if (key === "providers/codex-cli/features")
+    return {
+      provider: "codex-cli",
+      features: [],
+      exit_code: 0,
+      stderr: "",
+      raw_stdout: "",
+    };
+  if (key === "providers/codex-cli/mcp")
+    return {
+      provider: "codex-cli",
+      servers: {},
+      exit_code: 0,
+      parse_error: null,
+      stderr: "",
+      raw_stdout: "",
+    };
+  if (key === "providers/codex-cli/plugins")
+    return {
+      provider: "codex-cli",
+      plugins: [],
+      exit_code: 0,
+      mutation_capabilities: Object.fromEntries(
+        ["install", "remove", "enable", "disable"].map((k) => [
+          k,
+          { state: "unsupported", reason: "Fixture read inventory" },
+        ]),
+      ),
+      stderr: "",
+      raw_stdout: "",
+    };
+  if (/^providers\/[^/]+\/operations$/.test(key)) {
+    const scenario = new URL(req.headers.referer ?? "/", "http://fixture.test").searchParams.get("fixture_catalog");
+    if (scenario === "catalog_error") return operationFixtures.errors.catalog_unavailable;
+    return operationFixtures.scenarios[scenario] ?? operationFixtures.providers[key.split("/")[1]];
+  }
+  if (key === "providers") return { providers, count: 5 };
+  if (key === "status")
+    return {
+      active_sessions: 0,
+      providers: Object.fromEntries(providers.map((p) => [p.id, p])),
+      instance: {
+        name: "Isolated P01 fixture",
+        hostname: "fixture",
+        accent: "blue",
+      },
+      environment: {},
+    };
+  if (key === "projects") return { projects: [], count: 0 };
+  if (key === "agent-teams/presets") return { presets: [preset] };
+  // Synthetic unknown/empty observations for existing Teams read surfaces.
+  if (/^agent-teams\/presets\/\d+\/activity$/.test(key)) return {
+    preset_id: 1, checked_at: stamp, valid_until: new Date(Date.now() + 60_000).toISOString(),
+    slots: [1, 2].map(slot_id => ({slot_id, state: "unknown", reason: "Synthetic fixture has no live activity evidence.", observed_at: null})),
+  };
+  if (/^agent-teams\/presets\/\d+\/human-actions$/.test(key)) return {
+    preset_id: 1, observation_expires_at: new Date(Date.now() + 60_000).toISOString(), coverage_complete: false, actions: [],
+  };
+  if (/agent-teams\/presets\/\d+\/github-scopes/.test(key))
+    return { scopes: [] };
+  if (/agent-teams\/presets\/\d+\/github-work-items/.test(key))
+    return { items: [] };
+  if (key === "agent-teams/github-recovery-gate/active")
+    return { active: false };
+  if (key.endsWith("/launch-options"))
+    return {
+      provider: key.split("/")[1],
+      supported_launch_modes: ["plain"],
+      supported_launch_options: [],
+      platform_options: [],
+      model_options: [],
+      reasoning_effort_options: [],
+      context_tier_options: [],
+      profile_options: [],
+      warnings: [],
+    };
+  if (key === "agent-bridge/sessions") return { sessions: [], count: 0 };
+  unknown.push(key);
+  return null;
+}
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.url.startsWith("/api/v1/")) {
+      const data = respond(req);
+      res.writeHead(data?.status === 503 ? 503 : data ? 200 : 404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(data ?? { detail: "No fixture for endpoint" }));
+      return;
+    }
+    let file = path.join(
+      process.cwd(),
+      "dist",
+      decodeURIComponent(req.url.split("?")[0]),
+    );
+    if (!file.startsWith(path.join(process.cwd(), "dist")))
+      throw Error("Invalid asset path");
+    try {
+      const stat = await fs.stat(file);
+      if (!stat.isFile()) file = path.join(process.cwd(), "dist/index.html");
+    } catch {
+      file = path.join(process.cwd(), "dist/index.html");
+    }
+    res.setHeader(
+      "Content-Type",
+      file.endsWith(".js")
+        ? "application/javascript"
+        : file.endsWith(".css")
+          ? "text/css"
+          : file.endsWith(".png")
+            ? "image/png"
+            : "text/html",
+    );
+    res.end(await fs.readFile(file));
+  } catch (error) {
+    res.writeHead(500);
+    res.end(String(error));
+  }
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const port = server.address().port;
+const profile = await fs.mkdtemp(path.join(evidence, "chrome-profile-"));
+const chrome = spawn(
+  "/usr/bin/google-chrome",
+  [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${profile}`,
+    "--remote-debugging-port=0",
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let ws;
+try {
+  let debugPort;
+  for (let i = 0; i < 100; i++) {
+    try {
+      debugPort = Number(
+        (
+          await fs.readFile(path.join(profile, "DevToolsActivePort"), "utf8")
+        ).split("\n")[0],
+      );
+      break;
+    } catch {
+      await sleep(100);
+    }
+  }
+  assert(debugPort, "Chrome debug endpoint unavailable");
+  const targets = await (
+    await fetch(`http://127.0.0.1:${debugPort}/json/list`)
+  ).json();
+  ws = new WebSocket(
+    targets.find((t) => t.type === "page").webSocketDebuggerUrl,
+  );
+  await new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = reject;
+  });
+  let seq = 0;
+  const pending = new Map(),
+    errors = [];
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.id) {
+      const p = pending.get(data.id);
+      pending.delete(data.id);
+      if (data.error) p.reject(Error(JSON.stringify(data.error)));
+      else p.resolve(data.result);
+    } else if (data.method === "Runtime.exceptionThrown")
+      errors.push(data.params.exceptionDetails);
+  };
+  const send = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = ++seq;
+      pending.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+  const evaluate = async (expression) =>
+    (
+      await send("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      })
+    ).result.value;
+  await send("Page.enable");
+  await send("Runtime.enable");
+  const observations = [],
+    keyboard = [],
+    navigation = [],
+    retryConfirmations = [],
+    navigationPolish = [],
+    sidebarFocusContrast = [],
+    polishShots = [];
+  const tab = async (backwards = false) => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 });
+  };
+  const focusByTab = async (selector, backwards = false, label = null) => {
+    for (let i = 0; i < 90; i++) {
+      if (await evaluate("document.activeElement?.matches(" + JSON.stringify(selector) + ")" + (label ? " && document.activeElement.textContent.trim()===" + JSON.stringify(label) : ""))) break;
+      await tab(backwards);
+    }
+    const focus = await evaluate("(() => { const e=document.activeElement,s=getComputedStyle(e),r=e.getBoundingClientRect(); return {matches:e.matches(" + JSON.stringify(selector) + "),visible:e.matches(':focus-visible'),shadow:s.boxShadow,outline:s.outlineStyle,height:r.height,href:e.getAttribute('href'),name:e.getAttribute('aria-label')||e.textContent.trim()}; })()");
+    assert(focus.matches && focus.visible, "Natural keyboard focus did not reach " + selector);
+    if (label) assert.equal(focus.name, label);
+    assert(focus.shadow !== "none" || focus.outline !== "none", "Focus indication missing");
+    assert(focus.height >= 44, "Destination target height below 44px");
+    return focus;
+  };
+  const supplementalShot = async (name, theme, width) => {
+    const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    const filename = name + "-" + theme + "-" + width + ".png";
+    await fs.writeFile(path.join(evidence, filename), Buffer.from(shot.data, "base64"));
+    polishShots.push({ name, theme, width, filename, comparison: "supplemental_after_only" });
+  };
+  const checkSidebarFocus = async (selector, state, theme, width, hovered = false) => {
+    await focusByTab(selector, true);
+    const point = await evaluate("(() => {const r=document.activeElement.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()");
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: hovered ? point.x : width - 1, y: hovered ? point.y : 1 });
+    await sleep(200); // Let the existing color transition reach its rendered state.
+    const focused = await evaluate(`(() => {
+      const e=document.activeElement,s=getComputedStyle(e),r=e.getBoundingClientRect();
+      const rgb=value=>value.match(/[\\d.]+/g).slice(0,3).map(Number);
+      let background=e;
+      while(background.parentElement && getComputedStyle(background).backgroundColor==='rgba(0, 0, 0, 0)') background=background.parentElement;
+      const bg=getComputedStyle(background).backgroundColor;
+      const ringShadow=s.boxShadow.split(/,(?![^(]*\\))/).find(shadow=>shadow.includes('inset') && shadow.includes('0px 0px 0px 2px'));
+      const ring=ringShadow?.match(/rgba?\\([^)]*\\)/)?.[0];
+      const luminance=color=>rgb(color).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0);
+      const a=ring?luminance(ring):0,b=luminance(bg);
+      return {visible:e.matches(':focus-visible'),hovered:e.matches(':hover'),shadow:s.boxShadow,ringColor:ring,backgroundColor:bg,contrast: ring?(Math.max(a,b)+.05)/(Math.min(a,b)+.05):0,name:e.getAttribute('aria-label'),selected:e.getAttribute('aria-current'),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
+    })()`);
+    assert(focused.visible && focused.hovered === hovered, state + " keyboard/hover state missing");
+    assert(focused.shadow.includes("inset") && focused.shadow.includes("0px 0px 0px 2px"), state + " missing rendered 2px inset focus ring");
+    assert(focused.contrast >= 3, state + " focus ring contrast below 3:1: " + JSON.stringify(focused));
+    assert(focused.rect.x >= 0 && focused.rect.y >= 0 && focused.rect.x + focused.rect.width <= width && focused.rect.y + focused.rect.height <= 900, state + " focus indicator clipped");
+    await supplementalShot("focus-contrast-" + state, theme, width);
+    await tab();
+    const unfocused = await evaluate("(() => {const e=document.querySelector(" + JSON.stringify(selector) + "),s=getComputedStyle(e);return {focused:e.matches(':focus-visible'),hovered:e.matches(':hover'),shadow:s.boxShadow,backgroundColor:s.backgroundColor};})()");
+    assert(!unfocused.focused && unfocused.hovered === hovered && unfocused.shadow !== focused.shadow, state + " focused/unfocused rendered distinction missing");
+    await supplementalShot("focus-contrast-" + state + "-unfocused", theme, width);
+    await tab(true);
+    assert(await evaluate("document.activeElement.matches(" + JSON.stringify(selector) + ")"), state + " ShiftTab did not restore focus");
+    sidebarFocusContrast.push({ theme, width, state, focused, unfocused, naturalTabShiftTab: true });
+  };
+  for (const theme of ["light", "dark"]) {
+    const {identifier} = await send("Page.addScriptToEvaluateOnNewDocument", {source: `localStorage.setItem("theme", "${theme}")`});
+  for (const width of [360, 768, 1280]) {
+    await send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    for (const [name, route, text] of [
+      ["overview", "/", "132 matching work"],
+      ["work", "/work", "Work"],
+      ["detail", "/work/9", "delivery and human review are unconfirmed"],
+      ["offline-detail", "/work/2", "owner session offline"],
+      ["retry-confirmation", "/work/6", "Fixture issue 6"],
+      ["repository", "/repositories/1", "Same-label overlap"],
+      ["harnesses", "/harnesses", "Harnesses"],
+      ["harness-detail", "/harnesses/codex-cli", "Harnesses · Codex"],
+      ["native-codex", "/harnesses/codex-cli/config", "Codex Config"],
+      ["catalog-error", "/harnesses/codex-cli/config?fixture_catalog=catalog_error", "Native page unavailable"],
+      ["adapter-mismatch", "/harnesses/codex-cli/config?fixture_catalog=adapter_mismatch", "Native page unavailable"],
+      ["read-only-config", "/harnesses/codex-cli/config?fixture_catalog=read_only_config", "Native settings are read-only"],
+      ["unknown-config", "/harnesses/codex-cli/config?fixture_catalog=unknown_config", "Native page unavailable"],
+      ["legacy-mismatch", "/config?fixture_catalog=adapter_mismatch", "Native page unavailable"],
+      [
+        "unsupported",
+        "/harnesses/opencode-cli/config",
+        "Native page unavailable",
+      ],
+      [
+        "launch",
+        "/teams/1?slot_id=1&review_launch=1",
+        "Review selected slot launch",
+      ],
+    ]) {
+      if (name === "legacy-mismatch") await evaluate('localStorage.setItem("claude-deck:selected-provider", "codex-cli")');
+      await send("Page.navigate", { url: `http://127.0.0.1:${port}${route}` });
+      for (let i = 0; i < 100; i++) {
+        if (
+          await evaluate(
+            `document.body.innerText.includes(${JSON.stringify(text)})`,
+          )
+        )
+          break;
+        await sleep(50);
+      }
+      assert(
+        await evaluate(
+          `document.body.innerText.includes(${JSON.stringify(text)})`,
+        ),
+        `${name} did not render`,
+      );
+      await sleep(100);
+      if (["catalog-error", "adapter-mismatch", "read-only-config", "unknown-config", "legacy-mismatch"].includes(name)) {
+        const pageRequests = requests.filter(r => r.page === route);
+        assert(pageRequests.some(r => r.path === "providers/codex-cli/operations"), `${name} did not read required catalog`);
+        assert(!pageRequests.some(r => /^(codex-config|config|mcp|plugins)(\/|$)|^providers\/codex-cli\/(doctor|features|mcp|plugins)/.test(r.path)), `${name} leaked native API calls`);
+      }
+      if (name === "harnesses") {
+        for (let i=0; i<100 && !(await evaluate('document.querySelectorAll("dl").length === 5 && [...document.querySelectorAll("dd")].filter(x => x.textContent === "Configured for launch").length === 5')); i++) await sleep(50);
+        assert(await evaluate('[...document.querySelectorAll("dd")].filter(x => x.textContent === "Configured for launch").length === 5'), "Harness cards lost separate configuration readiness");
+        assert(await evaluate('[...document.querySelectorAll("dd")].filter(x => x.textContent.includes("Credentials not checked")).length === 5'), "Harness cards claimed credentials");
+      }
+      if (name === "retry-confirmation") {
+        // Synthetic cached credential; confirmation/cancellation must remain GET-only.
+        await evaluate(`sessionStorage.setItem("claude-deck.agent-teams.operator-token", "fixture-only");
+          [...document.querySelectorAll("button")].find(b=>b.textContent==="Retry issue").click()`);
+        for (let i = 0; i < 20; i++) {
+          if (await evaluate('Boolean(document.querySelector("[role=alertdialog]"))')) break;
+          await sleep(50);
+        }
+        assert(await evaluate('document.querySelector("[role=alertdialog]")?.textContent.includes("discard prior PR, handoff, and attempt markers")'), "Cached retry skipped confirmation");
+        assert(!(await evaluate('Boolean(document.querySelector("input[type=password]"))')), "Cached retry unexpectedly prompted for credentials");
+      }
+      const layout = await evaluate(
+        '({width:innerWidth,bodyWidth:document.documentElement.scrollWidth,mainWidth:document.querySelector("main").clientWidth,mainScrollWidth:document.querySelector("main").scrollWidth,heading:document.querySelector("main h2")?.textContent})',
+      );
+      assert(
+        layout.bodyWidth <= width,
+        `${name} body overflow at ${width}: ${layout.bodyWidth}`,
+      );
+      const shot = await send("Page.captureScreenshot", {
+        format: "png",
+        captureBeyondViewport: false,
+      });
+      await fs.writeFile(
+        path.join(evidence, `${name}-${theme}-${width}.png`),
+        Buffer.from(shot.data, "base64"),
+      );
+      const paired = beforeCapture?.observations.find(o => o.theme === theme && o.name === name && o.width === width);
+      if (paired && ["work", "detail", "harnesses"].includes(name)) {
+        assert(layout.mainScrollWidth <= Math.max(paired.mainScrollWidth, layout.mainWidth), name + " added main overflow");
+      }
+      observations.push({ theme, name, route, ...layout, comparison: paired ? "paired_before_after" : "supplemental_or_unpaired", before_layout: paired ?? null });
+      if (name === "harnesses") {
+        const primary = await focusByTab('a[href="/harnesses/claude-code/config"]');
+        await tab(true);
+        const previous = await evaluate("document.activeElement?.getAttribute('href')");
+        await tab();
+        assert.equal(await evaluate("document.activeElement?.getAttribute('href')"), primary.href);
+        assert.notEqual(previous, primary.href);
+        await supplementalShot("harnesses-primary-focus", theme, width);
+        const sidebar = await focusByTab('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', true);
+        assert.equal(await evaluate("document.activeElement.getAttribute('aria-current')"), "page");
+        await supplementalShot("sidebar-focus", theme, width);
+        await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', "expanded-selected", theme, width);
+        await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Work"]', "expanded-inactive-hover", theme, width, true);
+        if (width >= 768) {
+          await checkSidebarFocus('button[aria-label="Collapse sidebar"]', "expanded-toggle-hover", theme, width, true);
+          await focusByTab('button[aria-label="Collapse sidebar"]');
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))')); i++) await sleep(50);
+          assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))'));
+          assert.equal(await evaluate('document.querySelectorAll(\'nav[aria-label="Main navigation"] a[aria-label]\').length'), 8);
+          await supplementalShot("sidebar-collapsed", theme, width);
+          await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', "collapsed-selected", theme, width);
+          await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Work"]', "collapsed-inactive-hover", theme, width, true);
+          await checkSidebarFocus('button[aria-label="Expand sidebar"]', "collapsed-toggle-hover", theme, width, true);
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))')); i++) await sleep(50);
+          assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))'));
+        }
+        navigationPolish.push({ theme, width, case: "harness destination and sidebar natural focus", primary, sidebar, shiftTabReturns: true });
+      }
+      if (name === "detail" || name === "offline-detail") {
+        const primary = await focusByTab('nav[aria-label="Work context"] a[href^="/agent-bridge?"]');
+        const hierarchy = await evaluate("(() => {const nav=document.querySelector('nav[aria-label=\"Work context\"]'),links=[...nav.querySelectorAll('a')];return links.map(a=>({name:a.textContent.trim(),href:a.getAttribute('href'),border:getComputedStyle(a).borderTopWidth,tag:a.tagName,role:a.getAttribute('role')}));})()");
+        for (const label of ["Team", "Repository scope", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
+        assert(hierarchy.every(a => a.tag === "A" && a.role !== "button"));
+        const sessionUrl = new URL(primary.href, "http://fixture.test");
+        assert.equal(sessionUrl.searchParams.get("context"), "readonly");
+        if (name === "offline-detail") assert(!sessionUrl.searchParams.has("member_id") && !sessionUrl.searchParams.has("session_id"));
+        await supplementalShot(name + "-context-focus", theme, width);
+        navigationPolish.push({ theme, width, case: name + " destination/reference hierarchy", primary, hierarchy });
+      }
+      if (name === "work") {
+        const primary = await focusByTab('a[href^="/work/"]', false, "Open details");
+        await supplementalShot("work-primary-focus", theme, width);
+        const currentUrl = await evaluate("location.href");
+        const point = await evaluate("(() => {const r=document.activeElement.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()");
+        const opened = [];
+        for (const click of [{ button: "left", buttons: 1, modifiers: 2, kind: "ctrl" }, { button: "middle", buttons: 4, modifiers: 0, kind: "middle" }]) {
+          const oldTargets = new Set((await send("Target.getTargets")).targetInfos.map(t => t.targetId));
+          for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, ...point, button: click.button, buttons: type === "mousePressed" ? click.buttons : 0, modifiers: click.modifiers, clickCount: 1 });
+          let target;
+          for (let i = 0; i < 50; i++) {
+            target = (await send("Target.getTargets")).targetInfos.find(t => t.type === "page" && !oldTargets.has(t.targetId) && t.url === new URL(primary.href, currentUrl).href);
+            if (target) break;
+            await sleep(50);
+          }
+          assert(target, click.kind + " click did not open its original destination in a new tab");
+          const { sessionId } = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+          // Observe child-tab runtime events on the same owned CDP connection.
+          const childId = ++seq;
+          await new Promise((resolve, reject) => { pending.set(childId, { resolve, reject }); ws.send(JSON.stringify({ id: childId, sessionId, method: "Runtime.enable" })); });
+          await sleep(100);
+          assert.equal(await evaluate("location.href"), currentUrl, "Modified click navigated the source tab");
+          opened.push({ kind: click.kind, href: primary.href, target_url: target.url, source_unchanged: true });
+          await send("Target.closeTarget", { targetId: target.targetId });
+        }
+        navigationPolish.push({ theme, width, case: "Open details ctrl/middle new-tab semantics", primary, opened });
+      }
+      if (name === "retry-confirmation") {
+        await evaluate('[...document.querySelectorAll("[role=alertdialog] button")].find(b=>b.textContent==="Cancel").click()');
+        await sleep(100);
+        assert(!(await evaluate('Boolean(document.querySelector("[role=alertdialog]"))')), "Retry cancellation left confirmation open");
+        assert.equal(requests.filter((r) => r.method !== "GET").length, 0);
+        retryConfirmations.push({ theme, width, cached_credential: true, cancelled: true, mutations: 0 });
+        await evaluate('sessionStorage.removeItem("claude-deck.agent-teams.operator-token")');
+      }
+      if (name === "work") {
+        await evaluate(
+          '[...document.querySelectorAll("button")].find(b=>b.textContent==="Load more").click()',
+        );
+        for (let i = 0; i < 100; i++) {
+          if (
+            await evaluate('document.querySelectorAll("tbody tr").length===4')
+          )
+            break;
+          await sleep(50);
+        }
+        const before = await evaluate(`(() => {
+          const main=document.querySelector("main"),table=document.querySelector("[data-work-table]");
+          const link=[...document.querySelectorAll("a")].filter(a=>a.textContent==="Open details").at(-1);
+          link.focus({preventScroll:true});main.scrollTop=200;table.scrollLeft=180;
+          return {top:main.scrollTop,left:table.scrollLeft,href:link.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length};
+        })()`);
+        const reads = requests.filter(
+          (r) => r.path === "factory/work-items",
+        ).length;
+        await evaluate(
+          '[...document.querySelectorAll("a")].filter(a=>a.textContent==="Open details").at(-1).click()',
+        );
+        for (let i = 0; i < 100; i++) {
+          if (
+            await evaluate(
+              'document.body.innerText.includes("delivery and human review are unconfirmed")',
+            )
+          )
+            break;
+          await sleep(50);
+        }
+        await evaluate(
+          'document.querySelector("main").scrollTop=0;history.back()',
+        );
+        for (let i = 0; i < 100; i++) {
+          if (
+            await evaluate(
+              'document.body.innerText.includes("Live updates paused")',
+            )
+          )
+            break;
+          await sleep(50);
+        }
+        const after = await evaluate(
+          '({top:document.querySelector("main").scrollTop,left:document.querySelector("[data-work-table]")?.scrollLeft,href:document.activeElement?.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length,paused:document.body.innerText.includes("Live updates paused")})',
+        );
+        assert.equal(after.rows, before.rows);
+        assert.equal(after.rows, 4);
+        assert.equal(after.paused, true);
+        assert.equal(after.top, before.top);
+        assert.equal(after.left, before.left);
+        assert.equal(after.href, before.href);
+        assert.equal(
+          requests.filter((r) => r.path === "factory/work-items").length,
+          reads,
+        );
+        navigation.push({ width, before, after, extra_first_page_reads: 0 });
+        const returned = await send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: false,
+        });
+        await fs.writeFile(
+          path.join(evidence, `work-return-${theme}-${width}.png`),
+          Buffer.from(returned.data, "base64"),
+        );
+      }
+      if (name === "launch") {
+        assert(
+          !(await evaluate(
+            'Boolean(document.querySelector("input[type=password]"))',
+          )),
+          "Navigation prompted or launched automatically",
+        );
+        await evaluate(
+          '[...document.querySelectorAll("button")].find(b=>b.textContent.includes("Review current authenticated")).focus()',
+        );
+        await send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          text: "\r",
+          unmodifiedText: "\r",
+          key: "Enter",
+          code: "Enter",
+          windowsVirtualKeyCode: 13,
+        });
+        await send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "Enter",
+          code: "Enter",
+          windowsVirtualKeyCode: 13,
+        });
+        for (let i = 0; i < 20; i++) {
+          if (
+            await evaluate(
+              'Boolean(document.querySelector("input[type=password]"))',
+            )
+          )
+            break;
+          await sleep(50);
+        }
+        const prompt = await evaluate(
+          '({prompt:Boolean(document.querySelector("input[type=password]")),active:document.activeElement?.textContent,dialogs:[...document.querySelectorAll("[role=dialog]")].map(d=>d.textContent)})',
+        );
+        assert(
+          prompt.prompt,
+          `Keyboard launch review did not request operator authorization: ${JSON.stringify(prompt)}`,
+        );
+        keyboard.push({
+          theme, width,
+          case: "offline launch review via Enter",
+          token_prompt: true,
+          launch: false,
+        });
+      }
+      if (name === "native-codex") {
+        assert(
+          !(await evaluate(
+            '[...document.querySelectorAll("[role=tab]")].some(b=>b.textContent.includes("Scope"))',
+          )),
+          "Codex exposed Claude scope resolver",
+        );
+        assert(!requests.some((r) => r.path === "config/resolved"));
+      }
+    }
+  }
+    await send("Page.removeScriptToEvaluateOnNewDocument", {identifier});
+  }
+  assert.equal(unknown.length, 0, "Unaccounted fixture API requests");
+  assert.equal(errors.length, 0, "Browser runtime exceptions");
+  assert.equal(requests.filter((r) => r.method !== "GET").length, 0);
+  assert(
+    !requests.some((r) =>
+      /native_surfaces|inbox|ack|claim/.test(r.path),
+    ),
+  );
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  await fs.writeFile(
+    path.join(evidence, "browser.json"),
+    JSON.stringify(
+      {
+        head,
+        fixture_source: "eb31749bcae8f456d6df6709273afd5921d094ad",
+        fixture_review: "59c8cc9855e1a98f7d28e16abef88171c7da69ca",
+        manifest_sha256:
+          "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
+        operations_source_accepted: "66cd16329d5a01e9d96694513bd8e1544843fbf7",
+        operations_schema_version: operationFixtures.schema_version,
+        operations_catalog_sha256: operationManifest.catalog_sha256,
+        operations_manifest_sha256: "0ac33401f6a36ce92c1264884fec87d5999a105f8fb4520f74ca18ea4b1d3173",
+        navigation_before_head: beforeCapture?.head ?? null,
+        navigation_before_fixture_source: beforeCapture?.fixture_source ?? null,
+        navigationPolish,
+        sidebarFocusContrast,
+        supplemental_after_only: polishShots,
+        observations,
+        keyboard,
+        navigation,
+        retryConfirmations,
+        requests,
+        unknown,
+        errors,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(
+    JSON.stringify({
+      head,
+      screenshots: observations.length + navigation.length + polishShots.length,
+      routeReturns: navigation.length,
+      unknown,
+      errors: errors.length,
+    }),
+  );
+} finally {
+  ws?.close();
+  // Register before signalling; an already-exited process must not hang cleanup.
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    const exited = new Promise((resolve) => chrome.once("exit", resolve));
+    chrome.kill();
+    await exited;
+  }
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  // Chrome helpers can briefly finish writes after the parent exits.
+  await fs.rm(profile, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
+}

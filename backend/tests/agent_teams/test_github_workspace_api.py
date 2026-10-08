@@ -224,6 +224,8 @@ async def _continuation_proposal_context(db, tmp_path):
     scope.github_auth_mode = "ambient"
     leader_slot = await _slot(db, preset, 0)
     owner_slot = await _slot(db, preset, 1)
+    leader_slot.role = "Leader"
+    preset.leader_slot_id = leader_slot.id
     leader = MailTeamMember(
         identity_key=f"leader:{leader_slot.id}",
         repo_id="r",
@@ -1518,6 +1520,7 @@ async def test_owner_claims_persisted_continuation_with_no_store(
     preset, scope = await _scope(db, tmp_path / "continuation-repo")
     leader = await _slot(db, preset, 0)
     owner = await _slot(db, preset, 1)
+    preset.leader_slot_id = leader.id
     leader_member = MailTeamMember(
         identity_key=f"leader:{leader.id}",
         repo_id="r",

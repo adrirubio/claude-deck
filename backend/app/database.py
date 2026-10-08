@@ -240,15 +240,12 @@ async def _sqlite_reconcile_historical_approvals(conn) -> bool:
                       ORDER BY candidate.updated_at DESC, candidate.id DESC
                       LIMIT 1
                   )
+                JOIN agent_team_presets AS preset
+                  ON preset.id = scope.preset_id
                 JOIN agent_team_slots AS leader_slot
-                  ON leader_slot.id = (
-                      SELECT candidate.id
-                      FROM agent_team_slots AS candidate
-                      WHERE candidate.preset_id = scope.preset_id
-                        AND candidate.enabled = 1
-                      ORDER BY candidate.position, candidate.id
-                      LIMIT 1
-                  )
+                  ON leader_slot.id = preset.leader_slot_id
+                 AND leader_slot.preset_id = preset.id
+                 AND leader_slot.enabled = 1
                 JOIN mail_team_members AS leader
                   ON leader.id = (
                       SELECT candidate.id
@@ -757,6 +754,30 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")
         )
+    if preset_columns and "leader_slot_id" not in preset_columns:
+        await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    if preset_columns:
+        await conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("
+            "name VARCHAR PRIMARY KEY, applied_at DATETIME NOT NULL)"
+        ))
+        leader_migration = "p04_explicit_leader_assignment"
+        applied = (await conn.execute(text(
+            "SELECT 1 FROM deck_compat_migrations WHERE name = :name"
+        ), {"name": leader_migration})).first()
+        if applied is None:
+            # Preserve any explicit value and migrate legacy rows once.
+            await conn.execute(text(
+                "UPDATE agent_team_presets SET leader_slot_id = ("
+                "SELECT slot.id FROM agent_team_slots AS slot "
+                "WHERE slot.preset_id = agent_team_presets.id AND slot.enabled = 1 "
+                "ORDER BY slot.position, slot.id LIMIT 1) "
+                "WHERE leader_slot_id IS NULL"
+            ))
+            await conn.execute(text(
+                "INSERT INTO deck_compat_migrations (name, applied_at) "
+                "VALUES (:name, CURRENT_TIMESTAMP)"
+            ), {"name": leader_migration})
 
     result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
     scope_columns = {row[1] for row in result.fetchall()}
@@ -855,6 +876,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
     if work_item_columns and "last_verified_sha" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN last_verified_sha VARCHAR"))
+    if work_item_columns and "verification_head_sha" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_head_sha VARCHAR"))
+    if work_item_columns and "verification_started_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_started_at DATETIME"))
     if work_item_columns and "dispatched_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatched_at DATETIME"))
     if work_item_columns and "ack_received_at" not in work_item_columns:
@@ -1067,6 +1092,22 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "WHERE pr_number IS NOT NULL AND retry_requested_at IS NOT NULL"
             )
         )
+    # R01: context keys belong to one resource lifetime. Legacy key rows stay
+    # active for their current resource; deletion retires them from now on.
+    key_columns = await _sqlite_columns(conn, "factory_context_keys")
+    if key_columns and "retired_at" not in key_columns:
+        await conn.execute(text(
+            "ALTER TABLE factory_context_keys ADD COLUMN retired_at DATETIME"))
+    if key_columns:
+        from app.models.database import _install_context_key_lifetime_ddl
+
+        await conn.run_sync(lambda sync_conn: _install_context_key_lifetime_ddl(None, sync_conn))
+    # C12: install the stable forward-coverage marker and import the observed
+    # work state once. A later run finds the marker and changes nothing.
+    if await _sqlite_columns(conn, "factory_audit_events"):
+        from app.services.factory_audit_service import install_forward_coverage
+
+        await install_forward_coverage(conn)
     await conn.commit()
 
 

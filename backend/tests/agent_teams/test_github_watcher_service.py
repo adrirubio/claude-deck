@@ -152,6 +152,19 @@ async def _make_scope(db, **kw):
     preset = AgentTeamPreset(name=kw.pop("preset_name", "T"), description="", created_by="t")
     db.add(preset)
     await db.flush()
+    leader_slot = AgentTeamSlot(
+        preset_id=preset.id, position=0, display_name="Leader", role="Leader",
+        provider="codex-cli", repo_id="r", repo_path="/tmp/r", repo_name="r",
+    )
+    db.add(leader_slot)
+    await db.flush()
+    preset.leader_slot_id = leader_slot.id
+    leader = MailTeamMember(
+        identity_key=f"slot:{leader_slot.id}", repo_id="r", repo_path="/tmp/r", repo_name="r",
+        display_name="Leader", participant_kind="team_slot", team_preset_id=preset.id,
+        team_slot_id=leader_slot.id,
+    )
+    db.add(leader)
     scope = TeamGithubScope(
         preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r", **kw
     )
@@ -497,6 +510,8 @@ async def test_watcher_completed_fires_blocker_merged_notification(db):
     )
     db.add(leader)
     await db.flush()
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.leader_slot_id = leader.id
     member = MailTeamMember(
         identity_key="slot:leader",
         repo_id="r",
@@ -581,6 +596,8 @@ async def test_closed_issue_reconciliation_fires_blocker_merged_notification(db)
     )
     db.add(leader)
     await db.flush()
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.leader_slot_id = leader.id
     member = MailTeamMember(
         identity_key="slot:closed-reconciliation-leader",
         repo_id="r",
@@ -684,7 +701,8 @@ async def test_closed_issue_skips_item_with_open_pr(db, caplog):
         (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
         for message in messages
     )
-    assert "unresolved PR #865" in caplog.text
+    # A30: without fresh scoped closed-unmerged proof the item stays escalated.
+    assert "PR #865 has no current closed-unmerged proof" in caplog.text
 
 
 @pytest.mark.asyncio

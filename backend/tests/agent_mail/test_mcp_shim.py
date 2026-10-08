@@ -75,6 +75,9 @@ def test_owner_followup_forwards_explicit_event_and_private_challenge(monkeypatc
 def test_ensure_registered_refreshes_cached_member(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
+    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
+
     requests = []
     monkeypatch.setitem(shim._state, "member_id", 7)
     monkeypatch.setitem(shim._state, "session_key", "mcp:test")
@@ -91,21 +94,24 @@ def test_ensure_registered_refreshes_cached_member(monkeypatch):
 
     assert result["ok"] is True
     assert shim._state["member_id"] == 8
-    assert requests == [
-        (
-            "POST",
-            "/agent/register",
-            {
-                "json": {
-                    "source": "mcp",
-                    "provider": shim.PROVIDER,
-                    "cwd": "/tmp/repo",
-                    "session_key": "mcp:test",
-                    "pid": 1234,
-                }
-            },
-        )
-    ]
+    assert len(requests) == 1
+    method, path, kwargs = requests[0]
+    assert (method, path) == ("POST", "/agent/register")
+    assert kwargs["json"] == {
+        "source": "mcp",
+        "provider": shim.PROVIDER,
+        "cwd": "/tmp/repo",
+        "session_key": "mcp:test",
+        "pid": 1234,
+        "team_preset_id": 1,
+        "team_slot_id": 2,
+    }
+    # The pi-cli shim adds a bounded total timeout; other providers do not.
+    if shim.PROVIDER == "pi-cli":
+        assert isinstance(kwargs["total_timeout"], (int, float))
+        assert kwargs["total_timeout"] > 0
+    else:
+        assert "total_timeout" not in kwargs
 
 
 def test_heartbeat_once_returns_normal_interval_when_registered(monkeypatch):
@@ -973,6 +979,8 @@ def test_deck_launch_team_forwards_confirm_hash(monkeypatch):
 
 def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
     import mcp_shim.agent_mail_hook as hook
+    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
 
     body = {
         "hookSpecificOutput": {
@@ -1023,6 +1031,8 @@ def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
                 "cwd": "/repo",
                 "provider": "codex-cli",
                 "pid": 123,
+                "team_preset_id": 1,
+                "team_slot_id": 2,
             },
         )
     ]

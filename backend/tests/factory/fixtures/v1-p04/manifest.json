@@ -1,0 +1,25 @@
+{
+  "artifact_sha256": {
+    "errors.json": "e43899ff499409803e28ba4b005d408602aeb231a708d0b4d5f9dfbbb58c3a52",
+    "mapping.json": "580765070548e2f6c119099a50badaba103e4f98b88b59ba21b0bdd98cf03ca3",
+    "overview.json": "a5d86cdcd60af362b6a2cf65caae16554e741df0a940dc215df7e7b6e3794da5",
+    "protected-errors.json": "dd54587e32b53c33ddde27b43bcd8be413662cc2153bf4dfba5a9e93be518151",
+    "repositories.json": "1749e1b194b71859891d28adf7d1c2e8683ef0c6ac0ab7000b27fce00e6d9559",
+    "repository.json": "0bb10513a04713b1ffefb5897bd765c1b5bea8596e50f3f968913bf02cde61d1",
+    "schema.json": "6816e998fe803098bc5a0b9d9dc88ae79e377dea14d300e28b41dc024a9ff7d5",
+    "work-item.json": "ed7c607b98dde6ba0201f4d50fe408cc07e7083eb409b5d57f7d583921d7b132",
+    "work-items.json": "78baf0a4c839981b6980ab716eab3774b952f0a3d347c3ca757744fc736bf55c"
+  },
+  "based_on_p01_manifest_sha256": "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
+  "change_summary": "P04 explicit Leader authority: approval source is explicit_assignment in work-item and work-items responses.",
+  "changed_from_p01": [
+    "work-item.json",
+    "work-items.json"
+  ],
+  "contract_version": "p04",
+  "p01_source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad",
+  "reviewed_head": "7a032daf3147c03f0c030137973b292d05224bf6",
+  "schema_version": 1,
+  "source_branch": "deck/slot-2/issue-9-0af2b67ad9155c01",
+  "source_repository": "juanrubio/claude-deck"
+}

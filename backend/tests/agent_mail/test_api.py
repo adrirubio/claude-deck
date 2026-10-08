@@ -524,6 +524,7 @@ async def _dispatch_approval_fixture(db, provider="codex-cli"):
         members.append(member)
         sessions.append(session)
         tokens.append(token)
+    preset.leader_slot_id = slots[0].id
     scope = TeamGithubScope(
         preset_id=preset.id,
         repo_owner="o",
@@ -1372,9 +1373,9 @@ async def test_continuation_decision_guard_uses_database_current_leader(
             maker = async_sessionmaker(db.bind, expire_on_commit=False)
             async with maker() as concurrent_db:
                 await concurrent_db.execute(
-                    update(AgentTeamSlot)
-                    .where(AgentTeamSlot.id == replacement_slot.id)
-                    .values(position=-1)
+                    update(AgentTeamPreset)
+                    .where(AgentTeamPreset.id == scope.preset_id)
+                    .values(leader_slot_id=replacement_slot.id)
                 )
                 await concurrent_db.commit()
         return participants

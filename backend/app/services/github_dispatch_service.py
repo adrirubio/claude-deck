@@ -128,6 +128,52 @@ class PartiallyPreparedAttempt(ValueError):
         super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
 
 
+class HandoffExternalEffectError(ValueError):
+    """R07: handoff acceptance failed after an external stage began.
+
+    The SQL acceptance rolled back. ``effects`` keeps each known external
+    stage: push access, worktree identity and restoration.
+    """
+
+    def __init__(self, detail: str, effects: dict[str, str]):
+        self.effects = dict(effects)
+        super().__init__(detail)
+
+    @property
+    def uncertain(self) -> bool:
+        return (self.effects.get("restoration") == "restore_failed"
+                or (self.effects.get("worktree_identity") == "unknown"
+                    and self.effects.get("restoration") != "restored"))
+
+
+async def observe_work_lifecycle(
+    db, *, item, from_status: str | None, to_status: str, source: str
+) -> None:
+    """Record one forward lifecycle transition with attempt identity.
+
+    The event is flushed in the caller's transaction and commits with the
+    transition. An audit-write failure surfaces and rolls back the change.
+    """
+    from app.services import factory_audit_service as _audit
+    await _audit.record_event(
+        db,
+        event_kind="work_lifecycle",
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=_audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=item.id,
+        scope_id=item.scope_id,
+        before_values={"dispatch_status": from_status} if from_status else None,
+        after_values={"dispatch_status": to_status,
+                      "active_scope_revision": item.active_scope_revision},
+        # C12: the launch identity is the start boundary of this attempt.
+        context_snapshot={"launch_attempt": _audit.launch_attempt_key(item.id, item.launch_id)},
+        action_outcome="applied",
+        sanitized_reason=f"lifecycle transition to {to_status}",
+        correlation_id=f"lifecycle:{item.id}:{to_status}:{datetime.utcnow().isoformat()}",
+    )
+
+
 class ResumeAttemptError(ValueError):
     def __init__(self, block_code: str, detail: str):
         self.block_code = block_code
@@ -246,7 +292,14 @@ class GithubDispatchService:
         authenticated_owner_slot_id: int,
         dispatch_nonce: str,
         lease_token: str,
+        actor: dict | None = None,
     ) -> bool:
+        """Activate an approved continuation revision on the owner's ACK.
+
+        A caller that supplies its trusted ``actor`` gets one applied ACK
+        lifecycle fact in the activation commit. An exact replay writes
+        nothing and records nothing.
+        """
         await db.refresh(item)
         await db.refresh(revision)
         if revision.recovery_checkpoint_stage not in (None, "ack_open"):
@@ -420,6 +473,29 @@ class GithubDispatchService:
         ):
             await db.rollback()
             raise ValueError("stale_continuation_context")
+        if actor is not None:
+            # C09/A12: the owner ACK lifecycle transition records its fact in
+            # the activation commit, bound to the immutable revision row.
+            from app.services import factory_audit_service as _audit
+            operation_id = f"continuation_ack:revision:{revision.id}"
+            await _audit.record_event(
+                db,
+                event_kind="continuation_ack",
+                source="github_dispatch_service.activate_continuation_revision",
+                occurred_at=now,
+                actor=actor,
+                scope_id=scope.id,
+                item_id=item.id,
+                revision_id=revision.id,
+                request_id=revision.approval_request_id,
+                before_values={"status": "approved", "dispatch_status": "escalated"},
+                after_values={"status": "active", "dispatch_status": "dispatched",
+                              "phase": revision.phase},
+                action_outcome="applied",
+                sanitized_reason="continuation revision acknowledged",
+                operation_id=operation_id,
+                correlation_id=operation_id,
+            )
         await db.commit()
         await db.refresh(item)
         await db.refresh(revision)
@@ -495,6 +571,7 @@ class GithubDispatchService:
             try:
                 await github_workspace_service.force_release_acquisition(
                     db,
+                    actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
                     workspace_id=workspace.id,
                     scope_id=scope.id,
                     item_id=item.id,
@@ -542,6 +619,8 @@ class GithubDispatchService:
         item.ack_enforcement_epoch = None
         item.ack_approval_round = None
         item.last_verified_sha = None
+        item.verification_head_sha = None
+        item.verification_started_at = None
         item.retry_count = 0
         item.approval_round_count = 0
         item.retry_requested_at = None
@@ -639,6 +718,7 @@ class GithubDispatchService:
         preset_slots: list[AgentTeamSlot],
         issue_labels: list[str],
         classify=None,
+        leader_slot_id: int | None = None,
     ) -> tuple[int | None, str]:
         enabled = [slot for slot in preset_slots if slot.enabled]
         enabled.sort(key=lambda slot: slot.position)
@@ -657,7 +737,8 @@ class GithubDispatchService:
             if chosen is not None:
                 return chosen, "classified"
 
-        return enabled[0].id, "leader_fallback"
+        leader = next((slot for slot in enabled if slot.id == leader_slot_id), None)
+        return (leader.id, "leader_fallback") if leader is not None else (None, "leader_unavailable")
 
     async def slot_is_busy(self, db: AsyncSession, slot_id: int) -> bool:
         active = (
@@ -753,6 +834,17 @@ class GithubDispatchService:
         issue_details_are_authoritative = issue_details_by_number is not None
         issue_details_by_number = issue_details_by_number or {}
         slots_by_id = {slot.id: slot for slot in preset_slots}
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = next((slot for slot in preset_slots if preset and slot.id == preset.leader_slot_id and slot.enabled), None)
+        if leader is None:
+            for item in (await db.execute(select(GithubWorkItem).where(
+                GithubWorkItem.scope_id == scope.id,
+                GithubWorkItem.dispatch_status == "pending",
+            ))).scalars().all():
+                item.pending_reason = "leader_unavailable"
+                item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
         await github_workspace_service.reclaim_stale(db, scope)
@@ -825,7 +917,8 @@ class GithubDispatchService:
                     continue
             else:
                 owner_slot_id, method = await self.route_item(
-                    db, item, preset_slots, issue_labels, classify=classify
+                    db, item, preset_slots, issue_labels, classify=classify,
+                    leader_slot_id=preset.leader_slot_id if preset else None,
                 )
             if owner_slot_id is None:
                 await self.escalate(db, item, "plan_blocked")
@@ -915,7 +1008,7 @@ class GithubDispatchService:
                 base_ref=attempt_base_ref,
             )
             try:
-                leader = self._leader_slot(preset_slots)
+                leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
                 leader_member = (
                     await self._slot_member(db, leader.id) if leader is not None else None
                 )
@@ -925,6 +1018,7 @@ class GithubDispatchService:
                     workspace,
                     owner_slot_id=attempt.owner_slot_id,
                     preset_slots=preset_slots,
+                    leader_slot_id=preset.leader_slot_id if preset else None,
                     leader_member=leader_member,
                     issue_details=issue_details_by_number.get(item.issue_number),
                 )
@@ -966,6 +1060,9 @@ class GithubDispatchService:
             tmux_target = getattr(launch_item, "tmux_target", None)
             if launch_status in _LAUNCH_FAILED_STATUSES:
                 item.dispatch_status = "failed"
+                await observe_work_lifecycle(
+                    db, item=item, from_status=None, to_status="failed",
+                    source="github_dispatch_service.launch")
                 if tmux_target is None:
                     try:
                         await github_workspace_service.release(db, item.id)
@@ -973,6 +1070,9 @@ class GithubDispatchService:
                         item.status_note = str(exc)
             else:
                 item.dispatch_status = "dispatched"
+                await observe_work_lifecycle(
+                    db, item=item, from_status=None, to_status="dispatched",
+                    source="github_dispatch_service.launch")
                 item.dispatched_at = datetime.utcnow()
                 pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(
                     tmux_target
@@ -1007,10 +1107,11 @@ class GithubDispatchService:
         *,
         owner_slot_id: int,
         preset_slots: list[AgentTeamSlot],
+        leader_slot_id: int | None = None,
         leader_member: MailTeamMember | None = None,
         issue_details: dict | None = None,
     ) -> str:
-        leader = self._leader_slot(preset_slots)
+        leader = self._leader_slot(preset_slots, leader_slot_id)
         owner = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
         issue_body = (issue_details or {}).get("body") or ""
         labels = [
@@ -1282,6 +1383,22 @@ class GithubDispatchService:
             item.owner_slot_id = effective_owner_id
             item.routing_method = "operator_resume"
         item.updated_at = datetime.utcnow()
+        # A06/A08: the resume event commits in the same transaction as the
+        # resume. An audit-write failure rolls back the resume.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="prepared_attempt_resume",
+            source="github_dispatch_service.resume_prepared_attempt",
+            occurred_at=datetime.utcnow(),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            item_id=item.id,
+            after_values={"dispatch_status": item.dispatch_status,
+                          "owner_slot_id": item.owner_slot_id},
+            action_outcome="applied",
+            sanitized_reason="prepared attempt resumed",
+            correlation_id=f"prepared-resume:{item.id}:{item.updated_at.isoformat()}",
+        )
         await db.commit()
 
     def _build_instructions(
@@ -1330,12 +1447,13 @@ class GithubDispatchService:
             )
         return instructions
 
-    def _leader_slot(self, preset_slots: list[AgentTeamSlot]) -> AgentTeamSlot | None:
-        enabled = sorted(
-            [slot for slot in preset_slots if slot.enabled],
-            key=lambda slot: slot.position,
+    def _leader_slot(
+        self, preset_slots: list[AgentTeamSlot], leader_slot_id: int | None = None
+    ) -> AgentTeamSlot | None:
+        return next(
+            (slot for slot in preset_slots if slot.id == leader_slot_id and slot.enabled),
+            None,
         )
-        return enabled[0] if enabled else None
 
     @staticmethod
     def review_rework_guidance(item: GithubWorkItem | None = None) -> str:
@@ -1671,7 +1789,9 @@ class GithubDispatchService:
     ) -> AckEvidence:
         if not settings.mail_capability_tokens_required:
             return AckEvidence(False, "tokens_not_enforced")
-        leader = self._leader_slot(preset_slots)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        preset = await db.get(AgentTeamPreset, scope.preset_id) if scope is not None else None
+        leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
         leader_member = (
             await self._slot_member(db, leader.id) if leader is not None else None
         )
@@ -1768,7 +1888,14 @@ class GithubDispatchService:
         *,
         initiating_slot_id: int,
         target_slot_id: int,
+        actor: dict | None = None,
     ) -> None:
+        """Mark a pending handoff and notify its target.
+
+        A caller that supplies its trusted ``actor`` gets one applied action
+        fact in the handoff commit and a separate notice fact: applied, or
+        uncertain when the send fails after the commit.
+        """
         if item.owner_slot_id != initiating_slot_id:
             raise ResumeAttemptError("not_item_owner", "Only the current owner may initiate a handoff")
         target = await db.get(AgentTeamSlot, target_slot_id)
@@ -1784,27 +1911,89 @@ class GithubDispatchService:
         item.handoff_state = "pending"
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
-        await db.commit()
-        target_member = await agent_mail_service.get_or_create_slot_member(db, target)
-        await agent_mail_service.send_direct_message(
-            db,
-            recipient_member_id=target_member.id,
-            subject=f"GitHub dispatch handoff: work item {item.id}",
-            body_markdown=(
-                f"Work item {item.id} is being handed to your slot. Do not work in "
-                "the workspace yet. First call "
-                f"`deck_report_dispatch_status(work_item_id={item.id}, "
-                "status=\"handoff_accepted\")` and wait for a 200 response. Then "
-                "call `deck_get_work_item_context` to receive the preserved branch "
-                "and lease capability."
-            ),
-            payload={
-                "kind": "github_dispatch_handoff",
-                "work_item_id": item.id,
-                "target_slot_id": target_slot_id,
-            },
-            bypass_nudge_cooldown=True,
+        item_id = item.id
+        handoff = (
+            f"handoff:item:{item_id}:launch:{item.launch_id}:"
+            f"from:{initiating_slot_id}:to:{target_slot_id}:at:{item.updated_at.isoformat()}"
         )
+        from app.services import factory_audit_service as _audit
+
+        notice_fields = None
+        if actor is not None:
+            # C09/A12: the pending handoff records its applied fact in the
+            # handoff commit.
+            await _audit.record_event(
+                db,
+                event_kind="handoff_reassignment",
+                source="github_dispatch_service.initiate_handoff",
+                occurred_at=item.updated_at,
+                actor=actor,
+                scope_id=scope.id,
+                item_id=item_id,
+                before_values={"owner_slot_id": initiating_slot_id},
+                after_values={"owner_slot_id": initiating_slot_id},
+                action_outcome="applied",
+                sanitized_reason=f"handoff pending to slot {target_slot_id}",
+                operation_id=handoff,
+                correlation_id=handoff,
+            )
+            notice_fields = {
+                "event_kind": "handoff_notification",
+                "source": "github_dispatch_service.initiate_handoff",
+                "actor": actor,
+                "scope_id": scope.id,
+                "item_id": item_id,
+                "correlation_id": f"{handoff}:notice",
+            }
+        await db.commit()
+        try:
+            target_member = await agent_mail_service.get_or_create_slot_member(db, target)
+            await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=target_member.id,
+                subject=f"GitHub dispatch handoff: work item {item_id}",
+                body_markdown=(
+                    f"Work item {item_id} is being handed to your slot. Do not work in "
+                    "the workspace yet. First call "
+                    f"`deck_report_dispatch_status(work_item_id={item_id}, "
+                    "status=\"handoff_accepted\")` and wait for a 200 response. Then "
+                    "call `deck_get_work_item_context` to receive the preserved branch "
+                    "and lease capability."
+                ),
+                payload={
+                    "kind": "github_dispatch_handoff",
+                    "work_item_id": item_id,
+                    "target_slot_id": target_slot_id,
+                },
+                bypass_nudge_cooldown=True,
+            )
+        except Exception:
+            if notice_fields is not None:
+                # The committed handoff stands; its notice is unsettled.
+                await _audit.record_observation(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    action_outcome="uncertain",
+                    sanitized_reason="handoff notice unsettled after commit",
+                    operation_id=f"{handoff}:notice:uncertain",
+                    **notice_fields,
+                )
+            raise
+        if notice_fields is not None:
+            try:
+                await _audit.record_event(
+                    db,
+                    occurred_at=datetime.utcnow(),
+                    action_outcome="applied",
+                    sanitized_reason="handoff notice sent",
+                    operation_id=f"{handoff}:notice:applied",
+                    **notice_fields,
+                )
+                await db.commit()
+            except Exception:
+                # The notice is already sent; a missing observation never
+                # replays it.
+                await db.rollback()
 
     async def accept_handoff(
         self,
@@ -1814,6 +2003,7 @@ class GithubDispatchService:
         *,
         accepting_pane_pid: int,
         accepting_pane_proc_start: str,
+        actor: dict | None = None,
     ) -> None:
         if item.handoff_target_slot_id != accepting_slot_id:
             raise ValueError(
@@ -2022,18 +2212,54 @@ class GithubDispatchService:
             ):
                 await db.rollback()
                 raise ValueError("handoff state changed before acceptance")
+            if actor is not None:
+                # C09/A12: the acceptance fact is written before the external
+                # effects in the acceptance transaction. An audit failure
+                # therefore causes no revocation or identity write, and a
+                # later external failure rolls this fact back with the rest.
+                from app.services import factory_audit_service as _audit
+                acceptance = (
+                    f"handoff_acceptance:item:{item_id}:from:{old_owner_slot_id}:"
+                    f"to:{accepting_slot_id}:at:{now.isoformat()}"
+                )
+                await _audit.record_event(
+                    db,
+                    event_kind="handoff_acceptance",
+                    source="github_dispatch_service.accept_handoff",
+                    occurred_at=now,
+                    actor=actor,
+                    scope_id=scope.id,
+                    item_id=item_id,
+                    revision_id=active_revision.id if active_revision is not None else None,
+                    before_values={"owner_slot_id": old_owner_slot_id},
+                    after_values={"owner_slot_id": accepting_slot_id},
+                    action_outcome="applied",
+                    sanitized_reason="handoff accepted",
+                    operation_id=acceptance,
+                    correlation_id=acceptance,
+                )
+            # R07: each external stage is tracked so a failure after it keeps
+            # the known effect and its uncertainty.
+            effects = {"push_access": "not_attempted",
+                       "worktree_identity": "not_attempted",
+                       "restoration": "not_needed"}
             try:
                 await github_workspace_service.revoke_push_token(
                     scope,
                     workspace,
                     owner_slot_id=old_owner_slot_id,
                 )
+                # R07: the push-access revocation is an external effect that
+                # the SQL rollback below cannot undo.
+                effects["push_access"] = "revoked_or_not_held"
                 if workspace.kind != "primary":
+                    effects["worktree_identity"] = "unknown"
                     await github_workspace_service.apply_slot_identity(
                         config_workspace,
                         display_name=target.display_name,
                         slot_id=target.id,
                     )
+                    effects["worktree_identity"] = "applied"
                 await db.commit()
             except BaseException as exc:
                 await db.rollback()
@@ -2043,7 +2269,9 @@ class GithubDispatchService:
                             config_workspace,
                             snapshot,
                         )
+                        effects["restoration"] = "restored"
                     except GithubWorkspaceConfigError as restore_exc:
+                        effects["restoration"] = "restore_failed"
                         detail = (
                             "Handoff failed and the prior worktree identity could "
                             f"not be restored: {restore_exc}"
@@ -2056,12 +2284,13 @@ class GithubDispatchService:
                         )
                         if not isinstance(exc, Exception):
                             raise exc from restore_exc
-                        raise ValueError(detail) from restore_exc
+                        raise HandoffExternalEffectError(detail, effects) from restore_exc
                 if not isinstance(exc, Exception):
                     raise
                 if isinstance(exc, GithubWorkspaceCredentialRevokeError):
                     raise
-                raise ValueError(f"handoff identity update failed: {exc}") from exc
+                raise HandoffExternalEffectError(
+                    f"handoff identity update failed: {exc}", effects) from exc
         await db.refresh(item)
         await db.refresh(workspace)
 
@@ -3094,6 +3323,64 @@ class GithubDispatchService:
             await db.rollback()
             self._apply_escalation(item, reason, note, preserve_existing_reason=False)
 
+    async def abandon_by_operator(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        note: str,
+        *,
+        actor: dict,
+    ) -> None:
+        """R07: the operator abandon action, its fact, then its broadcast.
+
+        The escalation and its audit fact commit together; an audit failure
+        commits neither. The broadcast follows with its own notice fact. A
+        notice failure records uncertainty and never replays the action.
+        """
+        from app.services import factory_audit_service as _audit
+
+        owner_may_be_active = (
+            item.dispatch_status == "dispatched" and item.owner_slot_id is not None
+        )
+        self._apply_escalation(item, "abandoned_by_operator", note, preserve_existing_reason=False)
+        item_id, scope_id = item.id, item.scope_id
+        operation = f"operator_escalation:item:{item_id}:at:{item.updated_at.isoformat()}"
+        await _audit.record_event(
+            db,
+            event_kind="operator_escalation",
+            source="agent_teams.abandon_github_work_item",
+            occurred_at=datetime.utcnow(),
+            actor=actor,
+            scope_id=scope_id,
+            item_id=item_id,
+            after_values={"dispatch_status": "escalated"},
+            action_outcome="applied",
+            sanitized_reason=note,
+            operation_id=operation,
+            correlation_id=operation,
+        )
+        await db.commit()
+        notice_fields = dict(
+            event_kind="operator_escalation_notification",
+            source="agent_teams.abandon_github_work_item",
+            actor=actor, scope_id=scope_id, item_id=item_id,
+            correlation_id=f"{operation}:notice")
+        try:
+            await self._send_escalation_broadcast(
+                db, item, "abandoned_by_operator", note,
+                owner_may_be_active=owner_may_be_active)
+            await _audit.record_event(
+                db, occurred_at=datetime.utcnow(), action_outcome="applied",
+                sanitized_reason="abandon notice delivered",
+                operation_id=f"{operation}:notice:applied", **notice_fields)
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to send the abandon notification for item %s", item_id)
+            await _audit.record_observation(
+                db, occurred_at=datetime.utcnow(), action_outcome="uncertain",
+                sanitized_reason="abandon notice unsettled after the committed escalation",
+                operation_id=f"{operation}:notice:uncertain", **notice_fields)
+
     async def escalate_without_notification(
         self,
         db: AsyncSession,
@@ -3277,7 +3564,8 @@ class GithubDispatchService:
         item: GithubWorkItem,
         preset_slots: list[AgentTeamSlot],
     ) -> None:
-        leader = self._leader_slot(preset_slots)
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
         if leader is None:
             return
         member = await self._slot_member(db, leader.id)

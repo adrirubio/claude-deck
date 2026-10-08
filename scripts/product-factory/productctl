@@ -1,0 +1,67 @@
+#!/usr/bin/python3
+"""Operator commands for the isolated product factory. Never print credentials."""
+import argparse,datetime,json,os,pathlib,pwd,re,subprocess,sys,urllib.request
+BASE=pathlib.Path('/opt/claude-deck-product');STATE=BASE/'state';WORK=pathlib.Path('/home/deckproductctl/work');URL='http://127.0.0.1:8011';ENV=BASE/'controller/backend/.env'
+def cfg():return dict(l.split('=',1) for l in ENV.read_text().splitlines() if '=' in l)
+def api(method,path,body=None):
+ req=urllib.request.Request(URL+'/api/v1'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Content-Type':'application/json','X-Deck-Operator-Token':cfg()['OPERATOR_TOKEN']})
+ with urllib.request.urlopen(req,timeout=120) as r:return json.load(r)
+def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def store(p,data):p.write_text(json.dumps(data,indent=2)+'\n')
+def status():
+ p=api('GET','/agent-teams/presets/1');s=api('GET','/agent-teams/presets/1/github-scopes')['scopes'][0]
+ sup=json.loads((STATE/'supervisor-state.json').read_text()) if (STATE/'supervisor-state.json').exists() else {}
+ result={'controller':URL,'pin':json.loads((STATE/'preparation.json').read_text())['pin'],'preset':p['name'],'autonomy_enabled':p['autonomy_enabled'],'repo':s['repo_owner']+'/'+s['repo_name'],'scope_enabled':s['enabled'],'merge_policy':s['merge_policy'],'concurrency':s['max_concurrent_dispatched'],'github_poll_credential_configured':s['github_poll_token_configured'],'hold':(WORK/'operations/HOLD.json').exists(),'supervisor_mode':sup.get('mode'),'supervisor_last_tick':sup.get('last_tick'),'slots':[{'id':x['id'],'name':x['display_name'],'repo_path':x['repo_path'],'model':x['launch_options'].get('model')} for x in p['slots']]}
+ print(json.dumps(result,indent=2));return result
+parser=argparse.ArgumentParser();parser.add_argument('command',choices=['status','plan','launch-bootstrap','configure-ambient-github','arm','pause']);parser.add_argument('--confirm',action='store_true');args=parser.parse_args()
+if os.geteuid()!=0:sys.exit('Run with sudo; operator credentials are kept outside agent access.')
+if args.command=='status':status()
+elif args.command=='plan':
+ p=api('POST','/agent-teams/presets/1/plan-launch',{'reuse_existing':True,'requested_by':'product-operator'});store(STATE/'launch-plan.json',p);print(json.dumps(p,indent=2))
+elif args.command=='configure-ambient-github':
+ if not args.confirm:sys.exit('Use --confirm to choose your existing juanrubio GitHub login for ambient factory authentication. Its token retains the permissions of that login.')
+ secret=subprocess.run(['sudo','-H','-u','juan','/usr/bin/gh','auth','token','--hostname','github.com','--user','juanrubio'],check=True,capture_output=True,text=True,cwd='/tmp').stdout.strip()
+ if not secret:sys.exit('GitHub credential unavailable')
+ doc=ENV.read_text();doc=re.sub(r'^GITHUB_TOKEN=.*$',lambda _: 'GITHUB_TOKEN='+secret,doc,flags=re.M);ENV.write_text(doc);ENV.chmod(0o600)
+ # Separate credential files for this factory, not copies of Tizonia configuration.
+ for name in ['deckproduct','deckproductctl']:
+  u=pwd.getpwnam(name);folder=pathlib.Path(u.pw_dir)/'.config/gh';folder.mkdir(parents=True,exist_ok=True)
+  file=folder/'hosts.yml';file.write_text('github.com:\n    user: juanrubio\n    git_protocol: https\n    oauth_token: '+secret+'\n');file.chmod(0o600)
+  for parent in [folder.parent,folder,file]:os.chown(parent,u.pw_uid,u.pw_gid)
+  subprocess.run(['sudo','-H','-u',name,'/usr/bin/gh','auth','setup-git'],check=True,capture_output=True,text=True,cwd='/tmp')
+ subprocess.run(['systemctl','restart','claude-deck-product.service'],check=True)
+ manifest=json.loads((STATE/'preparation.json').read_text());manifest['github_auth']='ambient_existing_juanrubio_login';store(STATE/'preparation.json',manifest);print('Ambient GitHub credentials configured privately; autonomy remains unchanged.')
+elif args.command=='launch-bootstrap':
+ if (WORK/'operations/HOLD.json').exists():sys.exit('Lane held; await user instructions.')
+ p=api('POST','/agent-teams/presets/1/plan-launch',{'reuse_existing':True,'requested_by':'product-operator'})
+ if not p['can_launch'] or p.get('adopt_count'):sys.exit('Launch plan blocked or requires adoption; inspect plan first.')
+ result=api('POST','/agent-teams/presets/1/launch',{'reuse_existing':True,'confirm_plan_hash':p['plan_hash'],'requested_by':'product-bootstrap-preparation'})
+ store(STATE/'launch-result.json',result);print(json.dumps({'launch_id':result.get('launch_id'),'items':[{'slot_id':x['slot_id'],'status':x['status'],'tmux_target':x.get('tmux_target'),'error':x.get('error')} for x in result['items']]},indent=2))
+elif args.command=='pause':
+ api('PATCH','/agent-teams/presets/1',{'autonomy_enabled':False});print('Product autonomy paused; roster, leases and workspaces preserved.')
+elif args.command=='arm':
+ if not args.confirm:sys.exit('Use --confirm only after the operator chooses to start Lane B autonomy.')
+ s=status()
+ if s['hold'] or (STATE/'HOLD.json').exists():sys.exit('Lane held; no automatic resume. Await user instructions.')
+ if s['repo']!='juanrubio/claude-deck' or s['merge_policy']!='human' or s['concurrency']!=1:sys.exit('Recorded repository, human merge and concurrency one policy required.')
+ if not s['github_poll_credential_configured']:sys.exit('Choose/configure product GitHub credentials before arming.')
+ sup=json.loads((STATE/'supervisor-state.json').read_text());last=datetime.datetime.fromisoformat(sup['last_tick']);age=(datetime.datetime.now(datetime.timezone.utc)-last).total_seconds()
+ if sup.get('mode')!='PREPARED_DISARMED' or sup.get('autonomy_enabled'):sys.exit('Supervisor must confirm prepared/disarmed state before arming.')
+ if age>30:sys.exit('Supervisor is stale; arming refused.')
+ queue=json.loads((WORK/'operations/queue.json').read_text())
+ if not queue['gates']['packet_accepted']:sys.exit('Packet review acceptance required before autonomous implementation.')
+ members=api('GET','/agent-mail/team?sync=true')['members']
+ expected={x['id'] for x in api('GET','/agent-teams/presets/1')['slots']}
+ bound={m.get('team_slot_id') for m in members if m.get('team_preset_id')==1 and m.get('wake_state')=='wakeable'}
+ if not expected<=bound:sys.exit('Every product slot must have a verified wakeable binding before arming.')
+ scopes=api('GET','/agent-teams/presets/1/github-scopes')['scopes']
+ if len(scopes)!=1:sys.exit('Exactly one product scope is required before arming.')
+ scope=scopes[0]
+ if scope['id']!=1 or scope['base_ref']!='origin/feature/software-delivery-product-reposition' or scope['max_auto_merges_per_day']!=0 or scope['max_approval_rounds']!=3 or scope['max_verification_retries']!=2 or scope['continuation_enabled']:sys.exit('Scope differs from the accepted bootstrap policy.')
+ if queue['repo']!='juanrubio/claude-deck' or queue['integration']!='feature/software-delivery-product-reposition':sys.exit('Ledger destination mismatch.')
+ # Initial stage admits only the first backend task; later gates are checked by B1.
+ if set(queue['eligible_dispatch_issues'])!={5}:sys.exit('Initial queue must contain only deletion-guard issue #5.')
+ if not queue['eligible_dispatch_issues']:sys.exit('No accepted eligible dispatch issue in the ledger.')
+ (STATE/'arming-requested').write_text(stamp()+'\n')
+ api('PATCH','/agent-teams/github-scopes/1',{'enabled':True});api('PATCH','/agent-teams/presets/1',{'autonomy_enabled':True})
+ print('Lane B autonomy enabled: one fork scope, human merge, concurrency one. Supervisor active.')

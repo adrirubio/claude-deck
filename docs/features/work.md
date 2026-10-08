@@ -1,0 +1,13 @@
+# Work
+
+Open Work to browse mixed-team work. Team, repository scope, harness and category filters are carried in the URL. The saved native harness preference and active local project do not select factory work. Work's harness filter means the configured assigned owner; missing owners stay unassigned.
+
+Counts cover the complete filtered set. Rows retain distinct work/scope identities even when they describe the same GitHub issue. Open a work detail for its raw tracking status, category, phase, owner, approver and repository/PR context. Updated time is a record observation, not a heartbeat. Finished is tracking state; attention after an operator stop does not establish process termination or a delivery outcome.
+
+Visible observations refresh periodically. Starting Load more pauses that list so older rows, cursor, scroll and focus can remain stable. A detail/action refresh may mark it dirty rather than replace the older page. Use Refresh from start or change filters to restart the list. A failed background refresh keeps the previously loaded data labelled as stale/error; it does not convert the factory to empty. Explicit Refresh from start clears loaded pages and the cursor before requesting the first page; if that request fails, previous pages are not restored.
+
+Basic details need no operator credential. Protected revision history and retry retain server authority checks and the existing per-tab operator flow. Eligibility describes state, not permission. Unknown recovery actions lead to the existing recovery surface. Retry always requires explicit destructive confirmation, including stored credentials and renewed authorization after a denial. One confirmation permits one mutation; navigating away retires pending authorization and stale results. Retry can discard PR, handoff and attempt markers. A leased workspace defers re-dispatch until normal owner release; reset-to-pending and deferred responses do not prove a new dispatch. The server rechecks current principal and eligibility.
+
+A verified Bridge link opens read-only terminal context only after a unique current team/slot/member/MCP-session match. Otherwise use filtered inspection. Mail context navigation reads context without checking an agent inbox or acknowledging requests. An offline launch hint may identify the Leader rather than the owner; use the indicated slot's reviewed manual plan. Opening navigation does not launch or approve anything.
+
+See [Repositories](/features/repositories), [Teams](/features/agent-teams), [Live sessions](/features/agent-bridge), [Agent Mail](/features/agent-mail) and the shipped [Factory API](/api/factory). Human PR review remains separate from agent plan approval and operator interventions.

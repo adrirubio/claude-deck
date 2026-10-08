@@ -1,0 +1,2406 @@
+{
+  "models": {
+    "FactoryErrorResponse": {
+      "$defs": {
+        "FactoryErrorDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid_filter",
+                "invalid_cursor",
+                "resource_not_found",
+                "projection_failed"
+              ],
+              "title": "Code",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "FactoryErrorDetail",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/FactoryErrorDetail"
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "title": "FactoryErrorResponse",
+      "type": "object"
+    },
+    "OverviewResponse": {
+      "$defs": {
+        "AutomationSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_scopes": {
+              "default": 0,
+              "title": "Configured Scopes",
+              "type": "integer"
+            },
+            "enabled_scopes": {
+              "default": 0,
+              "title": "Enabled Scopes",
+              "type": "integer"
+            },
+            "intake_blocked_scopes": {
+              "default": 0,
+              "title": "Intake Blocked Scopes",
+              "type": "integer"
+            },
+            "intake_eligible_scopes": {
+              "default": 0,
+              "title": "Intake Eligible Scopes",
+              "type": "integer"
+            },
+            "intake_unknown_scopes": {
+              "default": 0,
+              "title": "Intake Unknown Scopes",
+              "type": "integer"
+            },
+            "never_polled_scopes": {
+              "default": 0,
+              "title": "Never Polled Scopes",
+              "type": "integer"
+            },
+            "paused_scopes": {
+              "default": 0,
+              "title": "Paused Scopes",
+              "type": "integer"
+            },
+            "runtime": {
+              "$ref": "#/$defs/RuntimeObservation"
+            },
+            "stale_scopes": {
+              "default": 0,
+              "title": "Stale Scopes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "runtime"
+          ],
+          "title": "AutomationSummary",
+          "type": "object"
+        },
+        "FactoryCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "default": 0,
+              "title": "Active",
+              "type": "integer"
+            },
+            "attention": {
+              "default": 0,
+              "title": "Attention",
+              "type": "integer"
+            },
+            "finished": {
+              "default": 0,
+              "title": "Finished",
+              "type": "integer"
+            },
+            "queued": {
+              "default": 0,
+              "title": "Queued",
+              "type": "integer"
+            },
+            "review": {
+              "default": 0,
+              "title": "Review",
+              "type": "integer"
+            },
+            "total": {
+              "default": 0,
+              "title": "Total",
+              "type": "integer"
+            },
+            "unknown": {
+              "default": 0,
+              "title": "Unknown",
+              "type": "integer"
+            }
+          },
+          "title": "FactoryCounts",
+          "type": "object"
+        },
+        "FactoryFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Team Id"
+            }
+          },
+          "title": "FactoryFilters",
+          "type": "object"
+        },
+        "RuntimeObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "normal",
+                "recovery_only",
+                "unknown"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "observed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Observed At"
+            },
+            "reason_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reason Code"
+            },
+            "scheduler_state": {
+              "enum": [
+                "running",
+                "stopped",
+                "unknown"
+              ],
+              "title": "Scheduler State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "scheduler_state",
+            "observed_at",
+            "reason_code"
+          ],
+          "title": "RuntimeObservation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "automation": {
+          "$ref": "#/$defs/AutomationSummary"
+        },
+        "counts": {
+          "$ref": "#/$defs/FactoryCounts"
+        },
+        "filters": {
+          "$ref": "#/$defs/FactoryFilters"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "filters",
+        "counts",
+        "automation"
+      ],
+      "title": "OverviewResponse",
+      "type": "object"
+    },
+    "RepositoryDetailResponse": {
+      "$defs": {
+        "GithubIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "owner": {
+              "title": "Owner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "title": "GithubIdentity",
+          "type": "object"
+        },
+        "IntakeProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "eligible",
+                "blocked",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason_code",
+            "summary"
+          ],
+          "title": "IntakeProjection",
+          "type": "object"
+        },
+        "OverlapObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "other_scope_ids": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Other Scope Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "none",
+                "warning",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "other_scope_ids"
+          ],
+          "title": "OverlapObservation",
+          "type": "object"
+        },
+        "PollObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "freshness": {
+              "enum": [
+                "fresh",
+                "stale",
+                "never_polled",
+                "suspended",
+                "unknown"
+              ],
+              "title": "Freshness",
+              "type": "string"
+            },
+            "interval_seconds": {
+              "title": "Interval Seconds",
+              "type": "integer"
+            },
+            "last_polled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Polled At"
+            }
+          },
+          "required": [
+            "interval_seconds",
+            "last_polled_at",
+            "freshness"
+          ],
+          "title": "PollObservation",
+          "type": "object"
+        },
+        "RepositoryProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_enabled": {
+              "title": "Configured Enabled",
+              "type": "boolean"
+            },
+            "github": {
+              "$ref": "#/$defs/GithubIdentity"
+            },
+            "intake": {
+              "$ref": "#/$defs/IntakeProjection"
+            },
+            "overlap": {
+              "$ref": "#/$defs/OverlapObservation"
+            },
+            "poll": {
+              "$ref": "#/$defs/PollObservation"
+            },
+            "scope_enabled": {
+              "title": "Scope Enabled",
+              "type": "boolean"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "team": {
+              "$ref": "#/$defs/TeamReference"
+            },
+            "team_automation_enabled": {
+              "title": "Team Automation Enabled",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "scope_id",
+            "team",
+            "github",
+            "team_automation_enabled",
+            "scope_enabled",
+            "configured_enabled",
+            "intake",
+            "poll",
+            "overlap"
+          ],
+          "title": "RepositoryProjection",
+          "type": "object"
+        },
+        "TeamReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "TeamReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "repository": {
+          "$ref": "#/$defs/RepositoryProjection"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "repository"
+      ],
+      "title": "RepositoryDetailResponse",
+      "type": "object"
+    },
+    "RepositoryListResponse": {
+      "$defs": {
+        "FactoryFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Team Id"
+            }
+          },
+          "title": "FactoryFilters",
+          "type": "object"
+        },
+        "GithubIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "owner": {
+              "title": "Owner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "title": "GithubIdentity",
+          "type": "object"
+        },
+        "IntakeProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "eligible",
+                "blocked",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reason_code",
+            "summary"
+          ],
+          "title": "IntakeProjection",
+          "type": "object"
+        },
+        "OverlapObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "other_scope_ids": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Other Scope Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "none",
+                "warning",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "other_scope_ids"
+          ],
+          "title": "OverlapObservation",
+          "type": "object"
+        },
+        "PollObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "freshness": {
+              "enum": [
+                "fresh",
+                "stale",
+                "never_polled",
+                "suspended",
+                "unknown"
+              ],
+              "title": "Freshness",
+              "type": "string"
+            },
+            "interval_seconds": {
+              "title": "Interval Seconds",
+              "type": "integer"
+            },
+            "last_polled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Polled At"
+            }
+          },
+          "required": [
+            "interval_seconds",
+            "last_polled_at",
+            "freshness"
+          ],
+          "title": "PollObservation",
+          "type": "object"
+        },
+        "RepositoryProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_enabled": {
+              "title": "Configured Enabled",
+              "type": "boolean"
+            },
+            "github": {
+              "$ref": "#/$defs/GithubIdentity"
+            },
+            "intake": {
+              "$ref": "#/$defs/IntakeProjection"
+            },
+            "overlap": {
+              "$ref": "#/$defs/OverlapObservation"
+            },
+            "poll": {
+              "$ref": "#/$defs/PollObservation"
+            },
+            "scope_enabled": {
+              "title": "Scope Enabled",
+              "type": "boolean"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "team": {
+              "$ref": "#/$defs/TeamReference"
+            },
+            "team_automation_enabled": {
+              "title": "Team Automation Enabled",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "scope_id",
+            "team",
+            "github",
+            "team_automation_enabled",
+            "scope_enabled",
+            "configured_enabled",
+            "intake",
+            "poll",
+            "overlap"
+          ],
+          "title": "RepositoryProjection",
+          "type": "object"
+        },
+        "TeamReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "TeamReference",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/FactoryFilters"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        },
+        "repositories": {
+          "items": {
+            "$ref": "#/$defs/RepositoryProjection"
+          },
+          "title": "Repositories",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "filters",
+        "total",
+        "has_more",
+        "next_cursor",
+        "repositories"
+      ],
+      "title": "RepositoryListResponse",
+      "type": "object"
+    },
+    "WorkDetailResponse": {
+      "$defs": {
+        "ApproverReference": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Member Id"
+            },
+            "slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Slot Id"
+            },
+            "source": {
+              "enum": [
+                "first_enabled_slot",
+                "explicit_assignment",
+                "unknown"
+              ],
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id",
+            "member_id",
+            "source"
+          ],
+          "title": "ApproverReference",
+          "type": "object"
+        },
+        "BridgeTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "exclusiveMinimum": 0,
+              "title": "Member Id",
+              "type": "integer"
+            },
+            "session_id": {
+              "exclusiveMinimum": 0,
+              "title": "Session Id",
+              "type": "integer"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id",
+            "member_id",
+            "session_id"
+          ],
+          "title": "BridgeTarget",
+          "type": "object"
+        },
+        "FactoryAction": {
+          "additionalProperties": false,
+          "properties": {
+            "block_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Block Code"
+            },
+            "name": {
+              "enum": [
+                "retry",
+                "resume_attempt",
+                "escalate_attempt",
+                "cancel_continuation_request",
+                "cancel_active_revision",
+                "release_recovery_checkpoint"
+              ],
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "required_actor": {
+              "enum": [
+                "leader",
+                "owner",
+                "operator",
+                "unknown"
+              ],
+              "title": "Required Actor",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "eligible",
+                "blocked",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "state",
+            "block_code",
+            "reason",
+            "required_actor"
+          ],
+          "title": "FactoryAction",
+          "type": "object"
+        },
+        "GithubIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "owner": {
+              "title": "Owner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "title": "GithubIdentity",
+          "type": "object"
+        },
+        "LaunchPlanHint": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id"
+          ],
+          "title": "LaunchPlanHint",
+          "type": "object"
+        },
+        "LinkHints": {
+          "additionalProperties": false,
+          "properties": {
+            "bridge_target": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BridgeTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "launch_plan": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LaunchPlanHint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "mail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MailHint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "LinkHints",
+          "type": "object"
+        },
+        "MailHint": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "exclusiveMinimum": 0,
+              "title": "Member Id",
+              "type": "integer"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id",
+            "member_id"
+          ],
+          "title": "MailHint",
+          "type": "object"
+        },
+        "OwnerReference": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Configured Provider"
+            },
+            "member_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Member Id"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "provider_label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider Label"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "slot_id",
+            "member_id",
+            "name",
+            "configured_provider",
+            "provider_label"
+          ],
+          "title": "OwnerReference",
+          "type": "object"
+        },
+        "SafeWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "active_scope_revision": {
+              "title": "Active Scope Revision",
+              "type": "integer"
+            },
+            "active_scope_status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Active Scope Status"
+            },
+            "approval_round_count": {
+              "title": "Approval Round Count",
+              "type": "integer"
+            },
+            "attempt_phase": {
+              "title": "Attempt Phase",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "diagnostic_retry_count": {
+              "title": "Diagnostic Retry Count",
+              "type": "integer"
+            },
+            "dispatch_status": {
+              "title": "Dispatch Status",
+              "type": "string"
+            },
+            "github_updated_at": {
+              "format": "date-time",
+              "title": "Github Updated At",
+              "type": "string"
+            },
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "issue_title": {
+              "title": "Issue Title",
+              "type": "string"
+            },
+            "issue_type": {
+              "title": "Issue Type",
+              "type": "string"
+            },
+            "last_verified_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Verified Sha"
+            },
+            "pending_approval_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Approval Kind"
+            },
+            "pending_approval_status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Approval Status"
+            },
+            "pr_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pr Number"
+            },
+            "retry_count": {
+              "title": "Retry Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "scope_id",
+            "issue_number",
+            "issue_title",
+            "issue_type",
+            "dispatch_status",
+            "attempt_phase",
+            "pr_number",
+            "retry_count",
+            "approval_round_count",
+            "diagnostic_retry_count",
+            "active_scope_revision",
+            "active_scope_status",
+            "pending_approval_kind",
+            "pending_approval_status",
+            "created_at",
+            "updated_at",
+            "github_updated_at",
+            "last_verified_sha"
+          ],
+          "title": "SafeWorkItem",
+          "type": "object"
+        },
+        "SessionAssociation": {
+          "additionalProperties": false,
+          "properties": {
+            "bridge_target": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BridgeTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "observed_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Provider"
+            },
+            "state": {
+              "enum": [
+                "bound",
+                "offline",
+                "ambiguous",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "SessionAssociation",
+          "type": "object"
+        },
+        "TeamReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "TeamReference",
+          "type": "object"
+        },
+        "WaitingActor": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "enum": [
+                "owner",
+                "leader",
+                "operator",
+                "human",
+                "unknown"
+              ],
+              "title": "Actor",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "actor",
+            "reason_code",
+            "summary"
+          ],
+          "title": "WaitingActor",
+          "type": "object"
+        },
+        "WorkPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "continuation_enabled": {
+              "title": "Continuation Enabled",
+              "type": "boolean"
+            },
+            "max_approval_rounds": {
+              "title": "Max Approval Rounds",
+              "type": "integer"
+            },
+            "max_verification_retries": {
+              "title": "Max Verification Retries",
+              "type": "integer"
+            },
+            "merge_policy": {
+              "title": "Merge Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "merge_policy",
+            "max_verification_retries",
+            "max_approval_rounds",
+            "continuation_enabled"
+          ],
+          "title": "WorkPolicy",
+          "type": "object"
+        },
+        "WorkProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/FactoryAction"
+              },
+              "title": "Actions",
+              "type": "array"
+            },
+            "approver": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ApproverReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "approver_session": {
+              "$ref": "#/$defs/SessionAssociation"
+            },
+            "category": {
+              "enum": [
+                "queued",
+                "active",
+                "review",
+                "attention",
+                "finished",
+                "unknown"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/SafeWorkItem"
+            },
+            "links": {
+              "$ref": "#/$defs/LinkHints"
+            },
+            "owner": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/WorkPolicy"
+            },
+            "repository": {
+              "$ref": "#/$defs/WorkRepository"
+            },
+            "session": {
+              "$ref": "#/$defs/SessionAssociation"
+            },
+            "team": {
+              "$ref": "#/$defs/TeamReference"
+            },
+            "waiting": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WaitingActor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkspaceAssociation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "item",
+            "team",
+            "repository",
+            "category",
+            "owner",
+            "approver",
+            "waiting",
+            "session",
+            "approver_session",
+            "policy",
+            "workspace",
+            "actions",
+            "links"
+          ],
+          "title": "WorkProjection",
+          "type": "object"
+        },
+        "WorkRepository": {
+          "additionalProperties": false,
+          "properties": {
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "github": {
+              "$ref": "#/$defs/GithubIdentity"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "scope_id",
+            "github",
+            "display_name"
+          ],
+          "title": "WorkRepository",
+          "type": "object"
+        },
+        "WorkspaceAssociation": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "leased",
+                "released",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "state"
+          ],
+          "title": "WorkspaceAssociation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "work_item": {
+          "$ref": "#/$defs/WorkProjection"
+        }
+      },
+      "required": [
+        "generated_at",
+        "work_item"
+      ],
+      "title": "WorkDetailResponse",
+      "type": "object"
+    },
+    "WorkListResponse": {
+      "$defs": {
+        "ApproverReference": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Member Id"
+            },
+            "slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Slot Id"
+            },
+            "source": {
+              "enum": [
+                "first_enabled_slot",
+                "explicit_assignment",
+                "unknown"
+              ],
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id",
+            "member_id",
+            "source"
+          ],
+          "title": "ApproverReference",
+          "type": "object"
+        },
+        "BridgeTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "exclusiveMinimum": 0,
+              "title": "Member Id",
+              "type": "integer"
+            },
+            "session_id": {
+              "exclusiveMinimum": 0,
+              "title": "Session Id",
+              "type": "integer"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id",
+            "member_id",
+            "session_id"
+          ],
+          "title": "BridgeTarget",
+          "type": "object"
+        },
+        "FactoryAction": {
+          "additionalProperties": false,
+          "properties": {
+            "block_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Block Code"
+            },
+            "name": {
+              "enum": [
+                "retry",
+                "resume_attempt",
+                "escalate_attempt",
+                "cancel_continuation_request",
+                "cancel_active_revision",
+                "release_recovery_checkpoint"
+              ],
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "required_actor": {
+              "enum": [
+                "leader",
+                "owner",
+                "operator",
+                "unknown"
+              ],
+              "title": "Required Actor",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "eligible",
+                "blocked",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "state",
+            "block_code",
+            "reason",
+            "required_actor"
+          ],
+          "title": "FactoryAction",
+          "type": "object"
+        },
+        "FactoryCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "default": 0,
+              "title": "Active",
+              "type": "integer"
+            },
+            "attention": {
+              "default": 0,
+              "title": "Attention",
+              "type": "integer"
+            },
+            "finished": {
+              "default": 0,
+              "title": "Finished",
+              "type": "integer"
+            },
+            "queued": {
+              "default": 0,
+              "title": "Queued",
+              "type": "integer"
+            },
+            "review": {
+              "default": 0,
+              "title": "Review",
+              "type": "integer"
+            },
+            "total": {
+              "default": 0,
+              "title": "Total",
+              "type": "integer"
+            },
+            "unknown": {
+              "default": 0,
+              "title": "Unknown",
+              "type": "integer"
+            }
+          },
+          "title": "FactoryCounts",
+          "type": "object"
+        },
+        "GithubIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "owner": {
+              "title": "Owner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "title": "GithubIdentity",
+          "type": "object"
+        },
+        "LaunchPlanHint": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id"
+          ],
+          "title": "LaunchPlanHint",
+          "type": "object"
+        },
+        "LinkHints": {
+          "additionalProperties": false,
+          "properties": {
+            "bridge_target": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BridgeTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "launch_plan": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LaunchPlanHint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "mail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MailHint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "LinkHints",
+          "type": "object"
+        },
+        "MailHint": {
+          "additionalProperties": false,
+          "properties": {
+            "member_id": {
+              "exclusiveMinimum": 0,
+              "title": "Member Id",
+              "type": "integer"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            },
+            "team_id": {
+              "exclusiveMinimum": 0,
+              "title": "Team Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "team_id",
+            "slot_id",
+            "member_id"
+          ],
+          "title": "MailHint",
+          "type": "object"
+        },
+        "OwnerReference": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Configured Provider"
+            },
+            "member_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Member Id"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "provider_label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider Label"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "slot_id",
+            "member_id",
+            "name",
+            "configured_provider",
+            "provider_label"
+          ],
+          "title": "OwnerReference",
+          "type": "object"
+        },
+        "SafeWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "active_scope_revision": {
+              "title": "Active Scope Revision",
+              "type": "integer"
+            },
+            "active_scope_status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Active Scope Status"
+            },
+            "approval_round_count": {
+              "title": "Approval Round Count",
+              "type": "integer"
+            },
+            "attempt_phase": {
+              "title": "Attempt Phase",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "diagnostic_retry_count": {
+              "title": "Diagnostic Retry Count",
+              "type": "integer"
+            },
+            "dispatch_status": {
+              "title": "Dispatch Status",
+              "type": "string"
+            },
+            "github_updated_at": {
+              "format": "date-time",
+              "title": "Github Updated At",
+              "type": "string"
+            },
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "issue_title": {
+              "title": "Issue Title",
+              "type": "string"
+            },
+            "issue_type": {
+              "title": "Issue Type",
+              "type": "string"
+            },
+            "last_verified_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Verified Sha"
+            },
+            "pending_approval_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Approval Kind"
+            },
+            "pending_approval_status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending Approval Status"
+            },
+            "pr_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pr Number"
+            },
+            "retry_count": {
+              "title": "Retry Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "scope_id",
+            "issue_number",
+            "issue_title",
+            "issue_type",
+            "dispatch_status",
+            "attempt_phase",
+            "pr_number",
+            "retry_count",
+            "approval_round_count",
+            "diagnostic_retry_count",
+            "active_scope_revision",
+            "active_scope_status",
+            "pending_approval_kind",
+            "pending_approval_status",
+            "created_at",
+            "updated_at",
+            "github_updated_at",
+            "last_verified_sha"
+          ],
+          "title": "SafeWorkItem",
+          "type": "object"
+        },
+        "SessionAssociation": {
+          "additionalProperties": false,
+          "properties": {
+            "bridge_target": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BridgeTarget"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "observed_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Provider"
+            },
+            "state": {
+              "enum": [
+                "bound",
+                "offline",
+                "ambiguous",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "SessionAssociation",
+          "type": "object"
+        },
+        "TeamReference": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "TeamReference",
+          "type": "object"
+        },
+        "WaitingActor": {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "enum": [
+                "owner",
+                "leader",
+                "operator",
+                "human",
+                "unknown"
+              ],
+              "title": "Actor",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "actor",
+            "reason_code",
+            "summary"
+          ],
+          "title": "WaitingActor",
+          "type": "object"
+        },
+        "WorkFilters": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "default": "all",
+              "enum": [
+                "all",
+                "queued",
+                "active",
+                "review",
+                "attention",
+                "finished",
+                "unknown"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Team Id"
+            }
+          },
+          "title": "WorkFilters",
+          "type": "object"
+        },
+        "WorkPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "continuation_enabled": {
+              "title": "Continuation Enabled",
+              "type": "boolean"
+            },
+            "max_approval_rounds": {
+              "title": "Max Approval Rounds",
+              "type": "integer"
+            },
+            "max_verification_retries": {
+              "title": "Max Verification Retries",
+              "type": "integer"
+            },
+            "merge_policy": {
+              "title": "Merge Policy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "merge_policy",
+            "max_verification_retries",
+            "max_approval_rounds",
+            "continuation_enabled"
+          ],
+          "title": "WorkPolicy",
+          "type": "object"
+        },
+        "WorkProjection": {
+          "additionalProperties": false,
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/FactoryAction"
+              },
+              "title": "Actions",
+              "type": "array"
+            },
+            "approver": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ApproverReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "approver_session": {
+              "$ref": "#/$defs/SessionAssociation"
+            },
+            "category": {
+              "enum": [
+                "queued",
+                "active",
+                "review",
+                "attention",
+                "finished",
+                "unknown"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/SafeWorkItem"
+            },
+            "links": {
+              "$ref": "#/$defs/LinkHints"
+            },
+            "owner": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OwnerReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/WorkPolicy"
+            },
+            "repository": {
+              "$ref": "#/$defs/WorkRepository"
+            },
+            "session": {
+              "$ref": "#/$defs/SessionAssociation"
+            },
+            "team": {
+              "$ref": "#/$defs/TeamReference"
+            },
+            "waiting": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WaitingActor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkspaceAssociation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "item",
+            "team",
+            "repository",
+            "category",
+            "owner",
+            "approver",
+            "waiting",
+            "session",
+            "approver_session",
+            "policy",
+            "workspace",
+            "actions",
+            "links"
+          ],
+          "title": "WorkProjection",
+          "type": "object"
+        },
+        "WorkRepository": {
+          "additionalProperties": false,
+          "properties": {
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "github": {
+              "$ref": "#/$defs/GithubIdentity"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "scope_id",
+            "github",
+            "display_name"
+          ],
+          "title": "WorkRepository",
+          "type": "object"
+        },
+        "WorkspaceAssociation": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "exclusiveMinimum": 0,
+              "title": "Id",
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "leased",
+                "released",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "state"
+          ],
+          "title": "WorkspaceAssociation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/FactoryCounts"
+        },
+        "filters": {
+          "$ref": "#/$defs/WorkFilters"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkProjection"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Cursor"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generated_at",
+        "filters",
+        "total",
+        "has_more",
+        "next_cursor",
+        "counts",
+        "items"
+      ],
+      "title": "WorkListResponse",
+      "type": "object"
+    }
+  },
+  "schema_version": 1
+}

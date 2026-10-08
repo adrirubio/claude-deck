@@ -1,0 +1,20 @@
+[Unit]
+Description=Isolated Claude Deck product factory
+After=network.target claude-deck-product-tmux.service
+Requires=claude-deck-product-tmux.service
+[Service]
+Type=simple
+User=deckproductctl
+Group=deckproductctl
+SupplementaryGroups=deckproduct-work
+WorkingDirectory=/opt/claude-deck-product/controller/backend
+Environment=PATH=/opt/claude-deck-product/bin:/opt/claude-deck-product/tools:/usr/local/bin:/usr/bin:/bin
+Environment=CLAUDE_DECK_URL=http://127.0.0.1:8011
+ExecStart=/opt/claude-deck-product/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8011
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+UMask=0007
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

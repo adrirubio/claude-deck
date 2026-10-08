@@ -80,7 +80,7 @@ export function SessionViewPage() {
   }
 
   const handleBack = () => {
-    navigate('/sessions')
+    navigate('/harnesses/claude-code/sessions')
   }
 
   const handleTabChange = (value: string) => {

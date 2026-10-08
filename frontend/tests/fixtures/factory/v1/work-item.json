@@ -1,0 +1,1967 @@
+{
+  "ambiguous_owner": {
+    "endpoint": "/api/v1/factory/work-items/2",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "active",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "dispatched",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 2,
+          "issue_number": 2,
+          "issue_title": "Fixture issue 2",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": "initial_plan",
+          "pending_approval_status": "pending",
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "ambiguous"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "leader",
+          "reason_code": "approval_pending",
+          "summary": "Waiting for the designated Leader's decision."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "awaiting_human_review": {
+    "endpoint": "/api/v1/factory/work-items/4",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "review",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "awaiting_human_review",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 4,
+          "issue_number": 4,
+          "issue_title": "Fixture issue 4",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "human",
+          "reason_code": "human_review",
+          "summary": "Ready for human review."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "completed": {
+    "endpoint": "/api/v1/factory/work-items/9",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 1,
+          "slot_id": 1,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "finished",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "completed",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 9,
+          "issue_number": 9,
+          "issue_title": "Fixture issue 9",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 1,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "launch_plan": {
+            "slot_id": 1,
+            "team_id": 1
+          },
+          "mail": {
+            "member_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 2,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 2
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 1
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "waiting": null,
+        "workspace": null
+      }
+    }
+  },
+  "dispatched": {
+    "endpoint": "/api/v1/factory/work-items/2",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "active",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "dispatched",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 2,
+          "issue_number": 2,
+          "issue_title": "Fixture issue 2",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": "initial_plan",
+          "pending_approval_status": "pending",
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "leader",
+          "reason_code": "approval_pending",
+          "summary": "Waiting for the designated Leader's decision."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "escalated": {
+    "endpoint": "/api/v1/factory/work-items/6",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "active_continuation",
+            "name": "retry",
+            "reason": "Resolve the active continuation before retrying.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "attention",
+        "item": {
+          "active_scope_revision": 1,
+          "active_scope_status": "active",
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "escalated",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 6,
+          "issue_number": 6,
+          "issue_title": "Fixture issue 6",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": 123,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "operator",
+          "reason_code": "abandoned_by_operator",
+          "summary": "Operator requested stop. Retry may remain available."
+        },
+        "workspace": {
+          "id": 1,
+          "state": "leased"
+        }
+      }
+    }
+  },
+  "failed": {
+    "endpoint": "/api/v1/factory/work-items/7",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 1,
+          "slot_id": 1,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "attention",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "failed",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 7,
+          "issue_number": 7,
+          "issue_title": "Fixture issue 7",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 1,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "launch_plan": {
+            "slot_id": 1,
+            "team_id": 1
+          },
+          "mail": {
+            "member_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 2,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 2
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 1
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "waiting": {
+          "actor": "operator",
+          "reason_code": "unknown",
+          "summary": "State needs inspection."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "future_status": {
+    "endpoint": "/api/v1/factory/work-items/10",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "unknown",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "future_status",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 10,
+          "issue_number": 10,
+          "issue_title": "Fixture issue 10",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 4,
+            "session_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "unknown",
+          "reason_code": "unknown",
+          "summary": "State needs inspection."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "merged": {
+    "endpoint": "/api/v1/factory/work-items/8",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "finished",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "merged",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 8,
+          "issue_number": 8,
+          "issue_title": "Fixture issue 8",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": null
+        },
+        "owner": null,
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "unknown"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": null,
+        "workspace": null
+      }
+    }
+  },
+  "operator_stop_retry_eligible": {
+    "endpoint": "/api/v1/factory/work-items/6",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": null,
+            "name": "retry",
+            "reason": "The existing retry state checks permit retry.",
+            "required_actor": "leader",
+            "state": "eligible"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "attention",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "escalated",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 6,
+          "issue_number": 6,
+          "issue_title": "Fixture issue 6",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "ambiguous"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "operator",
+          "reason_code": "abandoned_by_operator",
+          "summary": "Operator requested stop. Retry may remain available."
+        },
+        "workspace": {
+          "id": 1,
+          "state": "leased"
+        }
+      }
+    }
+  },
+  "pending": {
+    "endpoint": "/api/v1/factory/work-items/1",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 1,
+          "slot_id": 1,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "queued",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "pending",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 1,
+          "issue_number": 1,
+          "issue_title": "Fixture issue 1",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 1,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 1,
+            "team_id": 1
+          },
+          "mail": null
+        },
+        "owner": null,
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 1
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "unknown"
+        },
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "waiting": {
+          "actor": "unknown",
+          "reason_code": "work_queued",
+          "summary": "Waiting for dispatch."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "preserved_pr": {
+    "endpoint": "/api/v1/factory/work-items/6",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "pr_preserved",
+            "name": "retry",
+            "reason": "Resolve the preserved PR before retrying.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "attention",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "escalated",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 6,
+          "issue_number": 6,
+          "issue_title": "Fixture issue 6",
+          "issue_type": "code",
+          "last_verified_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": 123,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 3,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "ambiguous"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "operator",
+          "reason_code": "abandoned_by_operator",
+          "summary": "Operator requested stop. Retry may remain available."
+        },
+        "workspace": {
+          "id": 1,
+          "state": "leased"
+        }
+      }
+    }
+  },
+  "ready_for_review": {
+    "endpoint": "/api/v1/factory/work-items/5",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 1,
+          "slot_id": 1,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "review",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "ready_for_review",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 5,
+          "issue_number": 5,
+          "issue_title": "Fixture issue 5",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 1,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "launch_plan": {
+            "slot_id": 1,
+            "team_id": 1
+          },
+          "mail": {
+            "member_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 2,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 2
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 1
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "waiting": {
+          "actor": "human",
+          "reason_code": "human_review",
+          "summary": "Ready for human review."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "verified_offline_owner": {
+    "endpoint": "/api/v1/factory/work-items/2",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 3,
+          "slot_id": 3,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "active",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "dispatched",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 2,
+          "issue_number": 2,
+          "issue_title": "Fixture issue 2",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": "initial_plan",
+          "pending_approval_status": "pending",
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 2,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": null,
+          "launch_plan": {
+            "slot_id": 4,
+            "team_id": 2
+          },
+          "mail": {
+            "member_id": 4,
+            "slot_id": 4,
+            "team_id": 2
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 4,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 4
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 2
+        },
+        "session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "team": {
+          "id": 2,
+          "name": "Fixture team 2"
+        },
+        "waiting": {
+          "actor": "leader",
+          "reason_code": "approval_pending",
+          "summary": "Waiting for the designated Leader's decision."
+        },
+        "workspace": null
+      }
+    }
+  },
+  "verifying": {
+    "endpoint": "/api/v1/factory/work-items/3",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1,
+      "work_item": {
+        "actions": [
+          {
+            "block_code": "not_escalated",
+            "name": "retry",
+            "reason": "Only escalated work can be retried.",
+            "required_actor": "leader",
+            "state": "blocked"
+          },
+          {
+            "block_code": "unknown",
+            "name": "resume_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "escalate_attempt",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_continuation_request",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "owner",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "cancel_active_revision",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          },
+          {
+            "block_code": "unknown",
+            "name": "release_recovery_checkpoint",
+            "reason": "Open attempt recovery to check available actions.",
+            "required_actor": "operator",
+            "state": "unknown"
+          }
+        ],
+        "approver": {
+          "member_id": 1,
+          "slot_id": 1,
+          "source": "first_enabled_slot"
+        },
+        "approver_session": {
+          "bridge_target": null,
+          "observed_provider": null,
+          "state": "offline"
+        },
+        "category": "active",
+        "item": {
+          "active_scope_revision": 0,
+          "active_scope_status": null,
+          "approval_round_count": 0,
+          "attempt_phase": "implementation",
+          "created_at": "2026-09-30T12:00:00Z",
+          "diagnostic_retry_count": 0,
+          "dispatch_status": "verifying",
+          "github_updated_at": "2026-09-30T12:00:00Z",
+          "id": 3,
+          "issue_number": 3,
+          "issue_title": "Fixture issue 3",
+          "issue_type": "code",
+          "last_verified_sha": null,
+          "pending_approval_kind": null,
+          "pending_approval_status": null,
+          "pr_number": null,
+          "retry_count": 0,
+          "scope_id": 1,
+          "updated_at": "2026-09-30T12:00:00Z"
+        },
+        "links": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "launch_plan": {
+            "slot_id": 1,
+            "team_id": 1
+          },
+          "mail": {
+            "member_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          }
+        },
+        "owner": {
+          "configured_provider": "codex-cli",
+          "member_id": 2,
+          "name": "Owner",
+          "provider_label": "Codex",
+          "slot_id": 2
+        },
+        "policy": {
+          "continuation_enabled": true,
+          "max_approval_rounds": 3,
+          "max_verification_retries": 2,
+          "merge_policy": "human"
+        },
+        "repository": {
+          "display_name": "fixture/shared",
+          "github": {
+            "name": "shared",
+            "owner": "fixture"
+          },
+          "scope_id": 1
+        },
+        "session": {
+          "bridge_target": {
+            "member_id": 2,
+            "session_id": 2,
+            "slot_id": 2,
+            "team_id": 1
+          },
+          "observed_provider": "codex-cli",
+          "state": "bound"
+        },
+        "team": {
+          "id": 1,
+          "name": "Fixture team 1"
+        },
+        "waiting": {
+          "actor": "unknown",
+          "reason_code": "checks_running",
+          "summary": "Checks are being verified."
+        },
+        "workspace": null
+      }
+    }
+  }
+}

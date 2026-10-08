@@ -74,11 +74,59 @@ const policyNumberKeys: PolicyNumberKey[] = [
   'max_scope_paths', 'max_scope_commands',
 ]
 
-function parsedLimit(value: string, label: string, minimum: number): number {
-  const parsed = Number(value)
-  if (!value.trim() || !Number.isInteger(parsed)) throw new Error(`Enter a whole number for ${label}.`)
-  if (parsed < minimum) throw new Error(`${label} must be at least ${minimum}.`)
-  return parsed
+function parsedLimit(value: string, label: string, minimum: number, maximum?: number): number {
+  const text = value.trim()
+  const parsed = Number(text)
+  const [mantissa, exponent = '0'] = text.toLowerCase().split('e')
+  const fractionalPlaces = (mantissa.split('.')[1]?.length ?? 0) - Number(exponent)
+  const digits = mantissa.replace(/[+.-]/g, '')
+  // Check the decimal string too: Number can round fractions or underflow to zero.
+  const hasFraction = fractionalPlaces > 0 && /[1-9]/.test(digits.slice(-fractionalPlaces))
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text) || !Number.isInteger(parsed) || hasFraction) {
+    throw new Error(`Enter a whole number for ${label}.`)
+  }
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Enter a safely representable whole number for ${label}.`)
+  return Math.max(minimum, maximum === undefined ? parsed : Math.min(parsed, maximum))
+}
+
+// Changes retain the editing string; only blur or an explicit save normalizes it.
+function LimitInput({ id, label, value, minimum, maximum, disabled, onChange }: {
+  id: string
+  label: string
+  value: string
+  minimum: number
+  maximum?: number
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  return <>
+    <Input
+      id={id}
+      type="number"
+      step={1}
+      min={minimum}
+      max={maximum}
+      disabled={disabled}
+      value={value}
+      aria-invalid={Boolean(error)}
+      aria-describedby={error ? `${id}-error` : undefined}
+      onChange={(event) => {
+        setError(null)
+        onChange(event.target.value)
+      }}
+      onBlur={(event) => {
+        try {
+          const normalized = parsedLimit(event.target.value, label, minimum, maximum)
+          setError(null)
+          onChange(String(normalized))
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : 'Enter a whole number.')
+        }
+      }}
+    />
+    {error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}
+  </>
 }
 
 const emptyScope: TeamGithubScopeInput = {
@@ -360,10 +408,12 @@ function ScopeDialog({
   state,
   onOpenChange,
   onSave,
+  onReturnFocus,
 }: {
   state: ScopeDialogState
   onOpenChange: (state: ScopeDialogState) => void
   onSave: (scope: TeamGithubScopeInput | TeamGithubScopeUpdate) => Promise<void>
+  onReturnFocus: () => void
 }) {
   const [form, setForm] = useState<TeamGithubScopeInput>(emptyScope)
   const [numberInputs, setNumberInputs] = useState<Record<ScopeNumberKey, string>>({
@@ -411,6 +461,7 @@ function ScopeDialog({
         dispatch_label: form.dispatch_label?.trim() || 'claude-deck-ready',
         design_label: form.design_label?.trim() || 'claude-deck-design',
       }
+      setNumberInputs(Object.fromEntries(scopeNumberKeys.map((key) => [key, String(input[key])])) as Record<ScopeNumberKey, string>)
       if (state?.mode === 'edit' && state.scope) {
         const original = scopeToInput(state.scope)
         const changes = Object.fromEntries(
@@ -430,7 +481,7 @@ function ScopeDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next ? state : null)}>
-      <DialogContent className={MODAL_SIZES.SM}>
+      <DialogContent className={MODAL_SIZES.SM} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus() }}>
         <DialogHeader>
           <DialogTitle>{state?.mode === 'edit' ? 'Edit watched repo' : 'Add watched repo'}</DialogTitle>
           <DialogDescription>
@@ -524,46 +575,46 @@ function ScopeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="approval-rounds">Max approval rounds</Label>
-            <Input
+            <LimitInput
               id="approval-rounds"
-              type="number"
-              min={1}
+              label="Max approval rounds"
+              minimum={1}
               value={numberInputs.max_approval_rounds}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_approval_rounds: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_approval_rounds: value }))}
             />
             <p className="text-xs text-muted-foreground">Times the Leader may send an owner&apos;s plan back before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="concurrent-dispatches">Max concurrent dispatched</Label>
-            <Input
+            <LimitInput
               id="concurrent-dispatches"
-              type="number"
-              min={1}
+              label="Max concurrent dispatched"
+              minimum={1}
               value={numberInputs.max_concurrent_dispatched}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_concurrent_dispatched: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_concurrent_dispatched: value }))}
             />
             <p className="text-xs text-muted-foreground">Issues from this repo worked on at once; extra issues wait.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="verification-retries">Max verification retries</Label>
-            <Input
+            <LimitInput
               id="verification-retries"
-              type="number"
-              min={0}
+              label="Max verification retries"
+              minimum={0}
               value={numberInputs.max_verification_retries}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_verification_retries: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_verification_retries: value }))}
             />
             <p className="text-xs text-muted-foreground">Distinct failing PR heads allowed before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="auto-merges">Max auto-merges per day</Label>
-            <Input
+            <LimitInput
               id="auto-merges"
-              type="number"
-              min={0}
+              label="Max auto-merges per day"
+              minimum={0}
               value={numberInputs.max_auto_merges_per_day}
               disabled={form.merge_policy !== 'auto'}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_auto_merges_per_day: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_auto_merges_per_day: value }))}
             />
             <p className="text-xs text-muted-foreground">Rolling 24-hour cap. Beyond it, PRs wait for human review.</p>
           </div>
@@ -587,12 +638,12 @@ function ScopeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="scope-build-parallelism">Max build parallelism</Label>
-            <Input
+            <LimitInput
               id="scope-build-parallelism"
-              type="number"
-              min={1}
+              label="Max build parallelism"
+              minimum={1}
               value={numberInputs.max_build_parallelism}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_build_parallelism: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_build_parallelism: value }))}
             />
             <p className="text-xs text-muted-foreground">Tells the agent to cap parallel build jobs at this value.</p>
           </div>
@@ -677,15 +728,23 @@ function ContinuationPolicyDialog({
       const limits = Object.fromEntries(policyNumberKeys.map((key) => [
         key, parsedLimit(numberInputs[key], key.replaceAll('_', ' '), 1),
       ])) as Record<PolicyNumberKey, number>
-      if (limits.max_failed_heads_per_revision > limits.max_continuation_failed_heads) {
-        throw new Error('Per-revision failed heads cannot exceed the attempt-wide failed-head cap.')
-      }
+      limits.max_failed_heads_per_revision = Math.min(limits.max_failed_heads_per_revision, limits.max_continuation_failed_heads)
+      setNumberInputs(Object.fromEntries(policyNumberKeys.map((key) => [key, String(limits[key])])) as Record<PolicyNumberKey, string>)
       await onSave(scope.id, { ...form, ...limits })
       onOpenChange(null)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save recovery policy')
     } finally {
       setSaving(false)
+    }
+  }
+
+  let perRevisionMaximum: number | undefined
+  if (numberInputs) {
+    try {
+      perRevisionMaximum = parsedLimit(numberInputs.max_continuation_failed_heads, 'Attempt failed-head cap', 1)
+    } catch {
+      // An invalid attempt cap cannot supply a bound for another editing field.
     }
   }
 
@@ -722,12 +781,13 @@ function ContinuationPolicyDialog({
             ] as const).map(([key, label, help]) => (
               <div className="grid gap-2" key={key}>
                 <Label htmlFor={`policy-${key}`}>{label}</Label>
-                <Input
+                <LimitInput
                   id={`policy-${key}`}
-                  type="number"
-                  min={1}
+                  label={label}
+                  minimum={1}
+                  maximum={key === 'max_failed_heads_per_revision' ? perRevisionMaximum : undefined}
                   value={numberInputs[key]}
-                  onChange={(event) => setNumberInputs((current) => current ? { ...current, [key]: event.target.value } : current)}
+                  onChange={(value) => setNumberInputs((current) => current ? { ...current, [key]: value } : current)}
                 />
                 <p className="text-xs text-muted-foreground">{help}</p>
               </div>
@@ -768,6 +828,7 @@ function WorkItemDialog({
   onRequestOperatorToken,
   slots,
   onOperate,
+  onReturnFocus,
 }: {
   item: GithubWorkItem | null
   scope?: TeamGithubScope
@@ -775,6 +836,7 @@ function WorkItemDialog({
   ownerName?: string
   handoffTargetName?: string
   onOpenChange: (open: boolean) => void
+  onReturnFocus: () => void
   onRetry: (item: GithubWorkItem) => void
   onFetchScopeRevisions: (itemId: number) => Promise<GithubScopeRevision[]>
   onFetchWorkspaces: (scopeId: number) => Promise<{ workspaces: GithubWorkspace[] }>
@@ -914,7 +976,7 @@ function WorkItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto')}>
+      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto break-words [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]')} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus() }}>
         {item && (
           <>
             <DialogHeader>
@@ -966,30 +1028,30 @@ function WorkItemDialog({
               )}
               <div className="rounded-lg border">
                 <dl className="grid gap-0 text-sm">
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Status</dt>
                     <dd>{workItemStatusLabel(item, scope)}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Owner</dt>
                     <dd className="space-y-2">
                       <p>{ownerName ?? 'Unassigned'} ({routeMethodLabel(item.routing_method)})</p>
                       {item.owner_slot_id && <AgentActivityBadge activity={ownerActivity} />}
                     </dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Retries</dt>
                     <dd>implementation checks {item.retry_count} · diagnostic heads {item.diagnostic_retry_count}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Attempt</dt>
                     <dd>{phaseLabel(item.attempt_phase)} · revision {item.active_scope_revision}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Workspace</dt>
                     <dd className="truncate">{item.workspace_path ?? 'None leased'}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] p-3">
                     <dt className="text-muted-foreground">PR</dt>
                     <dd>{item.pr_number ? `#${item.pr_number}` : 'None yet'}</dd>
                   </div>
@@ -1245,6 +1307,9 @@ export function AutonomyPanel({
   const [scopeToRemove, setScopeToRemove] = useState<TeamGithubScope | null>(null)
   const [scopeRemovalPending, setScopeRemovalPending] = useState(false)
   const removeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const scopeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const enableTriggerRef = useRef<HTMLButtonElement | null>(null)
   const addRepoButtonRef = useRef<HTMLButtonElement | null>(null)
   const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
   const [detailItemId, setDetailItemId] = useState<number | null>(null)
@@ -1472,14 +1537,14 @@ export function AutonomyPanel({
     if (scopes.some((scope) => scope.enabled && scope.merge_policy === 'auto')) {
       warnings.push('At least one watched repo can auto-merge code PRs after verification.')
     }
-    const leader = [...preset.slots].filter((slot) => slot.enabled).sort((first, second) => first.position - second.position)[0]
+    const leader = preset.slots.find((slot) => slot.id === preset.leader_slot_id && slot.enabled)
     if (!leader) {
       warnings.push('No enabled Leader slot exists; dispatched work will not have an approver.')
     } else {
       try {
         const team = await fetchAgentMailTeam(false)
         if (!team.members.some((member) => member.team_slot_id === leader.id && member.status === 'connected')) {
-          warnings.push('The Leader is not currently connected in Agent Mail. Launch the first enabled slot from Roster before enabling autonomy.')
+          warnings.push('The Leader is not currently connected in Agent Mail. Launch the assigned Leader slot from Roster before enabling autonomy.')
         }
       } catch {
         warnings.push('Leader availability could not be checked. Confirm it before enabling unattended work.')
@@ -1539,6 +1604,7 @@ export function AutonomyPanel({
               {preset.autonomy_enabled ? 'Enabled' : 'Disabled'}
             </Label>
             <Switch
+              ref={enableTriggerRef}
               id="autonomy-enabled"
               aria-label="Enable autonomous GitHub dispatch"
               checked={preset.autonomy_enabled}
@@ -1565,13 +1631,13 @@ export function AutonomyPanel({
             {operatorTokenStored ? 'Clear operator token' : 'Set operator token'}
           </Button>
           <span className="self-center text-xs text-muted-foreground">
-            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected recovery actions'}
+            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected settings, launch, autonomy, and recovery actions'}
           </span>
           <Button variant="outline" onClick={() => { void onRefresh(); void checkGateStatus() }} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button ref={addRepoButtonRef} onClick={() => setScopeDialog({ mode: 'add' })}>
+          <Button ref={addRepoButtonRef} onClick={(event) => { scopeTriggerRef.current = event.currentTarget; setScopeDialog({ mode: 'add' }) }}>
             <Plus className="mr-2 h-4 w-4" />
             Add repo
           </Button>
@@ -1590,11 +1656,11 @@ export function AutonomyPanel({
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
-              <li>In Roster, launch the first enabled slot: it is the Leader who approves plans.</li>
+              <li>In Roster, assign and launch the Leader slot. It approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
-            <p className="mt-2">An operator token is only needed for protected recovery actions.</p>
+            <p className="mt-2">The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
           </div>
         )}
         {scopes.map((scope) => (
@@ -1639,7 +1705,7 @@ export function AutonomyPanel({
                     <Settings2 className="mr-2 h-4 w-4" />
                     Recovery policy
                   </Button>
-                  <Button variant="outline" size="sm" aria-label={`Edit ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setScopeDialog({ mode: 'edit', scope })}>
+                  <Button variant="outline" size="sm" aria-label={`Edit ${scope.repo_owner}/${scope.repo_name}`} onClick={(event) => { scopeTriggerRef.current = event.currentTarget; setScopeDialog({ mode: 'edit', scope }) }}>
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
@@ -1656,12 +1722,12 @@ export function AutonomyPanel({
       </div>
 
       <Card className="min-w-0">
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+        <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
             <CardTitle>Activity</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">Recent GitHub issues across this team&apos;s watched repos.</p>
           </div>
-          <span className="text-xs text-muted-foreground sm:shrink-0">
+          <span className="min-w-0 text-xs text-muted-foreground">
             {lastRefreshedAt ? `Table updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Table not refreshed yet'} · table every 5s · GitHub poll every 60s by default
           </span>
         </CardHeader>
@@ -1672,11 +1738,11 @@ export function AutonomyPanel({
                 <p className="font-medium">{actionCount} {actionCount === 1 ? 'item needs' : 'items need'} your action</p>
                 <p className="mt-1 text-muted-foreground">Open the highlighted item to see what the team is waiting for.</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
+              <Button variant="outline" size="sm" className="h-auto max-w-full whitespace-normal text-left" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
             </section>
           )}
           <section className="mb-3 rounded-lg border p-3 text-sm">
-            <Button variant="link" className="h-auto p-0 font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
+            <Button variant="link" className="h-auto max-w-full whitespace-normal p-0 text-left font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
             {showActivityHelp && <ul id="autonomy-activity-help" className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
               <li>Queued: waiting for an owner or prerequisite. Dispatched: the owner is planning or implementing. Verifying: Deck is watching the PR&apos;s GitHub checks.</li>
               <li>Your action needed: review or merge a PR under human policy, or inspect a stopped attempt. Leader approval and automatic merge waiting are shown separately. Merged or completed: finished.</li>
@@ -1840,7 +1906,7 @@ export function AutonomyPanel({
                                 Retry blocked: {recoveryBlockLabel(item.retry_block_code)}
                               </span>
                             )}
-                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={() => setDetailItemId(item.id)}>
+                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={(event) => { detailTriggerRef.current = event.currentTarget; setDetailItemId(item.id) }}>
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </Button>
@@ -1856,7 +1922,7 @@ export function AutonomyPanel({
         </CardContent>
       </Card>
 
-      <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
+      <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} onReturnFocus={() => (scopeTriggerRef.current?.isConnected ? scopeTriggerRef.current : addRepoButtonRef.current)?.focus()} />
       <AlertDialog open={scopeToRemove !== null} onOpenChange={(open) => { if (!open && !scopeRemovalPending) setScopeToRemove(null) }}>
         <AlertDialogContent onCloseAutoFocus={(event) => {
           event.preventDefault()
@@ -1896,6 +1962,7 @@ export function AutonomyPanel({
             : undefined
         }
         onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
+        onReturnFocus={() => (detailTriggerRef.current?.isConnected ? detailTriggerRef.current : addRepoButtonRef.current)?.focus()}
         onRetry={setRetryTarget}
         onFetchScopeRevisions={fetchRevisions}
         onFetchWorkspaces={(scopeId) => withOperatorToken((token) => fetchGithubWorkspaces(scopeId, token))}
@@ -1930,7 +1997,7 @@ export function AutonomyPanel({
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={enableConfirmOpen} onOpenChange={setEnableConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); enableTriggerRef.current?.focus() }}>
           <AlertDialogHeader>
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
