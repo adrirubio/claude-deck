@@ -54,7 +54,6 @@ from app.services.github_workspace_service import (
 )
 
 _BUSY_STATUSES = ("dispatched", "verifying")
-_SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
     "blocked",
@@ -63,6 +62,25 @@ _LAUNCH_FAILED_STATUSES = {
     "skipped_disabled",
 }
 _ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref")
+
+
+def occupied_work_condition():
+    """Work that reserves its owner, even before a launch result is known."""
+    return or_(
+        GithubWorkItem.dispatch_status.in_(_BUSY_STATUSES),
+        (GithubWorkItem.dispatch_status == "pending")
+        & GithubWorkItem.dispatch_nonce.is_not(None),
+        GithubWorkItem.dispatch_status.in_(("escalated", "failed"))
+        & GithubWorkItem.dispatch_nonce.is_not(None)
+        & exists(select(GithubWorkspace.id).where(
+            GithubWorkspace.leased_item_id == GithubWorkItem.id,
+        )),
+    )
+
+
+def reserved_work_condition():
+    """Capacity includes both sides of a pending handoff."""
+    return occupied_work_condition() | (GithubWorkItem.handoff_state == "pending")
 
 DISPATCH_STATUSES = frozenset(
     {
@@ -564,6 +582,7 @@ class GithubDispatchService:
         *,
         keep_lease: bool = False,
     ) -> None:
+        item.dispatch_status = "pending"
         item.pending_reason = "queued_auth_mode_unresolved"
         item.status_note = f"GitHub authentication unresolved for {scope.repo_owner}/{scope.repo_name}: {detail}"
         item.updated_at = datetime.utcnow()
@@ -740,12 +759,15 @@ class GithubDispatchService:
         leader = next((slot for slot in enabled if slot.id == leader_slot_id), None)
         return (leader.id, "leader_fallback") if leader is not None else (None, "leader_unavailable")
 
-    async def slot_is_busy(self, db: AsyncSession, slot_id: int) -> bool:
+    async def slot_is_busy(
+        self, db: AsyncSession, slot_id: int, *, exclude_item_id: int | None = None,
+    ) -> bool:
         active = (
             await db.execute(
                 select(GithubWorkItem.id).where(
                     GithubWorkItem.owner_slot_id == slot_id,
-                    GithubWorkItem.dispatch_status.in_(_BUSY_STATUSES),
+                    occupied_work_condition(),
+                    GithubWorkItem.id != exclude_item_id if exclude_item_id is not None else True,
                 )
             )
         ).first()
@@ -755,6 +777,7 @@ class GithubDispatchService:
             await db.execute(
                 select(GithubWorkItem.id).where(
                     GithubWorkItem.handoff_state == "pending",
+                    GithubWorkItem.id != exclude_item_id if exclude_item_id is not None else True,
                     (GithubWorkItem.owner_slot_id == slot_id)
                     | (GithubWorkItem.handoff_target_slot_id == slot_id),
                 )
@@ -762,7 +785,88 @@ class GithubDispatchService:
         ).first()
         return pending_handoff is not None
 
-    async def scope_active_count(self, db: AsyncSession, scope_id: int) -> int:
+    async def _dispatch_authorized(
+        self, db: AsyncSession, scope: TeamGithubScope, *, require_autonomy: bool,
+        owner_slot_id: int | None = None,
+    ) -> bool:
+        await db.refresh(scope)
+        preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
+        leader = await db.get(AgentTeamSlot, preset.leader_slot_id, populate_existing=True) if preset and preset.leader_slot_id else None
+        if (not scope.enabled or preset is None or leader is None or not leader.enabled
+            or leader.preset_id != scope.preset_id):
+            return False
+        if owner_slot_id is not None:
+            owner = await db.get(AgentTeamSlot, owner_slot_id, populate_existing=True)
+            if owner is None or not owner.enabled or owner.preset_id != scope.preset_id:
+                return False
+        if require_autonomy:
+            from app.services.github_coordination_service import hold_code
+            if not preset.autonomy_enabled or hold_code():
+                return False
+        return True
+
+    async def _claim_dispatch_start(
+        self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem,
+        *, owner_slot_id: int, routing_method: str, require_autonomy: bool,
+    ) -> bool:
+        """Reserve capacity in SQL before any brief or launch can escape.
+
+        The no-op preset update takes a writer lock on SQLite and a row lock
+        on PostgreSQL. Close the previous read transaction first. The lock is
+        held only through local checks and the durable start commit.
+        """
+        item_id, scope_id, preset_id = item.id, scope.id, scope.preset_id
+        expected_identity = (item.scope_id, item.dispatch_nonce, item.dispatch_head_ref, item.dispatch_base_ref)
+        await db.commit()
+        await db.execute(update(AgentTeamPreset).where(
+            AgentTeamPreset.id == preset_id,
+        ).values(updated_at=AgentTeamPreset.updated_at))
+        await db.refresh(item)
+        await db.refresh(scope)
+        owner = await db.get(AgentTeamSlot, owner_slot_id, populate_existing=True)
+        # Another invocation may already have claimed this exact item. Its
+        # lease must remain intact, and its launch must not be repeated.
+        if (item.dispatch_status != "pending" or expected_identity != (
+            item.scope_id, item.dispatch_nonce, item.dispatch_head_ref, item.dispatch_base_ref,
+        )):
+            await db.commit()
+            return False
+        if (not await self._dispatch_authorized(db, scope, require_autonomy=require_autonomy)
+            or scope.preset_id != preset_id or owner is None or not owner.enabled
+            or owner.preset_id != preset_id):
+            item.pending_reason = "leader_unavailable"
+            await db.commit()
+            return False
+        if await self.slot_is_busy(db, owner_slot_id, exclude_item_id=item_id):
+            item.owner_slot_id = owner_slot_id
+            item.routing_method = routing_method
+            item.pending_reason = "queued_slot_busy"
+            await db.commit()
+            return False
+        if await self.scope_active_count(db, scope_id, exclude_item_id=item_id) >= scope.max_concurrent_dispatched:
+            item.pending_reason = "queued_repo_cap"
+            await db.commit()
+            return False
+        # "dispatched" includes the committed start intent. A crash after
+        # this boundary requires recovery; it cannot trigger a second launch.
+        item.dispatch_status = "dispatched"
+        item.owner_slot_id = owner_slot_id
+        item.routing_method = routing_method
+        item.pending_reason = None
+        item.dispatched_at = datetime.utcnow()
+        item.updated_at = item.dispatched_at
+        # Parallel outcomes must not race to allocate the team's first audit
+        # identity after both launches. Allocate under the same short lock.
+        from app.services.factory_audit_service import context_key_for
+        await context_key_for(db, "team", preset_id)
+        await context_key_for(db, "scope", scope_id)
+        await context_key_for(db, "item", item_id)
+        await db.commit()
+        return True
+
+    async def scope_active_count(
+        self, db: AsyncSession, scope_id: int, *, exclude_item_id: int | None = None,
+    ) -> int:
         return int(
             (
                 await db.execute(
@@ -770,7 +874,8 @@ class GithubDispatchService:
                     .select_from(GithubWorkItem)
                     .where(
                         GithubWorkItem.scope_id == scope_id,
-                        GithubWorkItem.dispatch_status.in_(_SCOPE_CONCURRENCY_STATUSES),
+                        occupied_work_condition(),
+                        GithubWorkItem.id != exclude_item_id if exclude_item_id is not None else True,
                     )
                 )
             ).scalar_one()
@@ -828,6 +933,7 @@ class GithubDispatchService:
         launcher=None,
         issue_labels_by_number: dict[int, list[str]] | None = None,
         issue_details_by_number: dict[int, dict] | None = None,
+        require_autonomy: bool = False,
     ) -> None:
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
@@ -845,10 +951,7 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
             await db.commit()
             return
-        slots_dispatched_this_batch: set[int] = set()
-        scope_dispatched_this_batch = 0
         await github_workspace_service.reclaim_stale(db, scope)
-        scope_active = await self.scope_active_count(db, scope.id)
 
         pending = (
             await db.execute(
@@ -883,11 +986,6 @@ class GithubDispatchService:
                     "dispatch_label_removed",
                     note,
                 )
-                await db.commit()
-                continue
-            if scope_active + scope_dispatched_this_batch >= scope.max_concurrent_dispatched:
-                item.pending_reason = "queued_repo_cap"
-                item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
             available_memory_mb = self._available_memory_mb()
@@ -925,15 +1023,6 @@ class GithubDispatchService:
                 await db.commit()
                 continue
             owner_slot = slots_by_id.get(owner_slot_id)
-            if owner_slot_id in slots_dispatched_this_batch or await self.slot_is_busy(
-                db, owner_slot_id
-            ):
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
-                item.pending_reason = "queued_slot_busy"
-                item.updated_at = datetime.utcnow()
-                await db.commit()
-                continue
             ambiguity_note = await self._session_ambiguity_note(db, owner_slot_id)
             if ambiguity_note is not None:
                 item.owner_slot_id = owner_slot_id
@@ -943,8 +1032,18 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            # Claim before acquire/reset/configure. A second invocation cannot
+            # reset a workspace already used by a committed start intent.
+            if not await self._claim_dispatch_start(
+                db, scope, item, owner_slot_id=owner_slot_id,
+                routing_method=method, require_autonomy=require_autonomy,
+            ):
+                continue
+            start_identity = (item.scope_id, item.owner_slot_id, item.dispatch_nonce,
+                              item.dispatch_head_ref, item.dispatch_base_ref)
             workspace = await github_workspace_service.acquire(db, scope, item)
             if workspace is None:
+                item.dispatch_status = "pending"
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_no_workspace"
@@ -1000,6 +1099,13 @@ class GithubDispatchService:
                     keep_lease=exc.restoration_failed,
                 )
                 continue
+            await db.refresh(item)
+            if item.dispatch_status != "dispatched" or start_identity != (
+                item.scope_id, item.owner_slot_id, item.dispatch_nonce,
+                item.dispatch_head_ref, item.dispatch_base_ref,
+            ):
+                await db.commit()
+                continue
             attempt = await self.prepare_attempt(
                 db,
                 item,
@@ -1007,6 +1113,13 @@ class GithubDispatchService:
                 routing_method=method,
                 base_ref=attempt_base_ref,
             )
+            if not await self._dispatch_authorized(
+                db, scope, require_autonomy=require_autonomy, owner_slot_id=attempt.owner_slot_id,
+            ):
+                item.dispatch_status = "pending"
+                item.pending_reason = "leader_unavailable"
+                await db.commit()
+                continue
             try:
                 leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
                 leader_member = (
@@ -1093,8 +1206,6 @@ class GithubDispatchService:
                             pane_pid,
                             item.id,
                         )
-                slots_dispatched_this_batch.add(attempt.owner_slot_id)
-                scope_dispatched_this_batch += 1
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
             await db.commit()
@@ -1896,9 +2007,17 @@ class GithubDispatchService:
         fact in the handoff commit and a separate notice fact: applied, or
         uncertain when the send fails after the commit.
         """
+        expected_nonce = item.dispatch_nonce
+        await db.commit()
+        await db.execute(update(AgentTeamPreset).where(
+            AgentTeamPreset.id == scope.preset_id,
+        ).values(updated_at=AgentTeamPreset.updated_at))
+        await db.refresh(item)
+        if item.dispatch_nonce != expected_nonce or item.scope_id != scope.id:
+            raise ResumeAttemptError("attempt_changed", "The handoff attempt changed")
         if item.owner_slot_id != initiating_slot_id:
             raise ResumeAttemptError("not_item_owner", "Only the current owner may initiate a handoff")
-        target = await db.get(AgentTeamSlot, target_slot_id)
+        target = await db.get(AgentTeamSlot, target_slot_id, populate_existing=True)
         if (
             target is None
             or target.preset_id != scope.preset_id
@@ -1908,6 +2027,8 @@ class GithubDispatchService:
                 "invalid_handoff_target",
                 "Handoff target must be an enabled slot in the same preset",
             )
+        if await self.slot_is_busy(db, target_slot_id, exclude_item_id=item.id):
+            raise ResumeAttemptError("handoff_target_busy", "The handoff target has other work")
         item.handoff_state = "pending"
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()

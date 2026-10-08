@@ -896,3 +896,143 @@ async def test_design_review_uses_fresh_pr_identity_without_code_verified_head(d
     team.item.pr_number=None;await db.commit()
     summary=await attention.summary(db,team.preset.id,team.client)
     assert summary["actions"][0]["state"]=="pr_identity_unavailable" and not summary["coverage_complete"]
+
+
+async def sibling_scope(db, team):
+    scope = TeamGithubScope(preset_id=team.preset.id, repo_owner="o", repo_name="website",
+        repo_path="/tmp/fixture-website", max_concurrent_dispatched=1)
+    db.add(scope); await db.flush()
+    db.add(GithubWorkspace(scope_id=scope.id, path="/tmp/fixture-website-ws"))
+    await db.commit()
+    await service.configure(db, scope.id, CoordinationPolicy(expected_version=0, enabled=True, issue_numbers=[7, 8]))
+    client = Client()
+    for issue in client.issues.values():
+        issue["repository_url"] = "https://api.github.com/repos/o/website"
+    return scope, client
+
+
+@pytest.mark.asyncio
+async def test_one_leader_can_assess_two_repositories_with_same_issue_numbers(db, team):
+    sibling, client = await sibling_scope(db, team)
+    # The website has its own issue 7, with no Deck PR or Deck attempt.
+    client.issues[7]["state"] = "closed"
+    await service.reconcile(db, team.scope_id, team.client)
+    await service.reconcile(db, sibling.id, client)
+    first = await fresh_report(db, team)
+    await service.assess(db, team.scope_id, team.leader, first, team.client)
+    read = await service.request(db, sibling.id, principal=team.leader, client=client)
+    assert read["repo"] == "o/website"
+    assert read["observations"][0]["github_state"] == "closed"
+    assert read["observations"][0]["pr_number"] is None
+    receipt = CoordinationAssessment(generation=read["generation"], request_sequence=read["request_sequence"],
+        snapshot_token=read["snapshot_token"], entries=[
+            {"issue_number": 7, "disposition": "completed", "reason": "complete", "required_actor": "none",
+             "evidence_issue_numbers": [7]},
+            {"issue_number": 8, "disposition": "eligible", "reason": "admission", "required_actor": "leader",
+             "evidence_issue_numbers": [8]},
+        ])
+    await service.assess(db, sibling.id, team.leader, receipt, client)
+    assert (await service.summary(db, team.scope_id))["assessment_current"]
+    assert (await service.summary(db, sibling.id))["assessment_current"]
+    assert (await service.summary(db, team.scope_id))["observations"][0]["pr_number"] == 25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["start", "prepared", "handoff", "disable", "add_scope", "delete_scope"])
+async def test_sibling_capacity_or_scope_change_refuses_stale_assessment(db, team, change):
+    sibling, _client = await sibling_scope(db, team)
+    receipt = await fresh_report(db, team)
+    if change in {"start", "prepared", "handoff"}:
+        db.add(GithubWorkItem(scope_id=sibling.id, issue_number=7, issue_title="Sibling", issue_url="v",
+            github_updated_at=datetime.utcnow(), owner_slot_id=team.item.owner_slot_id,
+            dispatch_status="pending" if change == "prepared" else "dispatched",
+            dispatch_nonce="private-sibling-nonce" if change == "prepared" else None,
+            handoff_state="pending" if change == "handoff" else None,
+            handoff_target_slot_id=team.leader.team_slot_id if change == "handoff" else None))
+    elif change == "disable":
+        sibling.enabled = False
+    elif change == "add_scope":
+        db.add(TeamGithubScope(preset_id=team.preset.id, repo_owner="o", repo_name="third", repo_path="/tmp/third"))
+    else:
+        await db.delete(sibling)
+    await db.commit()
+    with pytest.raises(CoordinationError, match="coordination_read_changed"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert (await service.state(db, team.scope_id)).assessment_revision == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_sibling_still_reserves_slots_without_private_projection(db, team):
+    import json
+    sibling, _client = await sibling_scope(db, team)
+    sibling.enabled = False
+    db.add(GithubWorkItem(scope_id=sibling.id, issue_number=7, issue_title="Sibling", issue_url="v",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending", dispatch_nonce="private-sibling-nonce",
+        owner_slot_id=team.item.owner_slot_id))
+    await db.commit()
+    read = await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+    assert read["active_implementations"] == 0  # Repository limits stay local.
+    assert read["shared_slot_capacity"]["busy_slot_ids"] == [team.item.owner_slot_id]
+    assert "private-sibling-nonce" not in json.dumps(read, default=str)
+
+
+@pytest.mark.asyncio
+async def test_new_sibling_reservation_at_write_boundary_cannot_send_mail(db, team, monkeypatch):
+    sibling, _client = await sibling_scope(db, team)
+    original = service._context
+
+    async def changed_context(*args):
+        result = await original(*args)
+        db.add(GithubWorkItem(scope_id=sibling.id, issue_number=7, issue_title="New start", issue_url="v",
+            github_updated_at=datetime.utcnow(), dispatch_status="dispatched", owner_slot_id=team.item.owner_slot_id))
+        await db.flush()
+        return result
+
+    monkeypatch.setattr(service, "_context", changed_context)
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.daily_requests == 0 and row.message_id is None
+    assert team.wake.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_team_scope_overflow_refuses_context(db, team):
+    for number in range(64):
+        db.add(TeamGithubScope(preset_id=team.preset.id, repo_owner="o", repo_name=f"extra-{number}",
+            repo_path=f"/tmp/extra-{number}", enabled=False))
+    await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.error_code == "coordination_context_limit"
+    assert row.message_id is None and team.wake.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_sibling_uncertain_lease_change_refuses_stale_assessment(db, team):
+    sibling, _client = await sibling_scope(db, team)
+    item = GithubWorkItem(scope_id=sibling.id, issue_number=7, issue_title="Uncertain", issue_url="v",
+        github_updated_at=datetime.utcnow(), dispatch_status="escalated", escalation_reason="launch_outcome_unknown",
+        dispatch_nonce="private-uncertain-nonce", owner_slot_id=team.item.owner_slot_id)
+    db.add(item); await db.flush()
+    workspace = await db.scalar(select(GithubWorkspace).where(GithubWorkspace.scope_id == sibling.id))
+    workspace.leased_item_id, workspace.lease_token = item.id, "private-uncertain-lease"
+    await db.commit()
+    receipt = await fresh_report(db, team)
+    workspace.lease_token = "private-replacement-lease"
+    await db.commit()
+    with pytest.raises(CoordinationError, match="coordination_read_changed"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+
+
+@pytest.mark.asyncio
+async def test_shared_reservation_overflow_refuses_context(db, team):
+    sibling, _client = await sibling_scope(db, team)
+    for number in range(65):
+        db.add(GithubWorkItem(scope_id=sibling.id, issue_number=number + 100, issue_title="Reserved", issue_url="v",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending", dispatch_nonce=f"private-{number}",
+            owner_slot_id=team.item.owner_slot_id))
+    await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.error_code == "coordination_context_limit"
+    assert row.message_id is None and team.wake.await_count == 0

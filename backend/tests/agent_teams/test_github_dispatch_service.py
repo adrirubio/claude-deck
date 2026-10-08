@@ -2,12 +2,15 @@
 import asyncio
 import logging
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from datetime import datetime, timedelta
 from io import StringIO
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -7306,3 +7309,169 @@ async def test_dispatch_brief_contains_malformed_build_template(db):
 
     assert "Issue: #958" in brief
     assert "make -C" not in brief
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["shared_owner", "same_item", "distinct_owners", "repo_cap"])
+async def test_concurrent_dispatch_claims_before_workspace_effects(tmp_path, monkeypatch, case):
+    """Two independent WAL connections reach the old race at the same time."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'dispatch.db'}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def pragmas(connection, _):
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with maker() as db:
+        preset, slots, scope = await _team(db)
+        other_scope = scope
+        other_owner = slots[1]
+        if case in {"shared_owner", "distinct_owners"}:
+            other_scope = TeamGithubScope(preset_id=preset.id, repo_owner="o", repo_name="website",
+                repo_path="/tmp/website", github_auth_mode="ambient", base_ref="origin/master")
+            db.add(other_scope); await db.flush()
+            db.add(GithubWorkspace(scope_id=other_scope.id, path="/tmp/website-ws"))
+        if case in {"distinct_owners", "repo_cap"}:
+            other_owner = AgentTeamSlot(preset_id=preset.id, position=2, display_name="Second owner",
+                provider="claude-code", repo_id="website", repo_path="/tmp/website", repo_name="website",
+                area_labels=["area:website"], enabled=True)
+            db.add(other_owner); await db.flush()
+        if case == "repo_cap":
+            scope.max_concurrent_dispatched = 1
+        scope.github_auth_mode = "ambient"
+        first = GithubWorkItem(scope_id=scope.id, issue_number=9000, issue_title="First", issue_url="u",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending")
+        db.add(first); await db.flush()
+        second = first
+        if case != "same_item":
+            second = GithubWorkItem(scope_id=other_scope.id,
+                issue_number=9001 if case == "repo_cap" else 9000,
+                issue_title="Second", issue_url="v", github_updated_at=datetime.utcnow(), dispatch_status="pending")
+            db.add(second)
+        await db.commit()
+        scope_ids = (scope.id, other_scope.id)
+        preset_id, before_revision = preset.id, preset.updated_at
+
+    arrived, gate = 0, asyncio.Event()
+
+    async def reach_claim(*_args):
+        nonlocal arrived
+        arrived += 1
+        if arrived == 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), timeout=10)
+        return None
+
+    reset, configure = AsyncMock(), AsyncMock()
+    brief = AsyncMock()
+    launcher = AsyncMock(return_value=SimpleNamespace(launch_id=None, items=[]))
+    monkeypatch.setattr(github_dispatch_service, "_session_ambiguity_note", reach_claim)
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", brief)
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", reset)
+    monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", configure)
+
+    async def dispatch(index):
+        async with maker() as db:
+            scope = await db.get(TeamGithubScope, scope_ids[index])
+            slots = list((await db.scalars(select(AgentTeamSlot).where(
+                AgentTeamSlot.preset_id == preset_id))).all())
+            label = "area:website" if index == 1 and case in {"distinct_owners", "repo_cap"} else "area:backend"
+            labels = {9000: ["area:backend"], 9001: ["area:website"]} if case == "repo_cap" else {9000: [label]}
+            await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+                issue_labels_by_number=labels)
+
+    try:
+        await asyncio.wait_for(asyncio.gather(dispatch(0), dispatch(1)), timeout=20)
+        expected = 2 if case == "distinct_owners" else 1
+        assert launcher.await_count == brief.await_count == reset.await_count == configure.await_count == expected
+        async with maker() as db:
+            items = list((await db.scalars(select(GithubWorkItem))).all())
+            assert sum(item.dispatch_status == "dispatched" for item in items) == expected
+            assert await db.scalar(select(func.count()).select_from(GithubWorkspace).where(
+                GithubWorkspace.leased_item_id.is_not(None))) == expected
+            assert (await db.get(AgentTeamPreset, preset_id)).updated_at == before_revision
+            if case in {"shared_owner", "repo_cap"}:
+                waiting = next(item for item in items if item.dispatch_status == "pending")
+                assert waiting.pending_reason == ("queued_repo_cap" if case == "repo_cap" else "queued_slot_busy")
+                assert waiting.dispatch_nonce is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["off", "hold", "owner", "leader"])
+async def test_dispatch_rechecks_authority_after_workspace_preparation(db, monkeypatch, tmp_path, gate):
+    preset, slots, scope = await _team(db)
+    preset.autonomy_enabled = True
+    item = GithubWorkItem(scope_id=scope.id, issue_number=9010, issue_title="Paused", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    db.add(item); await db.commit()
+    marker = tmp_path / "hold.json"
+    monkeypatch.setattr(settings, "github_coordination_hold_paths", [str(marker)])
+    monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
+
+    async def change_authority(*_args, **_kwargs):
+        if gate == "off":
+            preset.autonomy_enabled = False
+        elif gate == "hold":
+            marker.write_text("{}")
+        elif gate == "owner":
+            slots[1].enabled = False
+        else:
+            slots[0].enabled = False
+        await db.commit()
+
+    monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", change_authority)
+    launcher, brief = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", brief)
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        require_autonomy=True, issue_labels_by_number={9010: ["area:backend"]})
+    assert launcher.await_count == brief.await_count == 0
+    assert item.dispatch_status == "pending"
+    assert item.dispatch_nonce is not None  # Retain the prepared attempt for explicit resume.
+
+
+@pytest.mark.asyncio
+async def test_handoff_cannot_reserve_another_items_owner(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    current = GithubWorkItem(scope_id=scope.id, issue_number=9020, issue_title="Handoff", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="dispatched", owner_slot_id=slots[0].id)
+    busy = GithubWorkItem(scope_id=scope.id, issue_number=9021, issue_title="Busy", issue_url="v",
+        github_updated_at=datetime.utcnow(), dispatch_status="dispatched", owner_slot_id=slots[1].id)
+    db.add_all([current, busy]); await db.commit()
+    notice = AsyncMock()
+    monkeypatch.setattr(agent_mail_service, "send_direct_message", notice)
+    with pytest.raises(ValueError, match="other work"):
+        await github_dispatch_service.initiate_handoff(db, current, scope,
+            initiating_slot_id=slots[0].id, target_slot_id=slots[1].id)
+    await db.rollback(); await db.refresh(current)
+    assert current.handoff_state is None and current.handoff_target_slot_id is None
+    assert notice.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_committed_start_without_launch_cannot_be_started_again(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(scope_id=scope.id, issue_number=9030, issue_title="Interrupted start", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    db.add(item); await db.commit()
+    assert await github_dispatch_service._claim_dispatch_start(db, scope, item,
+        owner_slot_id=slots[1].id, routing_method="label", require_autonomy=False)
+    reset, launcher = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", reset)
+    maker = async_sessionmaker(db.bind, expire_on_commit=False)
+    async with maker() as restarted:
+        refreshed_scope = await restarted.get(TeamGithubScope, scope.id)
+        refreshed_slots = list((await restarted.scalars(select(AgentTeamSlot))).all())
+        await github_dispatch_service.dispatch_pending(restarted, refreshed_scope, refreshed_slots,
+            launcher=launcher, issue_labels_by_number={9030: ["area:backend"]})
+        persisted = await restarted.get(GithubWorkItem, item.id)
+        assert persisted.dispatch_status == "dispatched" and persisted.dispatch_nonce is None
+        assert persisted.dispatched_at is not None
+    assert reset.await_count == launcher.await_count == 0

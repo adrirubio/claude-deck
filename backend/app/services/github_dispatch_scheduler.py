@@ -164,6 +164,7 @@ class GithubDispatchScheduler:
                 launcher=launcher,
                 issue_labels_by_number=issue_labels_by_number,
                 issue_details_by_number=issues_by_number,
+                require_autonomy=True,
             )
             await db.commit()
             if not await self._scope_remains_autonomous(db, scope.id):
