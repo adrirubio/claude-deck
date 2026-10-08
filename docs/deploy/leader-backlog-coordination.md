@@ -32,9 +32,46 @@ Concurrent configuration changes return a conflict; review before retrying.
 Changing configuration does not reset the persisted daily quota or request
 sequence. Disabling, re-enabling and restarting do not create a fresh allowance.
 
-Coordination requires capability-token enforcement, one enabled repository scope
-in the preset, and an exact current, connected, opted-in Leader binding. Existing
-shared-slot cross-scope concerns remain tracked separately in #389.
+Coordination requires capability-token enforcement and an exact current,
+connected Leader binding with Mail enabled. A team can coordinate more than one
+repository. Configure each repository scope separately.
+
+## Coordinate multiple repositories
+
+The designated Leader reads and submits one assessment for each scope. Each
+assessment has its own policy, assigned issues, token, sequence and notification
+limit. An issue number belongs to its repository. For example, `owner/code#7`
+and `owner/site#7` are separate issues.
+
+Repository limits and workspace counts apply to that repository. The
+`shared_slot_capacity` field lists occupied and available slot IDs across the
+whole team. Active work, prepared starts, retained uncertain launch leases and
+pending handoffs reserve their owners. A pending handoff also reserves its
+target. A disabled scope can retain a reservation. Human review or merge wait
+does not reserve an implementation slot.
+
+Dispatch reserves the owner and repository capacity in a short database
+transaction before it resets a workspace or sends a brief. `dispatched` includes
+this durable start intent. It does not prove that the harness launched or that
+the Leader approved work. A stale call cannot repeat the start. A crash after
+the reservation requires the existing monitored recovery procedure. Known
+workspace or authentication refusals return to the pending queue. A retained
+uncertain launch stays occupied until its lease is released through the existing
+authorized procedure. A busy handoff target is refused before notice delivery.
+Delayed queue and refusal writes cannot undo an operator cancellation. Deck
+checks the exact start and its current authority again after brief delivery.
+If that check fails, Deck does not call the launcher. It retains the delivered
+brief and current start because an existing harness may already have received
+the message. A late launch result cannot revive a cancelled attempt.
+
+Sibling scope changes, new starts and handoffs invalidate stale assessments.
+Scope, slot and participant authority checks remain in force. Reads have finite
+context bounds. Overflow refuses coordination instead of hiding relevant work.
+
+Cross-repository dependencies still require explicit full GitHub links in the
+release plan. The Leader must confirm those prerequisites before admission.
+Deck does not provide a cross-repository dependency graph or an atomic merge of
+several repositories. Keep release publication under the configured review gate.
 
 ## Leader protocol
 

@@ -28,7 +28,9 @@ from app.services.agent_mail_service import (
     MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service,
 )
 from app.services.github_client import GithubClient, github_client
-from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_dispatch_service import (
+    github_dispatch_service, reserved_work_condition,
+)
 from app.services.github_recovery_gate import configured_recovery_only_attempt
 from app.utils import peer_process
 
@@ -220,11 +222,24 @@ class GithubCoordinationService:
             raise CoordinationError("autonomy_off")
         if code := hold_code():
             raise CoordinationError(code)
-        count = await db.scalar(select(func.count()).select_from(TeamGithubScope).where(
-            TeamGithubScope.preset_id == scope.preset_id, TeamGithubScope.enabled.is_(True),
-        ))
-        if count != 1:
-            raise CoordinationError("single_scope_required")
+        team_scopes = list((await db.scalars(select(TeamGithubScope).where(
+            TeamGithubScope.preset_id == scope.preset_id,
+        ).order_by(TeamGithubScope.id).limit(_MAX_CONTEXT_ROWS + 1)
+            .execution_options(populate_existing=True))).all())
+        # Disabled sibling scopes can still hold an owner or a handoff. Do not
+        # hide that capacity until the attempt releases it.
+        shared_reservations = (TeamGithubScope.preset_id == scope.preset_id) & reserved_work_condition()
+        reservations = list((await db.scalars(select(GithubWorkItem).join(
+            TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id,
+        ).where(shared_reservations).order_by(GithubWorkItem.id)
+            .limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        shared_leases_query = select(GithubWorkspace).join(
+            GithubWorkItem, GithubWorkItem.id == GithubWorkspace.leased_item_id,
+        ).join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id).where(shared_reservations)
+        shared_leases = list((await db.scalars(shared_leases_query.order_by(GithubWorkspace.id)
+            .limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        if any(len(rows) > _MAX_CONTEXT_ROWS for rows in (team_scopes, reservations, shared_leases)):
+            raise CoordinationError("coordination_context_limit")
         leader, slots = await self.current_leader(db, scope)
         # Historical unrelated attempts cannot change capacity or assigned gates.
         relevant_items = (GithubWorkItem.scope_id == scope_id) & or_(
@@ -300,19 +315,38 @@ class GithubCoordinationService:
                 "work_status": item.dispatch_status if item else None,
                 "pr_number": item.pr_number if item else None,
             })
+        busy_slots = set()
+        for item in reservations:
+            if item.owner_slot_id is not None:
+                busy_slots.add(item.owner_slot_id)
+            if item.handoff_state == "pending" and item.handoff_target_slot_id is not None:
+                busy_slots.add(item.handoff_target_slot_id)
         public = {
+            "repo": f"{scope.repo_owner}/{scope.repo_name}",
             "issues": observations,
-            "active_implementations": sum(i.dispatch_status in {"dispatched", "verifying"} for i in items),
+            "active_implementations": await github_dispatch_service.scope_active_count(db, scope_id),
             "execution_limit": scope.max_concurrent_dispatched,
             "available_workspaces": sum(w.enabled and w.dispatchable and not w.provision_error
                                         and w.leased_item_id is None and w.lease_token is None
                                         for w in workspaces),
             "leased_workspaces": sum(w.leased_item_id is not None or w.lease_token is not None for w in workspaces),
+            "shared_slot_capacity": {
+                "busy_slot_ids": sorted(busy_slots),
+                "available_slot_ids": sorted(set(enabled_slots) - busy_slots),
+            },
         }
         # Private identity/authority material is hashed transiently, never projected.
         identity = {
             "boot": _BOOT_ID, "resume": preset.updated_at.isoformat(),
             "scope_revision": scope.updated_at.isoformat(),
+            "team_scopes": [[s.id, s.repo_owner, s.repo_name, s.enabled,
+                             s.updated_at.isoformat()] for s in team_scopes],
+            "reservations": [[i.id, i.scope_id, i.dispatch_status, i.owner_slot_id,
+                              i.dispatch_nonce, i.handoff_state, i.handoff_target_slot_id]
+                             for i in reservations],
+            "shared_leases": [[w.id, w.scope_id, w.leased_item_id, w.lease_token,
+                               w.leased_owner_pid, w.leased_owner_proc_start]
+                              for w in shared_leases],
             "scope_policy": {k: getattr(scope, k) for k in (
                 "base_ref", "dispatch_label", "merge_policy", "max_approval_rounds",
                 "max_verification_retries", "max_auto_merges_per_day", "continuation_enabled",
@@ -320,7 +354,8 @@ class GithubCoordinationService:
             )},
             "leader": [leader.id, leader.member_id, leader.bound_pane_pid, leader.bound_pane_proc_start,
                        leader.capability_token_hash],
-            "slots": [[s.id, s.position, s.enabled, s.role, s.area_labels] for s in slots],
+            "slots": [[s.id, s.position, s.enabled, s.role, s.area_labels,
+                       s.provider, s.updated_at.isoformat()] for s in slots],
             "members": [[m.id, m.team_slot_id] for m in sorted(members, key=lambda m: m.id)],
             "participants": [[s.id, s.member_id, s.team_slot_id, s.bound_pane_pid,
                 s.bound_pane_proc_start, s.capability_token_hash,
@@ -352,6 +387,34 @@ class GithubCoordinationService:
                 GithubWorkItem.attempt_phase == item.attempt_phase,
                 GithubWorkItem.ack_evidence_message_id == item.ack_evidence_message_id,
                 GithubWorkItem.retry_count == item.retry_count,
+            ))
+        for sibling in team_scopes:
+            authority &= exists(select(TeamGithubScope.id).where(
+                TeamGithubScope.id == sibling.id,
+                TeamGithubScope.preset_id == scope.preset_id,
+                TeamGithubScope.repo_owner == sibling.repo_owner,
+                TeamGithubScope.repo_name == sibling.repo_name,
+                TeamGithubScope.enabled == sibling.enabled,
+                TeamGithubScope.updated_at == sibling.updated_at,
+            ))
+        for reservation in reservations:
+            authority &= exists(select(GithubWorkItem.id).where(
+                GithubWorkItem.id == reservation.id,
+                GithubWorkItem.scope_id == reservation.scope_id,
+                GithubWorkItem.dispatch_status == reservation.dispatch_status,
+                GithubWorkItem.owner_slot_id == reservation.owner_slot_id,
+                GithubWorkItem.dispatch_nonce == reservation.dispatch_nonce,
+                GithubWorkItem.handoff_state == reservation.handoff_state,
+                GithubWorkItem.handoff_target_slot_id == reservation.handoff_target_slot_id,
+                reserved_work_condition(),
+            ))
+        for lease in shared_leases:
+            authority &= exists(select(GithubWorkspace.id).where(
+                GithubWorkspace.id == lease.id, GithubWorkspace.scope_id == lease.scope_id,
+                GithubWorkspace.leased_item_id == lease.leased_item_id,
+                GithubWorkspace.lease_token == lease.lease_token,
+                GithubWorkspace.leased_owner_pid == lease.leased_owner_pid,
+                GithubWorkspace.leased_owner_proc_start == lease.leased_owner_proc_start,
             ))
         for workspace in workspaces:
             authority &= exists(select(GithubWorkspace.id).where(
@@ -405,8 +468,15 @@ class GithubCoordinationService:
             AgentTeamSlot.preset_id == scope.preset_id,
         ).scalar_subquery() == len(slots)
         authority &= select(func.count()).select_from(TeamGithubScope).where(
-            TeamGithubScope.preset_id == scope.preset_id, TeamGithubScope.enabled.is_(True),
-        ).scalar_subquery() == 1
+            TeamGithubScope.preset_id == scope.preset_id,
+        ).scalar_subquery() == len(team_scopes)
+        authority &= select(func.count()).select_from(GithubWorkItem).join(
+            TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id,
+        ).where(shared_reservations).scalar_subquery() == len(reservations)
+        authority &= select(func.count()).select_from(GithubWorkspace).join(
+            GithubWorkItem, GithubWorkItem.id == GithubWorkspace.leased_item_id,
+        ).join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id
+        ).where(shared_reservations).scalar_subquery() == len(shared_leases)
         return public, _digest([public, identity]), leader, authority
 
     async def _issues(self, scope, numbers, client):
@@ -623,6 +693,7 @@ class GithubCoordinationService:
                 or issue["work_status"] not in {None, "pending"}
                 or public["available_workspaces"] == 0
                 or public["active_implementations"] >= public["execution_limit"]
+                or not public["shared_slot_capacity"]["available_slot_ids"]
             ):
                 raise CoordinationError("implementation_not_available")
         entries = [e.model_dump(exclude={"human_actions"} if not e.human_actions else set())
@@ -775,6 +846,7 @@ class GithubCoordinationService:
             "execution_limit": scope.max_concurrent_dispatched,
             "available_workspaces": snapshot.get("available_workspaces"),
             "leased_workspaces": snapshot.get("leased_workspaces"),
+            "shared_slot_capacity": snapshot.get("shared_slot_capacity"),
             "eligible_count": sum(e["disposition"] == "eligible" for e in entries) if current else None,
             "entries": entries, "assessment_current": current,
             "observations": snapshot.get("issues", []),
@@ -816,6 +888,7 @@ class GithubCoordinationService:
                       active_implementations=public["active_implementations"],
                       available_workspaces=public["available_workspaces"],
                       leased_workspaces=public["leased_workspaces"])
+        result["shared_slot_capacity"] = public["shared_slot_capacity"]
         if row.snapshot_hash != fingerprint:
             result.update(assessment_current=False, eligible_count=None)
         result["snapshot_token"] = _read_token({
