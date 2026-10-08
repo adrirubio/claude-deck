@@ -334,7 +334,10 @@ def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
         return None
 
 
-PANE_COMMAND_BYTE_CAP = 4096
+# Native launch commands include the bootstrap or dispatch prompt. Keep enough
+# room for a full prompt argument (up to 128 KiB on Linux) and launch options.
+# The limit still bounds every read and rejects oversized command vectors.
+PANE_COMMAND_BYTE_CAP = 256 * 1024
 
 
 def pane_agent_argv(pane_pid: int, pane_proc_start: str) -> Optional[list[str]]:
