@@ -583,6 +583,7 @@ class Maintenance:
         """The held Git operation records its exact accepted import before release."""
         from app.services.accepted_source_imports import import_record_values, verified_import_snapshots
         from app.services.github_client import GithubTreeEntry
+        from app.services.github_approval_service import github_approval_service
         if item['active_scope_revision'] == 0:
             return {'status':'not_applicable','paths':[]}
         db.row_factory = sqlite3.Row
@@ -605,12 +606,13 @@ class Maintenance:
                 result[path] = GithubTreeEntry(path, mode, kind, sha)
             return result
         baseline, current, accepted = tree(revision['baseline_head_sha']), tree(after['head']), tree(request.accepted_tip)
-        allowed = set(json.loads(revision['allowed_paths']))
+        allowed = json.loads(revision['allowed_paths'])
         def value(entries, path):
             row = entries.get(path)
             return None if row is None else (row.mode, row.object_type, row.sha)
         outside = sorted(path for path in baseline.keys() | current.keys()
-                         if path not in allowed and value(baseline, path) != value(current, path))
+                         if not github_approval_service.path_is_allowed(path, allowed)
+                         and value(baseline, path) != value(current, path))
         if not outside: return {'status':'not_needed','paths':[]}
         if len(outside) > 64: raise ValueError('source_import_path_limit')
         snapshots = verified_import_snapshots(baseline, current, accepted, allowed, outside)
