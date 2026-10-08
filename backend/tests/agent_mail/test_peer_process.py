@@ -9,6 +9,35 @@ def test_format_endpoint_ipv4():
     assert peer_process.format_endpoint("127.0.0.1", 8000) == "0100007F:1F40"
 
 
+@pytest.mark.parametrize("prompt_bytes", [4_812, 11_891, 65_536, 131_071])
+def test_pane_agent_argv_accepts_native_startup_prompts(tmp_path, monkeypatch, prompt_bytes):
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT)
+    prompt = "x" * prompt_bytes
+    (proc / "cmdline").write_bytes(b"/opt/tools/claude\0--model\0sonnet\0" + prompt.encode() + b"\0")
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+
+    assert peer_process.pane_agent_argv(1234, "120913170") == [
+        "/opt/tools/claude", "--model", "sonnet", prompt,
+    ]
+    assert peer_process.pane_agent_argv(1234, "different-generation") is None
+
+
+def test_pane_agent_argv_accepts_exact_cap_and_rejects_overflow(tmp_path, monkeypatch):
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    prefix = b"claude\0"
+    prompt = b"x" * (peer_process.PANE_COMMAND_BYTE_CAP - len(prefix) - 1)
+    (proc / "cmdline").write_bytes(prefix + prompt + b"\0")
+
+    assert peer_process.pane_agent_argv(1234, "120913170") == ["claude", prompt.decode()]
+    (proc / "cmdline").write_bytes(prefix + prompt + b"x\0")
+    assert peer_process.pane_agent_argv(1234, "120913170") is None
+
+
 def test_format_endpoint_ipv6():
     assert peer_process.format_endpoint("::1", 8000) == (
         "00000000000000000000000001000000:1F40"
