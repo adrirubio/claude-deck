@@ -58,6 +58,11 @@ the reservation requires the existing monitored recovery procedure. Known
 workspace or authentication refusals return to the pending queue. A retained
 uncertain launch stays occupied until its lease is released through the existing
 authorized procedure. A busy handoff target is refused before notice delivery.
+Delayed queue and refusal writes cannot undo an operator cancellation. Deck
+checks the exact start and its current authority again after brief delivery.
+If that check fails, Deck does not call the launcher. It retains the delivered
+brief and current start because an existing harness may already have received
+the message. A late launch result cannot revive a cancelled attempt.
 
 Sibling scope changes, new starts and handoffs invalidate stale assessments.
 Scope, slot and participant authority checks remain in force. Reads have finite
