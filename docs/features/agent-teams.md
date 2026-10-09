@@ -2,6 +2,8 @@
 
 Agent Teams are saved rosters of local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
 
+For the complete operator and supervisor workflow, use the [Supervised factory playbook](../guide/supervised-factory-playbook.md). It covers roster preparation, goals, external review, maintenance and recovery.
+
 ## Teams inside the work flow
 
 Teams retains saved rosters and manual launch planning alongside factory work. Overview/Work span teams; here configure a roster and its repositories. The preset's `leader_slot_id` supplies Leader authority. Slot order and descriptive Role text do not select the Leader.
