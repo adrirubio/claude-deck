@@ -2,7 +2,7 @@
 
 Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
-Older packaged releases can show the earlier configuration home page. Use the current source to evaluate the Overview and Work pages. The installation prerequisites still apply.
+Claude Deck 3.0.0 includes the Overview, Work, Repositories and Harnesses pages. Older packaged releases can show the earlier configuration home page. The installation prerequisites still apply.
 
 ## Native Installation
 
@@ -65,6 +65,45 @@ Claude Deck starts the backend at `http://localhost:8000` and the frontend dev s
 # Check frontend and docs
 ./scripts/build.sh
 ```
+
+## Upgrade and Rollback
+
+Claude Deck runs from a clone of the repository. An upgrade changes the source. It keeps your database, your operator and GitHub settings in `backend/.env`, and your agent configuration files.
+
+### Upgrade
+
+1. Stop Claude Deck.
+2. Copy the database while Deck is stopped. The database uses SQLite WAL mode, so committed data can be in the `-wal` file. Use the SQLite backup command and keep the copy outside the repository:
+
+```bash
+sqlite3 backend/claude_registry.db ".backup '$HOME/claude_registry.db.before-3.0.0'"
+```
+
+Without `sqlite3`, copy `claude_registry.db`, `claude_registry.db-wal` and `claude_registry.db-shm` together. If `DATABASE_URL` in `backend/.env` sets another database path, back up that database.
+
+3. Copy `backend/.env` if you have one. Also create a Backup in the Backup page if you plan to edit agent configuration.
+4. Update the source and install the dependencies:
+
+```bash
+git fetch --tags
+git checkout v3.0.0
+./scripts/install.sh
+```
+
+5. Start Claude Deck with `./scripts/dev.sh`.
+
+Do not delete the database. At startup, Deck adds the listed missing columns and indexes in place and records one-time data migrations. The first start after an upgrade also installs one audit coverage marker. See [Factory audit and metrics](/guide/factory-audit-and-metrics).
+
+### Rollback
+
+The startup steps do not support downgrade. To roll back, restore the copy you made before the upgrade:
+
+1. Stop Claude Deck.
+2. Check out the earlier version. For example, `git checkout v2.0.1`, then run `./scripts/install.sh`.
+3. Remove `backend/claude_registry.db-wal` and `backend/claude_registry.db-shm`. A stale file from 3.0.0 can damage the restored database. Then replace `backend/claude_registry.db` with your copy, for example `~/claude_registry.db.before-3.0.0`.
+4. Keep `backend/.env` unchanged. Start Claude Deck.
+
+Records written after the upgrade are not in the copy. They are lost when you restore it. Rollback does not change your agent configuration files. Use the Backup page to restore those files.
 
 ## Configuration
 

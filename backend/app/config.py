@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # Application settings
     app_name: str = "Claude Deck"
-    app_version: str = "2.0.1"
+    app_version: str = "3.0.0"
     debug: bool = False
 
     # API settings
