@@ -24,6 +24,8 @@ Technical operators with existing repositories, local agent CLIs, native toolcha
 
 ## Daily operating flow
 
+For delegated backlog delivery, use the [Supervised factory playbook](docs/guide/supervised-factory-playbook.md) and its [supervisor skill](skills/deck-factory-supervisor/SKILL.md). They cover team preparation, goals, independent review, factory maintenance and completion.
+
 1. Read Overview for complete filtered tracking counts and configured versus effective intake.
 2. Open Work or Repositories using explicit team, scope and harness filters.
 3. Inspect an owner, waiting reason, PR and current observations; session/Mail context remains read-only.

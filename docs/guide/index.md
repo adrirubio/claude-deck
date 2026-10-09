@@ -40,6 +40,7 @@ Repository setup uses a guided, observation-only access and label check. Leader 
 
 ## Next steps
 
+- [Supervised factory playbook](./supervised-factory-playbook.md) — delegate a backlog, provision a team, supervise delivery, review fixes and maintain the factory.
 - [Installation](/guide/installation)
 - [Quick Start](/guide/quick-start)
 - [Factory API](/api/factory)
