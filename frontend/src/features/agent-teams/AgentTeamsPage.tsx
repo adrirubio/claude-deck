@@ -18,6 +18,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { formatServerTime } from '@/lib/serverTime'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -122,12 +123,12 @@ const emptySlot: AgentTeamSlotInput = {
 }
 
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
+  return formatServerTime(value, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value))
+  })
 }
 
 function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {

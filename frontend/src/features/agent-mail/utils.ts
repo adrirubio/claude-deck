@@ -5,6 +5,7 @@ import type {
   MailMessageResponse,
   MailRequestStatus,
 } from '@/types/agentMail'
+import { formatServerTime } from '@/lib/serverTime'
 
 export const KIND_LABEL: Record<MailMessageKind, string> = {
   message: 'Message',
@@ -118,12 +119,12 @@ export function requestBadgeClass(status?: MailRequestStatus | null): string {
 
 export function formatDateTime(value?: string | null): string {
   if (!value) return 'Never'
-  return new Intl.DateTimeFormat(undefined, {
+  return formatServerTime(value, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value))
+  })
 }
 
 export function messageSummary(message: MailMessageResponse): string {

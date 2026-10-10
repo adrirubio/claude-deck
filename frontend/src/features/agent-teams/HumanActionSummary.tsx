@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { apiClient } from '@/lib/api'
+import { formatServerTime, parseServerTime } from '@/lib/serverTime'
 
 type HumanAction = {
   scope_id: number; repo: string; issue_number: number; kind: string; state: string
@@ -31,7 +32,7 @@ const states: Record<string, string> = {
 }
 function timestamp(value: string | undefined) {
   if (!value) return NaN
-  return Date.parse(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`)
+  return parseServerTime(value).getTime()
 }
 
 export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: number; onInspectAutonomy: () => void }) {
@@ -112,9 +113,9 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
       {!historical && action.state==='waiting_for_prerequisites' && <p className="mt-2 text-muted-foreground">This decision is not ready. Complete its required evidence first.</p>}
       {action.prerequisite_issue_numbers.length>0 && <p className="mt-2 text-muted-foreground">Required prerequisite evidence: {action.prerequisite_issue_numbers.map((n) => `#${n}`).join(', ')}. Their closure alone does not record acceptance.</p>}
       {action.expected_head_sha && <p className="mt-1 text-muted-foreground">Reported PR head: {action.expected_head_sha.slice(0, 8)}. Review current checks and evidence on GitHub.</p>}
-      {action.pr_observed_at && <p className="mt-1 text-muted-foreground">PR observed: {new Date(timestamp(action.pr_observed_at)).toLocaleString()}</p>}
-      {action.instructions_updated_at && <p className="mt-1 text-muted-foreground">Issue instructions updated: {new Date(timestamp(action.instructions_updated_at)).toLocaleString()}</p>}
-      <p className="mt-1 text-muted-foreground">{action.repo} · {action.source==='leader' ? 'Reported by the Leader' : 'Reported by dispatch'}{action.last_assessed_at ? ` · Assessment ${new Date(timestamp(action.last_assessed_at)).toLocaleString()}` : ''}</p>
+      {action.pr_observed_at && <p className="mt-1 text-muted-foreground">PR observed: {formatServerTime(action.pr_observed_at)}</p>}
+      {action.instructions_updated_at && <p className="mt-1 text-muted-foreground">Issue instructions updated: {formatServerTime(action.instructions_updated_at)}</p>}
+      <p className="mt-1 text-muted-foreground">{action.repo} · {action.source==='leader' ? 'Reported by the Leader' : 'Reported by dispatch'}{action.last_assessed_at ? ` · Assessment ${formatServerTime(action.last_assessed_at)}` : ''}</p>
     </li>)}</ul>}
     <p className="mt-3 text-xs text-muted-foreground">These requests do not approve work or satisfy a milestone. Waiting gates require their evidence and recorded decision.</p>
   </section>
