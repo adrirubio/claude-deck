@@ -5,7 +5,7 @@ This page shows who does what when a Deck team works on a GitHub backlog. Use it
 Select a figure to open it at full size. Parts marked **Planned (v3.1)** come from proposal [#506](https://github.com/adrirubio/claude-deck/issues/506). They are not in Deck 3.0.0. In the figures, green boxes are planned.
 
 ::: info Naming
-This page calls the human role the **Director**. Agent Mail already uses that name. The Deck 3.0.0 UI and API still say *operator* for the same role, for example the operator token and the operator API. In code, `operator` remains the name of the Director's authority interface. A supervisor uses it only under delegation.
+This page calls the human role the **Director**. Agent Mail already uses that name. The Deck 3.0.0 UI and API still say *operator* for the same role, for example the operator token and the operator API. In code, `operator` remains the name of the Director's authority interface. A supervisor uses it only under delegation. A later release will call the token the **Director key** in the UI ([#518](https://github.com/adrirubio/claude-deck/issues/518)).
 :::
 
 ## Kinds of actor
