@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How a Claude Deck factory is operated (#506, simplified)</title>
+<style>
+  :root {
+    --bg: #fafaf9; --ink: #1c1917; --muted: #57534e; --line: #d6d3d1; --card: #ffffff;
+    --hu: #b45309; --hu-bg: #fef3c7; --hu-ink: #78350f;
+    --ag: #6d28d9; --ag-bg: #ede9fe; --ag-ink: #4c1d95;
+    --sy: #334155; --sy-bg: #f1f5f9; --sy-ink: #1e293b;
+    --new: #15803d; --new-bg: #dcfce7; --new-ink: #14532d;
+    --bad-bg: #fee2e2;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 21px; margin: 56px 0 4px; }
+  h2 .n { display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: #fff; text-align: center; line-height: 28px; font-size: 14px; margin-right: 8px; vertical-align: 2px; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 820px; margin: 0 0 18px; }
+  .sub { color: var(--muted); margin: 0 0 18px; max-width: 840px; }
+  .ic { display: inline-block; width: 17px; height: 17px; vertical-align: -3px; margin-right: 5px; }
+  .legend { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; display: grid; gap: 8px; font-size: 13.5px; }
+  .legend .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .legend .row > b { width: 128px; color: var(--muted); font-weight: 600; }
+  .k { display: inline-flex; align-items: center; padding: 2px 9px 2px 6px; border-radius: 6px; border: 2px solid; font-weight: 600; }
+  .k.hu { background: var(--hu-bg); border-color: var(--hu); color: var(--hu-ink); }
+  .k.ag { background: var(--ag-bg); border-color: var(--ag); color: var(--ag-ink); }
+  .k.sy { background: var(--sy-bg); border-color: var(--sy); color: var(--sy-ink); }
+  .k small { font-weight: 400; margin-left: 6px; opacity: .85; }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; border: 2px solid; }
+  .sw.new { background: var(--new-bg); border-color: var(--new); }
+  .sw.fac { background: transparent; border-color: var(--ink); border-style: dashed; width: 22px; }
+  .sw.opt { background: transparent; border-color: var(--ag); border-style: dashed; }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sy-bg); padding: 1px 5px; border-radius: 4px; }
+
+  .def { display: grid; grid-template-columns: 1.3fr 1fr; gap: 18px; margin-top: 18px; }
+  .def > div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+  .def h4 { margin: 0 0 6px; font-size: 15px; }
+  .def ul { margin: 0; padding-left: 0; list-style: none; }
+  .def li { margin: 5px 0; }
+  .def .no { color: var(--muted); }
+
+  .why { background: var(--card); border: 2px solid var(--ag); border-radius: 10px; padding: 14px 16px; }
+  .why b { display: block; color: var(--ag-ink); font-size: 15px; margin-bottom: 4px; }
+  .why p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  table.duty { width: 100%; border-collapse: collapse; margin-top: 18px; background: var(--card); border: 1px solid var(--line); font-size: 14px; }
+  table.duty th, table.duty td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.duty th { background: var(--ink); color: #fff; font-size: 13.5px; }
+
+  .lanes { display: grid; grid-template-columns: 150px repeat(6, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card); font-size: 13px; }
+  .lanes > div { padding: 9px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .lanes > div:nth-child(7n) { border-right: 0; }
+  .lanes .hd { background: var(--ink); color: #fff; font-weight: 600; font-size: 13.5px; }
+  .lanes .who { font-weight: 700; line-height: 1.3; }
+  .lanes .who small { display: block; font-weight: 400; font-size: 11.5px; margin-top: 2px; }
+  .lanes .who.hu { background: var(--hu-bg); color: var(--hu-ink); }
+  .lanes .who.ag { background: var(--ag-bg); color: var(--ag-ink); }
+  .lanes .who.sy { background: var(--sy-bg); color: var(--sy-ink); }
+  .lanes .who.fac { box-shadow: inset 6px 0 0 var(--ink); padding-left: 16px; }
+  .lanes .empty { color: #a8a29e; }
+  .chip { display: inline-block; padding: 2px 7px; margin: 2px 2px 2px 0; border-radius: 5px; border: 1.5px solid #a8a29e; background: #fff; line-height: 1.35; }
+  .chip.new { background: var(--new-bg); border-color: var(--new); color: var(--new-ink); }
+  .chip.opt { border-style: dashed; }
+
+  .mock { max-width: 640px; margin: 0 auto; background: #fff; border: 2px solid var(--new); border-radius: 12px; padding: 18px 20px; box-shadow: 0 6px 24px rgba(0,0,0,.06); }
+  .mock h3 { margin: 0; font-size: 17px; }
+  .mock .meta { color: var(--muted); font-size: 13px; margin: 2px 0 14px; }
+  .mock dl { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin: 0; font-size: 14px; }
+  .mock dt { color: var(--muted); }
+  .mock dd { margin: 0; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+  .pill.ok { background: var(--new-bg); color: var(--new-ink); }
+  .pill.late { background: var(--hu-bg); color: var(--hu-ink); }
+  .pill.none { background: var(--sy-bg); color: var(--muted); }
+  .pill.abs { background: var(--bad-bg); color: #7f1d1d; }
+  .action { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--hu-bg); border: 1px solid #fcd34d; font-size: 14px; }
+  .action b { color: var(--hu-ink); }
+  .src { font-size: 11.5px; color: #78716c; font-family: ui-monospace, monospace; }
+  .variants { max-width: 640px; margin: 12px auto 0; font-size: 13px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .bucket { border-radius: 10px; padding: 14px 16px; border: 2px solid var(--line); background: var(--card); }
+  .bucket h4 { margin: 0 0 4px; font-size: 15px; }
+  .bucket p { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .bucket .arrow { font-size: 13.5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .cutlist { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .cut { border: 1.5px dashed #a8a29e; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--muted); }
+  .cut b { color: var(--ink); display: block; margin-bottom: 2px; }
+  .homes { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; background:var(--card); border:1px solid var(--line); border-left:4px solid #15803d; border-radius:0 10px 10px 0; padding:12px 16px; margin-bottom:16px; font-size:13.5px; }
+  .homes > b { width:100%; font-size:14.5px; }
+  .screens { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .scr { display:flex; flex-direction:column; gap:6px; padding:16px 18px; background:var(--card); border:2px solid var(--line); border-radius:12px; text-decoration:none; color:var(--ink); }
+  .scr:hover { border-color:#15803d; }
+  .scr .q { font-size:13px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  .scr b { font-size:17px; }
+  .scr span { font-size:13.5px; }
+  .scr .refs { font-size:12px; color:#78716c; font-family:ui-monospace,monospace; margin-top:auto; }
+  .rule { margin-top: 18px; padding: 14px 16px; border-left: 4px solid var(--ink); background: var(--card); border-radius: 0 8px 8px 0; font-size: 15px; }
+</style>
+</head>
+<body>
+<!-- Shared icons: human, AI agent, non-agent system -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-human" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/><circle cx="8.5" cy="12.5" r="2.1" fill="#fff"/><circle cx="15.5" cy="12.5" r="2.1" fill="#fff"/><rect x="8" y="16.6" width="8" height="1.7" rx=".8" fill="#fff"/><rect x="0" y="10" width="2" height="5" rx="1"/><rect x="22" y="10" width="2" height="5" rx="1"/></symbol>
+    <symbol id="i-system" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="3.4 3.35"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></symbol>
+  </defs>
+</svg>
+<main>
+
+<h1>How a Claude Deck factory is operated</h1>
+<p class="lede">This page shows the simplified #506 proposal. The Director owns the GitHub backlog. The factory is the supervisor, the controller and the team working together on it. Deck code already finds most problems; v1 collects them on one card and adds a supervisor heartbeat. The supervisor runs outside the controller. It is optional during normal running and required for factory maintenance.</p>
+<div class="legend">
+  <div class="row"><b>Kind of actor</b>
+    <span class="k hu"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg>Human<small>the Director</small></span>
+    <span class="k ag"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>AI agent<small>LLM sessions: supervisor, Leader, implementers, verifier</small></span>
+    <span class="k sy"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Non-agent system<small>deterministic software: Deck controller, scripts, GitHub</small></span>
+  </div>
+  <div class="row"><b>Other marks</b>
+    <span><i class="sw fac"></i>The factory boundary</span>
+    <span><i class="sw new"></i>New in v1</span>
+    <span><i class="sw opt"></i>Optional</span>
+    <span style="color:var(--muted)">Arrow colour = the kind of actor that acts</span>
+  </div>
+</div>
+
+<!-- ============ 1. Hierarchy ============ -->
+<h2><span class="n">1</span>The hierarchy of roles</h2>
+<p class="sub">The line of command runs Director → Leader → implementers and verifiers. The supervisor and the grooming helper are staff roles beside that line, and both are optional. Without a supervisor, the Leader reports directly to the Director. Each team has one Leader; the number of implementers and verifiers is the Director’s choice. Scope limits such as <code>max_concurrent_dispatched</code> cap concurrent work, not team size. The non-agent systems are not ranks: they enforce the hierarchy and keep the record.</p>
+<figure>
+<svg viewBox="0 0 1000 540" role="img" aria-label="Hierarchy: Director, staff roles, Leader, implementers and verifier; non-agent systems below">
+  <!-- line of command -->
+  <path d="M500,92 L500,228" stroke="#1c1917" stroke-width="3"/>
+  <path d="M500,318 L500,336 L300,336 L300,358 M500,336 L700,336 L700,358" stroke="#1c1917" stroke-width="3" fill="none"/>
+  <text x="510" y="205" font-size="11.5" font-weight="700" fill="#1c1917">line of command</text>
+  <!-- staff connectors -->
+  <path d="M500,146 L668,146" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="7 4"/>
+  <path d="M500,146 L332,146" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="7 4"/>
+  <text x="512" y="139" font-size="11" fill="#4c1d95">delegation</text>
+  <text x="488" y="139" text-anchor="end" font-size="11" fill="#4c1d95">assists</text>
+
+  <!-- Director -->
+  <rect x="340" y="18" width="320" height="74" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2.8"/>
+  <use href="#i-human" x="354" y="28" width="26" height="26" fill="#b45309"/>
+  <text x="388" y="47" font-size="18" font-weight="800" fill="#78350f">Director</text>
+  <text x="356" y="66" font-size="10.5" font-weight="700" fill="#b45309" letter-spacing=".4">HUMAN · TOP OF THE HIERARCHY</text>
+  <text x="356" y="84" font-size="12" fill="#78350f">owns the outcome and the backlog · decides</text>
+
+  <!-- Grooming helper (staff) -->
+  <rect x="40" y="108" width="292" height="78" rx="9" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="52" y="118" width="22" height="22" fill="#6d28d9"/>
+  <text x="82" y="135" font-size="14.5" font-weight="700" fill="#4c1d95">Grooming helper</text>
+  <text x="54" y="157" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · STAFF · OPTIONAL</text>
+  <text x="54" y="175" font-size="11.5" fill="#4c1d95">drafts issues for the Director; no authority</text>
+
+  <!-- Supervisor (staff) -->
+  <rect x="668" y="102" width="292" height="100" rx="9" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="680" y="112" width="22" height="22" fill="#6d28d9"/>
+  <text x="710" y="129" font-size="14.5" font-weight="700" fill="#4c1d95">Supervisor</text>
+  <text x="682" y="151" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · STAFF · OPTIONAL</text>
+  <text x="682" y="169" font-size="11.5" fill="#4c1d95">acts for the Director within delegation;</text>
+  <text x="682" y="186" font-size="11.5" fill="#4c1d95">operates and maintains the factory</text>
+
+  <!-- Leader -->
+  <rect x="370" y="228" width="260" height="90" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="382" y="238" width="24" height="24" fill="#6d28d9"/>
+  <text x="414" y="256" font-size="16" font-weight="700" fill="#4c1d95">Leader</text>
+  <text x="384" y="276" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · TEAM</text>
+  <text x="384" y="294" font-size="11.5" fill="#4c1d95">assesses the groomed backlog</text>
+  <text x="384" y="310" font-size="11.5" fill="#4c1d95">approves plans · selects next work</text>
+
+  <!-- Implementers -->
+  <rect x="190" y="368" width="240" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="185" y="363" width="240" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="180" y="358" width="240" height="72" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="192" y="368" width="22" height="22" fill="#6d28d9"/>
+  <text x="222" y="385" font-size="15" font-weight="700" fill="#4c1d95">Implementers ×N</text>
+  <text x="194" y="405" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENTS · TEAM · ANY NUMBER</text>
+  <text x="194" y="422" font-size="11.5" fill="#4c1d95">one leased attempt each</text>
+
+  <!-- Verifier -->
+  <rect x="580" y="368" width="265" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="575" y="363" width="265" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="570" y="358" width="265" height="72" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="592" y="368" width="22" height="22" fill="#6d28d9"/>
+  <text x="622" y="385" font-size="15" font-weight="700" fill="#4c1d95">Verifiers ×N</text>
+  <text x="594" y="405" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENTS · TEAM · ANY NUMBER</text>
+  <text x="594" y="422" font-size="11.5" fill="#4c1d95">independent review of the exact source</text>
+
+  <!-- not ranks -->
+  <line x1="40" y1="452" x2="960" y2="452" stroke="#d6d3d1" stroke-width="1.5"/>
+  <text x="500" y="447" text-anchor="middle" font-size="11" fill="#78716c" font-weight="700" letter-spacing=".6">NOT RANKS · NON-AGENT SYSTEMS</text>
+  <rect x="40" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="52" y="476" width="22" height="22" fill="#334155" color="#334155"/>
+  <text x="82" y="492" font-size="14" font-weight="700" fill="#1e293b">Deck controller</text>
+  <text x="54" y="512" font-size="11.5" fill="#1e293b">enforces the hierarchy: tokens, leases, limits, Mail identity</text>
+  <rect x="510" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="522" y="476" width="22" height="22" fill="#334155" color="#334155"/>
+  <text x="552" y="492" font-size="14" font-weight="700" fill="#1e293b">GitHub</text>
+  <text x="524" y="512" font-size="11.5" fill="#1e293b">holds the Director’s backlog, the PRs, CI and the record</text>
+</svg>
+</figure>
+<p class="note">Naming: Agent Mail already calls the human “Director”. In code, the authority interface keeps the name <code>operator</code>: the operator API and the operator token are the Director’s powers, and a supervisor uses them only under delegation. The UI will call the token the <b>Director key</b> (#518). An external agent such as OpenClaw takes the supervisor role. It is not a second Director.</p>
+
+<!-- ============ 2. Big picture ============ -->
+<h2><span class="n">2</span>The factory and the parts around it</h2>
+<p class="sub">The factory has three parts: one AI-agent supervisor, one non-agent controller and an AI-agent team. The Director owns the factory. GitHub supplies the work and keeps the record.</p>
+<figure>
+<svg viewBox="0 0 1000 650" role="img" aria-label="Factory diagram: supervisor, controller and team inside the factory boundary; Director and GitHub outside">
+  <defs>
+    <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b45309"/></marker>
+    <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d28d9"/></marker>
+    <marker id="ms" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+  </defs>
+
+  <!-- factory boundary -->
+  <rect x="15" y="100" width="760" height="460" rx="16" fill="#fafaf9" stroke="#1c1917" stroke-width="2.5" stroke-dasharray="11 6"/>
+  <rect x="622" y="88" width="138" height="24" rx="5" fill="#1c1917"/>
+  <text x="691" y="105" text-anchor="middle" font-size="13" font-weight="800" fill="#fff" letter-spacing="1">THE FACTORY</text>
+  <text x="760" y="132" text-anchor="end" font-size="12" font-weight="600" fill="#1c1917">= supervisor + controller + team</text>
+
+  <!-- Director (human) -->
+  <rect x="350" y="12" width="300" height="62" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2.5"/>
+  <use href="#i-human" x="364" y="22" width="26" height="26" fill="#b45309"/>
+  <text x="500" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#78350f">Director</text>
+  <text x="500" y="60" text-anchor="middle" font-size="12.5" fill="#78350f">HUMAN · sets the outcome · decides</text>
+
+  <!-- Supervisor (agent) -->
+  <rect x="30" y="180" width="170" height="190" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5" stroke-dasharray="7 4"/>
+  <use href="#i-agent" x="40" y="190" width="24" height="24" fill="#6d28d9"/>
+  <text x="70" y="208" font-size="15.5" font-weight="700" fill="#4c1d95">Supervisor</text>
+  <text x="42" y="232" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".5">AI AGENT · OPTIONAL</text>
+  <text x="42" y="254" font-size="11.5" fill="#4c1d95">Claude Code, OpenClaw,</text>
+  <text x="42" y="270" font-size="11.5" fill="#4c1d95">or the Director</text>
+  <text x="42" y="294" font-size="11.5" fill="#4c1d95"><tspan font-weight="700">optional:</tspan> normal running</text>
+  <text x="42" y="311" font-size="11.5" fill="#4c1d95"><tspan font-weight="700">required:</tspan> maintenance</text>
+  <text x="42" y="335" font-size="11" fill="#5b21b6">holds no state · runs</text>
+  <text x="42" y="351" font-size="11" fill="#5b21b6">outside the controller</text>
+
+  <!-- Controller (system) -->
+  <rect x="250" y="145" width="300" height="392" rx="12" fill="#f1f5f9" stroke="#334155" stroke-width="2.5"/>
+  <use href="#i-system" x="262" y="155" width="24" height="24" fill="#334155" color="#334155"/>
+  <text x="294" y="173" font-size="16" font-weight="700" fill="#1e293b">Deck controller</text>
+  <text x="264" y="194" font-size="10.5" font-weight="700" fill="#334155" letter-spacing=".5">NON-AGENT · NO AI REASONING INSIDE</text>
+
+  <rect x="264" y="204" width="272" height="122" rx="8" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="274" y="224" font-size="13" font-weight="700">Team preset = the campaign</text>
+  <text x="274" y="242" font-size="11.5" fill="#57534e">description = outcome · Leader · scopes</text>
+  <rect x="272" y="252" width="256" height="64" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <text x="282" y="270" font-size="11.5" fill="#14532d" font-weight="700">+ parent_issue_url</text>
+  <text x="282" y="287" font-size="11.5" fill="#14532d" font-weight="700">+ supervisor_actor_id (optional)</text>
+  <text x="282" y="304" font-size="11.5" fill="#14532d" font-weight="700">+ next_check_at (optional)</text>
+
+  <g font-size="12" text-anchor="middle">
+    <rect x="264" y="338" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="329" y="357" font-weight="600">Dispatch · leases</text><text x="329" y="373" font-size="10.5" fill="#57534e">bounded attempts</text>
+    <rect x="406" y="338" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="471" y="357" font-weight="600">Agent Mail</text><text x="471" y="373" font-size="10.5" fill="#57534e">authenticated</text>
+    <rect x="264" y="390" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="329" y="409" font-weight="600">Human actions</text><text x="329" y="425" font-size="10.5" fill="#57534e">per preset</text>
+    <rect x="406" y="390" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="471" y="409" font-weight="600">Work remaining</text><text x="471" y="425" font-size="10.5" fill="#57534e">per item</text>
+    <rect x="264" y="442" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="329" y="461" font-weight="600">Audit · maint. ops</text><text x="329" y="477" font-size="10.5" fill="#57534e">replay-safe records</text>
+    <rect x="406" y="442" width="130" height="44" rx="7" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="471" y="461" font-weight="600">Attention signals</text><text x="471" y="477" font-size="9.5" fill="#57534e">stall·stop·review·HOLD</text>
+  </g>
+  <rect x="264" y="496" width="272" height="28" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <text x="400" y="515" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">+ One summary card (section 7)</text>
+
+  <!-- Team (agents) -->
+  <rect x="590" y="145" width="170" height="245" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="600" y="155" width="24" height="24" fill="#6d28d9"/>
+  <text x="630" y="173" font-size="16" font-weight="700" fill="#4c1d95">Team</text>
+  <text x="602" y="194" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".5">AI AGENTS</text>
+  <g font-size="11">
+    <rect x="602" y="204" width="146" height="42" rx="6" fill="#fff" stroke="#a78bfa"/>
+    <use href="#i-agent" x="609" y="215" width="18" height="18" fill="#6d28d9"/>
+    <text x="633" y="221" font-weight="700" font-size="12">Leader</text><text x="633" y="237" fill="#57534e">plans · approves</text>
+    <rect x="608" y="258" width="146" height="42" rx="6" fill="#fff" stroke="#c4b5fd"/><rect x="605" y="255" width="146" height="42" rx="6" fill="#fff" stroke="#c4b5fd"/><rect x="602" y="252" width="146" height="42" rx="6" fill="#fff" stroke="#a78bfa"/>
+    <use href="#i-agent" x="609" y="263" width="18" height="18" fill="#6d28d9"/>
+    <text x="633" y="269" font-weight="700" font-size="11.5">Implementers ×N</text><text x="633" y="285" fill="#57534e">leased workspaces</text>
+    <rect x="608" y="306" width="146" height="42" rx="6" fill="#fff" stroke="#c4b5fd"/><rect x="605" y="303" width="146" height="42" rx="6" fill="#fff" stroke="#c4b5fd"/><rect x="602" y="300" width="146" height="42" rx="6" fill="#fff" stroke="#a78bfa"/>
+    <use href="#i-agent" x="609" y="311" width="18" height="18" fill="#6d28d9"/>
+    <text x="633" y="317" font-weight="700" font-size="12">Verifiers ×N</text><text x="633" y="333" fill="#57534e">reviews exact SHA</text>
+  </g>
+  <text x="675" y="370" text-anchor="middle" font-size="10.5" fill="#78716c">size set by the Director</text>
+
+  <!-- Grooming helper (agent, outside the factory, works for the Director) -->
+  <rect x="790" y="146" width="160" height="94" rx="9" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="799" y="154" width="20" height="20" fill="#6d28d9"/>
+  <text x="824" y="169" font-size="13" font-weight="700" fill="#4c1d95">Grooming helper</text>
+  <text x="800" y="189" font-size="10" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · OPTIONAL</text>
+  <text x="800" y="206" font-size="11" fill="#4c1d95">drafts and splits issues;</text>
+  <text x="800" y="222" font-size="11" fill="#4c1d95">the Director decides</text>
+  <path d="M850,240 L850,266" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)" stroke-dasharray="5 3"/>
+  <text x="856" y="258" font-size="10" fill="#4c1d95">drafts</text>
+  <!-- GitHub (system, outside) -->
+  <rect x="800" y="270" width="185" height="210" rx="10" fill="#f1f5f9" stroke="#334155" stroke-width="2.5"/>
+  <use href="#i-system" x="812" y="280" width="24" height="24" fill="#334155" color="#334155"/>
+  <text x="844" y="298" font-size="16" font-weight="700" fill="#1e293b">GitHub</text>
+  <text x="814" y="320" font-size="10.5" font-weight="700" fill="#334155" letter-spacing=".5">NON-AGENT SYSTEM</text>
+  <text x="814" y="336" font-size="10.5" font-weight="700" fill="#334155" letter-spacing=".5">OUTSIDE THE FACTORY</text>
+  <text x="814" y="360" font-size="12" fill="#1e293b"><tspan font-weight="700">Parent issue:</tspan></text>
+  <text x="814" y="376" font-size="12" fill="#1e293b">delegation, status</text>
+  <text x="814" y="398" font-size="12" fill="#1e293b"><tspan font-weight="700" fill="#b45309">Backlog</tspan> (Director-owned)</text>
+  <text x="814" y="418" font-size="12" fill="#1e293b">PRs · required CI</text>
+  <text x="814" y="446" font-size="11" fill="#57534e">supplies the work and</text>
+  <text x="814" y="462" font-size="11" fill="#57534e">keeps the record</text>
+
+  <!-- Arrows: human -->
+  <path d="M500,74 L500,141" stroke="#b45309" stroke-width="2.2" fill="none" marker-end="url(#mh)"/>
+  <text x="508" y="94" font-size="12" fill="#78350f">reads one card</text>
+  <path d="M650,43 L968,43 L968,266" stroke="#b45309" stroke-width="2.6" fill="none" marker-end="url(#mh)"/>
+  <text x="668" y="35" font-size="12" font-weight="700" fill="#78350f">owns + grooms the backlog · decides</text>
+  <path d="M350,43 C200,43 115,90 115,176" stroke="#b45309" stroke-width="2.2" fill="none" marker-end="url(#mh)"/>
+  <text x="150" y="40" text-anchor="end" font-size="12" fill="#78350f">delegates</text>
+  <text x="150" y="55" text-anchor="end" font-size="11" fill="#78350f">(text in parent issue)</text>
+
+  <!-- Arrows: agent -->
+  <path d="M200,236 L246,236" stroke="#6d28d9" stroke-width="2.5" fill="none" marker-end="url(#ma)" stroke-dasharray="6 3"/>
+  <text x="201" y="228" font-size="9.5" fill="#4c1d95" font-weight="700">check-in</text>
+  <path d="M200,300 L246,300" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)"/>
+  <text x="204" y="318" font-size="10" fill="#4c1d95">operator</text>
+  <text x="204" y="330" font-size="10" fill="#4c1d95">API</text>
+  <path d="M115,370 L115,615 L892,615 L892,484" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)" stroke-dasharray="6 4"/>
+  <text x="300" y="636" font-size="12" fill="#4c1d95">supervisor publishes checkpoints and maintenance status to the parent issue</text>
+  <path d="M700,390 L700,410 L796,410" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)"/>
+  <text x="706" y="404" font-size="10.5" fill="#4c1d95">PRs, pushes</text>
+
+  <!-- Arrows: system -->
+  <path d="M550,236 L586,236" stroke="#334155" stroke-width="2" fill="none" marker-end="url(#ms)" marker-start="url(#ms)"/>
+  <text x="553" y="228" font-size="9.5" fill="#334155">Mail</text>
+  <text x="553" y="252" font-size="9.5" fill="#334155">dispatch</text>
+  <path d="M796,450 L554,450" stroke="#334155" stroke-width="2" fill="none" marker-end="url(#ms)"/>
+  <text x="690" y="443" font-size="11" fill="#334155">controller polls</text>
+</svg>
+</figure>
+
+<div class="def">
+  <div>
+    <h4>What is in the factory?</h4>
+    <p style="margin:0 0 8px;color:var(--muted)">Test: if the Director must start, stop, upgrade or repair a part, it is in the factory.</p>
+    <ul>
+      <li><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg><b>Supervisor</b> — yes. The Director starts it and gives it delegation.</li>
+      <li><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg><b>Deck controller</b> — yes. Maintenance upgrades and repairs it.</li>
+      <li><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg><b>Team</b> — yes. Deck launches its sessions; the Director chooses the roster.</li>
+      <li class="no"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg><b>GitHub</b> — no. It keeps running when the factory stops. It holds the Director’s backlog, and the result goes out there.</li>
+      <li class="no"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg><b>Director</b> — no. The Director owns the factory and the backlog, and keeps the retained decisions.</li>
+      <li class="no"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg><b>Grooming helper</b> — no. It is optional and works for the Director, not for the factory.</li>
+    </ul>
+  </div>
+  <div>
+    <h4>Kinds inside the factory</h4>
+    <p style="margin:0;color:var(--muted)">AI agents do the work that needs judgment: supervision, planning, implementation and review. Non-agent software does everything that a rule can do: dispatch, leases, Mail, attention signals and the maintenance operation. A human owns the backlog and makes the retained decisions. When something can be a rule, put it in the controller and not in an agent prompt.</p>
+  </div>
+</div>
+
+<!-- ============ 2. Two modes ============ -->
+<h2><span class="n">3</span>Two operating modes</h2>
+<p class="sub">In normal running, non-agent code finds problems and an agent or the human acts on them. Factory maintenance is the one mode that needs an agent outside the controller.</p>
+<figure>
+<svg viewBox="0 0 1000 452" role="img" aria-label="Normal running and factory maintenance modes, coloured by kind of actor">
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#57534e"/></marker></defs>
+
+  <text x="20" y="28" font-size="15" font-weight="700">A · Normal running</text>
+  <text x="186" y="28" font-size="12.5" fill="#57534e">Deck UI available · supervisor optional</text>
+
+  <!-- A1 team (agent) -->
+  <rect x="20" y="44" width="200" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="30" y="54" width="20" height="20" fill="#6d28d9"/>
+  <text x="56" y="70" font-size="13.5" font-weight="700" fill="#4c1d95">Team works</text>
+  <text x="32" y="94" font-size="11" font-weight="700" fill="#6d28d9">TEAM · AI AGENTS</text>
+  <text x="32" y="112" font-size="11.5" fill="#4c1d95">dispatch · Mail · PRs · CI</text>
+  <!-- A2 deck (system) -->
+  <rect x="265" y="44" width="210" height="80" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="275" y="54" width="20" height="20" fill="#334155" color="#334155"/>
+  <text x="301" y="70" font-size="13.5" font-weight="700" fill="#1e293b">Deck flags it</text>
+    <text x="277" y="94" font-size="11" font-weight="700" fill="#334155">CONTROLLER · NON-AGENT</text>
+  <text x="277" y="112" font-size="11.5" fill="#1e293b">existing signals, now on one card</text>
+  <!-- A3 leader (agent) -->
+  <rect x="520" y="44" width="215" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="530" y="54" width="20" height="20" fill="#6d28d9"/>
+  <text x="556" y="70" font-size="13.5" font-weight="700" fill="#4c1d95">Leader acts</text>
+  <text x="532" y="94" font-size="11" font-weight="700" fill="#6d28d9">LEADER · AI AGENT</text>
+  <text x="532" y="112" font-size="11.5" fill="#4c1d95">backlog, plans, next work</text>
+  <!-- A4 Director (human) -->
+  <rect x="780" y="44" width="200" height="80" rx="8" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+  <use href="#i-human" x="790" y="54" width="20" height="20" fill="#b45309"/>
+  <text x="816" y="70" font-size="13.5" font-weight="700" fill="#78350f">Director decides</text>
+  <text x="792" y="94" font-size="11" font-weight="700" fill="#b45309">DIRECTOR · HUMAN</text>
+  <text x="792" y="112" font-size="11.5" fill="#78350f">retained decisions only</text>
+  <path d="M220,84 L261,84" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <path d="M475,84 L516,84" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <path d="M735,84 L776,84" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <rect x="265" y="136" width="470" height="30" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="274" y="142" width="18" height="18" fill="#6d28d9"/>
+  <text x="298" y="156" font-size="12" fill="#4c1d95">Optional supervisor (AI agent): reads the same signals, fixes routine blockers</text>
+
+  <line x1="20" y1="192" x2="980" y2="192" stroke="#d6d3d1" stroke-width="1.5"/>
+  <use href="#i-human" x="20" y="172" width="14" height="14" fill="#b45309"/>
+  <text x="38" y="183" font-size="11.5" fill="#78350f">The Director grooms the backlog at any time. The dispatch label is the Director’s “ready” signal.</text>
+  <text x="500" y="207" text-anchor="middle" font-size="11.5" fill="#78716c">a defect in Deck itself blocks the work ↓</text>
+
+  <text x="20" y="236" font-size="15" font-weight="700">B · Factory maintenance</text>
+  <text x="236" y="236" font-size="12.5" fill="#57534e">supervisor required · the controller is down for a short period</text>
+
+  <g>
+  <rect x="20" y="252" width="170" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="30" y="262" width="20" height="20" fill="#6d28d9"/>
+  <text x="56" y="278" font-size="13.5" font-weight="700" fill="#4c1d95">Prepare the fix</text>
+  <text x="32" y="302" font-size="11" font-weight="700" fill="#6d28d9">SUPERVISOR · AGENT</text>
+  <text x="32" y="320" font-size="11.5" fill="#4c1d95">isolated, reviewed</text>
+
+  <rect x="215" y="252" width="170" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="225" y="262" width="20" height="20" fill="#6d28d9"/>
+  <text x="251" y="278" font-size="13.5" font-weight="700" fill="#4c1d95">Safe handoff</text>
+  <text x="227" y="302" font-size="11" font-weight="700" fill="#6d28d9">TEAM OWNERS · AGENTS</text>
+  <text x="227" y="320" font-size="11.5" fill="#4c1d95">checkpoint, then hold</text>
+
+  <rect x="410" y="252" width="190" height="80" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="420" y="262" width="20" height="20" fill="#334155" color="#334155"/>
+  <text x="446" y="278" font-size="13.5" font-weight="700" fill="#1e293b">Run the upgrade</text>
+  <text x="422" y="302" font-size="11" font-weight="700" fill="#334155">MAINTENANCE SCRIPT</text>
+  <text x="422" y="320" font-size="11.5" fill="#1e293b">stop · backup · deploy · start</text>
+
+  <rect x="625" y="252" width="170" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="635" y="262" width="20" height="20" fill="#6d28d9"/>
+  <text x="661" y="278" font-size="13.5" font-weight="700" fill="#4c1d95">Check state</text>
+  <text x="637" y="302" font-size="11" font-weight="700" fill="#6d28d9">SUPERVISOR · AGENT</text>
+  <text x="637" y="320" font-size="11.5" fill="#4c1d95">DB, leases, authority</text>
+
+  <rect x="820" y="252" width="160" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <use href="#i-agent" x="830" y="262" width="20" height="20" fill="#6d28d9"/>
+  <text x="856" y="278" font-size="13.5" font-weight="700" fill="#4c1d95">Resume</text>
+  <text x="832" y="302" font-size="11" font-weight="700" fill="#6d28d9">SUPERVISOR · AGENT</text>
+  <text x="832" y="320" font-size="11.5" fill="#4c1d95">back to mode A</text>
+  </g>
+  <path d="M190,292 L211,292" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <path d="M385,292 L406,292" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <path d="M600,292 L621,292" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+  <path d="M795,292 L816,292" stroke="#57534e" stroke-width="2" marker-end="url(#a4)"/>
+
+  <rect x="20" y="350" width="960" height="40" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+  <use href="#i-system" x="32" y="360" width="20" height="20" fill="#334155" color="#334155"/>
+  <text x="510" y="375" text-anchor="middle" font-size="13" font-weight="700" fill="#1e293b">GitHub (outside the factory) keeps running: the parent issue is the only live status surface while the controller is down.</text>
+  <use href="#i-human" x="300" y="402" width="16" height="16" fill="#b45309"/>
+  <text x="322" y="415" font-size="11.5" fill="#78350f">The Director acts in maintenance only for a genuine security HOLD.</text>
+  <text x="500" y="442" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">Team sessions keep running through the restart; the upgrade is refused if a session changes. Resume re-enables autonomy; it relaunches no agent.</text>
+</svg>
+</figure>
+
+<!-- ============ 3. Why outside ============ -->
+<h2><span class="n">4</span>Why the supervisor runs outside the controller</h2>
+<p class="sub">The supervisor is part of the factory, but it does not run inside the controller process. An agent inside the controller cannot do maintenance. In normal running it would repeat work that non-agent code and the Leader already do.</p>
+<div class="grid3">
+  <div class="why"><b>It cannot upgrade its own host</b><p>An upgrade stops the controller, proves termination and restarts it. An agent inside the controller stops when the controller stops.</p></div>
+  <div class="why"><b>A watchdog must not fail with the controller</b><p>If the controller stalls or crashes, an internal supervisor stops too, and nobody sees the failure.</p></div>
+  <div class="why"><b>No self-repairing controller</b><p>An internal agent with permission to change and deploy Deck makes the safety model much harder to understand.</p></div>
+</div>
+<table class="duty">
+  <tr><th style="width:55%">Duty</th><th>Owner</th><th>Kind</th></tr>
+  <tr><td>Detect stalls, stale leases, unreadable CI, holds and an overdue supervisor</td><td>Deck controller (existing signals; “supervisor overdue” is new)</td><td><span class="k sy"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Non-agent</span></td></tr>
+  <tr><td><b>Own and groom the backlog:</b> write and order issues, set acceptance conditions, apply the dispatch label</td><td>Director, optionally helped by an agent that drafts issues</td><td><span class="k hu"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg>Human</span> + <span class="k ag" style="border-style:dashed"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>optional</span></td></tr>
+  <tr><td>Assess the groomed backlog, approve plans, select the next eligible work</td><td>Team Leader</td><td><span class="k ag"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>AI agent</span></td></tr>
+  <tr><td>Repair, upgrade and roll back the factory</td><td>Supervisor, using the maintenance script</td><td><span class="k ag"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>AI agent</span> + <span class="k sy"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Non-agent</span></td></tr>
+  <tr><td>Retained decisions: publication, budgets, models, security HOLD</td><td>Director</td><td><span class="k hu"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg>Human</span></td></tr>
+</table>
+
+<!-- ============ 4. Swimlane ============ -->
+<h2><span class="n">5</span>One campaign, start to finish</h2>
+<p class="sub">Each row is one actor, coloured by kind. A black bar on the left marks a part of the factory. The Director owns the backlog and grooms it before and during the run, with or without an agent drafting issues. Dashed chips are optional.</p>
+<div class="lanes">
+  <div class="hd">&nbsp;</div><div class="hd">Groom</div><div class="hd">Prepare</div><div class="hd">Run</div><div class="hd">Decision</div><div class="hd">Maintenance</div><div class="hd">Finish</div>
+
+  <div class="who hu"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg>Director<small>human · owns the factory and the backlog</small></div>
+  <div><span class="chip" style="border-color:#b45309;font-weight:600">Write + order issues</span><span class="chip" style="border-color:#b45309;font-weight:600">Apply dispatch label</span></div>
+  <div><span class="chip">Write outcome + delegation</span><span class="chip">Authorize start</span></div>
+  <div><span class="chip opt">Groom anytime</span><span class="empty"> reads the card</span></div>
+  <div><span class="chip">Approve / decide on GitHub</span></div>
+  <div class="empty">— (only for a security HOLD)</div>
+  <div><span class="chip">Approve publication</span></div>
+
+  <div class="who ag fac"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>Supervisor<small>AI agent · factory</small></div>
+  <div><span class="chip opt">Draft issues for the Director</span></div>
+  <div><span class="chip">Run startup checks</span><span class="chip opt">Register (optional)</span></div>
+  <div><span class="chip opt">Check in · fix routine blockers</span></div>
+  <div><span class="chip opt">Prepare exact request + evidence</span></div>
+  <div><span class="chip">Fix → handoff → reviewed upgrade</span><span class="chip">Status in parent issue</span></div>
+  <div><span class="chip">Reconcile records</span><span class="chip">Disable dispatch</span></div>
+
+  <div class="who sy fac"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Deck controller<small>non-agent · factory</small></div>
+  <div class="empty">— (polls labelled issues)</div>
+  <div><span class="chip new">Link parent issue</span><span class="chip">Scopes, leases, Mail</span></div>
+  <div><span class="chip">Dispatch, bound attempts</span><span class="chip">Existing signals</span><span class="chip new">Supervisor overdue</span></div>
+  <div><span class="chip">List human action</span></div>
+  <div><span class="chip">Maintenance op records</span><span class="chip">Preserve authority + leases</span></div>
+  <div><span class="chip new">Card shows “Complete”</span></div>
+
+  <div class="who ag fac"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>Leader + team<small>AI agents · factory</small></div>
+  <div><span class="chip opt">Readiness assessment</span></div>
+  <div><span class="chip">Mail canary</span></div>
+  <div><span class="chip">Assess, plan, implement, verify</span><span class="chip">Act on backlog signals</span></div>
+  <div><span class="chip">Independent work continues</span></div>
+  <div><span class="chip">Owner checkpoint, then hold</span></div>
+  <div><span class="chip">Close issues</span></div>
+
+  <div class="who sy"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>GitHub<small>non-agent · outside the factory</small></div>
+  <div><span class="chip">Director’s backlog</span></div>
+  <div><span class="chip">Parent issue + backlog</span></div>
+  <div><span class="chip">PRs + required CI</span></div>
+  <div><span class="chip">Exact instructions in issue</span></div>
+  <div><span class="chip">Only live status surface</span></div>
+  <div><span class="chip">Final record</span></div>
+</div>
+
+<!-- ============ 5. Heartbeat ============ -->
+<h2><span class="n">6</span>The optional supervisor heartbeat</h2>
+<p class="sub">The agent promises its next check. Non-agent code compares that promise with the clock. The agent never reports its own health.</p>
+<div class="grid2">
+<figure>
+<svg viewBox="0 0 480 360" role="img" aria-label="Supervisor tick loop">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6d28d9"/></marker></defs>
+  <use href="#i-agent" x="86" y="8" width="20" height="20" fill="#6d28d9"/>
+  <text x="112" y="24" font-size="15" font-weight="700" fill="#4c1d95">Supervisor tick (AI agent)</text>
+  <g fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5">
+    <rect x="140" y="44" width="200" height="50" rx="8"/>
+    <rect x="280" y="150" width="190" height="60" rx="8"/>
+    <rect x="140" y="262" width="200" height="56" rx="8"/>
+    <rect x="15" y="150" width="175" height="60" rx="8" stroke-width="2.5"/>
+  </g>
+  <text x="240" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">1 · Read</text>
+  <text x="240" y="84" text-anchor="middle" font-size="11.5" fill="#4c1d95">card, signals, PRs, CI</text>
+  <text x="375" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">2 · Act if delegated</text>
+  <text x="375" y="193" text-anchor="middle" font-size="11" fill="#4c1d95">else record the required actor</text>
+  <text x="240" y="285" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">3 · Publish if changed</text>
+  <text x="240" y="304" text-anchor="middle" font-size="11.5" fill="#4c1d95">checkpoint in parent issue</text>
+  <text x="102" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">4 · Check in</text>
+  <text x="102" y="193" text-anchor="middle" font-size="11" fill="#4c1d95" font-family="ui-monospace,monospace">next_check_at = +10 min</text>
+  <path d="M330,94 C380,110 385,125 380,146" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M377,210 C377,245 360,262 344,275" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M140,290 C100,280 100,240 102,214" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M102,150 C100,110 110,85 136,72" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <text x="240" y="346" text-anchor="middle" font-size="11.5" fill="#78716c">Replay safety comes from the controller’s replay_key / operation_id records.</text>
+</svg>
+</figure>
+<figure>
+<svg viewBox="0 0 480 360" role="img" aria-label="Heartbeat status derived by the controller">
+  <use href="#i-system" x="62" y="8" width="20" height="20" fill="#334155" color="#334155"/>
+  <text x="88" y="24" font-size="15" font-weight="700" fill="#1e293b">Controller derives the status (non-agent)</text>
+  <text x="240" y="46" text-anchor="middle" font-size="12" fill="#57534e">It compares the clock with the last promise.</text>
+  <line x1="30" y1="150" x2="455" y2="150" stroke="#44403c" stroke-width="2"/>
+  <rect x="60" y="100" width="170" height="40" fill="#dcfce7" stroke="#15803d"/>
+  <text x="145" y="125" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">Healthy</text>
+  <rect x="230" y="100" width="110" height="40" fill="#fef9c3" stroke="#a16207"/>
+  <text x="285" y="125" text-anchor="middle" font-size="14" font-weight="700" fill="#713f12">Late</text>
+  <rect x="340" y="100" width="115" height="40" fill="#fee2e2" stroke="#b91c1c"/>
+  <text x="397" y="125" text-anchor="middle" font-size="14" font-weight="700" fill="#7f1d1d">Absent</text>
+  <line x1="60" y1="142" x2="60" y2="162" stroke="#6d28d9" stroke-width="3"/>
+  <text x="60" y="180" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4c1d95">check-in</text>
+  <line x1="230" y1="142" x2="230" y2="162" stroke="#44403c" stroke-width="2"/>
+  <text x="230" y="180" text-anchor="middle" font-size="11" font-family="ui-monospace,monospace">next_check_at</text>
+  <line x1="340" y1="142" x2="340" y2="162" stroke="#44403c" stroke-width="2"/>
+  <text x="340" y="180" text-anchor="middle" font-size="11">threshold (open)</text>
+  <text x="455" y="168" text-anchor="end" font-size="11" fill="#78716c">time →</text>
+  <text x="30" y="218" font-size="12.5"><tspan font-weight="700">None</tspan> — no supervisor registered. Not an error.</text>
+  <text x="30" y="240" font-size="12.5"><tspan font-weight="700">Healthy</tspan> — the promised check has not passed.</text>
+  <text x="30" y="262" font-size="12.5"><tspan font-weight="700">Late</tspan> — the check is overdue. Work can still run.</text>
+  <text x="30" y="284" font-size="12.5"><tspan font-weight="700">Absent</tspan> — no check-in, or long overdue.</text>
+  <text x="30" y="316" font-size="12">“Supervisor overdue” becomes an attention signal.</text>
+  <text x="30" y="340" font-size="11.5" fill="#78716c">Replaces playbook §5 “record its last tick … state that supervision stopped”.</text>
+</svg>
+</figure>
+</div>
+
+<!-- ============ 6. Card ============ -->
+<h2><span class="n">7</span>What the Director sees</h2>
+<p class="sub">One card at the top of the existing team page. Each line shows which kind of actor supplies it. Only the supervisor line and the team total for remaining work are new data. The other lines collect what Deck already has.</p>
+<div class="mock">
+  <h3>Publish the next release</h3>
+  <div class="meta">Team preset “v3-release” · parent issue <a href="#">#NNN</a></div>
+  <dl>
+    <dt>Outcome</dt><dd>Release tagged, website live, final record posted <div class="src"><svg class="ic" fill="#b45309" style="width:13px;height:13px"><use href="#i-human"/></svg>written by the Director · preset.description · existing</div></dd>
+    <dt>Supervisor</dt><dd><span class="pill ok">Healthy</span> checked 2 min ago · next in 8 min <div class="src"><svg class="ic" fill="#334155" color="#334155" style="width:13px;height:13px"><use href="#i-system"/></svg>controller: check-in vs clock · new, optional</div></dd>
+    <dt>Attention</dt><dd>None open <div class="src"><svg class="ic" fill="#334155" color="#334155" style="width:13px;height:13px"><use href="#i-system"/></svg>controller: existing signals, collected here · new view</div></dd>
+    <dt>Remaining</dt><dd>Publish the release and the website. Estimate: under 1 active hour. <div class="src"><svg class="ic" fill="#6d28d9" style="width:13px;height:13px"><use href="#i-agent"/></svg>team reports: per-item work remaining · team total is new</div></dd>
+    <dt>Next actor</dt><dd><span class="pill late">You</span> <div class="src"><svg class="ic" fill="#6d28d9" style="width:13px;height:13px"><use href="#i-agent"/></svg>Leader’s human actions · existing</div></dd>
+  </dl>
+  <div class="action"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg><b>Your action:</b> Review the previews and approve publication on <a href="#">#NNN</a> at SHA <code>&lt;sha&gt;</code>.
+    <div class="src" style="margin-top:4px">GET presets/{id}/human-actions · existing</div></div>
+</div>
+<div class="variants">Other supervisor states:
+  <span class="pill none">None — not required</span>
+  <span class="pill late">Late — check 6 min overdue</span>
+  <span class="pill abs">Absent — no check-in</span>
+</div>
+<p class="note" style="text-align:center">The card answers three questions: do I need to act, is anyone watching, and what is left.</p>
+
+<!-- ============ 8. Director screens ============ -->
+<h2><span class="n">8</span>Where the Director looks</h2>
+<p class="sub">The UI audits after #506 covered every screen. Each Director question has one screen, and each kind of thing has one home. Each card links to the matching view of the clickable mockup.</p>
+<div class="homes">
+  <b>One home for each thing</b>
+  <span>A work item → <b>Work</b> (#533)</span><span>A team and its members → <b>Teams</b> (#542)</span><span>A repository and its settings → <b>Repositories</b> (#536)</span>
+  <span>An agent’s state → <b>one status</b> on every screen (#540)</span><span>The Director key → <b>one dialog</b> (#518)</span><span>Times → <b>one format</b>, local time (#521)</span>
+</div>
+<div class="screens">
+  <a class="scr" href="director-ui-mockup.html?view=overview"><span class="q"><svg class="ic" fill="#b45309"><use href="#i-human"/></svg>Do I need to act? Is anyone watching? What is left?</span>
+    <b>Overview</b><span>“Needs you” first, then one card per team with the supervisor status, the roster and the next actor. One status sentence for automation.</span>
+    <span class="refs">#508 · #507 · #509 · #510 · #513</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=work"><span class="q"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>What is the factory working on?</span>
+    <b>Work</b><span>Active work by default, with the team on every row. One page per item: plain status, a timeline from the audit ledger, and its actions only when they apply.</span>
+    <span class="refs">#511 · #533 · #534 · #535</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=teams"><span class="q"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>Who is on each team, and is it running?</span>
+    <b>Teams</b><span>A header with state, the autonomy switch, Leader and supervisor, then compact member rows. Editing sits behind “Edit team”; history is collapsed.</span>
+    <span class="refs">#542 · #543 · #544</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=repos"><span class="q"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Where does the work come from?</span>
+    <b>Repositories</b><span>One row per repository; a repository page holds its labels, merging, limits and recovery settings. One way to add a repository, without typing paths.</span>
+    <span class="refs">#536 · #537 · #538</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=live"><span class="q"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>What are the agents doing now?</span>
+    <b>Live sessions and Team lanes</b><span>Watch one agent read-only, or four Team lanes at a time: shift members in from the left and right, and zoom one lane to full screen.</span>
+    <span class="refs">#512 · #539 · #540 · #541</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=mail"><span class="q"><svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>Who is waiting for whom?</span>
+    <b>Agent Mail</b><span>“Waiting on someone” first, then threads grouped by team. Deck’s own messages are signed “Deck”, and repeated reminders stop and become one attention item.</span>
+    <span class="refs">#527 · #528 · #529 · #530 · #531</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=audit"><span class="q"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>How is delivery going, and what went wrong?</span>
+    <b>Audit</b><span>Plain headline results, a “Needs a look” panel for refused agent requests, and an activity feed with the team on every line. The Director key unlocks the feed only when asked.</span>
+    <span class="refs">#515 · #516 · #517 · #518 · #519 · #520 · #521</span></a>
+  <a class="scr" href="director-ui-mockup.html?view=harnesses"><span class="q"><svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>Are the agent tools ready?</span>
+    <b>Harnesses</b><span>One card per tool: Ready, Needs setup or Not installed. A harness page groups its settings pages, with breadcrumbs and a side menu. Local projects becomes a project picker on these pages.</span>
+    <span class="refs">#522 · #523 · #524 · #525 · #526 · #545 · #546</span></a>
+</div>
+<p class="note">All of these issues are in the Deck v3.1 milestone (#506–#546).</p>
+
+<!-- ============ 7. Cut + pilot ============ -->
+<h2><span class="n">9</span>What v1 leaves out, and how the pilot decides later</h2>
+<p class="sub">Each deferred item adds process but gives the Director no new information. The pilot decides whether any of them is needed.</p>
+<div class="cutlist">
+  <div class="cut"><b>Campaign record + lifecycle</b>The preset is the campaign.</div>
+  <div class="cut"><b>Delegation table</b>It would look enforced but enforce nothing. Use text in the parent issue.</div>
+  <div class="cut"><b>Agent inside the controller</b>It fails with the controller and overlaps the Leader and the rules.</div>
+  <div class="cut"><b>Goal-tool adapters</b>The heartbeat works with any harness.</div>
+  <div class="cut"><b>Event-driven wake-ups</b>A timer and a check-in are sufficient.</div>
+  <div class="cut"><b>Evidence / review registry</b>GitHub and the audit log hold the evidence.</div>
+  <div class="cut"><b>Maintenance sequence model</b>Maintenance operations record it.</div>
+  <div class="cut"><b>Pilot metrics programme</b>One test: the three questions.</div>
+</div>
+
+<p class="sub" style="margin-top:26px"><b style="color:var(--ink)">The pilot classifies each supervisor intervention, and each class has one destination:</b></p>
+<div class="grid3">
+  <div class="bucket" style="border-color:var(--ag)"><h4 style="color:var(--ag-ink)">Maintenance</h4><p>A defect in Deck itself had to be repaired. Example from the v3 ledger: the same request was refused 3 times for invalid file paths; the fix was #501/#502. Audit now shows such repeats (#520).</p>
+    <div class="arrow">→ <svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>stays with the <b>supervisor</b></div></div>
+  <div class="bucket" style="border-color:var(--sy)"><h4 style="color:var(--sy-ink)">Mechanical</h4><p>A check that a simple rule could do.</p>
+    <div class="arrow">→ <svg class="ic" fill="#334155" color="#334155"><use href="#i-system"/></svg>becomes a <b>controller rule</b> (attention signal)</div></div>
+  <div class="bucket" style="border-color:var(--ag)"><h4 style="color:var(--ag-ink)">Judgment in normal running</h4><p>A decision that needed reasoning.</p>
+    <div class="arrow">→ <svg class="ic" fill="#6d28d9"><use href="#i-agent"/></svg>first a wider <b>Leader charter</b>; an agent inside Deck only if that is not sufficient</div></div>
+</div>
+<div class="rule"><b>Admission rule for every increment:</b> it must remove or automate a step in the supervised factory playbook. Each implementation issue names that step. When the increment ships, remove the step from the playbook.</div>
+
+</main>
+</body>
+</html>

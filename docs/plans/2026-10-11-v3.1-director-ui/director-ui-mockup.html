@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<title>Claude Deck — Overview mockup (#507–#513)</title>
+<style>
+  :root {
+    --bg:#f7f7f5; --panel:#ffffff; --raised:#f1f1ee; --line:#e4e4e0; --ink:#1a1a18; --muted:#6b6b66; --faint:#9a9a94;
+    --green:#16a34a; --green-soft:#dcfce7; --green-ink:#14532d;
+    --amber:#d97706; --amber-soft:#fef3c7; --amber-ink:#78350f;
+    --red:#dc2626; --red-soft:#fee2e2; --red-ink:#7f1d1d;
+    --violet:#7c3aed; --violet-soft:#ede9fe; --violet-ink:#4c1d95;
+    --shadow:0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  }
+  html.dark {
+    --bg:#0f1110; --panel:#161917; --raised:#1d211f; --line:#2a2f2c; --ink:#ecefed; --muted:#9aa29e; --faint:#6b736f;
+    --green:#22c55e; --green-soft:rgba(34,197,94,.14); --green-ink:#86efac;
+    --amber:#f59e0b; --amber-soft:rgba(245,158,11,.14); --amber-ink:#fcd34d;
+    --red:#ef4444; --red-soft:rgba(239,68,68,.14); --red-ink:#fca5a5;
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.14); --violet-ink:#ddd6fe;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color:inherit; }
+  .ic { width:16px; height:16px; display:inline-block; vertical-align:-3px; }
+
+  /* review toolbar (not part of the design) */
+  .review { position:sticky; top:0; z-index:20; display:flex; gap:18px; align-items:center; flex-wrap:wrap; padding:8px 16px; background:#1e1b4b; color:#e0e7ff; font-size:12.5px; }
+  .review b { color:#fff; }
+  .seg { display:inline-flex; border:1px solid #4338ca; border-radius:7px; overflow:hidden; }
+  .seg button { background:transparent; color:#c7d2fe; border:0; padding:4px 10px; font:inherit; cursor:pointer; }
+  .seg button.on { background:#4338ca; color:#fff; }
+  .review .refs { margin-left:auto; opacity:.8; }
+
+  /* shell */
+  header.top { height:56px; display:flex; align-items:center; gap:12px; padding:0 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .logo { width:30px; height:30px; border-radius:7px; background:#0b0b0b; color:#22c55e; font:700 13px ui-monospace,monospace; display:grid; place-items:center; border:1px solid #2a2a2a; }
+  .brand { font-weight:700; font-size:16px; letter-spacing:-.01em; }
+  .machine { margin-left:auto; display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; border:1px solid var(--line); color:var(--muted); font-size:12.5px; }
+  .machine i { width:7px; height:7px; border-radius:50%; background:#64748b; }
+  .harness { font:12px ui-monospace,monospace; color:var(--faint); }
+  .iconbtn { width:32px; height:32px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--muted); display:grid; place-items:center; }
+  .shell { display:grid; grid-template-columns:220px 1fr; min-height:calc(100vh - 56px - 34px); }
+  nav.side { border-right:1px solid var(--line); padding:12px 10px; background:var(--panel); }
+  nav.side a { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; color:var(--muted); text-decoration:none; margin-bottom:2px; position:relative; }
+  nav.side a:hover { background:var(--raised); color:var(--ink); }
+  nav.side a.on { background:var(--raised); color:var(--ink); font-weight:600; }
+  nav.side a.on::before { content:""; position:absolute; left:-10px; top:8px; bottom:8px; width:3px; border-radius:0 3px 3px 0; background:var(--green); }
+  nav.side .badge { margin-left:auto; background:var(--amber-soft); color:var(--amber-ink); font-size:11.5px; font-weight:700; padding:0 7px; border-radius:999px; }
+  nav.side .sep { height:1px; background:var(--line); margin:10px 6px; }
+  main { padding:28px 32px 60px; max-width:1180px; width:100%; }
+
+  /* page head */
+  .head { display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+  .head h1 { font-size:24px; margin:0; letter-spacing:-.02em; }
+  .head .upd { color:var(--faint); font-size:12.5px; margin-bottom:3px; }
+  .filters { margin-left:auto; display:flex; gap:8px; }
+  .select { appearance:none; background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E") no-repeat right 10px center; border:1px solid var(--line); color:var(--ink); border-radius:8px; height:34px; padding:0 30px 0 12px; font:inherit; }
+
+  /* status sentence */
+  .status { display:flex; align-items:center; gap:10px; padding:12px 16px; border-radius:10px; background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow); margin-bottom:16px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .dot.g { background:var(--green); box-shadow:0 0 0 4px var(--green-soft); }
+  .dot.a { background:var(--amber); box-shadow:0 0 0 4px var(--amber-soft); }
+  .dot.n { background:var(--faint); box-shadow:0 0 0 4px var(--raised); }
+  .status .text b { font-weight:650; }
+  .status .more { margin-left:auto; color:var(--muted); font-size:13px; text-decoration:none; }
+  .btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--ink); font:inherit; font-weight:550; text-decoration:none; cursor:pointer; white-space:nowrap; }
+  .btn.primary { background:var(--green); border-color:var(--green); color:#04210f; }
+  .btn.sm { height:28px; padding:0 10px; font-size:13px; }
+
+  /* needs you */
+  .needs { border-radius:12px; background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow); overflow:hidden; margin-bottom:22px; }
+  .needs.has { border-color:color-mix(in srgb, var(--amber) 55%, var(--line)); }
+  .needs .nh { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--line); }
+  .needs.has .nh { background:var(--amber-soft); }
+  .needs h2 { margin:0; font-size:15.5px; }
+  .count { font-size:12px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--amber); color:#291400; }
+  .act { display:grid; grid-template-columns:28px 1fr auto; gap:12px; align-items:center; padding:14px 18px; border-bottom:1px solid var(--line); }
+  .act:last-child { border-bottom:0; }
+  .act .what { font-weight:600; }
+  .act .why { color:var(--muted); font-size:13px; }
+  .act .src { color:var(--faint); font-size:12px; }
+  .avatar { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; }
+  .avatar.h { background:var(--amber-soft); color:var(--amber); }
+  .avatar.a { background:var(--violet-soft); color:var(--violet); }
+  .empty { display:flex; align-items:center; gap:10px; padding:16px 18px; color:var(--muted); }
+  .empty .ok { width:22px; height:22px; border-radius:50%; background:var(--green-soft); color:var(--green); display:grid; place-items:center; font-weight:800; }
+
+  /* tiles */
+  .tiles { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:26px; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; text-decoration:none; }
+  .tile .k { color:var(--muted); font-size:12.5px; }
+  .tile .v { font-size:24px; font-weight:700; letter-spacing:-.02em; }
+  .tile.zero .v { color:var(--faint); font-weight:500; }
+  .tile.warn { border-color:color-mix(in srgb, var(--amber) 55%, var(--line)); background:var(--amber-soft); }
+  .tile.warn .v, .tile.warn .k { color:var(--amber-ink); }
+  .tile.fin .v { color:var(--muted); font-weight:500; }
+
+  /* sections */
+  .sec { display:flex; align-items:baseline; gap:10px; margin:0 0 10px; }
+  .sec h2 { margin:0; font-size:15.5px; }
+  .sec .meta { color:var(--faint); font-size:12.5px; }
+  .sec a { margin-left:auto; color:var(--muted); font-size:13px; text-decoration:none; }
+  .sec a:hover { color:var(--ink); text-decoration:underline; }
+
+  /* team cards */
+  .teams { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:26px; }
+  .team { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow); }
+  .team .tt { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+  .team .tt b { font-size:15px; }
+  .team .outcome { color:var(--muted); font-size:13px; margin-bottom:12px; }
+  .pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:650; padding:1px 9px; border-radius:999px; white-space:nowrap; }
+  .pill.g { background:var(--green-soft); color:var(--green-ink); }
+  .pill.a { background:var(--amber-soft); color:var(--amber-ink); }
+  .pill.r { background:var(--red-soft); color:var(--red-ink); }
+  .pill.n { background:var(--raised); color:var(--muted); }
+  .pill.v { background:var(--violet-soft); color:var(--violet-ink); }
+  .team dl { display:grid; grid-template-columns:96px 1fr; gap:6px 10px; margin:0; font-size:13.5px; }
+  .team dt { color:var(--faint); }
+  .team dd { margin:0; }
+  .roster { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+  .chipa { display:inline-flex; align-items:center; gap:4px; font-size:12px; padding:0 7px 0 4px; border-radius:6px; background:var(--violet-soft); color:var(--violet-ink); }
+  .chipa.idle { background:var(--raised); color:var(--muted); }
+
+  /* work table */
+  table.work { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:var(--shadow); margin-bottom:26px; }
+  table.work th { text-align:left; font-size:12px; font-weight:600; color:var(--faint); padding:9px 14px; border-bottom:1px solid var(--line); background:var(--raised); }
+  table.work td { padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  table.work tr:last-child td { border-bottom:0; }
+  table.work tr:hover td { background:var(--raised); }
+  .ttl { font-weight:550; }
+  .sub { color:var(--faint); font-size:12px; }
+  .owner { display:inline-flex; align-items:center; gap:6px; }
+
+  /* repos */
+  .repos { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .repo { display:grid; grid-template-columns:1fr 170px 110px 120px; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); font-size:13.5px; }
+  .repo:last-child { border-bottom:0; }
+  .repo .n { font-weight:550; }
+  .repo .t { color:var(--muted); }
+  .repo .p { color:var(--faint); font-size:12.5px; text-align:right; }
+
+  footer.bot { height:34px; display:flex; align-items:center; padding:0 16px; border-top:1px solid var(--line); color:var(--faint); font-size:12px; background:var(--panel); }
+  footer.bot span:last-child { margin-left:auto; }
+
+  /* lanes view */
+  .lanebar { display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+  .lanebar h1 { font-size:22px; margin:0; }
+  .lanes { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px, 1fr)); gap:12px; }
+  .lane { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+  .lane .lh { display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid var(--line); }
+  .lane .lh b { font-size:13.5px; }
+  .lane .lh .m { color:var(--faint); font-size:12px; }
+  .lane .lh .pill { margin-left:auto; }
+  .term { background:#0a0c0b; color:#c8d1cc; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; padding:10px 12px; height:170px; overflow:hidden; white-space:pre; }
+  .term .g { color:#4ade80; } .term .y { color:#facc15; } .term .d { color:#6b7280; }
+  .tilebody { padding:12px; display:flex; flex-direction:column; gap:6px; font-size:12.5px; color:var(--muted); height:170px; }
+  .tilebody code { font:12px ui-monospace,monospace; color:var(--ink); background:var(--raised); padding:6px 8px; border-radius:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+  .tilebody .btn { margin-top:auto; align-self:flex-start; }
+  .lane.live { border-color:color-mix(in srgb, var(--green) 45%, var(--line)); }
+  .note { color:var(--faint); font-size:12.5px; margin-top:12px; }
+  .showing { color:var(--muted); font-size:13px; padding:2px 10px; border:1px solid var(--line); border-radius:999px; }
+  .strip { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .mem { display:inline-flex; align-items:center; gap:6px; padding:4px 10px 4px 8px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--muted); font:inherit; font-size:12.5px; cursor:pointer; }
+  .mem.vis { border-color:color-mix(in srgb, var(--green) 55%, var(--line)); color:var(--ink); background:var(--raised); }
+  .mem i { width:7px; height:7px; border-radius:50%; }
+  .window { display:grid; grid-template-columns:36px 1fr 36px; gap:8px; align-items:stretch; }
+  .shift { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:10px; font-size:22px; cursor:pointer; }
+  .shift:disabled { opacity:.3; cursor:default; }
+  .lanes4 { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px; }
+  .lanes4 .term { height:520px; }
+  .lanes4 .nm { min-width:0; display:flex; flex-direction:column; line-height:1.25; }
+  .lanes4 .nm b { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lane.enter { animation:enter .22s ease-out; }
+  @keyframes enter { from { opacity:0; transform:translateX(var(--dx,24px)); } to { opacity:1; transform:none; } }
+  .zoom { margin-left:4px; flex:none; width:26px; height:26px; border-radius:6px; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; font-size:14px; line-height:1; }
+  .zoom:hover { color:var(--ink); background:var(--raised); }
+  .lanes4.zoomed { grid-template-columns:1fr; }
+  .lanes4.zoomed .term { height:620px; font-size:13px; }
+  .mem.zoomed { border-color:var(--green); box-shadow:0 0 0 2px var(--green-soft); }
+
+  /* harnesses */
+  .crumbs { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; margin-bottom:10px; }
+  .crumbs a { color:var(--muted); text-decoration:none; } .crumbs a:hover { color:var(--ink); text-decoration:underline; }
+  .crumbs b { color:var(--ink); font-weight:600; }
+  .hgrid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .hcard { display:flex; gap:14px; align-items:flex-start; padding:16px 18px; background:var(--panel); border:2px solid var(--line); border-radius:12px; cursor:pointer; text-align:left; font:inherit; color:inherit; transition:border-color .15s; }
+  .hcard:hover, .hcard:focus-visible { border-color:color-mix(in srgb, var(--green) 50%, var(--line)); outline:none; }
+  .hlogo { width:38px; height:38px; border-radius:9px; background:#0b0b0b; color:#22c55e; font:700 13px ui-monospace,monospace; display:grid; place-items:center; border:1px solid #2a2a2a; flex:none; }
+  .hcard .t { display:flex; align-items:center; gap:8px; flex-wrap:wrap; } .hcard .t b { font-size:15.5px; }
+  .hcard .ver { color:var(--faint); font:12px ui-monospace,monospace; margin-left:auto; }
+  .hcard .d { color:var(--muted); font-size:13px; margin-top:3px; }
+  .hcard .go { margin-left:auto; color:var(--muted); font-size:13px; align-self:center; white-space:nowrap; }
+  .hhead { display:flex; align-items:center; gap:14px; margin-bottom:6px; }
+  .hhead h1 { font-size:24px; margin:0; }
+  .hmeta { color:var(--faint); font-size:12.5px; margin-bottom:20px; }
+  .group { margin-bottom:20px; } .group h3 { font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin:0 0 8px; }
+  .tiles3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .ptile { display:flex; gap:10px; align-items:flex-start; text-align:left; padding:12px 14px; background:var(--panel); border:2px solid var(--line); border-radius:10px; cursor:pointer; font:inherit; color:inherit; }
+  .ptile:hover, .ptile:focus-visible { border-color:color-mix(in srgb, var(--green) 50%, var(--line)); outline:none; }
+  .ptile .pi { width:30px; height:30px; border-radius:8px; background:var(--raised); display:grid; place-items:center; color:var(--ink); flex:none; font:700 13px ui-sans-serif,system-ui,sans-serif; }
+  .ptile b { display:block; font-size:14px; } .ptile .pd { display:block; color:var(--muted); font-size:12.5px; } .ptile .pc { display:block; color:var(--faint); font-size:12px; margin-top:2px; }
+  .lock { font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:999px; padding:0 6px; margin-left:6px; font-weight:500; }
+  details.tech { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; color:var(--muted); font-size:13px; }
+  details.tech summary { cursor:pointer; color:var(--ink); font-weight:550; }
+  .settings { display:grid; grid-template-columns:220px 1fr; gap:22px; }
+  .subnav { border-right:1px solid var(--line); padding-right:14px; }
+  .subnav .back { display:block; color:var(--muted); text-decoration:none; font-size:13px; margin-bottom:12px; }
+  .subnav .back:hover { color:var(--ink); }
+  .subnav h4 { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin:12px 0 4px; }
+  .subnav a { display:block; padding:5px 10px; border-radius:7px; color:var(--muted); text-decoration:none; font-size:13.5px; position:relative; }
+  .subnav a:hover { background:var(--raised); color:var(--ink); }
+  .subnav a.on { background:var(--raised); color:var(--ink); font-weight:600; }
+  .subnav a.on::before { content:""; position:absolute; left:-2px; top:6px; bottom:6px; width:3px; border-radius:3px; background:var(--green); }
+  .placeholder { border:2px dashed var(--line); border-radius:12px; padding:30px; color:var(--faint); text-align:center; }
+  .server { display:flex; align-items:center; gap:12px; padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; margin-bottom:10px; }
+  .server code { font:12px ui-monospace,monospace; color:var(--muted); }
+  /* audit */
+  .covline { color:var(--muted); margin:-6px 0 16px; font-size:13.5px; }
+  .heads { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:22px; }
+  .head4 { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .head4 .k { color:var(--muted); font-size:12.5px; display:flex; gap:6px; align-items:center; }
+  .head4 .k i { font-style:normal; width:15px; height:15px; border-radius:50%; border:1px solid var(--line); display:inline-grid; place-items:center; font-size:10px; color:var(--faint); cursor:help; }
+  .head4 .v { font-size:22px; font-weight:700; } .head4 .s { color:var(--faint); font-size:12px; }
+  .look { border-radius:12px; background:var(--panel); border:1px solid color-mix(in srgb, var(--amber) 55%, var(--line)); margin-bottom:22px; overflow:hidden; }
+  .look .lh2 { padding:12px 18px; background:var(--amber-soft); display:flex; gap:10px; align-items:center; }
+  .look .grp { padding:12px 18px; border-top:1px solid var(--line); }
+  .look .grp b { display:block; } .look ul { margin:6px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
+  .look .acts { display:flex; gap:8px; margin-top:8px; }
+  .chips { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
+  .chipf { border:1px solid var(--line); background:var(--panel); color:var(--muted); border-radius:999px; padding:3px 11px; font:inherit; font-size:12.5px; cursor:pointer; }
+  .chipf.on { background:var(--raised); color:var(--ink); border-color:color-mix(in srgb, var(--green) 50%, var(--line)); }
+  .feed { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .ev { display:grid; grid-template-columns:110px 1fr auto; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); align-items:start; font-size:13.5px; }
+  .ev:last-child { border-bottom:0; }
+  .ev .when { color:var(--faint); font-size:12.5px; }
+  .ev.warn { background:var(--amber-soft); }
+  .ev .more { color:var(--faint); font-size:12px; }
+  .tb { white-space:nowrap; display:inline-block; font-size:11.5px; font-weight:600; padding:0 7px; border-radius:6px; margin-right:6px; }
+  .tb.t1 { background:rgba(56,189,248,.16); color:#7dd3fc; } .tb.t2 { background:rgba(45,212,191,.16); color:#5eead4; } .tb.t0 { background:var(--raised); color:var(--muted); }
+  html:not(.dark) .tb.t1 { color:#0369a1; } html:not(.dark) .tb.t2 { color:#0f766e; }
+  .locked { padding:22px; text-align:center; color:var(--muted); }
+
+  /* shared list rows */
+  .rows { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; margin-bottom:22px; }
+  .row { display:grid; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); font-size:13.5px; }
+  .row:last-child { border-bottom:0; }
+  .row.click { cursor:pointer; } .row.click:hover { background:var(--raised); }
+  .row.hd { background:var(--raised); color:var(--faint); font-size:12px; font-weight:600; padding:8px 16px; }
+  .grphd { padding:8px 16px; background:var(--raised); font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid var(--line); }
+  .w-row { grid-template-columns: 1fr 200px 130px 190px 60px 90px; }
+  .t-row { grid-template-columns: 1.3fr 1fr 110px 170px 34px; }
+  .r-row { grid-template-columns: 1.2fr 170px 1.1fr 130px 70px; }
+  .m-row { grid-template-columns: 130px 1fr 230px 120px 110px; }
+  .l-row { grid-template-columns: 1fr auto; }
+  .kebab { width:28px; height:28px; border-radius:7px; border:1px solid var(--line); background:transparent; color:var(--muted); cursor:pointer; }
+  .tabs2 { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  .tabs2 button { background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted); padding:8px 12px; font:inherit; font-weight:600; cursor:pointer; }
+  .tabs2 button.on { color:var(--ink); border-bottom-color:var(--green); }
+  .timeline { position:relative; margin:0 0 22px; padding-left:18px; }
+  .timeline::before { content:""; position:absolute; left:5px; top:6px; bottom:6px; width:2px; background:var(--line); }
+  .tl { position:relative; padding:4px 0 12px; font-size:13.5px; }
+  .tl::before { content:""; position:absolute; left:-17px; top:9px; width:10px; height:10px; border-radius:50%; background:var(--panel); border:2px solid var(--faint); }
+  .tl.ok::before { border-color:var(--green); } .tl.warn::before { border-color:var(--amber); } .tl.you::before { border-color:var(--amber); background:var(--amber); }
+  .tl .w { color:var(--faint); font-size:12px; margin-right:8px; }
+  .card2 { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:16px; }
+  .card2 h3 { margin:0 0 8px; font-size:14.5px; }
+  .kv { display:grid; grid-template-columns:200px 1fr; gap:6px 14px; font-size:13.5px; } .kv dt { color:var(--faint); } .kv dd { margin:0; }
+  .split { display:grid; grid-template-columns:360px 1fr; gap:16px; }
+  .term2 { background:#0a0c0b; color:#c8d1cc; font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; padding:12px 14px; height:430px; white-space:pre; overflow:hidden; border-radius:0 0 12px 12px; }
+  .term2 .g { color:#4ade80; } .term2 .d { color:#6b7280; }
+  .termhd { display:flex; align-items:center; gap:10px; padding:9px 14px; background:var(--panel); border:1px solid var(--line); border-bottom:0; border-radius:12px 12px 0 0; font-size:13px; }
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:grid; place-items:center; z-index:30; }
+  .modal { width:560px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px 22px; box-shadow:0 20px 60px rgba(0,0,0,.4); }
+  .modal h3 { margin:0 0 4px; } .modal .field { display:grid; gap:4px; margin:12px 0; font-size:13px; } .modal .field span { color:var(--muted); }
+  .inp { height:34px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink); padding:0 10px; font:inherit; }
+  .steps { display:flex; gap:6px; margin-bottom:16px; font-size:12.5px; }
+  .steps span { padding:4px 10px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .steps span.on { border-color:var(--green); color:var(--ink); background:var(--green-soft); }
+  .steps span i { font-style:normal; color:var(--faint); margin-left:4px; }
+  .who-you { color:var(--amber-ink); font-weight:700; } .who-deck { color:var(--muted); font-weight:700; } .who-ag { color:var(--violet-ink); font-weight:700; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-human" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6" fill="currentColor"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z" fill="currentColor"/></symbol>
+  <symbol id="i-agent" viewBox="0 0 24 24"><g fill="currentColor"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/></g><circle cx="8.5" cy="12.5" r="2.1" fill="var(--panel)"/><circle cx="15.5" cy="12.5" r="2.1" fill="var(--panel)"/><rect x="8" y="16.6" width="8" height="1.7" rx=".8" fill="var(--panel)"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></g></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></g></symbol>
+  <symbol id="i-repo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M9 4v6l2-1.5L13 10V4"/></g></symbol>
+  <symbol id="i-team" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14.8c1.7.8 2.7 2.5 3 5.2"/></g></symbol>
+  <symbol id="i-screen" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></g></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M3 6.5l9 6.5 9-6.5"/></g></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></g></symbol>
+  <symbol id="i-audit" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></symbol>
+</defs></svg>
+
+<div class="review">
+  <b>Mockup review</b>
+  <span>View <span class="seg" data-k="view"><button data-v="overview" class="on">Overview</button><button data-v="work">Work</button><button data-v="teams">Teams</button><button data-v="repos">Repositories</button><button data-v="live">Live sessions</button><button data-v="lanes">Team lanes</button><button data-v="mail">Agent Mail</button><button data-v="audit">Audit</button><button data-v="harnesses">Harnesses</button></span></span>
+  <span>State <span class="seg" data-k="state"><button data-v="busy" class="on">Needs you</button><button data-v="idle">Idle and paused</button></span></span>
+  <span>Theme <span class="seg" data-k="theme"><button data-v="dark" class="on">Dark</button><button data-v="light">Light</button></span></span>
+  <span class="refs">Issues #506–#546 · sample data</span>
+</div>
+
+<header class="top">
+  <div class="logo">&gt;_</div>
+  <div class="brand">Claude Deck</div>
+  <span class="machine" title="Hostname: PIDMDRWS5SD6BK3"><i></i>This machine</span>
+  <span class="harness">Claude Code 2.1 · Codex 0.159 · Pi 0.87</span>
+  <button class="iconbtn" title="Theme"><svg class="ic"><use href="#i-sun"/></svg></button>
+</header>
+
+<div class="shell">
+  <nav class="side">
+    <a href="#" class="on" data-nav="overview"><svg class="ic"><use href="#i-grid"/></svg>Overview<span class="badge" data-busy>2</span></a>
+    <a href="#" data-nav="work"><svg class="ic"><use href="#i-list"/></svg>Work</a>
+    <a href="#" data-nav="teams"><svg class="ic"><use href="#i-team"/></svg>Teams</a>
+    <a href="#" data-nav="repos"><svg class="ic"><use href="#i-repo"/></svg>Repositories</a>
+    <a href="#" data-nav="live"><svg class="ic"><use href="#i-screen"/></svg>Live sessions</a>
+    <div class="sep"></div>
+    <a href="#" data-nav="mail"><svg class="ic"><use href="#i-mail"/></svg>Agent Mail<span class="badge" data-busy>1</span></a>
+    <a href="#" data-nav="audit"><svg class="ic"><use href="#i-audit"/></svg>Audit</a>
+    <a href="#" data-nav="harnesses"><svg class="ic"><use href="#i-gear"/></svg>Harnesses</a>
+  </nav>
+
+  <main>
+  <!-- ================= OVERVIEW ================= -->
+  <section id="overview">
+    <div class="head">
+      <h1>Overview</h1>
+      <span class="upd" title="9 Oct 2026, 20:07">Updated 2 min ago</span>
+      <div class="filters">
+        <select class="select"><option>All teams</option><option>major-release-v3</option><option>product-reposition-fork</option></select>
+        <select class="select"><option>All repositories</option><option>adrirubio/claude-deck</option><option>adrirubio/claude-deck-website</option><option>juanrubio/claude-deck</option></select>
+      </div>
+    </div>
+
+    <div class="status" data-busy>
+      <span class="dot g"></span>
+      <span class="text"><b>Factory running.</b> 2 teams · 4 agents working · 2 of 3 repositories on.</span>
+      <a class="more" href="#">Automation details ›</a>
+    </div>
+    <div class="status" data-idle hidden>
+      <span class="dot n"></span>
+      <span class="text"><b>Factory paused.</b> All 3 repositories are off. No work is queued.</span>
+      <a class="btn sm" href="#" style="margin-left:auto">Open Teams</a>
+    </div>
+
+    <div class="needs has" data-busy>
+      <div class="nh"><svg class="ic" style="color:var(--amber)"><use href="#i-human"/></svg><h2>Needs you</h2><span class="count">2</span></div>
+      <div class="act">
+        <span class="avatar h"><svg class="ic"><use href="#i-human"/></svg></span>
+        <div><div class="what">Approve publication of Deck v3.0.1</div>
+          <div class="why">Previews and checks are ready. Review them, then approve on the parent issue.</div>
+          <div class="src">major-release-v3 · requested by the Leader · 12 min ago</div></div>
+        <a class="btn primary sm" href="#">Open #490</a>
+      </div>
+      <div class="act">
+        <span class="avatar h"><svg class="ic"><use href="#i-human"/></svg></span>
+        <div><div class="what">Review and merge PR #47 (design)</div>
+          <div class="why">Design-labelled work keeps human review. Verifier accepted at <code style="font-size:12px">4f2c9e1</code>.</div>
+          <div class="src">product-reposition-fork · juanrubio/claude-deck · 40 min ago</div></div>
+        <a class="btn sm" href="#">Review PR</a>
+      </div>
+    </div>
+    <div class="needs" data-idle hidden>
+      <div class="empty"><span class="ok">✓</span>Nothing needs you right now.</div>
+    </div>
+
+    <div class="tiles">
+      <a class="tile warn" href="#" data-busy><div class="k">Needs you</div><div class="v">2</div></a>
+      <a class="tile zero" href="#" data-idle hidden><div class="k">Needs you</div><div class="v">0</div></a>
+      <a class="tile" href="#" data-busy><div class="k">In progress</div><div class="v">3</div></a>
+      <a class="tile zero" href="#" data-idle hidden><div class="k">In progress</div><div class="v">0</div></a>
+      <a class="tile" href="#" data-busy><div class="k">In review</div><div class="v">1</div></a>
+      <a class="tile zero" href="#" data-idle hidden><div class="k">In review</div><div class="v">0</div></a>
+      <a class="tile" href="#" data-busy><div class="k">Queued</div><div class="v">2</div></a>
+      <a class="tile zero" href="#" data-idle hidden><div class="k">Queued</div><div class="v">0</div></a>
+      <a class="tile fin" href="#"><div class="k">Finished</div><div class="v">13</div></a>
+    </div>
+
+    <div class="sec"><h2>Teams</h2><span class="meta">2</span><a href="#">Manage teams ›</a></div>
+    <div class="teams">
+      <div class="team">
+        <div class="tt"><b>major-release-v3</b>
+          <span class="pill g" data-busy>Running</span><span class="pill n" data-idle hidden>Paused</span></div>
+        <div class="outcome">Release Deck v3.0.1 and its website. Publication needs Director approval.</div>
+        <dl>
+          <dt>Supervisor</dt><dd data-busy><span class="pill g">Healthy</span> <span class="sub">checked 2 min ago · next in 8 min</span></dd>
+          <dd data-idle hidden><span class="pill n">None</span> <span class="sub">not required while paused</span></dd>
+          <dt>Roster</dt><dd class="roster">
+            <span class="chipa"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Leader</span>
+            <span class="chipa"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Implementers ×3</span>
+            <span class="chipa idle"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Verifiers ×2</span></dd>
+          <dt>Remaining</dt><dd data-busy>Publish the release and the website · <span class="sub">under 1 active hour</span></dd>
+          <dd data-idle hidden>None. All 5 items are finished.</dd>
+          <dt>Next</dt><dd data-busy><span class="pill a"><svg class="ic" style="width:12px;height:12px"><use href="#i-human"/></svg>You</span> approve publication</dd>
+          <dd data-idle hidden><span class="sub">No next action.</span></dd>
+        </dl>
+      </div>
+      <div class="team">
+        <div class="tt"><b>product-reposition-fork</b>
+          <span class="pill g" data-busy>Running</span><span class="pill n" data-idle hidden>Paused</span></div>
+        <div class="outcome">Reposition Deck as a supervised delivery factory.</div>
+        <dl>
+          <dt>Supervisor</dt><dd><span class="pill n">None</span> <span class="sub">not required</span></dd>
+          <dt>Roster</dt><dd class="roster">
+            <span class="chipa"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Leader</span>
+            <span class="chipa"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Implementers ×2</span>
+            <span class="chipa idle"><svg class="ic" style="width:13px;height:13px"><use href="#i-agent"/></svg>Verifier</span></dd>
+          <dt>Attention</dt><dd data-busy><span class="pill r">1</span> Required CI cannot be read on #52</dd>
+          <dd data-idle hidden><span class="sub">None</span></dd>
+          <dt>Next</dt><dd data-busy><span class="pill v"><svg class="ic" style="width:12px;height:12px"><use href="#i-agent"/></svg>Leader</span> assess #53 and #54</dd>
+          <dd data-idle hidden><span class="sub">No next action.</span></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div data-busy>
+      <div class="sec"><h2>Active work</h2><span class="meta">4</span><a href="#">All work ›</a></div>
+      <table class="work">
+        <tr><th>Issue</th><th>Team</th><th>State</th><th>Owner</th><th>PR</th><th style="text-align:right">Updated</th></tr>
+        <tr><td><div class="ttl">#495 Publish release artifacts and checksums</div><div class="sub">adrirubio/claude-deck</div></td><td>major-release-v3</td><td><span class="pill g">In progress</span></td>
+          <td><span class="owner"><svg class="ic" style="color:var(--violet)"><use href="#i-agent"/></svg>R2 release implementer</span></td><td>#500</td><td class="sub" style="text-align:right">4 min ago</td></tr>
+        <tr><td><div class="ttl">#4 Regenerate public documentation</div><div class="sub">adrirubio/claude-deck-website</div></td><td>major-release-v3</td><td><span class="pill v">In review</span></td>
+          <td><span class="owner"><svg class="ic" style="color:var(--violet)"><use href="#i-agent"/></svg>V1 verifier</span></td><td>#5</td><td class="sub" style="text-align:right">9 min ago</td></tr>
+        <tr><td><div class="ttl">#52 Show supervisor status on the team card</div><div class="sub">juanrubio/claude-deck</div></td><td>product-reposition-fork</td><td><span class="pill r">CI unreadable</span></td>
+          <td><span class="owner"><svg class="ic" style="color:var(--violet)"><use href="#i-agent"/></svg>B3 frontend</span></td><td>#58</td><td class="sub" style="text-align:right">18 min ago</td></tr>
+        <tr><td><div class="ttl">#47 Overview layout for Directors</div><div class="sub">juanrubio/claude-deck</div></td><td>product-reposition-fork</td><td><span class="pill a">Needs you</span></td>
+          <td><span class="owner"><svg class="ic" style="color:var(--amber)"><use href="#i-human"/></svg>You</span></td><td>#47</td><td class="sub" style="text-align:right">40 min ago</td></tr>
+      </table>
+    </div>
+
+    <div class="sec"><h2>Repositories</h2><span class="meta">3</span><a href="#">Manage ›</a></div>
+    <div class="repos">
+      <div class="repo"><span class="n">adrirubio/claude-deck <span class="sub">· major-release-v3</span></span><span class="t">major-release-v3</span>
+        <span><span class="pill g" data-busy>On</span><span class="pill n" data-idle hidden>Off</span></span><span class="p">polled 1 min ago</span></div>
+      <div class="repo"><span class="n">adrirubio/claude-deck-website <span class="sub">· major-release-v3</span></span><span class="t">major-release-v3</span>
+        <span><span class="pill g" data-busy>On</span><span class="pill n" data-idle hidden>Off</span></span><span class="p">polled 1 min ago</span></div>
+      <div class="repo"><span class="n">juanrubio/claude-deck <span class="sub">· product-reposition-fork</span></span><span class="t">product-reposition-fork</span>
+        <span><span class="pill n">Off</span></span><span class="p">polled yesterday</span></div>
+    </div>
+  </section>
+
+  <!-- ================= LANES ================= -->
+  <section id="lanes" hidden>
+    <div class="lanebar">
+      <h1>Team lanes</h1>
+      <select class="select"><option>major-release-v3 · 8 members</option><option>product-reposition-fork · 4 members</option></select>
+      <span class="showing" id="showing"></span>
+      <span class="sub" style="margin-left:auto">Shift with ‹ › or the arrow keys · ⤢ zooms a lane</span>
+    </div>
+    <div class="strip" id="strip"></div>
+    <div class="window">
+      <button class="shift" id="left" aria-label="Shift left">‹</button>
+      <div class="lanes4" id="lanegrid"></div>
+      <button class="shift" id="right" aria-label="Shift right">›</button>
+    </div>
+    <p class="note">Mockup of #512: four lanes are visible at a time. Shifting moves one member in from one side and one out of the other. Only the four visible lanes keep a live terminal. ⤢ zooms one lane to full screen; Esc returns to the same four lanes.</p>
+  </section>
+
+
+  <section id="work" hidden><div id="wroot"></div></section>
+  <section id="teams" hidden><div id="troot"></div></section>
+  <section id="repos" hidden><div id="rroot"></div></section>
+  <section id="live" hidden><div id="lroot"></div></section>
+  <section id="mail" hidden><div id="mroot"></div></section>
+  <!-- ================= HARNESSES ================= -->
+  <section id="harnesses" hidden><div id="hroot"></div></section>
+
+  <!-- ================= AUDIT ================= -->
+  <section id="audit" hidden>
+    <div class="head">
+      <h1>Audit</h1>
+      <span class="upd">How delivery is going, and what went wrong</span>
+      <div class="filters">
+        <select class="select"><option>All teams</option><option>major-release-v3</option><option>product-reposition-fork</option></select>
+        <select class="select"><option>All repositories</option><option>adrirubio/claude-deck</option><option>adrirubio/claude-deck-website</option><option>juanrubio/claude-deck</option></select>
+        <select class="select"><option>Last 7 days</option><option>Last 30 days</option><option>Since recording started</option></select>
+      </div>
+    </div>
+    <p class="covline">Recording started 8 Oct 2026, 10:58. The first 5 days of this window have no data.</p>
+    <div class="heads">
+      <div class="head4"><div class="k">Delivered <i title="Attempts with a merged PR or an accepted design version">?</i></div><div class="v">2</div><div class="s">2 code PRs merged · 0 design</div></div>
+      <div class="head4"><div class="k">Closed without delivery <i title="Tracking ended with no delivery evidence">?</i></div><div class="v">0</div><div class="s">Outcome unknown: 0</div></div>
+      <div class="head4"><div class="k">Median time to finish <i title="From dispatch to the end of tracking. Not hands-on time.">?</i></div><div class="v">2 h 50 min</div><div class="s">dispatch → finished · 2 attempts</div></div>
+      <div class="head4"><div class="k">Your interventions <i title="Distinct actions taken with the Director key">?</i></div><div class="v">20</div><div class="s">1 recovery succeeded · 0 retries charged · cost not measured</div></div>
+    </div>
+    <div class="look">
+      <div class="lh2"><svg class="ic" style="color:var(--amber)"><use href="#i-human"/></svg><b>Needs a look</b><span class="count">2</span><span class="sub" style="margin-left:auto">Refused agent requests in this window</span></div>
+      <div class="grp"><b><span class="tb t1">major-release-v3</span>R3 website implementer: 5 requests refused on adrirubio/claude-deck-website #2</b>
+        <ul><li><b style="display:inline">3×</b> The plan's file paths are not valid · last 9 Oct 01:34 · <span style="color:var(--amber-ink)">repeated refusals often mean a factory defect</span></li>
+            <li>1× The requested actions are not allowed for this plan</li><li>1× Too many failed attempts for this plan</li></ul>
+        <div class="acts"><a class="btn sm" href="#">Open #2</a><a class="btn sm" href="#">Show events</a></div></div>
+      <div class="grp"><b><span class="tb t1">major-release-v3</span>R2 release implementer: 3 requests refused on adrirubio/claude-deck #492</b>
+        <ul><li>1× The requested actions are not allowed · 1× Too many failed attempts · 1× The attempt was not stopped, so it cannot continue</li></ul>
+        <div class="acts"><a class="btn sm" href="#">Open #492</a><a class="btn sm" href="#">Show events</a></div></div>
+    </div>
+    <div class="sec"><h2>Activity</h2><span class="meta">48 actions · from 84 records</span><a href="#" id="lockToggle">Preview: locked ›</a></div>
+    <div class="chips" id="chips"></div>
+    <div class="feed" id="feed"></div>
+    <details class="tech" style="margin-top:22px"><summary>All metrics (technical)</summary><p>The current metrics table, with plain labels beside the code names, each note shown once, and no horizontal scrolling (#517).</p></details>
+  </section>
+  </main>
+</div>
+<footer class="bot"><span>Claude Deck v3.0.0</span><span>GitHub</span></footer>
+
+<script>
+const members = [
+  {n:'Leader', m:'Sonnet 5.5', s:'Working', lines:['<span class="d">› deck_report_backlog_assessment</span>','  assessed 5 items · 1 human action','<span class="g">✓</span> published current summary on #490','<span class="d">waiting for Director approval…</span>']},
+  {n:'R1 implementer', m:'Sonnet 5.5', s:'Working', lines:['<span class="d">$ pytest tests/test_release.py -q</span>','<span class="g">........................</span> 24 passed','<span class="y">●</span> pushing checkpoint 7c1e2a9','  draft PR #500 updated']},
+  {n:'R2 implementer', m:'Sonnet 5.5', s:'Working', lines:['<span class="d">› Edit scripts/build.sh</span>','  +12 −3 checksum step','<span class="d">$ ./scripts/build.sh --dry-run</span>','<span class="g">✓</span> artifacts: 4 files']},
+  {n:'R3 implementer', m:'Codex 0.159', s:'Working', lines:['<span class="d">› reading docs/guide/index.md</span>','  regenerating 38 pages','<span class="y">●</span> 21 / 38']},
+  {n:'V1 verifier', m:'Opus 5.5', s:'Reviewing', lines:['<span class="d">› git diff 2b7e0aa..9be41d0</span>','  reviewing #5 · 3 of 7 files','  F1 docs/index.md: stale version string']},
+  {n:'V2 verifier', m:'Opus 5.5', s:'Idle', lines:['<span class="g">ACCEPT</span> #499 at 1f0c33e','<span class="d">26 min ago · no assigned review</span>']},
+  {n:'R4 implementer', m:'Pi 0.87', s:'Waiting', lines:['<span class="d">› deck_check_inbox</span>','  plan for #497 sent to Leader','<span class="y">●</span> waiting for approval']},
+  {n:'R5 implementer', m:'Sonnet 5.5', s:'Idle', lines:['<span class="d">No assigned work.</span>']},
+];
+const dotc = s => ({Working:'var(--green)',Reviewing:'var(--violet)',Waiting:'var(--amber)',Idle:'var(--faint)'}[s]);
+const pill = s => ({Working:'g',Reviewing:'v',Waiting:'a',Idle:'n'}[s]);
+let first = 0, zoomed = null;
+const laneHtml = (x, i, cls, dx, isZoom) => `<div class="lane live ${cls}" style="--dx:${dx}">
+    <div class="lh"><svg class="ic" style="color:var(--violet);flex:none"><use href="#i-agent"/></svg><div class="nm"><b>${x.n}</b><span class="m">${x.m}</span></div><span class="pill ${pill(x.s)}">${x.s}</span>
+      <button class="zoom" data-z="${i}" title="${isZoom ? 'Back to lanes (Esc)' : 'Full screen'}">${isZoom ? '⤡' : '⤢'}</button></div>
+    <div class="term">${x.lines.join('\n')}</div></div>`;
+function renderLanes(dir){
+  const vis = members.slice(first, first+4);
+  document.getElementById('showing').textContent = zoomed !== null
+    ? `Full screen: ${members[zoomed].n} · Esc to return`
+    : `Showing ${first+1}–${first+vis.length} of ${members.length}`;
+  document.getElementById('strip').innerHTML = members.map((x,i)=>`<button class="mem ${i>=first&&i<first+4?'vis':''} ${i===zoomed?'zoomed':''}" data-i="${i}"><i style="background:${dotc(x.s)}"></i>${x.n}</button>`).join('');
+  const grid = document.getElementById('lanegrid');
+  grid.classList.toggle('zoomed', zoomed !== null);
+  grid.innerHTML = zoomed !== null
+    ? laneHtml(members[zoomed], zoomed, 'enter', '0px', true)
+    : vis.map((x,j)=>laneHtml(x, first+j, dir && ((dir>0&&j===3)||(dir<0&&j===0)) ? 'enter' : '', dir>0?'24px':'-24px', false)).join('');
+  document.getElementById('left').disabled = zoomed !== null || first===0;
+  document.getElementById('right').disabled = zoomed !== null || first+4>=members.length;
+  document.querySelectorAll('.zoom').forEach(b=>b.onclick=()=>{ const i=+b.dataset.z; zoomed = zoomed===i ? null : i; renderLanes(0); });
+  document.querySelectorAll('.mem').forEach(b=>b.onclick=()=>{ const i=+b.dataset.i;
+    if (zoomed !== null) { zoomed = i; first = Math.max(0, Math.min(members.length-4, i<first ? i : i>=first+4 ? i-3 : first)); renderLanes(0); return; }
+    if(i<first){shift(i-first)} else if(i>=first+4){shift(i-first-3)} });
+}
+function shift(d){ if (zoomed !== null) return; const n=Math.max(0, Math.min(members.length-4, first+d)); if(n===first) return; const dir=Math.sign(n-first); first=n; renderLanes(dir); }
+document.getElementById('left').onclick=()=>shift(-1);
+document.getElementById('right').onclick=()=>shift(1);
+document.addEventListener('keydown', e=>{ if(state.view!=='lanes') return;
+  if(e.key==='Escape' && zoomed!==null){ zoomed=null; renderLanes(0); return; }
+  if(e.key==='ArrowRight') shift(1); if(e.key==='ArrowLeft') shift(-1); });
+renderLanes(0);
+
+
+/* ===== Harnesses ===== */
+const P = (slug, name, desc, count, icon, view) => ({slug, name, desc, count, icon, view});
+const HARN = {
+  'claude-code': {name:'Claude Code', status:'Ready', ver:'2.1.292', path:'/opt/claude-deck-product/tools/claude', teams:2, groups:[
+    ['Settings',[P('config','Configuration','Model, defaults and environment','settings.json','⚙'),P('permissions','Permissions','What it may do without asking','12 rules','🛡'),P('hooks','Hooks','Commands that run on events','3 hooks','⚡'),P('memory','Memory (CLAUDE.md)','Instructions read in every session','4 files','📝'),P('statusline','Status line','The bar at the bottom of the terminal','On','▭'),P('output-styles','Output styles','How replies are formatted','2 styles','✎')]],
+    ['Extensions',[P('mcp','MCP servers','Tools that Claude Code can call','1 server','🔌'),P('plugins','Plugins','Bundles of commands, agents and hooks','6 installed','🧩'),P('commands','Slash commands','Your own /commands','None yet','/'),P('agents','Agents','Specialist helpers it can delegate to','None yet','🤖'),P('skills','Skills','Know-how loaded when needed','9 skills','★')]],
+    ['History & usage',[P('sessions','Sessions','Past conversations','214 sessions','💬',1),P('plans','Plans','Plans that Claude Code wrote','31 plans','☰',1),P('context','Context window','How full each live session is','3 live','◔',1),P('usage','Usage','Tokens and estimated cost','This month','∑',1)]],
+    ['Safety',[P('backup','Backup & restore','Save and restore these settings','Last: 2 days ago','⟲')]]]},
+  'codex-cli': {name:'Codex CLI', status:'Ready', ver:'0.159.2', path:'/opt/claude-deck-product/tools/codex', teams:1, groups:[
+    ['Settings',[P('config','Configuration','Model, profiles and sandbox','config.toml','⚙')]],
+    ['Extensions',[P('mcp','MCP servers','Tools that Codex can call','2 servers','🔌'),P('plugins','Plugins','Installed Codex plugins','1 installed','🧩')]],
+    ['History & usage',[P('plans','Plans','Plan snapshots from session history','12 plans','☰',1)]]]},
+  'pi-cli': {name:'Pi', status:'Ready', ver:'0.87.1', path:'/opt/claude-deck-product/tools/pi', teams:1, groups:[]},
+  'copilot-cli': {name:'GitHub Copilot CLI', status:'Not installed', groups:[]},
+  'opencode-cli': {name:'OpenCode', status:'Not installed', groups:[]},
+};
+const pagesOf = h => h.groups.flatMap(g=>g[1]);
+const pill2 = st => st==='Ready' ? '<span class="pill g">● Ready</span>' : st==='Needs setup' ? '<span class="pill a">● Needs setup</span>' : '<span class="pill n">○ Not installed</span>';
+let hroute = {h:null, page:null};
+function go(h, page){ hroute={h, page}; renderH(); }
+function crumbs(){
+  const parts=['<a href="#" data-go="">Harnesses</a>'];
+  if (hroute.h) parts.push(hroute.page ? `<a href="#" data-go="${hroute.h}">${HARN[hroute.h].name}</a>` : `<b>${HARN[hroute.h].name}</b>`);
+  if (hroute.page) parts.push(`<b>${pagesOf(HARN[hroute.h]).find(p=>p.slug===hroute.page).name}</b>`);
+  return `<nav class="crumbs" aria-label="Breadcrumb">${parts.join('<span>›</span>')}</nav>`;
+}
+function renderH(){
+  const root=document.getElementById('hroot'); let html='', title='Harnesses · Claude Deck';
+  if (!hroute.h){
+    html = `<div class="head"><h1>Harnesses</h1><span class="upd">The agent tools on this machine</span></div><div class="hgrid">` +
+      Object.entries(HARN).map(([id,h])=>{ const n=pagesOf(h).length;
+        const d = h.status==='Not installed' ? 'Install it to use it in a team.' : `${n ? n+' settings pages' : 'No settings pages in Deck'} · used by ${h.teams} team${h.teams>1?'s':''}`;
+        return `<button class="hcard" data-go="${id}"><span class="hlogo">&gt;_</span><span style="flex:1;min-width:0"><span class="t"><b>${h.name}</b>${pill2(h.status)}${h.ver?`<span class="ver">v${h.ver}</span>`:''}</span><span class="d">${d}</span></span><span class="go">${h.status==='Not installed'?'How to install ›':'Open ›'}</span></button>`; }).join('') + `</div>`;
+  } else if (!hroute.page){
+    const h=HARN[hroute.h]; title=h.name+' · Harnesses · Claude Deck';
+    html = crumbs() + `<div class="hhead"><span class="hlogo">&gt;_</span><h1>${h.name}</h1>${pill2(h.status)}</div>` +
+      `<div class="hmeta">${h.ver?`v${h.ver} · ${h.path} · used by ${h.teams} team${h.teams>1?'s':''}`:'Not installed on this machine.'}</div>` +
+      (h.groups.length ? h.groups.map(([g,ps])=>`<div class="group"><h3>${g}</h3><div class="tiles3">${ps.map(p=>`<button class="ptile" data-page="${p.slug}"><span class="pi">${p.name[0]}</span><span><b>${p.name}${p.view?'<span class="lock">🔒 View only</span>':''}</b><span class="pd">${p.desc}</span><span class="pc">${p.count}</span></span></button>`).join('')}</div></div>`).join('')
+        : `<div class="placeholder" style="text-align:left">${h.status==='Not installed' ? `${h.name} is not installed. <a href="#">How to install</a> · Once installed, it can be used in a team.` : `${h.name} has no settings pages in Deck; it manages its own configuration. Use it from <a href="#">Teams</a> or watch it in <a href="#">Live sessions</a>.`}</div>`) +
+      (h.ver ? `<details class="tech" style="margin-top:8px"><summary>Technical details</summary><p>Configuration: configured for launch · Agent Mail prerequisites configured.<br>Credentials: not checked (configuration does not prove model access).<br>Session binding: set per team slot.<br>Last observation: today 14:00 · <a href="#">Refresh observations</a></p></details>` : '');
+  } else {
+    const h=HARN[hroute.h]; const p=pagesOf(h).find(x=>x.slug===hroute.page); title=`${p.name} · ${h.name} · Claude Deck`;
+    const sub = `<aside class="subnav"><a class="back" href="#" data-go="${hroute.h}">‹ ${h.name}</a>` + h.groups.map(([g,ps])=>`<h4>${g}</h4>`+ps.map(x=>`<a href="#" data-page="${x.slug}" class="${x.slug===p.slug?'on':''}">${x.name}</a>`).join('')).join('') + `</aside>`;
+    const body = p.slug==='mcp'
+      ? `<div class="server"><span style="width:30px;height:30px;border-radius:8px;background:var(--raised);display:grid;place-items:center;font-weight:700">c</span><div style="flex:1"><b>context7</b> <span class="pill g">Connected</span><br><code>npx -y @upstash/context7-mcp</code></div><button class="btn sm">Edit</button></div><button class="btn sm primary">Add server</button>`
+      : `<div class="placeholder">The existing “${p.name}” page content goes here, unchanged.<br>This mockup changes only the navigation around it.</div>`;
+    html = crumbs() + `<div class="settings">${sub}<div><div class="head" style="margin-bottom:6px"><h1>${p.name}</h1>${p.view?'<span class="lock">🔒 View only</span>':''}</div><p class="covline" style="margin:0 0 16px">${p.desc}.</p>${body}</div></div>`;
+  }
+  root.innerHTML = html; if (state.view==='harnesses') document.title = title;
+  root.querySelectorAll('[data-go]').forEach(e=>e.onclick=ev=>{ev.preventDefault(); const v=e.dataset.go; go(v||null, null);});
+  root.querySelectorAll('[data-page]').forEach(e=>e.onclick=ev=>{ev.preventDefault(); go(hroute.h, e.dataset.page);});
+}
+
+/* ===== Audit feed ===== */
+const EV = [
+  {k:'you', w:'9 Oct 08:20', t:1, s:'<b>You</b> turned off adrirubio/claude-deck-website, and 2 more settings changes', m:'enabled: on → off'},
+  {k:'agent', w:'9 Oct 01:50', t:1, s:'<b>R3 website implementer</b> released its workspace for #2'},
+  {k:'del', w:'9 Oct 01:49', t:1, s:'<b>Delivered:</b> PR #3 merged for issue #2 in adrirubio/claude-deck-website', m:'by R3 website implementer · counted as delivered code'},
+  {k:'agent', w:'9 Oct 01:38', t:1, s:'<b>Leader</b> approved R3’s request to continue #2 · R3 acknowledged', m:'3 records: request, decision, acknowledgement'},
+  {k:'ref', w:'9 Oct 01:34', t:1, s:'⚠ <b>Refused:</b> R3 website implementer asked to continue #2 — the plan’s file paths are not valid', m:'third time for this reason'},
+  {k:'you', w:'9 Oct 01:33', t:1, s:'<b>You</b> cancelled the active recovery on #2', m:'Leader notified'},
+  {k:'del', w:'8 Oct 21:11', t:1, s:'<b>Delivered:</b> PR #499 merged for issue #492 in adrirubio/claude-deck', m:'by R2 release implementer'},
+  {k:'ref', w:'8 Oct 20:46', t:1, s:'⚠ <b>Refused:</b> R2 release implementer asked to continue #492 — too many failed attempts for this plan'},
+  {k:'you', w:'8 Oct 12:05', t:1, s:'<b>You</b> assigned R1 as Leader of major-release-v3'},
+  {k:'you', w:'8 Oct 11:40', t:2, s:'<b>You</b> paused team autonomy for product-reposition-fork'},
+  {k:'sys', w:'8 Oct 10:58', t:0, s:'<b>Deck</b> started recording · existing state imported (11 records)'},
+];
+const TEAMS = {1:'major-release-v3', 2:'product-reposition-fork', 0:'Factory-wide'};
+const CH = [['all','All'],['you','Your actions'],['ref','Refused'],['del','Deliveries'],['agent','Agent activity']];
+let chip='all', locked=false;
+function renderFeed(){
+  document.getElementById('chips').innerHTML = CH.map(([k,l])=>`<button class="chipf ${k===chip?'on':''}" data-c="${k}">${l}</button>`).join('');
+  document.querySelectorAll('.chipf').forEach(b=>b.onclick=()=>{chip=b.dataset.c; renderFeed();});
+  const f=document.getElementById('feed');
+  f.innerHTML = locked
+    ? `<div class="locked">🔒 <b>Activity is protected.</b> It can include changed settings and reasons, and agents cannot read it.<br><br><button class="btn primary sm">Unlock activity</button></div>`
+    : EV.filter(e=>chip==='all'||e.k===chip).map(e=>`<div class="ev ${e.k==='ref'?'warn':''}"><span class="when">${e.w}</span><span><span class="tb t${e.t}">${TEAMS[e.t]}</span>${e.s}${e.m?`<div class="more">${e.m}</div>`:''}</span><a class="more" href="#">Details ›</a></div>`).join('');
+  document.getElementById('lockToggle').textContent = locked ? 'Preview: unlocked ›' : 'Preview: locked ›';
+}
+document.getElementById('lockToggle').onclick = e => { e.preventDefault(); locked=!locked; renderFeed(); };
+renderFeed();
+
+
+/* ===== shared ===== */
+const busy = () => state.state === 'busy';
+const TB = {1:'major-release-v3', 2:'product-reposition-fork'};
+const tb = t => `<span class="tb t${t}">${TB[t]}</span>`;
+const ag = n => `<span class="owner"><svg class="ic" style="color:var(--violet)"><use href="#i-agent"/></svg>${n}</span>`;
+const you = `<span class="owner"><svg class="ic" style="color:var(--amber)"><use href="#i-human"/></svg>You</span>`;
+const kebab = '<button class="kebab" title="More actions">⋯</button>';
+function bind(root, sel, fn){ root.querySelectorAll(sel).forEach(e => e.onclick = ev => { ev.preventDefault(); fn(e, ev); }); }
+const onlineIdle = s => s==='Working' ? '<span class="pill g">● Online · Working</span>' : s==='Offline' ? '<span class="pill n">○ Offline</span>' : '<span class="pill n">● Online · Idle</span>';
+
+/* ===== Work (#507 #511 #533 #534) ===== */
+const WI = [
+  {id:'495', t:1, title:'Publish release artifacts and checksums', repo:'adrirubio/claude-deck', st:'In progress', p:'g', owner:'R2 release implementer', pr:'#500', upd:'4 min ago', act:true},
+  {id:'4', t:1, title:'Regenerate public documentation', repo:'adrirubio/claude-deck-website', st:'In review', p:'v', owner:'V1 verifier', pr:'#5', upd:'9 min ago', act:true},
+  {id:'52', t:2, title:'Show supervisor status on the team card', repo:'juanrubio/claude-deck', st:'Needs attention', p:'r', owner:'B3 frontend', pr:'#58', upd:'18 min ago', act:true},
+  {id:'47', t:2, title:'Overview layout for Directors', repo:'juanrubio/claude-deck', st:'Needs you', p:'a', owner:'You', pr:'#47', upd:'40 min ago', act:true},
+  {id:'497', t:1, title:'Add release rollback notes', repo:'adrirubio/claude-deck', st:'Queued', p:'n', owner:'R4 implementer', pr:'—', upd:'1 h ago', act:true},
+  {id:'492', t:1, title:'Update versions, README, release notes and release artifacts', repo:'adrirubio/claude-deck', st:'Merged', p:'n', owner:'R2 release implementer', pr:'#499', upd:'9 Oct 08:18', act:false},
+  {id:'2', t:1, title:'Update the delivery website and regenerate documentation', repo:'adrirubio/claude-deck-website', st:'Merged', p:'n', owner:'R3 website implementer', pr:'#3', upd:'9 Oct 08:18', act:false},
+  {id:'10', t:2, title:'Add durable audit and evidence-based delivery metrics', repo:'juanrubio/claude-deck', st:'Merged', p:'n', owner:'B2 backend', pr:'#73', upd:'8 Oct 02:27', act:false},
+];
+let wroute = {item:null, filter:'active'};
+function renderWork(){
+  const root = document.getElementById('wroot'); let html = '', title = 'Work · Claude Deck';
+  if (!wroute.item){
+    const shown = WI.filter(w => wroute.filter==='all' ? (busy() || !w.act) : wroute.filter==='finished' ? !w.act : (busy() && w.act));
+    html = `<div class="head"><h1>Work</h1><span class="upd">Issues the factory is working on</span><div class="filters">
+      <select class="select"><option>All teams</option><option>${TB[1]}</option><option>${TB[2]}</option></select>
+      <select class="select"><option>All repositories</option><option>adrirubio/claude-deck</option><option>adrirubio/claude-deck-website</option><option>juanrubio/claude-deck</option></select></div></div>
+      <div class="chips">${[['active','Active'],['finished','Finished'],['all','All']].map(([k,l])=>`<button class="chipf ${wroute.filter===k?'on':''}" data-f="${k}">${l}</button>`).join('')}</div>
+      <div class="rows"><div class="row w-row hd"><span>Issue</span><span>Team</span><span>State</span><span>Owner</span><span>PR</span><span style="text-align:right">Updated</span></div>
+      ${shown.length ? shown.map(w=>`<div class="row w-row click" data-item="${w.id}"><span><b>#${w.id} ${w.title}</b><div class="sub">${w.repo}</div></span><span>${tb(w.t)}</span><span><span class="pill ${w.p}">${w.st}</span></span><span>${w.owner==='You'?you:ag(w.owner)}</span><span>${w.pr}</span><span class="sub" style="text-align:right">${w.upd}</span></div>`).join('')
+        : `<div class="empty"><span class="ok">✓</span>No active work. <a href="#" data-f="finished">13 finished items ›</a></div>`}</div>
+      <p class="note">Items have one home: this list and the item page (#533). Teams and Repositories link here with a filter.</p>`;
+  } else {
+    const w = WI.find(x=>x.id===wroute.item); title = `#${w.id} · Work · Claude Deck`;
+    const fin = !w.act, attn = w.st==='Needs attention';
+    html = `<nav class="crumbs"><a href="#" data-back>Work</a><span>›</span><b>#${w.id} ${w.title}</b></nav>
+      <div class="hhead"><h1 style="font-size:21px">#${w.id} ${w.title}</h1></div>
+      <div class="hmeta" style="font-size:13.5px;color:var(--muted)"><span class="pill ${w.p}">${w.st}</span> · PR ${w.pr} · ${w.repo} · ${tb(w.t)} · ${w.owner==='You'?'waiting for you':w.owner+' (Claude Code)'}</div>
+      ${attn ? `<div class="card2" style="border-color:color-mix(in srgb, var(--red) 45%, var(--line))"><h3>⚠ Required CI cannot be read</h3><p style="margin:0 0 10px;color:var(--muted);font-size:13.5px">Deck cannot read the required checks for PR #58, so it cannot verify the change. Check that the GitHub token can read checks, then retry.</p><div style="display:flex;gap:8px"><a class="btn primary sm" href="#">Retry verification</a><a class="btn sm" href="#">Open attempt recovery</a><a class="btn sm" href="#">Check GitHub access</a></div></div>` : ''}
+      <div class="sec"><h2>Timeline</h2><span class="meta">from the audit ledger</span></div>
+      <div class="timeline">${fin ? `
+        <div class="tl ok"><span class="w">9 Oct 08:18</span><b>Merged</b> PR #499 · counted as delivered code</div>
+        <div class="tl you"><span class="w">9 Oct 08:10</span><b>You</b> approved the master promotion</div>
+        <div class="tl ok"><span class="w">8 Oct 23:41</span>V1 verifier accepted the change at 1f0c33e</div>
+        <div class="tl warn"><span class="w">8 Oct 20:53</span>A request to continue was refused: the attempt was not stopped</div>
+        <div class="tl"><span class="w">8 Oct 18:40</span>R2 release implementer opened PR #499</div>
+        <div class="tl"><span class="w">8 Oct 12:20</span>Leader approved the plan · dispatched to R2</div>` : `
+        <div class="tl warn"><span class="w">18 min ago</span>Verification stopped: required CI cannot be read</div>
+        <div class="tl"><span class="w">52 min ago</span>B3 frontend pushed checkpoint 7a1c2e0 to PR #58</div>
+        <div class="tl"><span class="w">2 h ago</span>Leader approved the plan · dispatched to B3</div>`}</div>
+      <details class="tech"><summary>Technical details</summary><p>Merge policy: human · verification retries 0 of 2 · approval rounds 1 of 3 · revision 1 · approver slot 5 · workspace dispatch-1</p></details>`;
+  }
+  root.innerHTML = html; if (state.view==='work') document.title = title;
+  bind(root, '[data-f]', e => { wroute.filter = e.dataset.f; renderWork(); });
+  bind(root, '[data-item]', e => { wroute.item = e.dataset.item; renderWork(); });
+  bind(root, '[data-back]', () => { wroute.item = null; renderWork(); });
+}
+
+/* ===== Teams (#542 #543 #544 #540) ===== */
+const TEAMS2 = {
+  1: {name:'major-release-v3', desc:'Release Deck v3.0.1 and its website. Publication needs Director approval.', leader:'R1', sup:'Healthy', repos:2, work:'5 items, 3 active', members:[
+     ['R1 Leader','Claude Code · Sonnet 5.5','Leader','Working'],['R2 release implementer','Claude Code · Sonnet 5.5','Implements','Working'],['R3 website implementer','Claude Code · Sonnet 5.5','Implements','Idle'],['R4 verifier','Claude Code · Opus 5.5','Reviews','Idle']]},
+  2: {name:'product-reposition-fork', desc:'Reposition Deck as a supervised delivery factory.', leader:'B1', sup:'None', repos:1, work:'11 items, 2 active', members:[
+     ['B1 Product Leader','Claude Code · Sonnet 5.5','Leader','Idle'],['B2 Product Backend','Claude Code · Sonnet 5.5','Implements','Offline'],['B3 Product Frontend','Claude Code · Sonnet 5.5','Implements','Working'],['B4 Product Validation','Codex · gpt-6','Reviews','Idle']]},
+};
+let troute = {team:1, open:null};
+function renderTeams(){
+  const root = document.getElementById('troot'); const T = TEAMS2[troute.team];
+  const running = busy();
+  root.innerHTML = `<div class="head"><h1>Teams</h1><span class="upd">Teams of agents that work on your repositories</span>
+      <div class="filters">${Object.entries(TEAMS2).map(([k,t])=>`<button class="chipf ${+k===troute.team?'on':''}" data-team="${k}">${t.name}</button>`).join('')}<a class="btn sm" href="#">+ New team</a></div></div>
+    <div class="card2"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><h2 style="margin:0;font-size:20px">${T.name}</h2>
+      ${running ? '<span class="pill g">● Running</span>' : '<span class="pill n">Paused</span>'}
+      <span style="margin-left:auto;display:flex;gap:8px"><a class="btn sm ${running?'':'primary'}" href="#">${running?'Pause autonomy':'Turn on autonomy'}</a><a class="btn sm" href="#">Plan launch</a>${kebab}</span></div>
+      <p style="margin:6px 0 10px;color:var(--muted)">${T.desc}</p>
+      <div style="font-size:13.5px;color:var(--muted)">Leader: <b style="color:var(--ink)">${T.leader}</b> · Supervisor: ${T.sup==='Healthy'?'<span class="pill g">Healthy</span>':'<span class="pill n">None</span>'} · Repositories: ${T.repos} <a href="#" data-goto="repos">Manage ›</a> · Work: ${T.work} <a href="#" data-goto="work">View in Work ›</a></div></div>
+    <div class="sec"><h2>Members</h2><span class="meta">${T.members.length}</span><a href="#">+ Add member</a></div>
+    <div class="rows">${T.members.map((m,i)=>`<div class="row t-row click" data-m="${i}"><span><b>${m[0]}</b></span><span class="sub" style="font-size:13px">${m[1]}</span><span>${m[2]}</span><span>${onlineIdle(running?m[3]:(m[3]==='Offline'?'Offline':'Idle'))}</span>${kebab}</div>
+      ${troute.open===i ? `<div class="row" style="grid-template-columns:1fr;background:var(--raised)"><span style="color:var(--muted);font-size:13px"><b style="color:var(--ink)">Charter</b> · Coordinate the release across the Deck and website repositories. Admit only eligible assigned work…<br><b style="color:var(--ink)">Folder</b> · /home/deckproductctl/work/release-v3/coordinator · <b style="color:var(--ink)">Routing</b> · none (Leader) · <b style="color:var(--ink)">Session</b> · resumes previous session · <b style="color:var(--ink)">Language</b> · ASD-STE100</span></div>`:''}`).join('')}</div>
+    <div class="card2" style="display:flex;align-items:center;gap:10px"><b>Coordination</b><span style="color:var(--muted);font-size:13.5px">${running?'Backlog checks every 30 min · last Leader assessment 12 min ago':'Backlog checks paused while autonomy is off · last Leader assessment 1 day ago'}</span><a href="#" style="margin-left:auto;font-size:13px;color:var(--muted)">Settings ›</a></div>
+    <details class="tech"><summary>History</summary><p>Previous observed states, previous assessments and owner follow-ups, collapsed (#542).</p></details>`;
+  if (state.view==='teams') document.title = `${T.name} · Teams · Claude Deck`;
+  bind(root, '[data-team]', e => { troute = {team:+e.dataset.team, open:null}; renderTeams(); });
+  bind(root, '[data-m]', (e, ev) => { if (ev.target.closest('.kebab')) return; const i=+e.dataset.m; troute.open = troute.open===i?null:i; renderTeams(); });
+  bind(root, '[data-goto]', e => { state.view = e.dataset.goto; apply(); });
+}
+
+/* ===== Repositories (#536 #537) ===== */
+const RP = [
+  {id:'claude-deck', name:'adrirubio/claude-deck', br:'release/v3.0.1', t:1, items:'3 items, 2 active', poll:'checked 1 min ago', on:true},
+  {id:'claude-deck-website', name:'adrirubio/claude-deck-website', br:'master', t:1, items:'2 items, 1 active', poll:'checked 1 min ago', on:true},
+  {id:'fork', name:'juanrubio/claude-deck', br:'product-reposition', t:2, items:'11 items, 2 active', poll:'checked yesterday', on:false},
+];
+let rroute = {repo:null, add:false};
+function renderRepos(){
+  const root = document.getElementById('rroot'); let html='', title='Repositories · Claude Deck';
+  if (rroute.add){
+    title = 'Add a repository · Claude Deck';
+    html = `<nav class="crumbs"><a href="#" data-home>Repositories</a><span>›</span><b>Add a repository</b></nav><div class="head"><h1>Add a repository</h1></div>
+      <div class="steps"><span class="on">1 Repository</span><span>2 Team <i>required</i></span><span>3 Routing <i>optional</i></span><span>4 Limits <i>optional</i></span><span>5 Review</span></div>
+      <div class="card2" style="max-width:720px"><div class="kv" style="grid-template-columns:170px 1fr;align-items:center">
+        <dt>GitHub repository</dt><dd><input class="inp" style="width:100%" value="https://github.com/adrirubio/claude-deck-docs"></dd>
+        <dt>Local checkout</dt><dd><select class="select" style="width:100%"><option>/home/deckproductctl/work/docs-source (found)</option><option>Browse…</option></select></dd>
+        <dt>Branch</dt><dd><select class="select"><option>master (default)</option><option>release/v3.0.1</option></select></dd></div>
+        <p class="note">Deck reads the checkout and checks that it can see the repository and its labels. Nothing changes. The Director key is asked for only when you check access or save (#537).</p>
+        <div style="display:flex;gap:8px"><a class="btn primary sm" href="#">Check access</a><a class="btn sm" href="#">Continue</a></div></div>`;
+  } else if (!rroute.repo){
+    html = `<div class="head"><h1>Repositories</h1><span class="upd">Where work comes from</span><div class="filters"><select class="select"><option>All teams</option><option>${TB[1]}</option><option>${TB[2]}</option></select><a class="btn sm primary" href="#" data-add>+ Add a repository</a></div></div>
+      <div class="rows"><div class="row r-row hd"><span>Repository</span><span>Team</span><span>Work</span><span>State</span><span></span></div>
+      ${RP.map(r=>`<div class="row r-row click" data-repo="${r.id}"><span><b>${r.name}</b><div class="sub">${r.br}</div></span><span>${tb(r.t)}</span><span class="sub" style="font-size:13px">${r.items}</span><span>${busy()&&r.on?'<span class="pill g">On</span>':'<span class="pill n">Off</span>'} <span class="sub">${r.poll}</span></span><span class="go" style="color:var(--muted)">Open ›</span></div>`).join('')}</div>
+      <p class="note">Repository settings have one home: here (#536). Teams list their repositories with a Manage link.</p>`;
+  } else {
+    const r = RP.find(x=>x.id===rroute.repo); title = `${r.name} · Repositories · Claude Deck`;
+    html = `<nav class="crumbs"><a href="#" data-home>Repositories</a><span>›</span><b>${r.name}</b></nav>
+      <div class="hhead"><h1 style="font-size:22px">${r.name}</h1>${busy()&&r.on?'<span class="pill g">On</span>':'<span class="pill n">Off</span>'}</div>
+      <div class="hmeta">${tb(r.t)} · branch ${r.br} · ${r.poll} · Work: ${r.items} <a href="#" data-goto="work">View in Work ›</a></div>
+      <div class="card2"><h3>Labels and routing <a class="btn sm" style="float:right" href="#">Edit</a></h3><dl class="kv"><dt>Ready for the team</dt><dd><code>deck-v3-ready</code></dd><dt>Needs design review</dt><dd><code>deck-v3-design</code></dd></dl></div>
+      <div class="card2"><h3>Merging and limits <a class="btn sm" style="float:right" href="#">Edit</a></h3><dl class="kv"><dt>Who merges</dt><dd>You (human merge)</dd><dt>Work at the same time</dt><dd>1 issue</dd><dt>Review rounds</dt><dd>up to 3</dd><dt>Verification retries</dt><dd>up to 2</dd></dl></div>
+      <div class="card2"><h3>Recovery <a class="btn sm" style="float:right" href="#">Edit</a></h3><dl class="kv"><dt>Continue after a stop</dt><dd>On · up to 6 revisions, 8 failed attempts</dd></dl></div>
+      <details class="tech"><summary>Technical details</summary><p>Checkout /home/deckproductctl/work/release-v3/deck-source · GitHub access: host token · workspaces: 1 available, 0 leased · scope id 2</p></details>`;
+  }
+  root.innerHTML = html; if (state.view==='repos') document.title = title;
+  bind(root, '[data-repo]', e => { rroute = {repo:e.dataset.repo, add:false}; renderRepos(); });
+  bind(root, '[data-home]', () => { rroute = {repo:null, add:false}; renderRepos(); });
+  bind(root, '[data-add]', () => { rroute = {repo:null, add:true}; renderRepos(); });
+  bind(root, '[data-goto]', e => { state.view = e.dataset.goto; apply(); });
+}
+
+/* ===== Live sessions (#539 #541) ===== */
+const LS = [[1,'R1 Leader','Claude Code · Sonnet 5.5','Working'],[1,'R2 release implementer','Claude Code · Sonnet 5.5','Working'],[1,'R3 website implementer','Claude Code · Sonnet 5.5','Idle'],[1,'R4 verifier','Claude Code · Opus 5.5','Idle'],[2,'B3 Product Frontend','Claude Code · Sonnet 5.5','Working']];
+let lsel = 0, lnew = false;
+function renderLive(){
+  const root = document.getElementById('lroot'); const s = LS[lsel];
+  const groups = [1,2].map(t => `<div class="grphd">${TB[t]}</div>` + LS.map((x,i)=>[x,i]).filter(([x])=>x[0]===t).map(([x,i])=>`<div class="row l-row ${i===lsel?'':'click'}" data-s="${i}" style="${i===lsel?'background:var(--raised)':''}"><span><b>${x[1]}</b><div class="sub">${x[2]}</div><div style="margin-top:3px">${onlineIdle(busy()?x[3]:'Idle')}</div></span><span style="display:flex;gap:6px;align-items:center"><button class="btn sm" data-s="${i}">${i===lsel?'Watching':'Watch'}</button>${kebab}</span></div>`).join('')).join('') + `<div class="grphd">Not in a team · 2 <a href="#" style="float:right;text-transform:none">Show</a></div>`;
+  root.innerHTML = `<div class="head"><h1>Live sessions</h1><span class="upd">Watch your agents work. Up to 4 at a time.</span><div class="filters"><select class="select"><option>All teams</option><option>${TB[1]}</option></select><a class="btn sm" href="#" data-lanes>Team lanes</a><a class="btn sm primary" href="#" data-new>+ New session</a></div></div>
+    <div class="split"><div class="rows" style="margin:0">${groups}</div>
+    <div><div class="termhd"><svg class="ic" style="color:var(--violet)"><use href="#i-agent"/></svg><b>${s[1]}</b><span class="sub">${s[2]}</span><span class="pill n" style="margin-left:auto">View only</span><a class="btn sm" href="#">Interact</a><a class="btn sm" href="#">Stop watching</a></div>
+    <div class="term2">${busy() && s[3]==='Working' ? `<span class="d">› deck_check_inbox</span>
+  1 new message from the Leader
+<span class="g">✓</span> plan for #495 approved
+<span class="d">$ ./scripts/build.sh --checksums</span>
+  writing claude-deck-v3.0.1.tar.gz.sha256
+<span class="g">✓</span> artifacts: 4 files
+<span class="d">› pushing checkpoint 7c1e2a9 to PR #500</span>` : `<span class="d">› deck_check_inbox</span>
+  No new messages.
+  No authorized work remains for me, so I am idle.
+<span class="d">Waiting for the next assignment…</span>`}</div></div></div>
+    <p class="note">Kill and other rare actions live in the ⋯ menu. Host, tmux target and wake details sit under each row's technical details (#539).</p>
+    ${lnew ? `<div class="overlay" data-close><div class="modal" onclick="event.stopPropagation()"><h3>New session</h3><p class="sub" style="font-size:13px;margin:0">Starts a one-off session that is not part of a team. To add a team member, use Teams.</p>
+      <label class="field"><span>Harness</span><select class="select"><option>Claude Code</option><option>Codex</option><option>Pi</option></select></label>
+      <label class="field"><span>Folder</span><select class="select"><option>/home/juan/work/repos/juanrubio/claude-deck (team checkout)</option><option>Browse…</option></select></label>
+      <label class="field"><span>Start</span><select class="select"><option>New session</option><option>New session in a separate copy (worktree)</option><option>Resume a previous session</option></select></label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox"> Skip permission prompts <span style="color:var(--red)">Runs tools without asking</span></label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><a class="btn sm" href="#" data-close>Cancel</a><a class="btn sm primary" href="#">Start session</a></div>
+      <p class="note">No token field: the shared Director key dialog appears only when Start needs it (#541).</p></div></div>` : ''}`;
+  if (state.view==='live') document.title = 'Live sessions · Claude Deck';
+  bind(root, '[data-s]', e => { lsel = +e.dataset.s; renderLive(); });
+  bind(root, '[data-new]', () => { lnew = true; renderLive(); });
+  bind(root, '[data-close]', () => { lnew = false; renderLive(); });
+  bind(root, '[data-lanes]', () => { state.view = 'lanes'; apply(); });
+}
+
+/* ===== Agent Mail (#527–#531) ===== */
+const CV = [
+  {k:'all', t:1, from:'Release supervisor', fk:'ag', to:'all members', s:'Release goal complete; dispatch is disabled', st:'Broadcast', w:'9 Oct 08:20', n:0},
+  {k:'req', t:1, from:'R2 release implementer', fk:'ag', to:'R4 verifier', s:'Review request: PR #500 at 7c1e2a9', st:'Open', w:'6 min ago', n:1},
+  {k:'you', t:1, from:'R1 Leader', fk:'ag', to:'You', s:'Approve publication of Deck v3.0.1', st:'Waiting for you', w:'12 min ago', n:2},
+  {k:'hand', t:2, from:'B1 Product Leader', fk:'ag', to:'B3 Product Frontend', s:'Handoff: #52 supervisor status card', st:'Accepted', w:'2 h ago', n:3},
+  {k:'deck', t:2, from:'Deck', fk:'deck', to:'B2 Product Backend', s:'Reminder ×4: release the workspace for #5', st:'Not acknowledged', w:'2 Oct 13:52', n:4},
+  {k:'deck', t:1, from:'Deck', fk:'deck', to:'R1 Leader', s:'Backlog check ×46: reconcile assigned backlog', st:'Answered', w:'9 Oct 08:12', n:46},
+];
+let mtab = 'conv', mchip = 'all';
+function renderMail(){
+  const root = document.getElementById('mroot');
+  const who = (n, k) => k==='deck' ? `<span class="who-deck">Deck</span>` : n==='You' ? `<span class="who-you">You</span>` : `<span class="who-ag">${n}</span>`;
+  const conv = CV.filter(c => mchip==='all' || c.k===mchip).map(c => `<div class="row m-row click"><span class="when sub">${c.w}</span><span>${tb(c.t)}<b>${c.s}</b></span><span style="font-size:13px">${who(c.from,c.fk)} → ${who(c.to)}</span><span><span class="pill ${c.st==='Waiting for you'||c.st==='Not acknowledged'?'a':c.st==='Accepted'||c.st==='Answered'?'g':'n'}">${c.st}</span></span><span class="sub" style="text-align:right">${c.n ? c.n+(c.k==='deck'?' notices':' replies') : ''}</span></div>`).join('');
+  const roster = [1,2].map(t => `<div class="grphd">${TB[t]}</div>` + TEAMS2[t].members.map(m => `<div class="row t-row"><span><b>${m[0]}</b></span><span class="sub" style="font-size:13px">${m[1]}</span><span class="sub">${m[3]==='Offline'?'checked mail 2 Oct':'checked mail 08:20'}</span><span>${onlineIdle(busy()?m[3]:(m[3]==='Offline'?'Offline':'Idle'))}${m[3]==='Offline'?' <span class="pill a">4 not acknowledged</span>':''}</span>${kebab}</div>`).join('')).join('') + `<div class="grphd">Other sessions (not in a team) · 2 <a href="#" style="float:right;text-transform:none">Show</a></div>`;
+  root.innerHTML = `<div class="head"><h1>Agent Mail</h1><span class="upd">Messages between your agents, and between you and them</span><div class="filters"><select class="select"><option>All teams</option><option>${TB[1]}</option><option>${TB[2]}</option></select><a class="btn sm primary" href="#">Write a message</a></div></div>
+    <div class="look" style="margin-bottom:18px"><div class="lh2"><b>Waiting on someone</b><span class="count">2</span></div>
+      <div class="grp">⚠ <b style="display:inline">4 messages to B2 Product Backend are not acknowledged</b> · B2 is offline · ${tb(2)}<div class="sub">Deck reminded 4 times, then stopped and raised this item (#528).</div></div>
+      <div class="grp">• <b style="display:inline">R1 Leader asks you to approve publication</b> · ${tb(1)} <a class="btn sm" href="#" style="margin-left:8px">Open</a></div></div>
+    <div class="tabs2"><button data-t="conv" class="${mtab==='conv'?'on':''}">Conversations</button><button data-t="mem" class="${mtab==='mem'?'on':''}">Members</button></div>
+    ${mtab==='conv' ? `<div class="chips">${[['all','All'],['you','To you'],['req','Requests'],['hand','Handoffs'],['deck','Deck notices']].map(([k,l])=>`<button class="chipf ${mchip===k?'on':''}" data-c="${k}">${l}</button>`).join('')}</div><div class="rows">${conv}</div>` : `<div class="rows">${roster}</div>`}
+    <p class="note">Mail is set up for Claude Code, Codex and Pi · <a href="#" data-goto="harnesses">Manage in Harnesses ›</a> (#531). Deck’s own messages are signed “Deck”, never “Director” (#527).</p>`;
+  if (state.view==='mail') document.title = 'Agent Mail · Claude Deck';
+  bind(root, '[data-t]', e => { mtab = e.dataset.t; renderMail(); });
+  bind(root, '[data-c]', e => { mchip = e.dataset.c; renderMail(); });
+  bind(root, '[data-goto]', e => { state.view = e.dataset.goto; apply(); });
+}
+
+const state = {view:'overview', state:'busy', theme:'dark'};
+function apply(){
+  document.documentElement.className = state.theme;
+  for (const id of ['overview','work','teams','repos','live','lanes','mail','harnesses','audit']) document.getElementById(id).hidden = state.view!==id;
+  document.title = {overview:'Overview · Claude Deck', lanes:'Team lanes · Claude Deck', audit:'Audit · Claude Deck'}[state.view] || document.title;
+  if (state.view==='harnesses') renderH();
+  ({work:renderWork, teams:renderTeams, repos:renderRepos, live:renderLive, mail:renderMail})[state.view]?.();
+  document.querySelectorAll('[data-busy]').forEach(e=>e.hidden = state.state!=='busy');
+  document.querySelectorAll('[data-idle]').forEach(e=>e.hidden = state.state!=='idle');
+  document.querySelectorAll('nav.side a[data-nav]').forEach(a=>a.classList.toggle('on', a.dataset.nav===(state.view==='lanes'?'live':state.view)));
+  document.querySelectorAll('.seg[data-k]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', state[seg.dataset.k]===b.dataset.v)));
+}
+document.querySelectorAll('.seg[data-k] button').forEach(b=>b.onclick=()=>{ const k=b.parentElement.dataset.k; if(k in state){state[k]=b.dataset.v; apply();} });
+document.querySelectorAll('nav.side a[data-nav]').forEach(a=>a.onclick=e=>{e.preventDefault(); state.view=a.dataset.nav; apply();});
+const p = new URLSearchParams(location.search); for (const k of Object.keys(state)) if (p.get(k)) state[k]=p.get(k);
+apply();
+</script>
+</body>
+</html>
