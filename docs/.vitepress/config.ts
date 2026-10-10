@@ -37,6 +37,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Autonomous GitHub Dispatch', link: '/autonomy' },
+            { text: 'Factory Operating Model', link: '/guide/operating-model' },
             { text: 'Supervised Factory Playbook', link: '/guide/supervised-factory-playbook' },
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },

@@ -4,6 +4,8 @@ Use this playbook when an operator delegates a GitHub backlog to a supervising a
 
 This process comes from the product reposition work and the Deck v3 release. It describes the operating practice for Deck 3.0.0. Check the installed version before using a command. Team names, issue numbers, model choices and machine paths are campaign settings.
 
+For the roles, the hierarchy and the factory boundary, see the [Factory operating model](./operating-model.md).
+
 Reading this playbook or loading its companion skill grants no execution authority. The operator's instructions and the campaign's recorded permissions govern the work.
 
 ## Quick sequence
