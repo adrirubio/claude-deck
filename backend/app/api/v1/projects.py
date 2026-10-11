@@ -19,6 +19,23 @@ from app.services.project_service import ProjectService
 router = APIRouter()
 
 
+def _resolve_within_home(path: str) -> Path:
+    """Resolve a user-supplied path and refuse anything outside the home tree.
+
+    Symlinks are resolved first, so a link inside home cannot point outside it.
+    """
+    home = Path.home().resolve()
+    try:
+        resolved = Path(os.path.expanduser(path)).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path must be within your home directory")
+    return resolved
+
+
 @router.get("/projects", response_model=ProjectListResponse)
 async def list_projects(db: AsyncSession = Depends(get_db)):
     """List all tracked projects."""
@@ -33,6 +50,7 @@ async def add_project(
     db: AsyncSession = Depends(get_db)
 ):
     """Add a project manually."""
+    _resolve_within_home(project_data.path)
     service = ProjectService(db)
     project = await service.add_project(project_data)
     return project
@@ -44,6 +62,7 @@ async def discover_projects(
     db: AsyncSession = Depends(get_db)
 ):
     """Auto-discover project folders in the specified path."""
+    _resolve_within_home(request.base_path)
     service = ProjectService(db)
     discovered = service.discover_projects(request.base_path)
     return ProjectDiscoveryResponse(discovered=discovered)
@@ -57,16 +76,7 @@ async def browse_directory(path: str = Query(default="~")):
     unintended exposure of arbitrary filesystem locations.
     """
     home = Path.home().resolve()
-    try:
-        resolved = Path(os.path.expanduser(path)).resolve()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    # Constrain to home directory tree
-    try:
-        resolved.relative_to(home)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Path must be within your home directory")
+    resolved = _resolve_within_home(path)
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Path is not a directory")
