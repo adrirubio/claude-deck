@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { formatServerTime } from '@/lib/serverTime'
 import type { AgentActivityObservation } from '@/types/agentTeams'
 
 const reasons: Record<string, string> = {
@@ -28,7 +29,7 @@ export function AgentActivityBadge({ activity }: { activity?: AgentActivityObser
   const state = activity?.state ?? 'unknown'
   const label = state === 'unknown' ? 'Activity unknown' : state === 'working' ? 'Working' : state === 'idle' ? 'Idle' : 'Stopped'
   const reason = activity ? reasons[activity.reason] ?? 'Activity could not be confirmed.' : 'Activity is unavailable, refreshing or expired.'
-  const observed = activity?.observed_at ? ` Last native event: ${new Date(activity.observed_at).toLocaleString()}.` : ''
+  const observed = activity?.observed_at ? ` Last native event: ${formatServerTime(activity.observed_at)}.` : ''
   return (
     <Badge variant="outline" title={reason + observed} aria-label={`Agent activity: ${label}. ${reason}`} className={cn(
       'gap-1.5 whitespace-nowrap',

@@ -1,4 +1,5 @@
 import type { GithubWorkItem } from '@/types/agentTeams'
+import { formatServerTime } from '@/lib/serverTime'
 
 import type { RemainingWork } from './workRemaining'
 
@@ -20,7 +21,7 @@ export function WorkRemainingSummary({ report, current, complete, nextAction, it
       <li><span className="font-medium">Next:</span> {next}</li>
     </ul>
     {fresh && report?.reported_at && <p className="text-xs text-muted-foreground">
-      {report.reported_by ?? 'Team report'} · Updated {new Date(report.reported_at).toLocaleString()}
+      {report.reported_by ?? 'Team report'} · Updated {formatServerTime(report.reported_at)}
     </p>}
     {report?.state === 'historical' && <p className="text-xs text-muted-foreground">The previous report is out of date.</p>}
     {report && report.state !== 'unavailable' && <details className="text-xs">
@@ -31,7 +32,7 @@ export function WorkRemainingSummary({ report, current, complete, nextAction, it
         {report.assumptions && <><dt>Assumptions</dt><dd>{report.assumptions}</dd></>}
         <dt>Reported by</dt><dd>{report.reported_by ?? 'Unavailable'}</dd>
         <dt>Source checkpoint</dt><dd className="break-all">{report.source_sha ?? 'Unavailable'}</dd>
-        <dt>Report updated</dt><dd>{report.reported_at ? new Date(report.reported_at).toLocaleString() : 'Unavailable'}</dd>
+        <dt>Report updated</dt><dd>{report.reported_at ? formatServerTime(report.reported_at) : 'Unavailable'}</dd>
       </dl>
     </details>}
     <a href={issueUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-medium text-primary">Details on GitHub</a>

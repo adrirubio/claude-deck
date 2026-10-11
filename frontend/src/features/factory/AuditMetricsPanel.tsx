@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { formatServerTime } from "@/lib/serverTime";
 import { ApiHttpError } from "@/lib/api";
 import type { AuditEventPage, AuditEventRead, MetricsWindow } from "./auditApi";
 import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
@@ -462,7 +463,7 @@ export function AuditMetricsPage() {
             <tbody>
               {events.map((event) => (
                 <tr key={event.id} className="border-t align-top">
-                  <td className="p-2">{event.occurred_at}</td>
+                  <td className="p-2">{formatServerTime(event.occurred_at)}</td>
                   <td className="p-2 break-words">{event.event_kind}</td>
                   <td className="p-2 break-words">{event.actor_kind}</td>
                   <td className="p-2">{event.action_outcome ?? "unknown"}</td>

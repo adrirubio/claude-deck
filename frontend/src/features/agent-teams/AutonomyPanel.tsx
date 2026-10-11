@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Eye, GitPullRequest, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Trash2, XCircle } from 'lucide-react'
+import { formatServerTime } from '@/lib/serverTime'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -171,12 +172,12 @@ function scopeToInput(scope: TeamGithubScope): TeamGithubScopeInput {
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'never'
-  return new Intl.DateTimeFormat(undefined, {
+  return formatServerTime(value, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value))
+  })
 }
 
 function routeMethodLabel(value?: string | null) {

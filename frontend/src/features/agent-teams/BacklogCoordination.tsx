@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { apiClient } from '@/lib/api'
+import { formatServerTime, parseServerTime } from '@/lib/serverTime'
 
 type Entry = {
   issue_number: number
@@ -85,11 +86,11 @@ function policy(data: Summary): Policy {
 }
 function date(value: string | null) {
   if (!value) return 'not yet'
-  return new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString()
+  return formatServerTime(value)
 }
 function timestamp(value: string | null | undefined) {
   if (!value) return NaN
-  return Date.parse(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`)
+  return parseServerTime(value).getTime()
 }
 const followupStates = ['waiting', 'pending', 'notified', 'delivered', 'capped', 'delivery_failed', 'delivery_unknown', 'assessed', 'paused', 'invalidated']
 const followupHistory = ['no_outstanding_event', 'paused', 'observation_unavailable', 'authority_changed', 'changed_during_read']
