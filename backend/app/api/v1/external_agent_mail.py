@@ -23,6 +23,7 @@ from app.services.external_agent_mail_service import (
     ExternalAgentMailRateLimitError,
     external_agent_mail_service,
 )
+from app.services.mail_redaction import redact_lease_thread
 
 router = APIRouter()
 
@@ -182,7 +183,9 @@ async def get_external_agent_mail_thread(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return await external_agent_mail_service.thread(db, actor, message_id)
+        return redact_lease_thread(
+            await external_agent_mail_service.thread(db, actor, message_id)
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -196,7 +199,7 @@ async def get_external_agent_mail_request_status(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return await external_agent_mail_service.request_status(db, actor, message_id)
+        return redact_lease_thread(await external_agent_mail_service.request_status(db, actor, message_id))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -211,12 +214,12 @@ async def wait_external_agent_mail_request_status(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return await external_agent_mail_service.wait_for_request_status(
+        return redact_lease_thread(await external_agent_mail_service.wait_for_request_status(
             db,
             actor,
             message_id,
             timeout_seconds,
-        )
+        ))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -232,7 +235,7 @@ async def ack_external_agent_mail_request(
 ):
     try:
         response.status_code = 200
-        return await external_agent_mail_service.acknowledge_external_request(db, actor, message_id)
+        return redact_lease_thread(await external_agent_mail_service.acknowledge_external_request(db, actor, message_id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -248,9 +251,9 @@ async def actor_ack_external_agent_mail_request(
 ):
     """Acknowledge a request the actor did not create."""
     try:
-        return await external_agent_mail_service.acknowledge_actor_request(
+        return redact_lease_thread(await external_agent_mail_service.acknowledge_actor_request(
             db, actor, message_id
-        )
+        ))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

@@ -61,6 +61,7 @@ from app.services.agent_mail_service import (
     agent_mail_service,
 )
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.mail_redaction import redact_lease_message, redact_lease_thread
 from app.services.github_approval_service import (
     GithubApprovalError,
     github_approval_service,
@@ -755,7 +756,7 @@ async def _record_continuation_notice(
 @router.get("/messages", response_model=list[MailMessageResponse])
 async def list_messages(db: AsyncSession = Depends(get_db)):
     return [
-        _redact_generic_continuation_message(message)
+        redact_lease_message(_redact_generic_continuation_message(message))
         for message in await agent_mail_service.list_root_messages(db)
     ]
 
@@ -767,13 +768,13 @@ async def get_thread(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return _redact_generic_continuation_thread(
+        return redact_lease_thread(_redact_generic_continuation_thread(
             await agent_mail_service.get_thread(
                 db,
                 message_id,
                 for_member_id=member_id,
             )
-        )
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
