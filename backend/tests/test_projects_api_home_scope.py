@@ -15,6 +15,7 @@ async def client(tmp_path, monkeypatch):
     (home / "repo").mkdir(parents=True)
     (tmp_path / "outside" / "repo").mkdir(parents=True)
     (home / "link-out").symlink_to(tmp_path / "outside")
+    (tmp_path / "home-sibling").mkdir()
     monkeypatch.setenv("HOME", str(home))
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -37,7 +38,8 @@ async def client(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_discover_refuses_paths_outside_home(client):
     c, home, outside = client
-    for base_path in (str(outside), "/", str(home / "link-out"), str(home / ".." / "outside")):
+    sibling = str(home) + "-sibling"  # shares the home prefix but is outside it
+    for base_path in (str(outside), "/", sibling, str(home / "link-out"), str(home / ".." / "outside")):
         response = await c.post("/api/v1/projects/discover", json={"base_path": base_path})
         assert response.status_code == 403, base_path
 

@@ -24,16 +24,14 @@ def _resolve_within_home(path: str) -> Path:
 
     Symlinks are resolved first, so a link inside home cannot point outside it.
     """
-    home = Path.home().resolve()
+    home = os.path.realpath(os.path.expanduser("~"))
     try:
-        resolved = Path(os.path.expanduser(path)).resolve()
+        resolved = os.path.realpath(os.path.expanduser(path))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid path")
-    try:
-        resolved.relative_to(home)
-    except ValueError:
+    if resolved != home and not resolved.startswith(home + os.sep):
         raise HTTPException(status_code=403, detail="Path must be within your home directory")
-    return resolved
+    return Path(resolved)
 
 
 @router.get("/projects", response_model=ProjectListResponse)
@@ -62,9 +60,9 @@ async def discover_projects(
     db: AsyncSession = Depends(get_db)
 ):
     """Auto-discover project folders in the specified path."""
-    _resolve_within_home(request.base_path)
+    base_path = _resolve_within_home(request.base_path)
     service = ProjectService(db)
-    discovered = service.discover_projects(request.base_path)
+    discovered = service.discover_projects(str(base_path))
     return ProjectDiscoveryResponse(discovered=discovered)
 
 
