@@ -8,6 +8,7 @@ export function parseServerTime(value: string): Date {
   return new Date(timestamp)
 }
 
+/** Without options, show the local date and time, like `Date.prototype.toLocaleString`. */
 export function formatServerTime(value: string, options?: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat(undefined, options).format(parseServerTime(value))
+  return parseServerTime(value).toLocaleString(undefined, options)
 }

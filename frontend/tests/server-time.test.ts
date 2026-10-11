@@ -16,4 +16,15 @@ describe('server timestamps', () => {
     expect(formatServerTime('2026-10-09T06:20:53.083886', options))
       .toBe(formatServerTime('2026-10-09T06:20:53.083886Z', options))
   })
+
+  it('shows the time of day when no options are given', () => {
+    const instant = '2026-10-09T06:20:53Z'
+    expect(formatServerTime('2026-10-09T06:20:53')).toBe(new Date(instant).toLocaleString())
+    expect(formatServerTime('2026-10-09T06:20:53'))
+      .not.toBe(new Date(instant).toLocaleDateString())
+  })
+
+  it('does not throw on a value that is not a date', () => {
+    expect(formatServerTime('not a date')).toBe('Invalid Date')
+  })
 })
