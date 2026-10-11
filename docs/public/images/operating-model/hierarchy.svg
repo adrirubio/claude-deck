@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" width="1000" height="540">
+<style>text{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}</style>
+<defs><symbol id="i-human" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/><circle cx="8.5" cy="12.5" r="2.1" fill="#fff"/><circle cx="15.5" cy="12.5" r="2.1" fill="#fff"/><rect x="8" y="16.6" width="8" height="1.7" rx=".8" fill="#fff"/><rect x="0" y="10" width="2" height="5" rx="1"/><rect x="22" y="10" width="2" height="5" rx="1"/></symbol>
+    <symbol id="i-system" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="3.4 3.35"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></symbol>
+  </defs>
+<rect width="100%" height="100%" rx="12" fill="#ffffff"/>
+
+  <!-- line of command -->
+  <path d="M500,92 L500,228" stroke="#1c1917" stroke-width="3"/>
+  <path d="M500,318 L500,336 L300,336 L300,358 M500,336 L700,336 L700,358" stroke="#1c1917" stroke-width="3" fill="none"/>
+  <text x="510" y="205" font-size="11.5" font-weight="700" fill="#1c1917">line of command</text>
+  <!-- staff connectors -->
+  <path d="M500,146 L668,146" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="7 4"/>
+  <path d="M500,146 L332,146" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="7 4"/>
+  <text x="512" y="139" font-size="11" fill="#4c1d95">delegation</text>
+  <text x="488" y="139" text-anchor="end" font-size="11" fill="#4c1d95">assists</text>
+
+  <!-- Director -->
+  <rect x="340" y="18" width="320" height="74" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2.8"/>
+  <use href="#i-human" x="354" y="28" width="26" height="26" fill="#b45309"/>
+  <text x="388" y="47" font-size="18" font-weight="800" fill="#78350f">Director</text>
+  <text x="356" y="66" font-size="10.5" font-weight="700" fill="#b45309" letter-spacing=".4">HUMAN · TOP OF THE HIERARCHY</text>
+  <text x="356" y="84" font-size="12" fill="#78350f">owns the outcome and the backlog · decides</text>
+
+  <!-- Grooming helper (staff) -->
+  <rect x="40" y="108" width="292" height="78" rx="9" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="52" y="118" width="22" height="22" fill="#6d28d9"/>
+  <text x="82" y="135" font-size="14.5" font-weight="700" fill="#4c1d95">Grooming helper</text>
+  <text x="54" y="157" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · STAFF · OPTIONAL</text>
+  <text x="54" y="175" font-size="11.5" fill="#4c1d95">drafts issues for the Director; no authority</text>
+
+  <!-- Supervisor (staff) -->
+  <rect x="668" y="102" width="292" height="100" rx="9" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+  <use href="#i-agent" x="680" y="112" width="22" height="22" fill="#6d28d9"/>
+  <text x="710" y="129" font-size="14.5" font-weight="700" fill="#4c1d95">Supervisor</text>
+  <text x="682" y="151" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · STAFF · OPTIONAL</text>
+  <text x="682" y="169" font-size="11.5" fill="#4c1d95">acts for the Director within delegation;</text>
+  <text x="682" y="186" font-size="11.5" fill="#4c1d95">operates and maintains the factory</text>
+
+  <!-- Leader -->
+  <rect x="370" y="228" width="260" height="90" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="382" y="238" width="24" height="24" fill="#6d28d9"/>
+  <text x="414" y="256" font-size="16" font-weight="700" fill="#4c1d95">Leader</text>
+  <text x="384" y="276" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENT · TEAM</text>
+  <text x="384" y="294" font-size="11.5" fill="#4c1d95">assesses the groomed backlog</text>
+  <text x="384" y="310" font-size="11.5" fill="#4c1d95">approves plans · selects next work</text>
+
+  <!-- Implementers -->
+  <rect x="190" y="368" width="240" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="185" y="363" width="240" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="180" y="358" width="240" height="72" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="192" y="368" width="22" height="22" fill="#6d28d9"/>
+  <text x="222" y="385" font-size="15" font-weight="700" fill="#4c1d95">Implementers ×N</text>
+  <text x="194" y="405" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENTS · TEAM · ANY NUMBER</text>
+  <text x="194" y="422" font-size="11.5" fill="#4c1d95">one leased attempt each</text>
+
+  <!-- Verifier -->
+  <rect x="580" y="368" width="265" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="575" y="363" width="265" height="72" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+  <rect x="570" y="358" width="265" height="72" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+  <use href="#i-agent" x="592" y="368" width="22" height="22" fill="#6d28d9"/>
+  <text x="622" y="385" font-size="15" font-weight="700" fill="#4c1d95">Verifiers ×N</text>
+  <text x="594" y="405" font-size="10.5" font-weight="700" fill="#6d28d9" letter-spacing=".4">AI AGENTS · TEAM · ANY NUMBER</text>
+  <text x="594" y="422" font-size="11.5" fill="#4c1d95">independent review of the exact source</text>
+
+  <!-- not ranks -->
+  <line x1="40" y1="452" x2="960" y2="452" stroke="#d6d3d1" stroke-width="1.5"/>
+  <text x="500" y="447" text-anchor="middle" font-size="11" fill="#78716c" font-weight="700" letter-spacing=".6">NOT RANKS · NON-AGENT SYSTEMS</text>
+  <rect x="40" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="52" y="476" width="22" height="22" fill="#334155" color="#334155"/>
+  <text x="82" y="492" font-size="14" font-weight="700" fill="#1e293b">Deck controller</text>
+  <text x="54" y="512" font-size="11.5" fill="#1e293b">enforces the hierarchy: tokens, leases, limits, Mail identity</text>
+  <rect x="510" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <use href="#i-system" x="522" y="476" width="22" height="22" fill="#334155" color="#334155"/>
+  <text x="552" y="492" font-size="14" font-weight="700" fill="#1e293b">GitHub</text>
+  <text x="524" y="512" font-size="11.5" fill="#1e293b">holds the Director’s backlog, the PRs, CI and the record</text>
+</svg>

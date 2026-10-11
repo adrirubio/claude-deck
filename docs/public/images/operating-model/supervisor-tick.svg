@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360" width="480" height="360">
+<style>text{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}</style>
+<defs><symbol id="i-human" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/><circle cx="8.5" cy="12.5" r="2.1" fill="#fff"/><circle cx="15.5" cy="12.5" r="2.1" fill="#fff"/><rect x="8" y="16.6" width="8" height="1.7" rx=".8" fill="#fff"/><rect x="0" y="10" width="2" height="5" rx="1"/><rect x="22" y="10" width="2" height="5" rx="1"/></symbol>
+    <symbol id="i-system" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="3.4 3.35"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></symbol>
+  </defs>
+<rect width="100%" height="100%" rx="12" fill="#ffffff"/>
+
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6d28d9"/></marker></defs>
+  <use href="#i-agent" x="86" y="8" width="20" height="20" fill="#6d28d9"/>
+  <text x="112" y="24" font-size="15" font-weight="700" fill="#4c1d95">Supervisor tick (AI agent)</text>
+  <g fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5">
+    <rect x="140" y="44" width="200" height="50" rx="8"/>
+    <rect x="280" y="150" width="190" height="60" rx="8"/>
+    <rect x="140" y="262" width="200" height="56" rx="8"/>
+    <rect x="15" y="150" width="175" height="60" rx="8" stroke-width="2.5"/>
+  </g>
+  <text x="240" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">1 · Read</text>
+  <text x="240" y="84" text-anchor="middle" font-size="11.5" fill="#4c1d95">card, signals, PRs, CI</text>
+  <text x="375" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">2 · Act if delegated</text>
+  <text x="375" y="193" text-anchor="middle" font-size="11" fill="#4c1d95">else record the required actor</text>
+  <text x="240" y="285" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">3 · Publish if changed</text>
+  <text x="240" y="304" text-anchor="middle" font-size="11.5" fill="#4c1d95">checkpoint in parent issue</text>
+  <text x="102" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">4 · Check in</text>
+  <text x="102" y="193" text-anchor="middle" font-size="11" fill="#4c1d95" font-family="ui-monospace,monospace">next_check_at = +10 min</text>
+  <path d="M330,94 C380,110 385,125 380,146" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M377,210 C377,245 360,262 344,275" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M140,290 C100,280 100,240 102,214" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <path d="M102,150 C100,110 110,85 136,72" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+  <text x="240" y="346" text-anchor="middle" font-size="11.5" fill="#78716c">Replay safety comes from the controller’s replay_key / operation_id records.</text>
+</svg>

@@ -22,6 +22,20 @@ Technical operators with existing repositories, local agent CLIs, native toolcha
 > [!WARNING]
 > Claude Deck reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code, Codex CLI, and installed agent integrations actually use. Review changes carefully, and create a backup before major edits.
 
+## How a factory is operated
+
+A **factory** is a supervisor, the Deck controller and a team, working together on a GitHub backlog. The **Director** (the human) owns the outcome and the backlog and makes the retained decisions. GitHub is outside the factory: it holds the work and the record.
+
+![Hierarchy of roles: the Director at the top; an optional supervisor and grooming helper as staff roles; the Leader; implementers and verifiers; the Deck controller and GitHub as non-agent systems](docs/public/images/operating-model/hierarchy.svg)
+
+- **Line of command:** Director → Leader → implementers and verifiers. Each team has one Leader. The Director chooses the number of implementers and verifiers.
+- **Staff roles:** an optional supervisor acts for the Director within the recorded delegation and maintains the factory. An optional grooming helper drafts issues. Neither takes the Leader's authority.
+- **Kinds of actor:** AI agents do the work that needs judgment. Non-agent software does the work that a rule can do: dispatch, leases, Mail and the maintenance operation. The Director makes the retained decisions.
+
+![The factory: the supervisor, the Deck controller and the team inside the factory boundary; the Director, the grooming helper and GitHub outside it](docs/public/images/operating-model/factory.svg)
+
+Green boxes are planned for v3.1 ([#506](https://github.com/adrirubio/claude-deck/issues/506)). See the [Factory operating model](docs/guide/operating-model.md) for the operating modes, factory maintenance and the planned supervisor heartbeat. Deck 3.0.0 still calls the Director *operator* in the UI and API.
+
 ## Daily operating flow
 
 For delegated backlog delivery, use the [Supervised factory playbook](docs/guide/supervised-factory-playbook.md) and its [supervisor skill](skills/deck-factory-supervisor/SKILL.md). They cover team preparation, goals, independent review, factory maintenance and completion.
