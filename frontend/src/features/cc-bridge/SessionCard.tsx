@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { AgentStatusBadges } from '@/components/shared/AgentStatusBadges'
 import { Button } from '@/components/ui/button'
 import { CLICKABLE_CARD } from '@/lib/constants'
 import { getTeamSlotColorClasses } from '@/lib/agentTeamColors'
@@ -51,7 +52,6 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
     ? `Team: ${teamName}${showProject ? ` · Repo: ${projectName}` : ''}`
     : session.cwd
   const isMailBound = Boolean(session.mail_member_id && session.mail_mcp_session_id)
-  const wakeState = session.mail_wake_state || (session.mail_member_id ? 'unknown' : 'unbound')
   const canUpdateWake = hasOperatorToken && isMailBound
 
   async function openDetails() {
@@ -162,11 +162,11 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
         >
+          <AgentStatusBadges status={session.agent_status} className="mb-1.5" />
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <Badge variant="outline">{session.mail_member_id ? `Mail member #${session.mail_member_id}` : 'Mail unbound'}</Badge>
             {session.mail_member_name && <span className="truncate" title={session.mail_member_name}>{session.mail_member_name}</span>}
             <span className="text-muted-foreground">Repo: {session.mail_repo_id ?? '—'}</span>
-            <Badge variant={wakeState === 'wakeable' ? 'secondary' : 'outline'}>{wakeState.replaceAll('_', ' ')}</Badge>
             <Badge variant="outline">
               {session.mail_wake_enabled == null ? 'Wake participation unknown' : `Wake participation ${session.mail_wake_enabled ? 'enabled' : 'disabled'}`}
             </Badge>
@@ -177,7 +177,6 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
           {session.mail_wake_target && (
             <p className="mt-1 break-all text-xs" title="Exact wake target">Wake target: {session.mail_wake_target}</p>
           )}
-          {session.mail_wake_reason && <p className="mt-1 text-xs text-muted-foreground">{session.mail_wake_reason}</p>}
           <div className="mt-2 flex items-center gap-2">
             <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={openDetails}>
               {detailsOpen ? <ChevronUp className="mr-1 h-3 w-3" /> : <ChevronDown className="mr-1 h-3 w-3" />}

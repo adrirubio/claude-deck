@@ -95,7 +95,7 @@ import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
 import { HumanActionSummary } from './HumanActionSummary'
-import { AgentActivityBadge } from './AgentActivityBadge'
+import { AgentStatusBadges } from '@/components/shared/AgentStatusBadges'
 import { useAgentActivity } from './useAgentActivity'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
@@ -1543,7 +1543,7 @@ export function AgentTeamsPage() {
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold">{slot.display_name}</p>
-                            <AgentActivityBadge activity={agentActivity.get(slot.id)} />
+                            <AgentStatusBadges status={agentActivity.get(slot.id)?.agent_status} />
                             {isLeader && <Badge variant="outline" title="This slot has the explicit Leader assignment.">Leader for autonomous dispatch</Badge>}
                             {!isLeader && slot.enabled && !selectedPreset.autonomy_enabled && (
                               <Button size="sm" variant="outline" onClick={() => void assignLeader(slot)}>Set Leader</Button>

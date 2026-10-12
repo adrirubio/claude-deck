@@ -1,3 +1,5 @@
+import type { AgentStatus } from './agentStatus'
+
 export type MailMessageKind = 'message' | 'broadcast' | 'context_request' | 'handoff' | 'answer'
 export type MailRequestStatus = 'pending' | 'answered' | 'acknowledged'
 export type MailMemberStatus = 'connected' | 'observed' | 'offline'
@@ -47,6 +49,7 @@ export interface MailMemberResponse {
   wake_state?: MailWakeState
   last_inbox_checked_at?: string | null
   sessions: MailSessionResponse[]
+  agent_status?: AgentStatus | null
 }
 
 export interface TeamListResponse {

@@ -59,26 +59,6 @@ export function statusTitle(status: MailMemberStatus | string): string {
   return status
 }
 
-export function wakeStateLabel(state: string): string {
-  if (state === 'wakeable') return 'Wakeable'
-  if (state === 'delivered_waiting') return 'Not wakeable'
-  if (state === 'offline') return 'Offline'
-  return state
-}
-
-export function wakeStateTitle(state: string): string {
-  if (state === 'wakeable') return 'Claude Deck has a wake path for this member.'
-  if (state === 'delivered_waiting') return 'Messages are delivered, but Claude Deck cannot wake this visible agent session.'
-  if (state === 'offline') return 'No live session is available for this member.'
-  return state
-}
-
-export function wakeStateBadgeClass(state: string): string {
-  if (state === 'wakeable') return 'border-emerald-300 text-emerald-700 dark:text-emerald-300'
-  if (state === 'delivered_waiting') return 'border-amber-300 text-amber-700 dark:text-amber-300'
-  return 'border-muted-foreground/30 text-muted-foreground'
-}
-
 export function wakeMethodLabel(method: string): string {
   if (method === 'tmux') return 'tmux'
   return method

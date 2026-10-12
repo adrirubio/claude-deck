@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { agentStatusView } from '@/lib/agentStatus'
 import { MODAL_SIZES } from '@/lib/constants'
 import type { MailMemberResponse, MailMessageCreate, MailMessageKind } from '@/types/agentMail'
 import { splitLines } from './utils'
@@ -58,35 +59,36 @@ function recipientLabel(member: MailMemberResponse): string {
 }
 
 function deliveryLabel(member: MailMemberResponse): string {
-  if (member.status === 'offline' || member.wake_state === 'offline') return 'offline, stored only'
-  if (member.wake_state === 'wakeable') {
+  const view = agentStatusView(member.agent_status, Date.now())
+  if (view.session.state === 'offline') return 'offline, stored only'
+  if (view.wake.state === 'can_wake') {
     const methodText = member.wake_methods?.length ? ` via ${member.wake_methods.join(', ')}` : ''
-    return `wakeable${methodText}`
+    return `can be woken${methodText}`
   }
-  if (member.wake_state === 'delivered_waiting') return 'not wakeable'
-  if (member.status === 'observed') return 'observed only'
-  return member.status
+  if (view.wake.state === 'cannot_wake') return 'cannot be woken'
+  return view.session.label.toLowerCase()
 }
 
 function deliveryRank(member: MailMemberResponse): number {
-  if (member.status === 'offline' || member.wake_state === 'offline') return 4
-  if (member.wake_state === 'wakeable') return 0
-  if (member.status === 'connected') return 1
-  if (member.status === 'observed') return 2
+  const view = agentStatusView(member.agent_status, Date.now())
+  if (view.session.state === 'offline') return 4
+  if (view.wake.state === 'can_wake') return 0
+  if (view.wake.state === 'cannot_wake') return 1
   return 3
 }
 
 function deliveryWarning(member: MailMemberResponse, kind: Exclude<MailMessageKind, 'answer'>): string | null {
   const expectsAction = kind === 'context_request' || kind === 'handoff'
-  if (member.status === 'offline' || member.wake_state === 'offline') {
+  const view = agentStatusView(member.agent_status, Date.now())
+  if (view.session.state === 'offline') {
     return expectsAction
       ? `${member.display_name} is offline. This ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but no live agent can be woken to respond until that participant checks in again.`
       : `${member.display_name} is offline. This message will be stored for later; Claude Deck cannot wake a live session.`
   }
-  if (member.wake_state === 'delivered_waiting') {
+  if (view.wake.state === 'cannot_wake') {
     return expectsAction
-      ? `${member.display_name} is not wakeable. The ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but the agent may not see it until it checks Agent Mail or reaches a hook boundary.`
-      : `${member.display_name} is not wakeable. The message will be stored, but Claude Deck cannot nudge this session.`
+      ? `${member.display_name} cannot be woken. ${view.wake.reason} The ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but the agent may not see it until it checks Agent Mail or reaches a hook boundary.`
+      : `${member.display_name} cannot be woken. ${view.wake.reason} The message will be stored, but Claude Deck cannot nudge this session.`
   }
   return null
 }

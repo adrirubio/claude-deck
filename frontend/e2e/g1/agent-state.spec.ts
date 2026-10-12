@@ -6,7 +6,6 @@ import { expect, test } from '../support/guard'
 // a live fake pane, a live MCP session and an observation 3 hours old.
 // The words come from #540: Online / Offline, Working / Idle, and
 // Can be woken / Cannot be woken. An old observation alone is "Idle", not "stale".
-// @pending until #540 merges.
 
 const AGENT = 'F2 Frontend'
 const ONLINE = /\b(Online|Offline)\b/
@@ -31,7 +30,7 @@ async function stateOf(page: Page): Promise<{ online: string; wake: string; text
   return { online, wake, text }
 }
 
-test('@pending one agent shows the same online and wake state on Agent Mail, Live sessions and Teams', async ({ page }) => {
+test('@active one agent shows the same online and wake state on Agent Mail, Live sessions and Teams', async ({ page }) => {
   test.skip(process.env.E2E_NO_TMUX === '1', 'E2E_NO_TMUX=1: the agent has no live pane')
 
   await page.goto('/agent-mail')

@@ -1,3 +1,5 @@
+import type { AgentStatus } from './agentStatus'
+
 export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
 export type AgentTeamLaunchAction = 'reuse' | 'adopt' | 'spawn' | 'skip' | 'blocked'
 export type AgentTeamLaunchStatus =
@@ -321,6 +323,7 @@ export interface AgentActivityObservation {
   state: 'working' | 'idle' | 'stopped' | 'unknown'
   reason: string
   observed_at: string | null
+  agent_status?: AgentStatus | null
 }
 
 export interface AgentTeamActivityResponse {

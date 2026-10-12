@@ -1,5 +1,6 @@
 import { BellRing, Edit3, Handshake, HelpCircle, Mail, Search } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { AgentStatusBadges } from '@/components/shared/AgentStatusBadges'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -23,12 +24,7 @@ import {
   sessionStatusLabel,
   sessionStatusTitle,
   statusBadgeClass,
-  statusLabel,
-  statusTitle,
   wakeMethodLabel,
-  wakeStateBadgeClass,
-  wakeStateLabel,
-  wakeStateTitle,
 } from './utils'
 
 export type TeamStatusFilter = 'all' | MailMemberStatus
@@ -157,7 +153,6 @@ export function TeamTab({
         <div className="grid gap-4 xl:grid-cols-2">
           {filtered.map((member) => {
             const visibleSessions = displaySessions(member.sessions)
-            const wakeState = member.wake_state ?? (member.status === 'offline' ? 'offline' : 'delivered_waiting')
             const wakeMethods = member.wake_methods ?? []
             const deliveryWarnings = [
               member.unseen_pending_count > 0
@@ -194,25 +189,14 @@ export function TeamTab({
                             : member.team_preset_name}
                         </p>
                       )}
+                      <AgentStatusBadges status={member.agent_status} className="mt-2" />
+                      {member.agent_status?.wake_state === 'can_wake' && wakeMethodText && (
+                        <p className="mt-1 text-xs text-muted-foreground" title="How Deck wakes this agent.">
+                          Wake method: {wakeMethodText}
+                        </p>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                      <Badge
-                        variant="outline"
-                        className={statusBadgeClass(member.status)}
-                        title={statusTitle(member.status)}
-                      >
-                        {statusLabel(member.status)}
-                      </Badge>
-                      {wakeState !== 'offline' && (
-                        <Badge
-                          variant="outline"
-                          className={wakeStateBadgeClass(wakeState)}
-                          title={wakeStateTitle(wakeState)}
-                        >
-                          {wakeStateLabel(wakeState)}
-                          {wakeMethodText ? `: ${wakeMethodText}` : ''}
-                        </Badge>
-                      )}
                       {member.pending_count > 0 && (
                         <Badge variant="outline" className="border-amber-300 text-amber-700">
                           {member.pending_count} pending
