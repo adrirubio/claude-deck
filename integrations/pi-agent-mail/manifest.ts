@@ -191,7 +191,7 @@ export const manifest = [
   },
   {
     "name": "deck_create_team",
-    "description": "Create an Agent Team preset.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use deck_plan_team_launch before launch.\n    ",
+    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use deck_plan_team_launch before launch.\n    ",
     "inputSchema": {
       "properties": {
         "name": {
@@ -218,6 +218,18 @@ export const manifest = [
           ],
           "default": null,
           "title": "Slots"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Issue Url"
         }
       },
       "required": [
@@ -295,6 +307,23 @@ export const manifest = [
         "preset_id"
       ],
       "title": "deck_get_operator_action_contextsArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_get_team_summary",
+    "description": "Read a team's outcome, parent link, existing attention signals, effort total and next actors.\n\n    Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "preset_id"
+      ],
+      "title": "deck_get_team_summaryArguments",
       "type": "object"
     }
   },
@@ -1127,6 +1156,35 @@ export const manifest = [
         "body"
       ],
       "title": "deck_send_messageArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_update_team_parent_issue",
+    "description": "Set a team's GitHub parent issue link. Use null to clear the link.\n\n    This operation changes only the parent link. It grants no execution authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Issue Url"
+        }
+      },
+      "required": [
+        "preset_id",
+        "parent_issue_url"
+      ],
+      "title": "deck_update_team_parent_issueArguments",
       "type": "object"
     }
   },

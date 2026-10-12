@@ -257,3 +257,53 @@ class FactoryErrorDetail(FactoryModel):
 
 class FactoryErrorResponse(FactoryModel):
     detail: FactoryErrorDetail
+
+
+class TeamSummaryAttention(FactoryModel):
+    code: Literal["attempt_stopped", "recovery_decision", "human_review", "owner_stalled",
+                  "observation_pause", "hold", "recovery_only", "hold_unavailable"]
+    work_item_id: PositiveId | None = None
+    scope_id: PositiveId | None = None
+    issue_number: PositiveId | None = None
+    pause_id: PositiveId | None = None
+    observed_at: Timestamp | None = None
+    resume_deadline: Timestamp | None = None
+
+
+class TeamSummaryHumanAction(FactoryModel):
+    scope_id: PositiveId
+    issue_number: PositiveId
+    work_item_id: PositiveId | None = None
+    kind: Literal["review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
+                  "pilot_decision", "scope_clarification", "provide_evidence"]
+    state: Literal["requested", "context_pending", "waiting_for_prerequisites", "historical", "resolved",
+                   "head_changed", "pr_unavailable", "pr_identity_unavailable"]
+    source: Literal["leader", "dispatch", "unknown"]
+    assessment_current: bool
+    pull_request_number: PositiveId | None = None
+
+
+class TeamRemainingWork(FactoryModel):
+    state: Literal["known", "unknown"]
+    unfinished_items: int = Field(ge=0)
+    reported_items: int = Field(ge=0)
+    effort_low_minutes: int | None = Field(default=None, ge=0)
+    effort_high_minutes: int | None = Field(default=None, ge=0)
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
+    reason: Literal["complete", "report_unknown", "observation_incomplete", "context_changed"]
+
+
+class AgentTeamSummaryResponse(FactoryModel):
+    preset_id: PositiveId
+    outcome: str | None
+    parent_issue_url: str | None
+    supervisor: Literal["none"] = "none"
+    checked_at: Timestamp
+    valid_until: Timestamp
+    coverage_complete: bool
+    hold_code: Literal["hold", "recovery_only", "hold_unavailable"] | None
+    attention: list[TeamSummaryAttention]
+    human_actions: list[TeamSummaryHumanAction]
+    remaining_work: TeamRemainingWork
+    next_actors: list[Literal["owner", "leader", "operator", "controller"]]
+    next_actor_coverage_complete: bool

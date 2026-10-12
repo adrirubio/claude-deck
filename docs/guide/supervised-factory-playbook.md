@@ -56,6 +56,18 @@ A goal tool records the objective and status. It does not, by itself, schedule a
 
 ## 1. Record the campaign
 
+Link each saved team to its parent GitHub issue with `parent_issue_url`.
+Use the team's `description` for the outcome. Keep completion conditions in the parent issue.
+Read `/api/v1/agent-teams/presets/{preset_id}/summary` for the collected team signals.
+The summary uses existing attention, human-action, HOLD, observation-pause, and progress reads.
+It does not create new detection or execution authority.
+
+A known team effort total requires current numeric reports for every unfinished tracked item.
+An incomplete, stale, unknown, or changed-context read keeps the whole estimate Unknown.
+The read has an eight-second observation limit and a 64-item limit. Waiting time is excluded.
+Check observation expiry and next-actor coverage. Keep each separate approval, recovery, review, CI, and milestone gate.
+The supervisor field stays `none` until the separate #549 contract is available.
+
 Keep a short campaign record. Use the parent GitHub issue for public scope and current status. Keep the machine record and sensitive runtime details in protected local storage.
 
 Agree on these fields before dispatch:

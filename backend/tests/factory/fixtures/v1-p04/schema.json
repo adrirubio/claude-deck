@@ -1,5 +1,397 @@
 {
   "models": {
+    "AgentTeamSummaryResponse": {
+      "$defs": {
+        "TeamRemainingWork": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence": {
+              "default": "unknown",
+              "enum": [
+                "unknown",
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "Confidence",
+              "type": "string"
+            },
+            "effort_high_minutes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort High Minutes"
+            },
+            "effort_low_minutes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort Low Minutes"
+            },
+            "reason": {
+              "enum": [
+                "complete",
+                "report_unknown",
+                "observation_incomplete",
+                "context_changed"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "reported_items": {
+              "minimum": 0,
+              "title": "Reported Items",
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "known",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "unfinished_items": {
+              "minimum": 0,
+              "title": "Unfinished Items",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "unfinished_items",
+            "reported_items",
+            "reason"
+          ],
+          "title": "TeamRemainingWork",
+          "type": "object"
+        },
+        "TeamSummaryAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "attempt_stopped",
+                "recovery_decision",
+                "human_review",
+                "owner_stalled",
+                "observation_pause",
+                "hold",
+                "recovery_only",
+                "hold_unavailable"
+              ],
+              "title": "Code",
+              "type": "string"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "observed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed At"
+            },
+            "pause_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pause Id"
+            },
+            "resume_deadline": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume Deadline"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "title": "TeamSummaryAttention",
+          "type": "object"
+        },
+        "TeamSummaryHumanAction": {
+          "additionalProperties": false,
+          "properties": {
+            "assessment_current": {
+              "title": "Assessment Current",
+              "type": "boolean"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "review_pr",
+                "merge_pr",
+                "inspect_attempt",
+                "inspect_checkpoint",
+                "milestone_acceptance",
+                "pilot_decision",
+                "scope_clarification",
+                "provide_evidence"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "pull_request_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pull Request Number"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "source": {
+              "enum": [
+                "leader",
+                "dispatch",
+                "unknown"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "requested",
+                "context_pending",
+                "waiting_for_prerequisites",
+                "historical",
+                "resolved",
+                "head_changed",
+                "pr_unavailable",
+                "pr_identity_unavailable"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "scope_id",
+            "issue_number",
+            "kind",
+            "state",
+            "source",
+            "assessment_current"
+          ],
+          "title": "TeamSummaryHumanAction",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attention": {
+          "items": {
+            "$ref": "#/$defs/TeamSummaryAttention"
+          },
+          "title": "Attention",
+          "type": "array"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "coverage_complete": {
+          "title": "Coverage Complete",
+          "type": "boolean"
+        },
+        "hold_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "hold",
+                "recovery_only",
+                "hold_unavailable"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Hold Code"
+        },
+        "human_actions": {
+          "items": {
+            "$ref": "#/$defs/TeamSummaryHumanAction"
+          },
+          "title": "Human Actions",
+          "type": "array"
+        },
+        "next_actor_coverage_complete": {
+          "title": "Next Actor Coverage Complete",
+          "type": "boolean"
+        },
+        "next_actors": {
+          "items": {
+            "enum": [
+              "owner",
+              "leader",
+              "operator",
+              "controller"
+            ],
+            "type": "string"
+          },
+          "title": "Next Actors",
+          "type": "array"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outcome"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Issue Url"
+        },
+        "preset_id": {
+          "exclusiveMinimum": 0,
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "remaining_work": {
+          "$ref": "#/$defs/TeamRemainingWork"
+        },
+        "supervisor": {
+          "const": "none",
+          "default": "none",
+          "title": "Supervisor",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preset_id",
+        "outcome",
+        "parent_issue_url",
+        "checked_at",
+        "valid_until",
+        "coverage_complete",
+        "hold_code",
+        "attention",
+        "human_actions",
+        "remaining_work",
+        "next_actors",
+        "next_actor_coverage_complete"
+      ],
+      "title": "AgentTeamSummaryResponse",
+      "type": "object"
+    },
     "FactoryErrorResponse": {
       "$defs": {
         "FactoryErrorDetail": {

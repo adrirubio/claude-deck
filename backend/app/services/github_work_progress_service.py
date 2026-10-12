@@ -201,6 +201,9 @@ class GithubWorkProgressService:
         reason = report_reason(report, context, now)
         return GithubWorkRemainingView(state="historical" if reason else "current", reason=reason,
             remaining=report.remaining, estimate=report.estimate(), next_action=report.next_action,
+            effort_low_minutes=report.effort_low_minutes if reason is None else None,
+            effort_high_minutes=report.effort_high_minutes if reason is None else None,
+            confidence=report.confidence if reason is None else "unknown",
             reported_at=report.reported_at, reported_by=report.reported_by,
             source_sha=report.source_sha, source_url=issue_url,
             completed=report.completed or None, assumptions=report.assumptions or None)

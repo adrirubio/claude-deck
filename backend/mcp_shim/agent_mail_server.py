@@ -847,8 +847,11 @@ def deck_create_team(
     name: str,
     description: str = "",
     slots: Optional[list[dict[str, Any]]] = None,
+    parent_issue_url: Optional[str] = None,
 ) -> dict:
     """Create an Agent Team preset.
+
+    parent_issue_url is an HTTPS GitHub issue URL.
 
     Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.
     Common slot fields: display_name, provider, repo_path, role, charter,
@@ -877,12 +880,37 @@ def deck_create_team(
         "name": name,
         "description": description or None,
         "created_by": "mcp",
+        "parent_issue_url": parent_issue_url,
         "slots": slots or [],
     }
     result = _team_request("POST", "/presets", json=payload)
     if not result["ok"]:
         return result
     return {"ok": True, "preset": result["data"]}
+
+
+@mcp.tool()
+def deck_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str]) -> dict:
+    """Set a team's GitHub parent issue link. Use null to clear the link.
+
+    This operation changes only the parent link. It grants no execution authority.
+    """
+    result = _team_request("PATCH", f"/presets/{preset_id}", json={"parent_issue_url": parent_issue_url})
+    if not result["ok"]:
+        return result
+    return {"ok": True, "preset": result["data"]}
+
+
+@mcp.tool()
+def deck_get_team_summary(preset_id: int) -> dict:
+    """Read a team's outcome, parent link, existing attention signals, effort total and next actors.
+
+    Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.
+    """
+    result = _team_request("GET", f"/presets/{preset_id}/summary")
+    if not result["ok"]:
+        return result
+    return {"ok": True, "summary": result["data"]}
 
 
 @mcp.tool()

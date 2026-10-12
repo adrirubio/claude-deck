@@ -25,6 +25,43 @@ from app.services.github_app_auth_service import github_app_auth_service
 
 
 @pytest.mark.asyncio
+async def test_parent_issue_http_create_update_and_clear(client):
+    url = "https://github.com/example/repo/issues/506"
+    created = await client.post("/api/v1/agent-teams/presets", json={
+        "name": "Linked", "description": "Ship the release.", "parent_issue_url": url})
+    assert created.status_code == 200
+    data = created.json()
+    assert data["parent_issue_url"] == url
+    path = f"/api/v1/agent-teams/presets/{data['id']}"
+    renamed = await client.patch(path, json={"name": "Renamed"})
+    assert renamed.json()["parent_issue_url"] == url
+    invalid = await client.patch(path, json={"parent_issue_url": "https://github.com/example/repo/pull/1"})
+    assert invalid.status_code == 422
+    cleared = await client.patch(path, json={"parent_issue_url": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["parent_issue_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_team_summary_http_is_read_only_and_not_cached(client, monkeypatch):
+    monkeypatch.setattr("app.services.agent_team_summary_service.hold_code", lambda: None)
+    created = await client.post("/api/v1/agent-teams/presets", json={
+        "name": "Summary", "description": "Ship the release.",
+        "parent_issue_url": "https://github.com/example/repo/issues/506"})
+    preset_id = created.json()["id"]
+    response = await client.get(f"/api/v1/agent-teams/presets/{preset_id}/summary")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    data = response.json()
+    assert data["outcome"] == "Ship the release."
+    assert data["remaining_work"]["effort_low_minutes"] == 0
+    assert data["supervisor"] == "none"
+    unchanged = await client.get(f"/api/v1/agent-teams/presets/{preset_id}")
+    assert unchanged.json() == created.json()
+    assert (await client.get("/api/v1/agent-teams/presets/999999/summary")).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_delivery_policy_operator_api_records_defaults_and_explicit_attempt_adoption(client, db):
     from app.models.schemas import FactoryDeliveryPolicy
 

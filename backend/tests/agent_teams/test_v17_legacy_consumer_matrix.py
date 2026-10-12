@@ -36,11 +36,11 @@ async def _migrated_store():
     await conn.run_sync(Base.metadata.create_all)
     await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
     await conn.execute(text(
-        "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled) VALUES "
-        "(1, 'tied', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
-        "(2, 'disabled-first', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
-        "(3, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
-        "(4, 'all-disabled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled, parent_issue_url) VALUES "
+        "(1, 'tied', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL), "
+        "(2, 'disabled-first', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL), "
+        "(3, 'invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL), "
+        "(4, 'all-disabled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, NULL)"
     ))
     await conn.execute(text(
         "INSERT INTO agent_team_slots (id, preset_id, position, display_name, provider, repo_id, "
