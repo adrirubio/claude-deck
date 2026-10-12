@@ -324,7 +324,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     fireEvent.change(screen.getByPlaceholderText("Enter secret value"),
       { target: { value: "synthetic-submitted" } });
-    fireEvent.click(screen.getByRole("button", { name: "Use token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use key" }));
     await flushLate();
     expect(stub.audit()).toHaveLength(0);
     expect(getOperatorToken()).toBe("synthetic-submitted");
@@ -349,7 +349,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.audit()[0].respond({ detail: "operator_token_invalid" }, 401);
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(
-      "The Deck operator token was rejected. Clear it and enter a valid token."));
+      "The Director key was rejected. Clear it and enter a valid key."));
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(getOperatorToken()).toBeNull();
 
@@ -371,7 +371,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.audit()[0].respond({ detail: "operator_token_unconfigured" }, 503);
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(
-      "The Deck operator token is not configured on the backend."));
+      "The Director key is not configured on the backend."));
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(screen.getByText(/Audit events could not be loaded/)).toBeInTheDocument();
   });

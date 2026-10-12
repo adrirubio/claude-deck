@@ -5,8 +5,8 @@ import { AgentTeamsHelpDialog } from '@/features/agent-teams/AgentTeamsHelpDialo
 describe('AgentTeamsHelpDialog', () => {
   it('distinguishes operator protections from the GitHub polling credential', () => {
     render(<AgentTeamsHelpDialog open onOpenChange={() => undefined} />)
-    expect(screen.getByText(/The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies/)).toHaveTextContent('separate from the GitHub polling token')
-    expect(screen.getByText(/The operator token protects/)).toHaveTextContent('stays in this browser tab')
+    expect(screen.getByText(/The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies/)).toHaveTextContent('separate from the GitHub polling token')
+    expect(screen.getByText(/The Director key protects/)).toHaveTextContent('stays in this browser tab')
     expect(screen.queryByText(/needed only for protected recovery/)).not.toBeInTheDocument()
   })
   it('links to the promoted autonomy guide', () => {

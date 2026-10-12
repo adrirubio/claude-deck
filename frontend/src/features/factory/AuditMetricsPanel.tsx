@@ -536,6 +536,7 @@ export function AuditMetricsPage() {
         open={tokenDialogOpen}
         value={tokenInput}
         error={tokenError}
+        reason="to read audit events"
         onValueChange={setTokenInput}
         onSubmit={submitToken}
         onCancel={() => settleToken(null)}

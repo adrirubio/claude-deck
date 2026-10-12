@@ -262,14 +262,14 @@ describe("AgentTeamsPage launch authorization", () => {
       await screen.findByRole("button", { name: "Plan launch" }),
     );
     const tokenDialog = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
     expect(planAgentTeamLaunch).not.toHaveBeenCalled();
 
-    const input = within(tokenDialog).getByLabelText(/Operator token/);
+    const input = within(tokenDialog).getByLabelText(/Director key/);
     await user.click(input);
     expect(input).toHaveFocus();
     await user.type(input, "test-token{Enter}");
@@ -285,7 +285,7 @@ describe("AgentTeamsPage launch authorization", () => {
       await screen.findByRole("dialog", { name: "Launch Plan" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("dialog", { name: "Operator token" }),
+      screen.queryByRole("dialog", { name: "Director key" }),
     ).not.toBeInTheDocument();
   });
 
@@ -312,12 +312,12 @@ describe("AgentTeamsPage launch authorization", () => {
     await user.click(screen.getByRole("button", { name: "Launch" }));
 
     const tokenDialog = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
-    const input = within(tokenDialog).getByLabelText(/Operator token/);
+    const input = within(tokenDialog).getByLabelText(/Director key/);
     await user.click(input);
     await user.type(input, "new-token{Enter}");
 
@@ -462,7 +462,7 @@ describe("Teams current route and stale reads", () => {
     );
     const launch = await screen.findByRole("dialog", { name: "Launch Plan" });
     await user.click(within(launch).getByRole("button", { name: "Launch" }));
-    await screen.findByRole("dialog", { name: "Operator token" });
+    await screen.findByRole("dialog", { name: "Director key" });
     expect(launchAgentTeam).toHaveBeenCalledTimes(1);
     fireEvent.click(
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
@@ -471,7 +471,7 @@ describe("Teams current route and stale reads", () => {
       expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
     );
     expect(
-      screen.queryByRole("dialog", { name: "Operator token" }),
+      screen.queryByRole("dialog", { name: "Director key" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
@@ -483,10 +483,10 @@ describe("Teams current route and stale reads", () => {
       }),
     );
     const current = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     await user.type(
-      within(current).getByLabelText(/Operator token/),
+      within(current).getByLabelText(/Director key/),
       "synthetic-current-token{Enter}",
     );
     await waitFor(() =>

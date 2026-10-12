@@ -340,10 +340,13 @@ function readableCode(value?: string | null) {
   return value.replaceAll('_', ' ').replace(/^./, (first) => first.toUpperCase())
 }
 
+const INSTALLATION_GUIDE_URL = 'https://github.com/adrirubio/claude-deck/blob/master/docs/guide/installation.md'
+
 export function OperatorTokenDialog({
   open,
   value,
   error,
+  reason,
   onValueChange,
   onSubmit,
   onCancel,
@@ -351,6 +354,7 @@ export function OperatorTokenDialog({
   open: boolean
   value: string
   error: string | null
+  reason?: string
   onValueChange: (value: string) => void
   onSubmit: () => void
   onCancel: () => void
@@ -359,20 +363,21 @@ export function OperatorTokenDialog({
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
       <DialogContent className={MODAL_SIZES.SM}>
         <DialogHeader>
-          <DialogTitle>Operator token</DialogTitle>
+          <DialogTitle>Director key</DialogTitle>
           <DialogDescription>
-            Enter the token configured as operator_token in backend/.env. It protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies, and stays in this browser tab only.
+            Paste the Director key for this Deck installation. It is the value of <code>OPERATOR_TOKEN</code> on the server. Deck keeps it in this browser tab only.
           </DialogDescription>
         </DialogHeader>
+        {reason && <p className="text-sm">Deck needs the key {reason}.</p>}
         <details className="text-sm text-muted-foreground">
-          <summary className="cursor-pointer text-foreground">How do I create one?</summary>
-          <p className="mt-2">On the machine running Deck, run <code>openssl rand -hex 32</code>. Add the result as <code>operator_token=&lt;value&gt;</code> in <code>backend/.env</code>, run <code>chmod 600 backend/.env</code>, then restart the backend. Do not export the token into the agent environment.</p>
+          <summary className="cursor-pointer text-foreground">First time? Set up the key on the server</summary>
+          <p className="mt-2">On the machine running Deck, run <code>openssl rand -hex 32</code>. Add the result as <code>operator_token=&lt;value&gt;</code> in <code>backend/.env</code>, run <code>chmod 600 backend/.env</code>, then restart the backend. Do not export the key into the agent environment. See the <a className="underline" href={INSTALLATION_GUIDE_URL} target="_blank" rel="noreferrer">installation guide</a>.</p>
         </details>
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         <form onSubmit={(event) => { event.preventDefault(); onSubmit() }} className="space-y-4">
           <SecretField
             id="autonomy-operator-token"
-            label="Operator token"
+            label="Director key"
             value={value}
             onChange={onValueChange}
             required
@@ -380,7 +385,7 @@ export function OperatorTokenDialog({
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={!value.trim()}>Use token</Button>
+            <Button type="submit" disabled={!value.trim()}>Use key</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -758,7 +763,7 @@ function ContinuationPolicyDialog({
             {scope ? `${scope.repo_owner}/${scope.repo_name}` : 'Configure finite continuation limits.'}
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">If an issue escalates with its PR still open, the owner can propose a scope revision: a plan with allowed files and commands. The Leader approves it, then the owner continues in the same workspace. A failed head is a pushed PR commit whose checks fail. These caps bound recovery. Saving requires the operator token.</p>
+        <p className="text-sm text-muted-foreground">If an issue escalates with its PR still open, the owner can propose a scope revision: a plan with allowed files and commands. The Leader approves it, then the owner continues in the same workspace. A failed head is a pushed PR commit whose checks fail. These caps bound recovery. Saving requires the Director key.</p>
         {errorMessage && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             {errorMessage}
@@ -909,7 +914,7 @@ function WorkItemDialog({
       queueMicrotask(() => {
         if (revisionRequestIdRef.current === requestId) {
           setLoadingRevisions(false)
-          setRevisionError('Enter an operator token to load recovery history.')
+          setRevisionError('Enter the Director key to load recovery history.')
         }
       })
       return () => { requestRef.current++ }
@@ -1431,8 +1436,8 @@ export function AutonomyPanel({
     action: (token: string) => Promise<Result>
   ): Promise<Result> => {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const token = await requestToken(attempt > 0 ? 'The operator token was rejected. Enter a valid token to retry.' : null)
-      if (!token) throw new Error('Operator token is required for this action.')
+      const token = await requestToken(attempt > 0 ? 'The Director key was rejected. Enter a valid key to retry.' : null)
+      if (!token) throw new Error('The Director key is required for this action.')
       try {
         return await action(token)
       } catch (error) {
@@ -1442,7 +1447,7 @@ export function AutonomyPanel({
         if (attempt === 1) throw error
       }
     }
-    throw new Error('Operator token was rejected.')
+    throw new Error('The Director key was rejected.')
   }, [requestToken])
 
   const fetchRevisions = useCallback(
@@ -1459,7 +1464,7 @@ export function AutonomyPanel({
     try {
       setGate(await withOperatorToken(fetchGithubRecoveryGate))
     } catch (error) {
-      if (error instanceof Error && error.message === 'Operator token is required for this action.') {
+      if (error instanceof Error && error.message === 'The Director key is required for this action.') {
         cancelled = true
       } else {
         setGateError(error instanceof Error ? error.message : 'Failed to read recovery gate')
@@ -1629,10 +1634,10 @@ export function AutonomyPanel({
             onClick={() => { if (operatorTokenStored) clearStoredToken(); else void requestToken() }}
           >
             <KeyRound className="mr-2 h-4 w-4" />
-            {operatorTokenStored ? 'Clear operator token' : 'Set operator token'}
+            {operatorTokenStored ? 'Clear Director key' : 'Set Director key'}
           </Button>
           <span className="self-center text-xs text-muted-foreground">
-            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected settings, launch, autonomy, and recovery actions'}
+            {operatorTokenStored ? 'Director key set for this tab' : 'Needed for protected settings, launch, autonomy, and recovery actions'}
           </span>
           <Button variant="outline" onClick={() => { void onRefresh(); void checkGateStatus() }} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
@@ -1661,7 +1666,7 @@ export function AutonomyPanel({
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
-            <p className="mt-2">The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
+            <p className="mt-2">The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
           </div>
         )}
         {scopes.map((scope) => (
@@ -1976,6 +1981,7 @@ export function AutonomyPanel({
         open={tokenDialogOpen}
         value={tokenInput}
         error={tokenError}
+        reason="to change autonomy or recovery settings"
         onValueChange={setTokenInput}
         onSubmit={submitToken}
         onCancel={() => settleTokenDialog(null)}

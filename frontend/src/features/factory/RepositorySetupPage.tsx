@@ -260,18 +260,18 @@ export function RepositorySetupPage() {
 
   async function withOperatorToken<Result>(action: (value: string) => Promise<Result>): Promise<Result> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const value = await requestOperatorToken(attempt ? "The operator token was rejected. Enter a valid token to retry." : null);
+      const value = await requestOperatorToken(attempt ? "The Director key was rejected. Enter a valid key to retry." : null);
       // Typed pre-send credential cancellation: the prompt cancel sends
       // nothing. Recovery clears only when every attempted create was a
       // proven non-write; uncertain writes keep the latch.
-      if (!value) throw new SaveIntentChangedError("Operator token is required for this action.");
+      if (!value) throw new SaveIntentChangedError("The Director key is required for this action.");
       try { return await action(value); }
       catch (cause) {
         if (!(cause instanceof ApiHttpError) || cause.status !== 401 || attempt > 0) throw cause;
         clearOperatorToken();
       }
     }
-    throw new Error("Operator token was rejected.");
+    throw new Error("The Director key was rejected.");
   }
 
   async function refreshConfiguration() {
@@ -370,7 +370,7 @@ export function RepositorySetupPage() {
     const requestedIntent = currentSaveIntent.current;
     const intentChanged = () => currentSaveIntent.current !== requestedIntent;
     const saveToken = await requestOperatorToken();
-    if (!saveToken) { setError("The operator token is required. The draft remains available."); return; }
+    if (!saveToken) { setError("The Director key is required. The draft remains available."); return; }
     if (intentChanged()) {
       // A refusal before the save body must display safely and return normally.
       setError("Inputs changed during the save. Review the saved records before continuing.");
@@ -875,6 +875,7 @@ export function RepositorySetupPage() {
       open={tokenDialogOpen}
       value={tokenInput}
       error={tokenError}
+      reason="to change watched repositories"
       onValueChange={setTokenInput}
       onSubmit={() => settleOperatorToken(tokenInput)}
       onCancel={() => settleOperatorToken(null)}

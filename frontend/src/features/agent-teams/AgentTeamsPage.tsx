@@ -863,9 +863,9 @@ export function AgentTeamsPage() {
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       assertCurrentContext()
-      const token = await requestOperatorToken(attempt ? 'The operator token was rejected. Enter a valid token to retry.' : null)
+      const token = await requestOperatorToken(attempt ? 'The Director key was rejected. Enter a valid key to retry.' : null)
       assertCurrentContext()
-      if (!token) throw new Error('Operator token is required for this action.')
+      if (!token) throw new Error('The Director key is required for this action.')
       try {
         const result = await action(token)
         assertCurrentContext()
@@ -877,7 +877,7 @@ export function AgentTeamsPage() {
         if (attempt === 1) throw error
       }
     }
-    throw new Error('Operator token was rejected.')
+    throw new Error('The Director key was rejected.')
   }
 
   const selectedPreset = useMemo(
@@ -1665,6 +1665,7 @@ export function AgentTeamsPage() {
         open={tokenDialogOpen}
         value={tokenInput}
         error={tokenError}
+        reason="to change the team roster or launch the team"
         onValueChange={setTokenInput}
         onSubmit={() => {
           const token = tokenInput.trim()
