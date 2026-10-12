@@ -371,6 +371,8 @@ class GithubWorkItem(Base):
     last_verified_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     verification_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     verification_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    merge_wait_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    merge_wait_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ack_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
