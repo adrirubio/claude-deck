@@ -5,6 +5,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 
@@ -17,6 +18,8 @@ async def client(tmp_path, monkeypatch):
     (home / "link-out").symlink_to(tmp_path / "outside")
     (tmp_path / "home-sibling").mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # These tests cover path rules; the Director-key guard has its own tests.
+    monkeypatch.setattr(settings, "operator_token", "")
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:

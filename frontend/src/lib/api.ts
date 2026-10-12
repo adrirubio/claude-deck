@@ -1,5 +1,18 @@
 import { assertBrowserNativeRequest } from '@/features/native-settings/surfaceRegistry'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { API_BASE_URL } from './constants'
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/**
+ * The stored Director key for a write request, so settings writes pass the
+ * backend's guard when a key is configured. Reads never carry it.
+ */
+export function operatorWriteHeaders(method = 'GET'): Record<string, string> {
+  if (READ_METHODS.has(method.toUpperCase())) return {}
+  const token = getOperatorToken()
+  return token ? { 'X-Deck-Operator-Token': token } : {}
+}
 
 /**
  * Build an API endpoint URL with optional query parameters.
@@ -85,6 +98,7 @@ export class ApiClient {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          ...operatorWriteHeaders(options?.method),
           ...options?.headers,
         },
       })
@@ -140,6 +154,7 @@ export async function apiClient<T>(endpoint: string, options?: RequestInit): Pro
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        ...operatorWriteHeaders(options?.method),
         ...options?.headers,
       },
     })
