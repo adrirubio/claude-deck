@@ -4,11 +4,8 @@ import { expect, test } from '../support/guard'
 
 // #510: all text meets WCAG AA contrast in both themes, and each colour has
 // one meaning across Overview, Work and Teams.
-// @active: Overview, Work and the Teams roster with the selected team card
-// (the regions that #510, PR #574, changed). @pending: the full Teams page.
-// The Autonomy tab fails 3 checks in the light theme (AutonomyPanel.tsx;
-// not changed by #574): "code merge:" 1.67:1, "recovery:" 3.77:1 and the
-// "merged" badge 1.92:1.
+// @active: Overview, Work, the Teams roster with the selected team card, and
+// the full Teams page with the Autonomy tab (#577 fixed AutonomyPanel.tsx).
 
 const THEMES: Theme[] = ['light', 'dark']
 
@@ -67,7 +64,7 @@ for (const theme of THEMES) {
     expect(isNeutral(navBackground), `active navigation background ${navBackground}`).toBe(true)
   })
 
-  test(`@pending the full Teams page meets AA contrast in the ${theme} theme`, async ({ page }) => {
+  test(`@active the full Teams page meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await open(page, '/teams/1?tab=autonomy', 'Agent Teams')
     await expect(page.getByText('code merge:', { exact: false }).first()).toBeVisible()

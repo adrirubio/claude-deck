@@ -267,9 +267,9 @@ function approvalStatusLabel(status?: string | null) {
 
 function statusBadgeClass(status: string) {
   if (status === 'escalated' || status === 'failed') return 'border-destructive text-destructive'
-  if (status === 'merged') return 'border-emerald-500/70 text-emerald-400'
+  if (status === 'merged') return 'border-emerald-500/70 text-emerald-700 dark:text-emerald-400'
   if (status === 'awaiting_human_review' || status === 'ready_for_review') {
-    return 'border-sky-500/70 text-sky-400'
+    return 'border-sky-500/70 text-sky-700 dark:text-sky-400'
   }
   if (status === 'verifying' || status === 'dispatched') return 'border-primary/70 text-primary'
   return 'border-muted-foreground/50 text-muted-foreground'
@@ -574,7 +574,7 @@ function ScopeDialog({
                 <SelectItem value="auto">Auto-merge after checks pass</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-amber-400">
+            <p className="text-xs text-amber-700 dark:text-amber-400">
               Applies to the code pipeline only. Design-pipeline PRs always require a human review.
             </p>
             <p className="text-xs text-muted-foreground">Human: Deck marks the PR ready for review. Auto: merges after GitHub checks pass, within the rolling daily cap; otherwise it waits for a human.</p>
@@ -1680,13 +1680,13 @@ export function AutonomyPanel({
                     <Badge variant="secondary" className="max-w-full truncate" title={scope.design_label}>Design: {scope.design_label}</Badge>
                     <Badge
                       variant="outline"
-                      className={scope.merge_policy === 'auto' ? 'border-primary text-primary' : 'border-amber-500/70 text-amber-400'}
+                      className={scope.merge_policy === 'auto' ? 'border-primary text-primary' : 'border-amber-500/70 text-amber-700 dark:text-amber-400'}
                     >
                       code merge: {scope.merge_policy}
                     </Badge>
                     <Badge
                       variant="outline"
-                      className={scope.continuation_enabled ? 'border-emerald-500/70 text-emerald-600 dark:text-emerald-400' : undefined}
+                      className={scope.continuation_enabled ? 'border-emerald-500/70 text-emerald-700 dark:text-emerald-400' : undefined}
                       title="Bounded recovery of escalated issues with an open PR. Configure under Recovery policy."
                     >
                       recovery: {scope.continuation_enabled ? 'enabled' : 'off'}
@@ -1849,7 +1849,7 @@ export function AutonomyPanel({
                           {attention && <p className="mt-1 max-w-xs text-xs text-muted-foreground">{attention.reason}</p>}
                           {pendingLabel && <p className="mt-1 text-xs text-muted-foreground">{pendingLabel}</p>}
                           {item.handoff_state && (
-                            <p className="mt-1 text-xs text-sky-400">
+                            <p className="mt-1 text-xs text-sky-700 dark:text-sky-400">
                               Handoff: {item.handoff_state.replaceAll('_', ' ')}
                               {handoffTarget ? ` → ${handoffTarget.display_name}` : ''}
                             </p>
