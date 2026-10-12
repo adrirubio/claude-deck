@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { WorkProjection } from "@/types/factory";
-import { anchor, destination } from "./styles";
+import { anchor } from "./styles";
 
 export function ContextLinks({ work: w }: { work: WorkProjection }) {
   const target = w.links.bridge_target;
@@ -26,14 +26,14 @@ export function ContextLinks({ work: w }: { work: WorkProjection }) {
           ? `slot ${launch.slot_id}`
           : "";
   return (
-    <nav aria-label="Work context" className="flex flex-wrap items-center gap-2">
+    <nav aria-label="Work context" className="flex flex-wrap items-center gap-x-4 gap-y-2">
       <Link className={anchor} to={`/teams/${w.team.id}`}>
         Team
       </Link>
       <Link className={anchor} to={`/repositories/${w.repository.scope_id}`}>
         Repository scope
       </Link>
-      <Link className={destination} to={`/agent-bridge?${bridge}`}>
+      <Link className={anchor} to={`/agent-bridge?${bridge}`}>
         {target && w.session.state === "bound"
           ? "Read-only verified session"
           : "Inspect team/slot sessions"}
@@ -48,7 +48,7 @@ export function ContextLinks({ work: w }: { work: WorkProjection }) {
       )}
       {launch && (
         <Link
-          className={destination}
+          className={anchor}
           to={`/teams/${launch.team_id}?slot_id=${launch.slot_id}&review_launch=1`}
         >
           Review launch for {launchName}
@@ -56,7 +56,7 @@ export function ContextLinks({ work: w }: { work: WorkProjection }) {
       )}
       {w.owner?.configured_provider && (
         <Link
-          className={destination}
+          className={anchor}
           to={`/harnesses/${w.owner.configured_provider}`}
         >
           Native harness settings

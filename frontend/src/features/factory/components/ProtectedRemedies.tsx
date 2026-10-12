@@ -143,8 +143,8 @@ export function ProtectedRemedies({
     <section className={panel}>
       <h3 className="font-semibold">Protected recovery</h3>
       <p>
-        Eligibility describes work state; the server rechecks actor and operator
-        authorization. Agent decisions and human PR review remain separate.
+        Deck checks again on the server that you may do this. Agent decisions
+        and human PR review stay separate.
       </p>
       <div className="flex flex-wrap gap-3">
         <Button
@@ -175,8 +175,8 @@ export function ProtectedRemedies({
       <p>
         Retry: {retry?.state ?? "unknown"} · required actor{" "}
         {retry?.required_actor ?? "unknown"} ·{" "}
-        {retry?.reason ?? "Eligibility unavailable"}. Retrying may reset attempt
-        markers.
+        {(retry?.reason ?? "Eligibility unavailable").replace(/[.\s]+$/, "")}.
+        Retrying may reset attempt markers.
       </p>
       {work.actions
         .filter((action) => action.name !== "retry")

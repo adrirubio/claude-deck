@@ -24,7 +24,7 @@ test('@active Work lists the seeded items', async ({ page }) => {
 
 test('@active a work item loads', async ({ page }) => {
   await page.goto('/work/2')
-  await expect(page.getByRole('heading', heading('Work details'))).toBeVisible()
+  await expect(page.getByRole('heading', heading(/Fix the settings page layout/))).toBeVisible()
   await expect(page.getByText('Fix the settings page layout').first()).toBeVisible()
   await expect(page.getByText(/Ready for human review/).first()).toBeVisible()
 })
