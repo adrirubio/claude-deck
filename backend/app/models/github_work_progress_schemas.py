@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel as PydanticBaseModel, Field
+from app.models.api_model import ApiModel as BaseModel
 from mcp_shim.work_remaining_protocol import ReportContext
 
 
@@ -24,7 +25,7 @@ class GithubWorkRemainingView(BaseModel):
     assumptions: str | None = None
 
 
-class GithubPublicationObservation(BaseModel):
+class GithubPublicationObservation(PydanticBaseModel):
     state: Literal["current", "historical", "unavailable"]
     observed_at: datetime | None = None
     local_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")

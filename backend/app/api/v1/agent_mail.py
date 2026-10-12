@@ -24,6 +24,7 @@ from app.api.v1.deps import (
 )
 from app.config import settings
 from app.database import get_db
+from app.models.api_model import format_utc_time
 from app.utils import peer_process
 from app.models.database import (
     GithubApprovalRequest,
@@ -929,7 +930,7 @@ async def list_wake_attempts(
             "pending_count": entry.pending_count,
             "result": entry.result,
             "failure_code": entry.failure_code,
-            "created_at": entry.created_at,
+            "created_at": format_utc_time(entry.created_at),
         }
         for entry in attempts
     ]}

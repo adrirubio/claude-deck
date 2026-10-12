@@ -11,6 +11,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
+from app.models.api_model import format_utc_time
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2840,11 +2841,11 @@ async def force_release_github_workspace(
         if workspace.leased_item_id is None:
             current = "the workspace is no longer leased"
         else:
-            current = f"it now reports leased_at {workspace.leased_at.isoformat()}"
+            current = f"it now reports leased_at {format_utc_time(workspace.leased_at)}"
         raise _conflict(
             "The workspace lease changed between inspection and release, so "
             f"nothing was released. You confirmed leased_at "
-            f"{request.expected_leased_at.isoformat()}, but {current}. "
+            f"{format_utc_time(request.expected_leased_at)}, but {current}. "
             "Refresh the workspace and confirm again.",
             block_code="lease_changed",
         )

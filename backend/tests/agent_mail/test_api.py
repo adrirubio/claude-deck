@@ -1,5 +1,5 @@
 """HTTP surface for team and messages."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -90,6 +90,39 @@ async def _session_headers(db, member, key):
     )
     await db.commit()
     return {"X-Deck-Session-Token": token}
+
+
+@pytest.mark.asyncio
+async def test_message_http_timestamp_names_utc_without_changing_storage(client, db):
+    stored = MailMessage(kind="message",
+                         body_markdown="UTC fixture", created_at=datetime(2026, 10, 9, 6, 20, 53, 83886))
+    db.add(stored)
+    await db.commit()
+    response = await client.get("/api/v1/agent-mail/messages")
+    assert response.status_code == 200
+    data = next(row for row in response.json() if row["id"] == stored.id)
+    stamp = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    assert stamp.tzinfo is not None
+    assert stamp == stored.created_at.replace(tzinfo=timezone.utc)
+    assert stored.created_at.tzinfo is None
+
+
+@pytest.mark.asyncio
+async def test_wake_attempt_http_timestamp_names_utc_without_changing_storage(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "utc-fixture")
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    attempt = MailWakeAttempt(actor_type="operator", source="fixture", correlation_id="utc-fixture",
+                              result="refused", created_at=stamp)
+    db.add(attempt)
+    await db.commit()
+    response = await client.get("/api/v1/agent-mail/wake-attempts", headers={"X-Deck-Operator-Token": "utc-fixture"})
+    assert response.status_code == 200
+    data = response.json()["attempts"][0]
+    parsed = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    assert parsed == stamp.replace(tzinfo=timezone.utc)
+    await db.refresh(attempt)
+    assert attempt.created_at == stamp
+    assert attempt.result == "refused"
 
 
 @pytest.mark.asyncio

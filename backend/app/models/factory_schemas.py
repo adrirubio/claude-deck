@@ -2,7 +2,8 @@
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, ConfigDict, Field
+from app.models.api_model import ApiModel as BaseModel
 from app.models.schemas import AgentStatus
 
 
