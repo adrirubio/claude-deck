@@ -2623,19 +2623,20 @@ class GithubDispatchService:
                 await self.escalate(db, item, "brief_unread")
                 continue
             if not self._ack_satisfied(item):
-                anchor = item.dispatched_at or item.updated_at or item.created_at
-                overdue = datetime.utcnow() - anchor > timedelta(
-                    seconds=self._ack_deadline_seconds(item)
-                )
-                if not overdue:
+                request = await github_approval_service.pending_initial_for_attempt(db, item)
+                if request is not None:
+                    overdue = datetime.utcnow() - request.created_at > timedelta(
+                        seconds=self._ack_deadline_seconds(item)
+                    )
+                    if not overdue:
+                        continue
+                    if item.last_nudge_at is None or item.last_nudge_at < request.created_at:
+                        await self._nudge_leader_for_ack(db, item, leader)
+                    elif datetime.utcnow() - item.last_nudge_at > timedelta(
+                        seconds=settings.github_nudge_grace_seconds
+                    ):
+                        await self.escalate(db, item, "leader_ack_timeout", initial_request=request)
                     continue
-                if item.last_nudge_at is None:
-                    await self._nudge_leader_for_ack(db, item, leader)
-                elif datetime.utcnow() - item.last_nudge_at > timedelta(
-                    seconds=settings.github_nudge_grace_seconds
-                ):
-                    await self.escalate(db, item, "leader_ack_timeout")
-                continue
             from app.services.factory_delivery_policy import effective_policy
             from app.services.native_owner_contact import contact_context, refresh_contact_context, renew_native_owner_contact
             policy = effective_policy(item, scope)
@@ -3559,13 +3560,24 @@ class GithubDispatchService:
         item: GithubWorkItem,
         reason: str,
         note: str | None = None,
+        *,
+        initial_request: GithubApprovalRequest | None = None,
     ) -> None:
         owner_may_be_active = (
             item.dispatch_status == "dispatched" and item.owner_slot_id is not None
         )
+        initial_timeout = reason == "leader_ack_timeout" and initial_request is not None
+        if initial_timeout:
+            if not await github_approval_service.supersede_initial_for_timeout(db, item, initial_request):
+                await db.rollback()
+                await db.refresh(item)
+                return
         applied = self._apply_escalation(item, reason, note)
         if not applied:
             return
+        if initial_timeout:
+            # Keep escalation and supersession atomic before the notice can fail.
+            await db.commit()
         try:
             await self._send_escalation_broadcast(
                 db,
