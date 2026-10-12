@@ -98,6 +98,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     fireEvent.click(within(nav).getByRole('link', { name: 'Harnesses' })); await settle()
     expect(within(nav).getByRole('link', { name: 'Harnesses' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses')
+    expect(screen.queryByLabelText('Saved native harness preference')).not.toBeInTheDocument()
     expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
   })
   it('keeps the empty-factory Open Harnesses destination as a link without launching or requesting native data', async () => {

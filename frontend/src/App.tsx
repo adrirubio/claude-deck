@@ -5,6 +5,7 @@ import { ProviderProvider } from './contexts/ProviderContext'
 import { MainLayout } from './components/layout/MainLayout'
 import { ProjectsPage } from './features/projects/ProjectsPage'
 import { NativeRoute } from './features/native-settings/NativeRoute'
+import { LegacyNativeRedirect } from './features/native-settings/LegacyNativeRedirect'
 import { HarnessesPage } from './features/harnesses/HarnessesPage'
 import { OverviewPage } from './features/factory/pages/OverviewPage'
 import { WorkPage } from './features/factory/pages/WorkPage'
@@ -41,30 +42,30 @@ function App() {
                 <Route path="harnesses/:providerId/sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
                 <Route path="teams" element={<AgentTeamsPage />} />
                 <Route path="teams/:teamId" element={<AgentTeamsPage />} />
-                <Route path="config" element={<NativeRoute surface="config" />} />
-                <Route path="mcp" element={<NativeRoute surface="mcp" />} />
-                <Route path="commands" element={<NativeRoute surface="commands" />} />
-                <Route path="plugins" element={<NativeRoute surface="plugins" />} />
-                <Route path="hooks" element={<NativeRoute surface="hooks" />} />
-                <Route path="permissions" element={<NativeRoute surface="permissions" />} />
-                <Route path="agents" element={<NativeRoute surface="agents" />} />
-                <Route path="skills" element={<NativeRoute surface="skills" />} />
-                <Route path="memory" element={<NativeRoute surface="memory" />} />
+                <Route path="config" element={<LegacyNativeRedirect />} />
+                <Route path="mcp" element={<LegacyNativeRedirect />} />
+                <Route path="commands" element={<LegacyNativeRedirect />} />
+                <Route path="plugins" element={<LegacyNativeRedirect />} />
+                <Route path="hooks" element={<LegacyNativeRedirect />} />
+                <Route path="permissions" element={<LegacyNativeRedirect />} />
+                <Route path="agents" element={<LegacyNativeRedirect />} />
+                <Route path="skills" element={<LegacyNativeRedirect />} />
+                <Route path="memory" element={<LegacyNativeRedirect />} />
                 <Route path="projects" element={<Navigate replace to="/harnesses/folders" />} />
                 <Route path="harnesses/folders" element={<ProjectsPage />} />
-                <Route path="backup" element={<NativeRoute surface="backup" />} />
-                <Route path="output-styles" element={<NativeRoute surface="output-styles" />} />
-                <Route path="statusline" element={<NativeRoute surface="statusline" />} />
-                <Route path="sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
-                <Route path="sessions" element={<NativeRoute surface="sessions" />} />
+                <Route path="backup" element={<LegacyNativeRedirect />} />
+                <Route path="output-styles" element={<LegacyNativeRedirect />} />
+                <Route path="statusline" element={<LegacyNativeRedirect />} />
+                <Route path="sessions/:projectFolder/:sessionId" element={<LegacyNativeRedirect />} />
+                <Route path="sessions" element={<LegacyNativeRedirect />} />
                 <Route path="agent-bridge" element={<BridgeEntry />} />
                 <Route path="cc-bridge" element={<BridgeEntry />} />
                 <Route path="agent-mail" element={<MailEntry />} />
                 <Route path="agent-teams" element={<TeamsAlias />} />
-                <Route path="plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
-                <Route path="plans" element={<NativeRoute surface="plans" />} />
-                <Route path="context" element={<NativeRoute surface="context" />} />
-                <Route path="usage" element={<NativeRoute surface="usage" />} />
+                <Route path="plans/:filename" element={<LegacyNativeRedirect />} />
+                <Route path="plans" element={<LegacyNativeRedirect />} />
+                <Route path="context" element={<LegacyNativeRedirect />} />
+                <Route path="usage" element={<LegacyNativeRedirect />} />
               </Route>
             </Routes>
 
