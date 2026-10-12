@@ -293,6 +293,17 @@
           "title": "Coverage Complete",
           "type": "boolean"
         },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Description"
+        },
         "hold_code": {
           "anyOf": [
             {
@@ -333,17 +344,6 @@
           "title": "Next Actors",
           "type": "array"
         },
-        "outcome": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Outcome"
-        },
         "parent_issue_url": {
           "anyOf": [
             {
@@ -377,7 +377,7 @@
       },
       "required": [
         "preset_id",
-        "outcome",
+        "description",
         "parent_issue_url",
         "checked_at",
         "valid_until",

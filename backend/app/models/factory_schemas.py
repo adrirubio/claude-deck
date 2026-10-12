@@ -295,7 +295,7 @@ class TeamRemainingWork(FactoryModel):
 
 class AgentTeamSummaryResponse(FactoryModel):
     preset_id: PositiveId
-    outcome: str | None
+    description: str | None
     parent_issue_url: str | None
     supervisor: Literal["none"] = "none"
     checked_at: Timestamp

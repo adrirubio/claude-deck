@@ -177,7 +177,7 @@ class AgentTeamSummaryService:
             confidence=confidence, reason="complete" if known else "context_changed" if changed
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]
-        return AgentTeamSummaryResponse(preset_id=preset_id, outcome=final_team.description,
+        return AgentTeamSummaryResponse(preset_id=preset_id, description=final_team.description,
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],

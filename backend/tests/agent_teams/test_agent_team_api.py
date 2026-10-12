@@ -53,7 +53,7 @@ async def test_team_summary_http_is_read_only_and_not_cached(client, monkeypatch
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     data = response.json()
-    assert data["outcome"] == "Ship the release."
+    assert data["description"] == "Ship the release."
     assert data["remaining_work"]["effort_low_minutes"] == 0
     assert data["supervisor"] == "none"
     unchanged = await client.get(f"/api/v1/agent-teams/presets/{preset_id}")

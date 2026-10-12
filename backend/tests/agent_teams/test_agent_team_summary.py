@@ -3,10 +3,26 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.database import Base
 from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
 from app.models.github_work_progress_schemas import GithubPublicationObservation, GithubWorkProgressResponse, GithubWorkRemainingView
 from app.services.agent_team_summary_service import AgentTeamSummaryService
+
+
+@pytest_asyncio.fixture
+async def db(tmp_path):
+    # Timeout cancellation can discard a connection. A file preserves the store across that boundary.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'summary.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 async def seed(db, statuses=("dispatched",), *, enabled=True):
@@ -35,14 +51,14 @@ async def seed(db, statuses=("dispatched",), *, enabled=True):
     return team, scope, items
 
 
-def progress(item_id, *, low=10, high=20, actor="owner", state="current", expired=False):
+def progress(item_id, *, low=10, high=20, actor="owner", state="current", expired=False, confidence="medium"):
     now = datetime.now(timezone.utc)
     return GithubWorkProgressResponse(work_item_id=item_id, dispatch_nonce="private-nonce", owner_slot_id=1,
         checked_at=now, valid_until=now + timedelta(seconds=-1 if expired else 15),
         phase="implementation", next_actor=actor, next_action="Continue the approved work.",
         publication=GithubPublicationObservation(state="current"),
         remaining_work=GithubWorkRemainingView(state=state, effort_low_minutes=low,
-            effort_high_minutes=high, confidence="medium", reason=None))
+            effort_high_minutes=high, confidence=confidence, reason=None))
 
 
 class Progress:
@@ -78,7 +94,9 @@ async def test_empty_team_has_zero_effort_and_no_actor(db, monkeypatch):
     team, _, _ = await seed(db, ())
     summary, reads = service(monkeypatch)
     result = await summary.summary(db, team.id)
-    assert result.outcome == "Ship the release."
+    assert result.description == "Ship the release."
+    assert "outcome" not in type(result).model_fields
+    assert "done_when" not in type(result).model_fields
     assert result.parent_issue_url.endswith("/issues/506")
     assert result.supervisor == "none"
     assert result.remaining_work.state == "known"
@@ -90,12 +108,15 @@ async def test_empty_team_has_zero_effort_and_no_actor(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_active_team_sums_all_unfinished_items_and_preserves_actors(db, monkeypatch):
     team, _, items = await seed(db, ("dispatched", "verifying", "merged", "completed"))
-    summary, reads = service(monkeypatch, {items[1].id: progress(items[1].id, low=30, high=60, actor="controller")})
+    summary, reads = service(monkeypatch, {
+        items[0].id: progress(items[0].id, confidence="low"),
+        items[1].id: progress(items[1].id, low=30, high=60, actor="controller", confidence="high")})
     item_ids = [items[0].id, items[1].id]
     result = await summary.summary(db, team.id)
     assert result.remaining_work.effort_low_minutes == 40
     assert result.remaining_work.effort_high_minutes == 80
     assert result.remaining_work.unfinished_items == 2
+    assert result.remaining_work.confidence == "low"
     assert set(result.next_actors) == {"owner", "controller"}
     assert reads.calls == item_ids
     public = result.model_dump_json()
@@ -158,8 +179,8 @@ async def test_stopped_attempts_and_recorded_pauses_use_existing_signals(db, mon
 async def test_shared_time_limit_and_item_limit_keep_unknown_coverage(db, monkeypatch):
     team, _, items = await seed(db, ("dispatched", "dispatched"))
     async def slow(db, item_id):
-        await asyncio.sleep(1)
-    summary, reads = service(monkeypatch, {items[0].id: slow}, observation_seconds=0.02)
+        await asyncio.sleep(2)
+    summary, reads = service(monkeypatch, {items[0].id: slow}, observation_seconds=0.5)
     item_id, team_id = items[0].id, team.id
     result = await summary.summary(db, team.id)
     assert result.remaining_work.state == "unknown"
@@ -260,3 +281,28 @@ async def test_deleted_team_during_read_returns_none(db, monkeypatch):
         return progress(item_id)
     summary, _ = service(monkeypatch, {items[0].id: change})
     assert await summary.summary(db, team_id) is None
+
+
+@pytest.mark.asyncio
+async def test_observation_budget_is_shared_across_items(db, monkeypatch):
+    team, _, items = await seed(db, ("dispatched", "dispatched"))
+    async def delayed(db, item_id):
+        await asyncio.sleep(0.3)
+        return progress(item_id)
+    summary, reads = service(monkeypatch, {item.id: delayed for item in items}, observation_seconds=0.5)
+    result = await summary.summary(db, team.id)
+    assert len(reads.calls) == 2
+    assert result.remaining_work.reported_items == 1
+    assert result.remaining_work.state == "unknown"
+    assert not result.next_actor_coverage_complete
+
+
+@pytest.mark.asyncio
+async def test_more_than_64_items_cannot_produce_a_partial_total(db, monkeypatch):
+    team, _, _ = await seed(db, ("dispatched",) * 65)
+    summary, reads = service(monkeypatch)
+    result = await summary.summary(db, team.id)
+    assert result.remaining_work.unfinished_items == 65
+    assert len(reads.calls) == 64
+    assert result.remaining_work.state == "unknown"
+    assert not result.coverage_complete

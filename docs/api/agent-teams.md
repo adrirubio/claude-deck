@@ -226,6 +226,7 @@ The existing `description` supplies the outcome. Completion conditions stay in t
 
 `GET /api/v1/agent-teams/presets/{preset_id}/summary` returns one observation for the team card.
 It returns the outcome, parent link, existing attention signals, human actions, remaining effort, and next actors.
+The `description` field supplies the outcome text. No `outcome` or `done_when` field is added.
 `supervisor` stays `none` until #549 supplies the supervisor contract.
 `hold_code` uses the existing HOLD and recovery-only check.
 Attention uses existing recovery actions, recorded owner escalations, and recorded observation pauses.
