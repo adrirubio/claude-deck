@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import type { OverviewResponse } from "@/types/factory";
 import { ReadStatus } from "../components/ReadStatus";
@@ -8,13 +8,14 @@ import { Time } from "../components/Time";
 import { WorkResults } from "../components/WorkResults";
 import { categories, factoryQuery, workLink } from "../filterHelpers";
 import { FactoryFilters } from "../filters";
+import { useFactoryFilters } from "../filterOptions";
 import { useObservation } from "../reads";
 
 export function OverviewPage() {
-  const [params] = useSearchParams();
+  const { params, ready } = useFactoryFilters();
   const query = factoryQuery(params);
   const state = useObservation<OverviewResponse>(
-    `factory/overview${query ? `?${query}` : ""}`,
+    ready ? `factory/overview${query ? `?${query}` : ""}` : null,
   );
   const filtered = Boolean(query);
   return (

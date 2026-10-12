@@ -112,28 +112,20 @@ describe("delivery read authority and filters", () => {
       ),
     ).toBe(false);
   });
-  it("ignores an old filter response and retains actionable invalid-filter errors", async () => {
+  it("ignores an old filter response after a filter change", async () => {
     let release!: (response: Response) => void;
-    fixtureFetch((_path, q) =>
-      q.get("team_id") === "1"
-        ? new Promise((resolve) => {
-            release = resolve;
-          })
-        : q.get("team_id") === "bad"
-          ? jsonResponse(
-              {
-                detail: {
-                  code: "invalid_filter",
-                  message: "Team ID must be positive.",
-                },
-              },
-              422,
-            )
+    fixtureFetch((path, q) =>
+      path === "factory/repositories"
+        ? jsonResponse(repositories.normal.response)
+        : q.get("team_id") === "1"
+          ? new Promise((resolve) => {
+              release = resolve;
+            })
           : jsonResponse(last),
     );
     renderRoute(<WorkPage />, "/work?team_id=1");
     await settle();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "2" },
     });
     await settle();
@@ -143,16 +135,6 @@ describe("delivery read authority and filters", () => {
     expect(
       screen.queryByText(first.items[0].item.issue_title, { exact: false }),
     ).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
-      target: { value: "bad" },
-    });
-    await settle();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Team ID must be positive. (invalid_filter)",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
-    await settle();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("preserves last good observations after failure instead of showing an empty factory", async () => {
     vi.useFakeTimers();
@@ -234,19 +216,21 @@ describe("delivery read authority and filters", () => {
 
 describe("cursor browsing V26/V27", () => {
   it("clears older-page browsing on a filter change, including return to a previous URL", async () => {
-    fixtureFetch((_path, query) =>
-      jsonResponse(query.has("cursor") ? work.next_page.response : first),
+    fixtureFetch((path, query) =>
+      path === "factory/repositories"
+        ? jsonResponse(repositories.normal.response)
+        : jsonResponse(query.has("cursor") ? work.next_page.response : first),
     );
     renderRoute(<WorkPage />, "/work?team_id=1");
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await settle();
     expect(screen.getByText(/Live updates paused/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "2" },
     });
     await settle();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "1" },
     });
     await settle();
@@ -364,7 +348,9 @@ describe("cursor browsing V26/V27", () => {
     }));
     let old!: (response: Response) => void;
     let firstReads = 0;
-    const { requests } = fixtureFetch((_path, query) => {
+    const { requests } = fixtureFetch((path, query) => {
+      if (path === "factory/repositories")
+        return jsonResponse(repositories.normal.response);
       const cursor = query.get("cursor");
       if (!cursor && ++firstReads === 2)
         return new Promise((resolve) => {
@@ -726,5 +712,112 @@ describe("polling after errors", () => {
     expect(screen.queryByText("Retrying…")).not.toBeInTheDocument();
     await steps(5000);
     expect(requests).toHaveLength(8);
+  });
+});
+
+describe("name filters", () => {
+  const withNames = (path: string, query: URLSearchParams) =>
+    path === "factory/repositories" && query.get("limit") === "100"
+      ? jsonResponse(repositories.normal.response)
+      : path === "factory/overview"
+        ? jsonResponse(overview.normal.response)
+        : jsonResponse(first);
+  const sent = (requests: { query: URLSearchParams }[], key: string) =>
+    requests.map((r) => r.query.get(key)).filter((v) => v !== null);
+
+  it("filters by team and repository name, with no ID inputs", async () => {
+    const { requests } = fixtureFetch(withNames);
+    renderRoute(<WorkPage />, "/work");
+    await settle();
+    expect(screen.queryByLabelText(/ID/)).not.toBeInTheDocument();
+    const team = screen.getByLabelText("Team") as HTMLSelectElement;
+    expect([...team.options].map((o) => o.text)).toEqual([
+      "All teams",
+      "Fixture team 1",
+      "Fixture team 2",
+    ]);
+    const repository = screen.getByLabelText("Repository") as HTMLSelectElement;
+    // One repository name in two scopes also shows the team.
+    expect([...repository.options].map((o) => o.text)).toEqual([
+      "All repositories",
+      "fixture/paused",
+      "fixture/shared · Fixture team 1",
+      "fixture/shared · Fixture team 2",
+    ]);
+    fireEvent.change(team, { target: { value: "2" } });
+    await settle();
+    fireEvent.change(repository, { target: { value: "3" } });
+    await settle();
+    expect(sent(requests, "team_id")).toContain("2");
+    expect(sent(requests, "scope_id")).toContain("3");
+  });
+
+  it("hides a select that has one option, and shows Reset only while a filter is active", async () => {
+    fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? jsonResponse(repositories.last_page.response)
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work");
+    await settle();
+    expect(screen.queryByLabelText("Team")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Reset filters" })).not.toBeInTheDocument();
+    cleanup();
+    renderRoute(<WorkPage />, "/work?provider=codex-cli");
+    await settle();
+    expect(screen.getByRole("link", { name: "Reset filters" })).toHaveAttribute("href", "/work");
+  });
+
+  for (const value of ["abc", "999", "0", "1e3"]) {
+    for (const key of ["team_id", "scope_id"]) {
+      it(`keeps the page and sends nothing for an unknown ${key}=${value}`, async () => {
+        const { requests } = fixtureFetch(withNames);
+        renderRoute(<WorkPage />, `/work?${key}=${value}`);
+        await settle();
+        expect(screen.getByRole("status")).toHaveTextContent("was not found");
+        expect(screen.getAllByRole("link", { name: "Reset filters" })).toHaveLength(1);
+        expect(screen.getAllByText(/Fixture issue/).length).toBeGreaterThan(0);
+        expect(sent(requests, key)).toEqual([]);
+        cleanup();
+        resetFactoryReads();
+        const overviewReads = fixtureFetch(withNames);
+        renderRoute(<OverviewPage />, `/?${key}=${value}`, "/");
+        await settle();
+        expect(screen.getByRole("status")).toHaveTextContent("was not found");
+        expect(screen.getByText(/matching work items/)).toBeInTheDocument();
+        expect(sent(overviewReads.requests, key)).toEqual([]);
+      });
+    }
+  }
+
+  it("holds a numeric filter until the names are known", async () => {
+    let release!: (response: Response) => void;
+    const { requests } = fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work?team_id=999");
+    await settle();
+    expect(requests).toHaveLength(0);
+    await act(async () => release(jsonResponse(repositories.normal.response)));
+    await settle();
+    expect(sent(requests, "team_id")).toEqual([]);
+    expect(requests.length).toBeGreaterThan(0);
+  });
+
+  it("sends a valid-looking value when the names cannot be read, and still drops text", async () => {
+    const { requests } = fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? jsonResponse({ detail: "Unavailable" }, 500)
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work?team_id=1&scope_id=abc");
+    await settle();
+    expect(sent(requests, "team_id")).toContain("1");
+    expect(sent(requests, "scope_id")).toEqual([]);
   });
 });

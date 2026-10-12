@@ -1,10 +1,10 @@
-import { useSearchParams } from "react-router-dom";
 import { WorkResults } from "../components/WorkResults";
 import { factoryQuery } from "../filterHelpers";
 import { FactoryFilters } from "../filters";
+import { useFactoryFilters } from "../filterOptions";
 
 export function WorkPage() {
-  const [params] = useSearchParams();
+  const { params, ready } = useFactoryFilters();
   const query = factoryQuery(params, true);
   return (
     <section className="space-y-5">
@@ -14,7 +14,7 @@ export function WorkPage() {
         tracking ended; delivery and human review require evidence.
       </p>
       <FactoryFilters work />
-      <WorkResults key={query} query={query} />
+      {ready && <WorkResults key={query} query={query} />}
     </section>
   );
 }
