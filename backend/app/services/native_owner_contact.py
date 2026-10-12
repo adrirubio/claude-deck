@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,7 +107,7 @@ async def renew_native_owner_contact(db: AsyncSession, scope: TeamGithubScope,
     ).order_by(MailAgentSession.id.desc()).limit(1))).scalar_one_or_none()
     if (session is None or session.bound_pane_pid != workspace.leased_owner_pid
             or session.bound_pane_proc_start != workspace.leased_owner_proc_start
-            or not session.cwd or Path(session.cwd).resolve() != Path(workspace.path).resolve()):
+            or not session.cwd):
         return False
     if session.pid is None:
         return False
