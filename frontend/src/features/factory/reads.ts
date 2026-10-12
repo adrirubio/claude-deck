@@ -116,11 +116,28 @@ class Observation<T> {
   snapshot = () => this.state;
 }
 const observations = new Map<string, Observation<unknown>>();
-export function useObservation<T>(endpoint: string) {
-  if (!observations.has(endpoint))
-    observations.set(endpoint, new Observation(endpoint));
-  const read = observations.get(endpoint)! as Observation<T>;
-  const state = useSyncExternalStore(read.subscribe, read.snapshot);
+// A null endpoint holds the read until the caller can build a valid URL.
+const IDLE: ReadState<never> = {
+  data: null,
+  error: null,
+  refreshing: true,
+  retrying: false,
+  stopped: false,
+};
+const idleRead = {
+  subscribe: () => () => undefined,
+  snapshot: () => IDLE,
+  refresh: () => Promise.resolve(),
+};
+export function useObservation<T>(endpoint: string | null) {
+  let read: Pick<Observation<T>, "subscribe" | "snapshot" | "refresh">;
+  if (endpoint === null) read = idleRead;
+  else {
+    if (!observations.has(endpoint))
+      observations.set(endpoint, new Observation(endpoint));
+    read = observations.get(endpoint)! as Observation<T>;
+  }
+  const state = useSyncExternalStore(read.subscribe, read.snapshot) as ReadState<T>;
   return { ...state, refresh: read.refresh };
 }
 

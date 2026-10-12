@@ -1,11 +1,12 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { RepositoryResults } from "../components/RepositoryResults";
 import { destination } from "../components/styles";
 import { factoryQuery } from "../filterHelpers";
 import { FactoryFilters } from "../filters";
+import { useFactoryFilters } from "../filterOptions";
 
 export function RepositoriesPage() {
-  const [params] = useSearchParams();
+  const { params, ready } = useFactoryFilters();
   const query = factoryQuery(params);
   return (
     <section className="space-y-5">
@@ -16,7 +17,7 @@ export function RepositoriesPage() {
         roster harness filters may differ from Work's assigned owner filter.
       </p>
       <FactoryFilters repository />
-      <RepositoryResults key={query} query={query} />
+      {ready && <RepositoryResults key={query} query={query} />}
     </section>
   );
 }
