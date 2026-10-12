@@ -14,6 +14,7 @@ by their seeded names where they can.
 | Deleted team with history | Retired crew: audit events kept after the team is deleted. |
 | Mail with unacknowledged messages | Director and member messages without an ack. |
 | Locked Audit | Audit events exist; the browser has no Director key. |
+| Lane G (#606) | #527 mail senders, #528 lease and reminders, #535 active revision, #549 supervisor. |
 | One agent, one state (#540) | F2 Frontend: a live fake pane, a live MCP session and an observation 3 h old. |
 """
 from __future__ import annotations
@@ -240,10 +241,14 @@ def seed_core(s: Seeder, root: Path) -> None:
         member(s, slot["id"], QUIET_TEAM, slot, quiet)
     message(s, 1, sender=None, recipient=2, subject="Autonomous dispatch: issue #101",
             body="Synthetic dispatch brief for issue #101.", sent=at(days=2),
-            read=at(days=2), acked=at(days=2), sender_type_director=True)
+            read=at(days=2), acked=at(days=2),
+            payload={"kind": "github_dispatch_assignment", "work_item_id": ITEM_ATTENTION,
+                     "issue_number": 101, "scope_id": RELEASE_SCOPE})
     message(s, 2, sender=None, recipient=2, subject="Progress check: issue #101",
             body="No PR yet for issue #101. Are you still making progress?",
-            sent=at(hours=5), sender_type_director=True)
+            sent=at(hours=5),
+            payload={"kind": "github_dispatch_idle_nudge", "work_item_id": ITEM_ATTENTION,
+                     "issue_number": 101})
     message(s, 3, sender=3, recipient=1, subject="Plan for #102",
             body="Please approve the plan for #102.", kind="context_request",
             request_status="pending", sent=at(hours=4), read=at(hours=4))
@@ -287,6 +292,81 @@ def seed_core(s: Seeder, root: Path) -> None:
         message_id=None, last_polled_at=at(minutes=2), last_requested_at=None,
         last_assessed_at=None, error_code=None,
     )
+    seed_lane_g(s, root, sample)
+
+
+# Lane G (#606): states for the backend journeys in frontend/e2e/lane-g/.
+# They attach to the existing items, so the Overview count stays "5 matching".
+LANE_G_LEASE_TOKEN = "e2e-seed-lease-token-0001"
+LANE_G_REMINDERS = 8          # unanswered workspace-release reminders (#528)
+LANE_G_SUPERVISOR_ACTOR = 1   # external actor bound to Release crew (#549)
+
+
+def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
+    # #527: a message that the Director wrote. Messages 1 and 2 come from the
+    # scheduler (their payload kinds), so they must not show "Director".
+    message(s, 6, sender=None, recipient=2, subject="Director note: keep #101 small",
+            body="Please keep the CSV export change small.", sent=at(hours=1),
+            payload={})
+
+    # #528: merged item #104 still holds a workspace; its owner (B1 Backend)
+    # has not answered the release reminders.
+    workspace = root / "workspaces" / "dispatch-e2e"
+    workspace.mkdir(parents=True, exist_ok=True)
+    s.insert(
+        "github_workspaces", id=1, scope_id=RELEASE_SCOPE, path=str(workspace),
+        kind="worktree", dispatchable=1, leased_item_id=ITEM_MERGED, leased_at=at(hours=6),
+        released_at=None, lease_token=LANE_G_LEASE_TOKEN, push_token_expires_at=None,
+        leased_owner_pid=None, leased_owner_proc_start=None,
+        lease_last_owner_contact_at=at(hours=6), lease_release_reminded_at=at(minutes=4),
+        provision_error=None, enabled=1, created_at=at(days=3), updated_at=at(minutes=4),
+    )
+    for index in range(LANE_G_REMINDERS):
+        message(s, 100 + index, sender=None, recipient=2, subject="Release needed: issue #104",
+                body="Issue #104 is merged but still holds a workspace. Release it.",
+                sent=at(minutes=4 * (LANE_G_REMINDERS - index)),
+                payload={"kind": "github_lease_release_reminder", "work_item_id": ITEM_MERGED,
+                         "issue_number": 104})
+
+    # #535: merged item #104 still has a continuation revision in an active state.
+    s.insert(
+        "github_attempt_scope_revisions", id=1, work_item_id=ITEM_MERGED,
+        dispatch_nonce=f"seed{ITEM_MERGED:012d}", revision=1, owner_slot_id=2, owner_member_id=2,
+        phase="implementation", execution_target="workspace",
+        summary="Synthetic recovery revision for #104.",
+        allowed_paths=["scripts/sync.py"], allowed_actions=["edit"], allowed_commands=["pytest"],
+        prohibited_actions=[], tool_fallbacks={},
+        baseline_head_sha=sha("revision-baseline-104"), baseline_tree_sha=sha("revision-tree-104"),
+        originating_escalation_reason="owner_idle_timeout", expected_workspace_id=1,
+        expected_lease_token_hash=digest(LANE_G_LEASE_TOKEN), max_failed_heads=2,
+        failed_head_count=0, last_failed_head_sha=None, status="active",
+        recovery_checkpoint_stage=None, approval_request_id=None, delivery_message_id=None,
+        approved_at=at(days=2), delivered_at=at(days=2), acknowledged_at=at(days=2),
+        last_delivery_attempt_at=at(days=2), delivery_attempt_count=1, last_ack_nudge_at=None,
+        result_summary=None, evidence=None, submitted_head_sha=None, submitted_at=None,
+        completed_at=None, cancelled_at=None, cancellation_reason=None, expires_at=None,
+        created_at=at(days=2),
+    )
+
+    # #549: a supervisor actor. It is bound to Release crew only when the #549
+    # columns exist, so the seed works before and after #549 merges. "Healthy"
+    # is relative to the real clock: the next check is 8 minutes from now.
+    s.insert(
+        "mail_external_actors", id=LANE_G_SUPERVISOR_ACTOR, actor_key="e2e-supervisor",
+        display_name="Supervisor (e2e)", kind="external_tool",
+        description="Synthetic outside supervisor.", token_hash=digest("e2e-supervisor-token"),
+        created_at=at(days=1), last_used_at=at(minutes=2),
+    )
+    preset_columns = {name for name, _, _ in s.columns("agent_team_presets")}
+    if {"supervisor_actor_id", "next_check_at"} <= preset_columns:
+        next_check = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=8)).isoformat(sep=" ")
+        s.conn.execute(
+            "UPDATE agent_team_presets SET supervisor_actor_id = ?, next_check_at = ? WHERE id = ?",
+            (LANE_G_SUPERVISOR_ACTOR, next_check, RELEASE_TEAM),
+        )
+
+    # #550: the #550 implementer adds the stored "required CI cannot be read"
+    # state for item #102 here, in the PR that activates its journey.
 
 
 async def seed_history() -> None:
