@@ -96,7 +96,7 @@ export function ImageAttachmentDialog({
             )}
 
             {readOnly && !error && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-300">
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-800 dark:text-amber-300">
                 This terminal is read-only. Enter the Deck operator token to switch to interactive mode before pasting into tmux.
               </div>
             )}

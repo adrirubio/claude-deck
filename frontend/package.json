@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "check:dark-pairs": "node scripts/check-dark-pairs.mjs",
     "test": "vitest run",
     "preview": "vite preview",
     "e2e": "playwright test --grep @active",
