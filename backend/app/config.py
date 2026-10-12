@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
+    # Test instance (scripts/e2e-instance.sh). No dispatch scheduler, no
+    # start-up relay cleanup (it signals every tmux client on the host) and no
+    # GitHub network access. Never set this on a real installation.
+    test_instance: bool = False
+
 
 # Global settings instance
 settings = Settings()

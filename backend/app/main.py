@@ -27,15 +27,21 @@ async def lifespan(app: FastAPI):
             await agent_bridge_attachment_service.cleanup_expired(db)
     except Exception:
         logger.exception("Failed to clean up expired Agent Bridge attachments")
-    try:
-        await github_dispatch_scheduler.start()
-    except Exception:
-        logger.exception("Failed to start autonomous GitHub dispatch scheduler")
-    # Clean up any orphaned relay processes from previous runs
-    from app.services.cc_bridge.pty_relay import close_all_relays, cleanup_orphaned_relays
-    cleanup_orphaned_relays()
+    if settings.test_instance:
+        # A test instance runs no autonomous dispatch and must not signal
+        # tmux clients that belong to other servers on the host.
+        logger.warning("Test instance: dispatch scheduler and relay cleanup are off")
+    else:
+        try:
+            await github_dispatch_scheduler.start()
+        except Exception:
+            logger.exception("Failed to start autonomous GitHub dispatch scheduler")
+        # Clean up any orphaned relay processes from previous runs
+        from app.services.cc_bridge.pty_relay import cleanup_orphaned_relays
+        cleanup_orphaned_relays()
     yield
     # Shutdown: Cleanup
+    from app.services.cc_bridge.pty_relay import close_all_relays
     await github_dispatch_scheduler.shutdown()
     await close_all_relays()
 

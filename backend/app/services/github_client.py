@@ -16,6 +16,7 @@ import httpx
 
 from app.config import settings
 from app.services.github_check_observation import observe_checks
+from app.services.github_offline import github_http_client
 
 _GITHUB_API = "https://api.github.com"
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -59,7 +60,7 @@ class GithubClient:
     def _client(self) -> httpx.AsyncClient:
         if self._http is not None:
             return self._http
-        return httpx.AsyncClient(base_url=_GITHUB_API, timeout=30.0)
+        return github_http_client(_GITHUB_API, settings)
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github+json"}
