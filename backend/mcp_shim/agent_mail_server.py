@@ -902,6 +902,42 @@ def deck_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str
 
 
 @mcp.tool()
+def deck_update_team_campaign(
+    preset_id: int,
+    backlog_milestone: Optional[str],
+    planned_decisions: Optional[list[dict[str, Any]]],
+    director_key: Optional[str] = None,
+) -> dict:
+    """Replace campaign metadata. Use null to clear either field.
+
+    backlog_milestone is an exact GitHub milestone title.
+    Each planned decision has text and state: later, now, or done.
+    The caller supplies the Director key for this call.
+    The tool never loads, stores, logs, returns, or publishes the key.
+    A session key grants no authority for this write.
+    """
+    if not director_key:
+        return {"ok": False, "error": {"code": "operator_token_required"}}
+    result = _team_request("PATCH", f"/presets/{preset_id}",
+        headers={"X-Deck-Operator-Token": director_key},
+        json={"backlog_milestone": backlog_milestone, "planned_decisions": planned_decisions})
+    if not result["ok"]:
+        # Keep credential-bearing request details out of the returned error.
+        error = result.get("error")
+        allowed = {"operator_token_required", "operator_token_invalid", "operator_token_unconfigured",
+                   "deck_http_error", "deck_unreachable", "mail_generation_closing", "mail_startup_expired"}
+        code = error.get("code") if isinstance(error, dict) else None
+        failure = {"ok": False, "error": {"code": code if code in allowed else "campaign_update_failed"}}
+        if result.get("outcome") == "unknown":
+            failure.update(outcome="unknown",
+                suggestion="Do not repeat this mutation blindly; reconcile its outcome first.")
+        return failure
+    value = result["data"]
+    return {"ok": True, "preset": {field: value.get(field) for field in
+        ("id", "backlog_milestone", "planned_decisions")}}
+
+
+@mcp.tool()
 def deck_get_team_summary(preset_id: int) -> dict:
     """Read a team's outcome, parent link, existing attention signals, effort total and next actors.
 

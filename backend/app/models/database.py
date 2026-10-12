@@ -147,6 +147,8 @@ class AgentTeamPreset(Base):
     autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     leader_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    backlog_milestone: Mapped[str | None] = mapped_column(String, nullable=True)
+    planned_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class AgentTeamSlot(Base):

@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional
-from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from app.models.api_model import ApiModel as BaseModel, naive_utc_confirmation
 
 
@@ -2305,7 +2305,35 @@ GithubParentIssueUrl = Annotated[str, Field(
 ), AfterValidator(_parent_issue_url)]
 
 
-class AgentTeamPresetCreate(BaseModel):
+class PlannedCampaignDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=240)
+    state: Literal["later", "now", "done"] = "later"
+
+    @field_validator("text")
+    @classmethod
+    def plain_sentence(cls, value: str) -> str:
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("Use one plain sentence without control characters")
+        return value
+
+
+class CampaignPresetFields(BaseModel):
+    backlog_milestone: Optional[str] = Field(default=None, max_length=160)
+    planned_decisions: Optional[List[PlannedCampaignDecision]] = Field(default=None, max_length=12)
+
+    @field_validator("backlog_milestone")
+    @classmethod
+    def milestone_title(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("Use a milestone title without control characters")
+        return value.strip() or None
+
+
+class AgentTeamPresetCreate(CampaignPresetFields):
     name: str
     description: Optional[str] = None
     parent_issue_url: Optional[GithubParentIssueUrl] = None
@@ -2314,14 +2342,14 @@ class AgentTeamPresetCreate(BaseModel):
     slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
 
 
-class AgentTeamPresetUpdate(BaseModel):
+class AgentTeamPresetUpdate(CampaignPresetFields):
     name: Optional[str] = None
     description: Optional[str] = None
     parent_issue_url: Optional[GithubParentIssueUrl] = None
     autonomy_enabled: Optional[bool] = None
 
 
-class AgentTeamPresetResponse(BaseModel):
+class AgentTeamPresetResponse(CampaignPresetFields):
     id: int
     name: str
     description: Optional[str] = None
@@ -2373,7 +2401,7 @@ class AgentTeamPresetListResponse(BaseModel):
     presets: List[AgentTeamPresetResponse] = Field(default_factory=list)
 
 
-class AgentTeamCreateFromMailRequest(BaseModel):
+class AgentTeamCreateFromMailRequest(CampaignPresetFields):
     name: str
     description: Optional[str] = None
     parent_issue_url: Optional[GithubParentIssueUrl] = None
@@ -2381,7 +2409,7 @@ class AgentTeamCreateFromMailRequest(BaseModel):
     include_offline: bool = True
 
 
-class AgentTeamCreateFromBridgeRequest(BaseModel):
+class AgentTeamCreateFromBridgeRequest(CampaignPresetFields):
     name: str
     description: Optional[str] = None
     parent_issue_url: Optional[GithubParentIssueUrl] = None

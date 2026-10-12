@@ -294,6 +294,44 @@ class TeamRemainingWork(FactoryModel):
     reason: Literal["complete", "report_unknown", "observation_incomplete", "context_changed"]
 
 
+class CampaignDoneItem(FactoryModel):
+    title: str
+    merged_at: Timestamp | None
+
+
+class CampaignUnderWayItem(FactoryModel):
+    title: str
+    owner_short_name: str | None
+    state_phrase: Literal["building it", "reviewing it", "waiting for checks", "waiting for you"]
+
+
+class CampaignQueuedItem(FactoryModel):
+    title: str
+
+
+class CampaignAreaGroup(FactoryModel):
+    area: str
+    count: int = Field(ge=0)
+
+
+class CampaignDecision(FactoryModel):
+    text: str
+    state: Literal["later", "now", "done"]
+
+
+class TeamCampaignSummary(FactoryModel):
+    backlog_state: Literal["available", "backlog unavailable"]
+    done_count: int = Field(ge=0)
+    latest_done: list[CampaignDoneItem]
+    under_way_count: int = Field(ge=0)
+    under_way: list[CampaignUnderWayItem]
+    queued_count: int = Field(ge=0)
+    queued: list[CampaignQueuedItem]
+    not_started_count: int | None = Field(ge=0)
+    not_started_groups: list[CampaignAreaGroup]
+    decisions_ahead: list[CampaignDecision]
+
+
 class AgentTeamSummaryResponse(FactoryModel):
     preset_id: PositiveId
     description: str | None
@@ -308,3 +346,4 @@ class AgentTeamSummaryResponse(FactoryModel):
     remaining_work: TeamRemainingWork
     next_actors: list[Literal["owner", "leader", "operator", "controller"]]
     next_actor_coverage_complete: bool
+    campaign: TeamCampaignSummary

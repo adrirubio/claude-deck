@@ -1160,6 +1160,63 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_update_team_campaign",
+    "description": "Replace campaign metadata. Use null to clear either field.\n\n    backlog_milestone is an exact GitHub milestone title.\n    Each planned decision has text and state: later, now, or done.\n    The caller supplies the Director key for this call.\n    The tool never loads, stores, logs, returns, or publishes the key.\n    A session key grants no authority for this write.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "backlog_milestone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Backlog Milestone"
+        },
+        "planned_decisions": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Planned Decisions"
+        },
+        "director_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Director Key"
+        }
+      },
+      "required": [
+        "preset_id",
+        "backlog_milestone",
+        "planned_decisions"
+      ],
+      "title": "deck_update_team_campaignArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_update_team_parent_issue",
     "description": "Set a team's GitHub parent issue link. Use null to clear the link.\n\n    This operation changes only the parent link. It grants no execution authority.\n    ",
     "inputSchema": {

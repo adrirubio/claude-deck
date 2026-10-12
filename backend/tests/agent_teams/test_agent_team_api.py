@@ -1012,6 +1012,37 @@ async def test_team_creation_requires_operator(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["", "wrong-key"])
+async def test_campaign_fields_need_director_key(client, key):
+    created = await client.post("/api/v1/agent-teams/presets", json={"name": "Campaign", "slots": []})
+    path = f'/api/v1/agent-teams/presets/{created.json()["id"]}'
+    changes = {"backlog_milestone": "Campaign", "planned_decisions": [{"text": "Decide promotion.", "state": "later"}]}
+    denied = await client.patch(path, json=changes, headers={"X-Deck-Operator-Token": key,
+                                                           "X-Deck-Session-Token": "synthetic-session-key"})
+    assert denied.status_code == 401
+    unchanged = (await client.get(path)).json()
+    assert unchanged["backlog_milestone"] is None and unchanged["planned_decisions"] is None
+    allowed = await client.patch(path, json=changes)
+    assert allowed.status_code == 200
+    assert allowed.json()["backlog_milestone"] == "Campaign"
+    assert allowed.json()["planned_decisions"] == changes["planned_decisions"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"planned_decisions": [{"text": "", "state": "later"}]},
+    {"planned_decisions": [{"text": "Decide promotion.", "state": "requested"}]},
+    {"planned_decisions": [{"text": "Two\nlines", "state": "now"}]},
+    {"planned_decisions": [{"text": "Decide promotion.", "private_key": "forbidden"}]},
+    {"backlog_milestone": "Two\nlines"},
+])
+async def test_campaign_fields_reject_invalid_public_metadata(client, changes):
+    created = await client.post("/api/v1/agent-teams/presets", json={"name": "Campaign", "slots": []})
+    response = await client.patch(f'/api/v1/agent-teams/presets/{created.json()["id"]}', json=changes)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_v18_leader_update_invalid_change_matrix(client, db, tmp_path):
     """V18: invalid-change matrix for the protected Leader update route."""
     repo = tmp_path / "v18-repo"
