@@ -32,7 +32,7 @@ export function Header() {
   }
 
   return (
-    <header className={cn("border-b bg-background", instance && "border-t-4", instance && accentClasses.headerBorder)}>
+    <header className={cn("border-b border-t-4 bg-background", instance ? accentClasses.headerBorder : "border-t-transparent")}>
       <div className="flex min-h-16 flex-wrap items-center justify-between gap-2 px-3 py-2 md:px-6">
         <div className="flex items-center gap-3">
           <img
@@ -46,6 +46,10 @@ export function Header() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {!status && (
+            // Reserve the badge space so the header does not shift when the status loads.
+            <span aria-hidden="true" className="inline-block h-[1.375rem] w-32" />
+          )}
           {status && (
             <>
               {instance && (
