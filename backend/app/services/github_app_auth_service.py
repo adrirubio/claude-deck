@@ -11,6 +11,7 @@ import httpx
 import jwt
 
 from app.config import Settings, settings
+from app.services.github_offline import github_http_client
 
 _GITHUB_API = "https://api.github.com"
 
@@ -132,7 +133,7 @@ class GithubAppAuthService:
     def _client(self) -> httpx.AsyncClient:
         if self._http is not None:
             return self._http
-        return httpx.AsyncClient(base_url=_GITHUB_API, timeout=30.0)
+        return github_http_client(_GITHUB_API, self._config)
 
     async def _revoke_token(
         self,

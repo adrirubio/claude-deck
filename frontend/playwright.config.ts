@@ -1,4 +1,5 @@
 import path from 'path'
+import { fileURLToPath } from 'url'
 import { defineConfig, devices } from '@playwright/test'
 import { E2E_LOCALE, E2E_TIMEZONE } from './e2e/support/time'
 
@@ -6,7 +7,15 @@ import { E2E_LOCALE, E2E_TIMEZONE } from './e2e/support/time'
 // scripts/e2e-instance.sh owns its temporary HOME, database and tmux server.
 const port = Number(process.env.E2E_PORT || 18765)
 const baseURL = `http://127.0.0.1:${port}`
-const repoRoot = path.resolve(__dirname, '..')
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+// One seed clock per run, shared by the instance (seed) and the journeys.
+// The start of the current UTC hour keeps seeded data inside recent windows.
+if (!process.env.E2E_SEED_NOW) {
+  const now = new Date()
+  now.setUTCMinutes(0, 0, 0)
+  process.env.E2E_SEED_NOW = now.toISOString()
+}
 
 export default defineConfig({
   testDir: './e2e',
@@ -36,6 +45,6 @@ export default defineConfig({
     stdout: 'pipe',
     stderr: 'pipe',
     gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
-    env: { E2E_PORT: String(port) },
+    env: { E2E_PORT: String(port), E2E_SEED_NOW: process.env.E2E_SEED_NOW },
   },
 })

@@ -5,9 +5,21 @@ import { expect, type Locator } from '@playwright/test'
 export const E2E_TIMEZONE = 'America/New_York'
 export const E2E_LOCALE = 'en-US'
 
-// The seed writes every timestamp relative to this moment (naive UTC in SQLite).
-// Keep it equal to SEED_NOW in scripts/e2e/seed.py.
-export const SEED_NOW = new Date('2026-10-01T14:00:00Z')
+// The seed writes every timestamp relative to this moment (naive UTC in
+// SQLite). playwright.config.ts sets E2E_SEED_NOW once per run; the instance
+// and every worker read the same value.
+// Read lazily: playwright.config.ts imports this module before it sets the value.
+export function seedNow(): Date {
+  const value = process.env.E2E_SEED_NOW
+  if (!value) throw new Error('E2E_SEED_NOW is not set; run the journeys through playwright.config.ts')
+  return new Date(value)
+}
+
+/** seedNow() minus an offset, the way scripts/e2e/scenarios.py writes it. */
+export function seedAgo(offset: { days?: number; hours?: number; minutes?: number }): Date {
+  const ms = (((offset.days ?? 0) * 24 + (offset.hours ?? 0)) * 60 + (offset.minutes ?? 0)) * 60_000
+  return new Date(seedNow().getTime() - ms)
+}
 
 /** One seeded moment: the UTC instant and the zone the browser shows it in. */
 export function seededMoment(isoUtc: string): Date {
@@ -16,34 +28,9 @@ export function seededMoment(isoUtc: string): Date {
   return moment
 }
 
-/** Wall-clock parts of a moment in the browser zone, for format-neutral checks. */
-export function localParts(moment: Date): { date: string; hour: string; minute: string } {
-  const parts = new Intl.DateTimeFormat(E2E_LOCALE, {
-    timeZone: E2E_TIMEZONE,
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(moment)
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? ''
-  return {
-    date: `${part('month')} ${part('day')}, ${part('year')}`,
-    hour: part('hour').padStart(2, '0'),
-    minute: part('minute'),
-  }
-}
-
-/** The local HH:MM of a moment. A UTC rendering fails this check by the zone offset. */
-export function localClock(moment: Date): string {
-  const { hour, minute } = localParts(moment)
-  return `${hour}:${minute}`
-}
-
-/** Assert that a locator shows the local clock time of the moment. */
+/** Assert that a locator shows the moment's local clock time (any of Deck's formats). */
 export async function expectLocalTime(locator: Locator, moment: Date): Promise<void> {
-  await expect(locator).toContainText(localClock(moment))
+  await expect(locator).toContainText(localClockPattern(moment))
 }
 
 /** Read the visible time text of each locator; all must be identical. */
@@ -51,4 +38,19 @@ export async function expectSameTimeText(locators: Locator[]): Promise<string> {
   const texts = await Promise.all(locators.map(async l => (await l.innerText()).trim()))
   expect(new Set(texts).size, `time texts differ: ${JSON.stringify(texts)}`).toBe(1)
   return texts[0]
+}
+
+/**
+ * The moment's hour and minute in the browser zone, as a 12- or 24-hour clock
+ * with an optional leading zero. It matches any of Deck's current formats; a
+ * UTC rendering does not match, because the zone offset changes the hour.
+ */
+export function localClockPattern(moment: Date): RegExp {
+  const parts = new Intl.DateTimeFormat(E2E_LOCALE, {
+    timeZone: E2E_TIMEZONE, hour: 'numeric', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(moment)
+  const hour24 = Number(parts.find(p => p.type === 'hour')?.value)
+  const minute = parts.find(p => p.type === 'minute')?.value
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+  return new RegExp(`\\b0?(${hour24}|${hour12}):${minute}\\b`)
 }

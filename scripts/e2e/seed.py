@@ -6,8 +6,8 @@ The ORM creates the schema (``init_db``). Rows are then written with stdlib
 filled explicitly, and ``insert()`` refuses a row that omits one.
 
 All timestamps are fixed offsets from ``SEED_NOW``. All names, repositories,
-SHAs and tokens are synthetic. Keep SEED_NOW equal to the constant in
-``frontend/e2e/support/time.ts``.
+SHAs and tokens are synthetic. ``frontend/e2e/support/time.ts`` reads the
+same ``E2E_SEED_NOW`` value.
 """
 from __future__ import annotations
 
@@ -18,11 +18,25 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-SEED_NOW = datetime(2026, 10, 1, 14, 0, 0)  # naive UTC, as Deck stores it
+def _seed_now() -> datetime:
+    """The seed clock: E2E_SEED_NOW, or the start of the current UTC hour.
+
+    playwright.config.ts sets E2E_SEED_NOW once per run, so the instance and
+    the journeys share one value. Offsets from it are identical on every run,
+    and the data stays inside Deck's recent windows (for example Audit's 7 days).
+    """
+    value = os.environ.get("E2E_SEED_NOW")
+    if value:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return datetime.now(timezone.utc).replace(tzinfo=None, minute=0, second=0, microsecond=0)
+
+
+SEED_NOW = _seed_now()  # naive UTC, as Deck stores it
 
 
 def at(**delta: float) -> str:
