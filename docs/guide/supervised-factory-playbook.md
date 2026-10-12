@@ -191,7 +191,11 @@ Before enabling intake:
   - Codex: mark each workspace as a trusted project.
   - Sign-in: make one real model call as the native user. A sign-in status command only reads a saved file and does not prove that the token is still valid.
 - Block interactive question prompts in every unattended native session. For example, add a Claude Code `PreToolUse` hook on `AskUserQuestion` that refuses the call and points the member to Mail. Nobody answers a question form in an unattended pane, so the member stops until someone presses a key.
-- Launch a new slot in `plain` mode. Resume mode needs an existing session ID. After launch, save each slot's session ID and set the slot to resume mode, so that a restart continues the same conversation. Activity observation also reads this ID.
+- Launch a new slot in `plain` mode. Resume mode needs an existing session ID. After launch:
+  1. Save each slot's session ID and set the slot to resume mode.
+  2. Restart each session through Deck, so that its command line resumes that ID.
+
+  Deck observes native activity only for a process started with the slot's session ID. A session still running from the `plain` launch reports `session_mismatch`, Deck never renews its owner contact, and the idle timeout escalates working owners. Check that every slot's activity state is not `session_mismatch` before you admit work.
 - Check the conversation, native process lifetime, tmux pane, working directory and workspace ownership.
 - Configure supervision for the actual preset, slots and supported native event formats. Confirm that it survives the supervisor's interactive turn.
 - Record activation readiness for every scope. Keep other campaigns in their intended state.
