@@ -6252,6 +6252,7 @@ async def test_delivery_and_ack_nudge_counters_are_independent(db, monkeypatch):
         delivered_item,
         lease_last_owner_contact_at=datetime.utcnow(),
     )
+    await _pending_initial_plan(db, delivered_item, slots, stale)
 
     await github_dispatch_service.monitor_dispatched(
         db,
@@ -6477,6 +6478,26 @@ async def test_monitor_does_not_escalate_slow_live_owner(db):
         assert item.escalation_reason is None
 
 
+async def _pending_initial_plan(db, item, slots, created_at):
+    members = [await agent_mail_service.get_or_create_slot_member(db, slot) for slot in slots]
+    item.dispatch_nonce = "timeout-attempt"
+    item.approval_round_count = 1
+    await db.flush()
+    request = GithubApprovalRequest(
+        work_item_id=item.id,
+        request_kind="initial_plan",
+        dispatch_nonce=item.dispatch_nonce,
+        approval_round=item.approval_round_count,
+        owner_member_id=members[1].id,
+        leader_member_id=members[0].id,
+        request_fingerprint="timeout-plan",
+        created_at=created_at,
+    )
+    db.add(request)
+    await db.commit()
+    return request
+
+
 @pytest.mark.asyncio
 async def test_monitor_nudges_leader_on_ack_timeout(db):
     preset, slots, scope = await _team(db)
@@ -6500,6 +6521,7 @@ async def test_monitor_nudges_leader_on_ack_timeout(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6534,6 +6556,7 @@ async def test_retried_item_still_nudged_when_leader_never_acks_again(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=dispatched_at)
+    await _pending_initial_plan(db, item, slots, dispatched_at)
 
     await github_dispatch_service.monitor_dispatched(
         db,
@@ -6576,6 +6599,7 @@ async def test_monitor_escalates_leader_ack_after_nudge_grace(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    request = await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6583,6 +6607,8 @@ async def test_monitor_escalates_leader_ack_after_nudge_grace(db):
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "leader_ack_timeout"
+    await db.refresh(request)
+    assert request.status == "superseded"
 
 
 @pytest.mark.asyncio
@@ -6610,6 +6636,8 @@ async def test_monitor_design_item_uses_ack_multiplier(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6653,7 +6681,7 @@ async def test_monitor_no_ack_action_when_ack_received(db):
 
 
 @pytest.mark.asyncio
-async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
+async def test_monitor_ack_timeout_uses_request_time_not_recent_activity(db):
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
     old = datetime.utcnow() - timedelta(
@@ -6675,6 +6703,7 @@ async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
