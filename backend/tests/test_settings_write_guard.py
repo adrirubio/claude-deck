@@ -6,6 +6,7 @@ write is as strong as running a command as the controller. When a Director
 key is configured, every write on them needs it; reads stay open. Without a
 configured key (a single-user install), they stay open as before.
 """
+import importlib
 import re
 
 import httpx
@@ -18,24 +19,13 @@ from app.main import app
 
 KEY = "director-key-for-tests"
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
-GUARDED_MODULES = {
-    "app.api.v1.agents",
-    "app.api.v1.backup",
-    "app.api.v1.cli",
-    "app.api.v1.codex_config",
-    "app.api.v1.commands",
-    "app.api.v1.config",
-    "app.api.v1.hooks",
-    "app.api.v1.mcp",
-    "app.api.v1.memory",
-    "app.api.v1.output_styles",
-    "app.api.v1.permissions",
-    "app.api.v1.plugins",
-    "app.api.v1.projects",
-    "app.api.v1.providers",
-    "app.api.v1.statusline",
-    "app.api.v1.usage",
-}
+GUARDED_MODULES = [
+    "agents", "backup", "cli", "codex_config", "commands", "config", "hooks", "mcp",
+    "memory", "output_styles", "permissions", "plugins", "projects", "providers",
+    "statusline", "usage",
+]
+# Prefixes given to include_router in app/api/v1/router.py.
+INCLUDE_PREFIXES = {"mcp": "/mcp"}
 
 
 def _concrete(path: str) -> str:
@@ -43,13 +33,17 @@ def _concrete(path: str) -> str:
 
 
 def _routes(write: bool) -> list[tuple[str, str]]:
+    """Read each module's own router: FastAPI 0.143 no longer flattens app.routes."""
     found = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or route.endpoint.__module__ not in GUARDED_MODULES:
-            continue
-        for method in sorted(route.methods):
-            if (method not in READ_METHODS) == write:
-                found.append((method, _concrete(route.path)))
+    for name in GUARDED_MODULES:
+        module = importlib.import_module(f"app.api.v1.{name}")
+        prefix = settings.api_v1_prefix + INCLUDE_PREFIXES.get(name, "")
+        for route in module.router.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            for method in sorted(route.methods):
+                if (method not in READ_METHODS) == write:
+                    found.append((method, _concrete(prefix + route.path)))
     return found
 
 
