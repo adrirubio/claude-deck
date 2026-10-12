@@ -3,7 +3,7 @@ name: E2E
 on:
   pull_request:
     branches: [master, release/v3.1]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   push:
     branches: [master, release/v3.1]
 
