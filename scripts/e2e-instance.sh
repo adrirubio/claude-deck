@@ -18,7 +18,9 @@
 #     not resolve to the instance's fake binaries.
 #
 # Environment:
-#   E2E_PORT        Port for the API and the built UI (default 18765).
+#   E2E_PORT        Port for the API and the built UI. playwright.config.ts
+#                   chooses a free port; 18765 is only the manual-start default.
+#   E2E_RUN_TOKEN   Per-run token that /health reports (default: random).
 #   E2E_ROOT        Temporary root (default: mktemp). It must be new, empty, or
 #                   marked with a .deck-e2e-root file. It is removed on exit.
 #   E2E_SKIP_BUILD  Set to 1 to reuse an existing frontend/dist.
@@ -209,11 +211,18 @@ if [[ "${E2E_SKIP_BUILD:-0}" != 1 ]]; then
 fi
 [[ -f "$REPO_ROOT/frontend/dist/index.html" ]] || refuse "frontend/dist is missing; unset E2E_SKIP_BUILD"
 
+# The run token identifies this instance on /health; journeys refuse a server
+# that reports another token. Never print it.
+RUN_TOKEN="${E2E_RUN_TOKEN:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+[[ "$RUN_TOKEN" =~ ^[A-Za-z0-9_-]{16,}$ ]] || refuse "E2E_RUN_TOKEN must be at least 16 letters, digits, - or _"
+
 # Settings come from this environment only. The backend runs from $RUN_DIR,
 # so a .env file in the checkout is never read.
 CLEAN_ENV+=(
   "DATABASE_URL=sqlite+aiosqlite:///$DB_PATH"
   "TEST_INSTANCE=1"
+  "TEST_INSTANCE_ROOT=$ROOT"
+  "TEST_INSTANCE_TOKEN=$RUN_TOKEN"
   "OPERATOR_TOKEN=e2e-director-key-0000000000000000"
   "GITHUB_TOKEN=" "GITHUB_APP_ID=" "GITHUB_APP_PRIVATE_KEY_PATH="
   "GITHUB_COORDINATION_HOLD_PATHS=[]"

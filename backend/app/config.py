@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # start-up relay cleanup (it signals every tmux client on the host) and no
     # GitHub network access. Never set this on a real installation.
     test_instance: bool = False
+    # A test instance reports these on /health, so the E2E harness can refuse
+    # a server that belongs to another run. Ignored unless test_instance is set.
+    test_instance_root: str = Field(default="", repr=False)
+    test_instance_token: str = Field(default="", repr=False)
 
 
 # Global settings instance

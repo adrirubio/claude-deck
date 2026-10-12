@@ -69,11 +69,18 @@ app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {
+    body = {
         "name": settings.app_name,
         "version": settings.app_version,
         "status": "running"
     }
+    if settings.test_instance:
+        # The E2E harness checks that this server is its own run's instance.
+        body["test_instance"] = {
+            "root": settings.test_instance_root,
+            "token": settings.test_instance_token,
+        }
+    return body
 
 # Serve static files from the frontend build directory
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
