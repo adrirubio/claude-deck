@@ -694,6 +694,8 @@ class GithubDispatchService:
         item.last_verified_sha = None
         item.verification_head_sha = None
         item.verification_started_at = None
+        item.merge_wait_head_sha = None
+        item.merge_wait_started_at = None
         item.retry_count = 0
         item.approval_round_count = 0
         item.retry_requested_at = None

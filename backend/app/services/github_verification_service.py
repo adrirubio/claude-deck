@@ -54,6 +54,7 @@ _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
 _STATUS_FAILURE_STATES = {"failure", "error"}
 _TRANSIENT_MERGE_STATES = {"unstable", "blocked"}
+_MERGE_CHECK_WAIT_LIMIT = timedelta(minutes=60)
 _HUMAN_MERGE_NOTE_PREFIXES = (
     "Auto-merge blocked",
     "Auto-merge budget exhausted",
@@ -1974,6 +1975,15 @@ class GithubVerificationService:
                 "Auto-merge budget exhausted; PR is ready for human merge.",
             )
             return
+        current_head = self._head_sha(pull)
+        if not current_head or current_head != item.last_verified_sha:
+            item.dispatch_status = "verifying"
+            item.status_note = "Head changed since promotion; re-verifying before auto-merge."
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
+        if await self._wait_for_merge_checks(db, scope, item, client, current_head):
+            return
         merge_state = pull.get("mergeable_state")
         if merge_state in _TRANSIENT_MERGE_STATES:
             await self._record_transient_merge_failure(
@@ -1983,10 +1993,10 @@ class GithubVerificationService:
                 f"mergeable_state={merge_state}",
             )
             return
-        current_head = self._head_sha(pull)
-        if current_head != item.last_verified_sha or not await self._head_is_green(
-            scope, client, current_head, item=item
-        ):
+        if not await self._head_is_green(scope, client, current_head, item=item):
+            # Preserve the wait bound if another check started during this read.
+            if await self._wait_for_merge_checks(db, scope, item, client, current_head):
+                return
             item.dispatch_status = "verifying"
             item.status_note = (
                 "Head changed or is no longer green since promotion; re-verifying "
@@ -2005,7 +2015,9 @@ class GithubVerificationService:
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code in _MERGE_TRANSIENT_STATUS_CODES or status_code >= 500:
-                await self._record_transient_merge_failure(db, scope, item, str(exc))
+                # Checks can start after the green read and before the merge.
+                if not await self._wait_for_merge_checks(db, scope, item, client, current_head):
+                    await self._record_transient_merge_failure(db, scope, item, str(exc))
             elif status_code == 403:
                 await self._fallback_to_human_merge(
                     db,
@@ -2110,6 +2122,62 @@ class GithubVerificationService:
         if owner_member.id == item.ack_approver_member_id:
             return "owner and approver are not distinct"
         return None
+
+    async def _wait_for_merge_checks(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        head_sha: str,
+    ) -> bool:
+        """Wait for head checks without charging implementation retries."""
+        checks = await client.list_check_runs_for_ref(
+            scope.repo_owner, scope.repo_name, head_sha,
+        )
+        status = await client.get_combined_status_for_ref(
+            scope.repo_owner, scope.repo_name, head_sha,
+        )
+        pending = [
+            str(check.get("name") or check.get("id") or "unnamed check")
+            for check in checks
+            if check.get("head_sha") in (None, head_sha)
+            and (check.get("status") != "completed" or check.get("conclusion") is None)
+        ]
+        contexts = status.get("statuses") or []
+        pending_contexts = [
+            str(context.get("context") or "unnamed commit status")
+            for context in contexts
+            if context.get("state") == "pending"
+        ]
+        pending.extend(pending_contexts)
+        # Combined success covers every context, including paged-out contexts.
+        # Failure can hide pending contexts. Incomplete evidence cannot charge
+        # a retry. An empty aggregate pending response means no status exists.
+        total_contexts = status.get("total_count", len(contexts))
+        if status.get("state") == "pending" and total_contexts and not pending_contexts:
+            pending.append("pending commit status contexts")
+        elif total_contexts > len(contexts) and status.get("state") != "success":
+            pending.append("unobserved commit status contexts")
+        if not pending:
+            return False
+        now = datetime.utcnow()
+        if item.merge_wait_head_sha != head_sha or item.merge_wait_started_at is None:
+            item.merge_wait_head_sha = head_sha
+            item.merge_wait_started_at = now
+        names = ", ".join(pending)
+        if now - item.merge_wait_started_at >= _MERGE_CHECK_WAIT_LIMIT:
+            await self._fallback_to_human_merge(
+                db,
+                item,
+                f"Auto-merge blocked: GitHub checks stalled for 60 minutes on head {head_sha}. "
+                f"Pending checks: {names}.",
+            )
+        else:
+            item.status_note = f"Auto-merge waiting for checks on head {head_sha}: {names}."
+            item.updated_at = now
+        await db.commit()
+        return True
 
     async def _record_transient_merge_failure(
         self,
