@@ -172,12 +172,7 @@ function scopeToInput(scope: TeamGithubScope): TeamGithubScopeInput {
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'never'
-  return formatServerTime(value, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatServerTime(value)
 }
 
 function routeMethodLabel(value?: string | null) {

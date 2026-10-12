@@ -191,9 +191,11 @@ describe('AutonomyPanel', () => {
   it('distinguishes a missing polling token from unresolved dispatch mode after a poll', () => {
     const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false }], workItems: [] })} />)
     expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))
+    expect(screen.getByText(/Last polled/)).toHaveTextContent('Last polled never')
     view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', last_polled_at: '2026-09-29T12:00:00Z' }], workItems: [] })} />)
     expect(screen.getByText('Dispatch auth: not selected')).toHaveAttribute('title', expect.stringContaining('successful poll'))
     expect(screen.queryByText('Polling token not set')).not.toBeInTheDocument()
+    expect(screen.getByText(/Last polled/)).toHaveTextContent(`Last polled ${new Date('2026-09-29T12:00:00Z').toLocaleString()}`)
   })
 
   it('hides the soak-only gate until active and explains it when active', async () => {
