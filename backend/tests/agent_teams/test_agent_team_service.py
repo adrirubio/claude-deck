@@ -2680,3 +2680,45 @@ async def test_v17_leader_mutation_races_separate_approval_and_revision_acquisit
                 assert injected[0]["approval_request_id"] is None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fresh_claude_launch_persists_identity_for_resume(db, tmp_path, monkeypatch):
+    from uuid import UUID
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Fresh Claude", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="claude-code", repo_path=str(repo))]))
+    calls = []
+    def spawn(provider_id, options, *, extra_env=None):
+        calls.append(options)
+        return {"session_name": "fixture", "tmux_target": "fixture:0.0", "workspace_trust_changed": True}
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", spawn)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    assert str(UUID(calls[0].session_id)) == calls[0].session_id
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert slot.launch_options["session_id"] == calls[0].session_id
+    assert slot.launch_mode == "resume"
+    assert result.items[0].workspace_trust_changed is True
+    assert "Workspace trust prepared" in result.items[0].message
+    assert agent_team_service._spawn_options_for_slot(slot, None).mode == "resume"
+
+
+@pytest.mark.asyncio
+async def test_failed_claude_spawn_does_not_save_new_identity(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Failed Claude", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="claude-code", repo_path=str(repo))]))
+    def refuse(*args, **kwargs):
+        raise ValueError("Workspace trust could not be prepared")
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", refuse)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    assert result.items[0].status == "failed"
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert not (slot.launch_options or {}).get("session_id")
+    assert slot.launch_mode == "plain"

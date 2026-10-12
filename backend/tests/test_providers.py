@@ -169,3 +169,13 @@ def test_opencode_home_respects_xdg_config_home(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
 
     assert get_opencode_home() == tmp_path / "custom"
+
+
+def test_fresh_claude_command_selects_session_uuid():
+    from uuid import uuid4
+    from app.services.providers import get_provider
+    from app.services.providers.base import SpawnCommandOptions
+    session_id = str(uuid4())
+    command = get_provider("claude-code").build_spawn_command(
+        SpawnCommandOptions(directory="/fixture", session_id=session_id))
+    assert command == ["claude", "--session-id", session_id]

@@ -12,10 +12,19 @@ from app.services.providers import get_provider
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.providers.claude_code import ClaudeCodeProvider
 from app.services.providers.platform_env import build_platform_env
+from app.services.team_workspace_trust import prepare_workspace_trust
 
 logger = logging.getLogger(__name__)
 
 _spawned_sessions: dict[str, dict] = {}
+
+
+class SpawnSessionError(ValueError):
+    """Keep completed trust changes visible when tmux cannot start the session."""
+
+    def __init__(self, message: str, workspace_trust_changed: bool = False):
+        super().__init__(message)
+        self.workspace_trust_changed = workspace_trust_changed
 
 
 def _validate_directory(directory: str) -> str:
@@ -94,6 +103,10 @@ def spawn_session(
     if extra_env:
         env_flags += _env_flags(extra_env)
 
+    trust_changed = False
+    if extra_env and extra_env.get("CLAUDE_DECK_TEAM_SLOT_ID"):
+        trust_changed = prepare_workspace_trust(provider.id, directory)
+
     try:
         result = subprocess.run(
             [
@@ -115,12 +128,12 @@ def spawn_session(
             timeout=10,
         )
         if result.returncode != 0:
-            raise ValueError(f"tmux new-session failed: {result.stderr.strip()}")
+            raise SpawnSessionError(f"tmux new-session failed: {result.stderr.strip()}", trust_changed)
         pane_pid = _parse_pane_pid(result.stdout)
     except FileNotFoundError:
-        raise ValueError("tmux is not installed or not in PATH")
+        raise SpawnSessionError("tmux is not installed or not in PATH", trust_changed)
     except subprocess.TimeoutExpired:
-        raise ValueError("tmux new-session timed out")
+        raise SpawnSessionError("tmux new-session timed out", trust_changed)
 
     _spawned_sessions[name] = {
         "provider": provider.id,
@@ -137,6 +150,7 @@ def spawn_session(
         "tmux_target": f"{name}:0.0",
         "session_name": name,
         "pane_pid": pane_pid,
+        "workspace_trust_changed": trust_changed,
     }
 
 

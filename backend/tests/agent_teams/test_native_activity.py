@@ -94,6 +94,7 @@ def native(tmp_path, monkeypatch):
     process(pane_pid, 1, pane_start, command=b"zsh\0")
     process(native_pid, pane_pid, native_start)
     monkeypatch.setattr(pi, "_PROC", proc)
+    monkeypatch.setattr(activity, "_PROC", proc)
     monkeypatch.setattr(pi, "pi_session_directory", lambda project: directory)
     monkeypatch.setattr(activity, "_process", lambda pid: (pi._process(pid)[0], pi._process(pid)[2]))
     monkeypatch.setattr(activity, "_process_started_at", lambda start: now - timedelta(seconds=10))
@@ -503,3 +504,138 @@ async def test_sdk_idle_attestation_keeps_old_debt_current_without_creating_new_
     assert private.settlement_id is None  # An old event cannot create a new trigger.
     assert private.current_settlement_id == (event_id if attestation == "fresh" else None)
     assert private.state == ("idle" if attestation == "fresh" else "unknown")
+
+
+@pytest.fixture
+def codex_first_launch(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    process = proc / "50"
+    (process / "fd").mkdir(parents=True)
+    (process / "cmdline").write_bytes(b"codex\0--no-alt-screen\0")
+    home = tmp_path / "codex"
+    (home / "sessions").mkdir(parents=True)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    now = datetime.now(timezone.utc)
+    session_id = str(uuid4())
+    path = home / "sessions" / f"rollout-fixture-{session_id}.jsonl"
+    header = {"type": "session_meta", "timestamp": (now - timedelta(seconds=4)).isoformat(),
+              "payload": {"id": session_id, "cwd": str(cwd)}}
+    path.write_text(json.dumps(header) + "\n")
+    (process / "fd" / "3").symlink_to(path)
+    monkeypatch.setattr(activity, "_PROC", proc, raising=False)
+    monkeypatch.setattr(activity, "_codex_home", lambda pid: home)
+    monkeypatch.setattr(activity, "_process", lambda pid: ("S", "1000"))
+    monkeypatch.setattr(activity, "_process_started_at", lambda start: now - timedelta(seconds=10))
+    binding = activity.ActivityBinding(50, "1000", str(cwd))
+    return locals()
+
+
+def test_codex_first_launch_records_rollout_and_requires_restart(codex_first_launch):
+    f = codex_first_launch
+    provenance = {}
+    observed = activity._observe(2, "codex-cli", None, [f["binding"]], False, f["now"], provenance=provenance)
+    assert (observed.state, observed.reason) == ("unknown", "restart_needed_for_observation")
+    assert provenance["discovered_session_id"] == f["session_id"]
+    assert "event_id" not in provenance
+    assert f["session_id"] not in observed.model_dump_json()
+
+
+@pytest.mark.parametrize("invalid", ["cwd", "old", "future", "uuid", "world_write", "ambiguous"])
+def test_codex_rollout_capture_refuses_invalid_evidence(codex_first_launch, invalid):
+    f = codex_first_launch
+    header = f["header"]
+    if invalid == "cwd":
+        header["payload"]["cwd"] = "/other"
+    elif invalid == "old":
+        header["timestamp"] = (f["now"] - timedelta(seconds=100)).isoformat()
+    elif invalid == "future":
+        header["timestamp"] = (f["now"] + timedelta(seconds=100)).isoformat()
+    elif invalid == "uuid":
+        header["payload"]["id"] = str(uuid4())
+    elif invalid == "world_write":
+        f["path"].chmod(0o666)
+    else:
+        other = f["home"] / "sessions" / f"rollout-fixture-{uuid4()}.jsonl"
+        other_header = dict(header, payload={"id": other.stem[-36:], "cwd": str(f["cwd"])})
+        other.write_text(json.dumps(other_header) + "\n")
+        (f["process"] / "fd" / "4").symlink_to(other)
+    f["path"].write_text(json.dumps(header) + "\n")
+    provenance = {}
+    observed = activity._observe(2, "codex-cli", None, [f["binding"]], False, f["now"], provenance=provenance)
+    assert observed.state == "unknown"
+    assert "discovered_session_id" not in provenance
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_options", [None, {}])
+async def test_codex_rollout_identity_is_saved_for_later_resume(db, codex_first_launch, monkeypatch, launch_options):
+    from unittest.mock import AsyncMock
+    f = codex_first_launch
+    preset = AgentTeamPreset(name="Codex fixture")
+    db.add(preset)
+    await db.flush()
+    slot = AgentTeamSlot(preset_id=preset.id, display_name="Worker", provider="codex-cli",
+                         repo_id="fixture", repo_name="fixture", repo_path=str(f["cwd"]),
+                         launch_mode="plain", launch_options=launch_options)
+    db.add(slot)
+    await db.commit()
+    entry = (slot.id, "codex-cli", None, [f["binding"]], False)
+    monkeypatch.setattr(activity, "_team_inputs", AsyncMock(return_value=[entry]))
+    result = await activity.observe_team(db, preset.id)
+    await db.refresh(slot)
+    assert result.slots[0].reason == "restart_needed_for_observation"
+    assert slot.launch_options["session_id"] == f["session_id"]
+    assert slot.launch_mode == "resume"
+
+
+def test_codex_saved_first_launch_identity_still_requires_restart(codex_first_launch):
+    f = codex_first_launch
+    observed = activity._observe(2, "codex-cli", f["session_id"], [f["binding"]], False, f["now"])
+    assert (observed.state, observed.reason) == ("unknown", "restart_needed_for_observation")
+
+
+def test_codex_capture_refuses_replaced_descriptor_file(codex_first_launch, monkeypatch):
+    import os
+    f = codex_first_launch
+    replacement = f["home"] / "sessions" / "replacement"
+    replacement.write_bytes(f["path"].read_bytes())
+    actual_stat = os.stat
+    def mismatch(path, *args, **kwargs):
+        if str(path) == str(f["process"] / "fd" / "3"):
+            return actual_stat(replacement)
+        return actual_stat(path, *args, **kwargs)
+    monkeypatch.setattr(activity.os, "stat", mismatch)
+    provenance = {}
+    activity._observe(2, "codex-cli", None, [f["binding"]], False, f["now"], provenance=provenance)
+    assert "discovered_session_id" not in provenance
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["binding", "duplicate", "mode"])
+async def test_codex_capture_does_not_replace_changed_or_duplicate_slot(db, codex_first_launch, monkeypatch, invalid):
+    from unittest.mock import AsyncMock
+    f = codex_first_launch
+    preset = AgentTeamPreset(name="Codex safety fixture")
+    db.add(preset)
+    await db.flush()
+    slot = AgentTeamSlot(preset_id=preset.id, display_name="Worker", provider="codex-cli",
+                         repo_id="fixture", repo_name="fixture", repo_path=str(f["cwd"]),
+                         launch_mode="plain", launch_options={})
+    db.add(slot)
+    await db.commit()
+    entry = (slot.id, "codex-cli", None, [f["binding"]], False)
+    if invalid == "duplicate":
+        db.add(AgentTeamSlot(preset_id=preset.id, display_name="Other", provider="claude-code",
+                            repo_id="fixture", repo_name="fixture", repo_path=str(f["cwd"]),
+                            launch_options={"session_id": f["session_id"]}))
+        await db.commit()
+    elif invalid == "mode":
+        slot.launch_mode = "resume"
+        await db.commit()
+    values = AsyncMock(side_effect=[[entry], []]) if invalid == "binding" else AsyncMock(return_value=[entry])
+    monkeypatch.setattr(activity, "_team_inputs", values)
+    result = await activity.observe_team(db, preset.id)
+    await db.refresh(slot)
+    assert "session_id" not in slot.launch_options
+    assert result.slots[0].state == "unknown"
