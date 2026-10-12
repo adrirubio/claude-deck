@@ -874,6 +874,17 @@ def test_campaign_setter_sends_director_key_only_as_header(monkeypatch):
         "json": {"backlog_milestone": "Campaign", "planned_decisions": planned}})
 
 
+def test_campaign_setter_preserves_unknown_write_outcome_without_private_errors(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    monkeypatch.setattr(shim, "_team_request", lambda *args, **kwargs: {
+        "ok": False, "error": {"code": "deck_unreachable", "message": "synthetic-director-key"},
+        "outcome": "unknown", "suggestion": "private-request-details"})
+    result = shim.deck_update_team_campaign(12, None, None, director_key="synthetic-director-key")
+    assert result["ok"] is False and result["outcome"] == "unknown"
+    assert result["suggestion"] == "Do not repeat this mutation blindly; reconcile its outcome first."
+    assert "synthetic-director-key" not in repr(result) and "private-request-details" not in repr(result)
+
+
 def test_campaign_setter_keeps_session_key_out_of_director_header(monkeypatch):
     import mcp_shim.agent_mail_server as shim
     requests = []

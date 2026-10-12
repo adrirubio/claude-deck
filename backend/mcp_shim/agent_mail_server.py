@@ -927,7 +927,11 @@ def deck_update_team_campaign(
         allowed = {"operator_token_required", "operator_token_invalid", "operator_token_unconfigured",
                    "deck_http_error", "deck_unreachable", "mail_generation_closing", "mail_startup_expired"}
         code = error.get("code") if isinstance(error, dict) else None
-        return {"ok": False, "error": {"code": code if code in allowed else "campaign_update_failed"}}
+        failure = {"ok": False, "error": {"code": code if code in allowed else "campaign_update_failed"}}
+        if result.get("outcome") == "unknown":
+            failure.update(outcome="unknown",
+                suggestion="Do not repeat this mutation blindly; reconcile its outcome first.")
+        return failure
     value = result["data"]
     return {"ok": True, "preset": {field: value.get(field) for field in
         ("id", "backlog_milestone", "planned_decisions")}}
