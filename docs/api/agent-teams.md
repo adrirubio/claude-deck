@@ -2,6 +2,11 @@
 
 Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.
 
+Response timestamps identify UTC with `Z` or `+00:00`. The JSON serializer leaves stored datetimes unchanged.
+Send the returned timestamp unchanged in `expected_updated_at` or `expected_leased_at`.
+Those two confirmation fields preserve the instant when they decode a UTC or non-UTC offset.
+Naive confirmation values keep their existing UTC meaning. Stale instants still fail the existing comparison with 409.
+
 ## Authorization
 
 "Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.

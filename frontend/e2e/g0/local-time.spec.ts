@@ -23,7 +23,7 @@ async function timeText(page: Page, near: string): Promise<string> {
   return text as string
 }
 
-test('@pending one seeded moment shows the same local time on Teams, Work and Audit', async ({ page }) => {
+test('@active one seeded moment shows the same local time on Teams, Work and Audit', async ({ page }) => {
   await page.goto('/work/3')
   await expect(page.getByText('Document the import format').first()).toBeVisible()
   const work = await timeText(page, 'Document the import format')

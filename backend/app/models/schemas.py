@@ -1,7 +1,8 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict, Field, computed_field, model_validator
+from app.models.api_model import ApiModel as BaseModel, naive_utc_confirmation
 
 
 class ConfigFile(BaseModel):
@@ -1392,7 +1393,7 @@ class BackupMCPServerInfo(BaseModel):
     requires_npm_install: bool = False
 
 
-class BackupManifestContents(BaseModel):
+class BackupManifestContents(PydanticBaseModel):
     """Contents tracked in backup manifest."""
 
     files: List[str] = []
@@ -1405,7 +1406,7 @@ class BackupManifestContents(BaseModel):
     backup_policy: Dict[str, Any] = {}
 
 
-class BackupManifest(BaseModel):
+class BackupManifest(PydanticBaseModel):
     """Full backup manifest stored in the backup zip."""
 
     version: str = "1.0"
@@ -2336,7 +2337,7 @@ class AgentTeamPresetResponse(BaseModel):
 class AgentTeamLeaderUpdateRequest(BaseModel):
     leader_slot_id: int
     expected_leader_slot_id: Optional[int] = None
-    expected_updated_at: datetime
+    expected_updated_at: Annotated[datetime, AfterValidator(naive_utc_confirmation)]
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -2582,7 +2583,7 @@ class GithubWorkspaceResponse(BaseModel):
 
 class GithubWorkspaceForceReleaseRequest(BaseModel):
     force: Literal[True]
-    expected_leased_at: datetime
+    expected_leased_at: Annotated[datetime, AfterValidator(naive_utc_confirmation)]
     reason: str
     requested_by: Optional[str] = None
 

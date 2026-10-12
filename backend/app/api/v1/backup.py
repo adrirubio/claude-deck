@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
+from app.models.api_model import utc_response_values
 
 from app.database import get_db
 from app.models.schemas import (
@@ -217,7 +218,7 @@ async def get_backup_manifest(
             detail="Manifest not found in backup (older backup format)"
         )
 
-    return manifest
+    return utc_response_values(manifest)
 
 
 @router.get("/{backup_id}/plan", response_model=RestorePlan)

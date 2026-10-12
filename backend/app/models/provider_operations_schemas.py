@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+from app.models.api_model import ApiModel as BaseModel
 
 OPERATION_KEYS = frozenset({
     "launch", "observe_session", "mail_identity", "receive_work", "report_work_status",

@@ -6,7 +6,7 @@ and the release. A test that seeds the replacement *before* the request passes
 against a route that compares at the top and writes at the bottom, which is
 the exact defect this file exists to catch.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -161,19 +161,21 @@ async def _row(db, workspace_id: int, columns: str = "leased_item_id, lease_toke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation_zone", [None, timezone.utc, timezone(timedelta(hours=2))])
 async def test_matching_acquisition_is_released_and_state_fully_cleared(
-    client, db, tmp_path, monkeypatch
+    client, db, tmp_path, monkeypatch, confirmation_zone
 ):
     repo = tmp_path / "repo"
     scope = await _scope(db, repo)
     item_id, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
     monkeypatch.setattr(github_workspace_service, "_runner", InterleavingRunner(repo))
+    confirmed = inspected_at if confirmation_zone is None else inspected_at.replace(tzinfo=timezone.utc).astimezone(confirmation_zone)
 
     response = await client.post(
         _url(scope.id, workspace_id),
         json={
             "force": True,
-            "expected_leased_at": inspected_at.isoformat(),
+            "expected_leased_at": confirmed.isoformat(),
             "reason": "owner is unavailable",
             "requested_by": "operator",
         },
@@ -213,8 +215,9 @@ async def test_matching_acquisition_is_released_and_state_fully_cleared(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed", ["2020-01-01T00:00:00", "2020-01-01T00:00:00Z", "2020-01-01T02:00:00+02:00"])
 async def test_stale_expected_leased_at_refuses_without_touching_the_lease(
-    client, db, tmp_path, monkeypatch
+    client, db, tmp_path, monkeypatch, confirmed
 ):
     repo = tmp_path / "repo"
     scope = await _scope(db, repo)
@@ -225,7 +228,7 @@ async def test_stale_expected_leased_at_refuses_without_touching_the_lease(
         _url(scope.id, workspace_id),
         json={
             "force": True,
-            "expected_leased_at": "2020-01-01T00:00:00",
+            "expected_leased_at": confirmed,
             "reason": "stale value",
         },
         headers=OPERATOR_HEADERS,
@@ -284,8 +287,8 @@ async def test_a_replacement_acquired_during_the_inspection_survives(
     # §4.6a: the refusal names both timestamps. The second one has to be the
     # REPLACEMENT's, read fresh -- a message built from the stale ORM object
     # names the operator's own value twice and reads as "your value matched".
-    assert inspected_at.isoformat() in detail["message"]
-    assert replacement_leased_at.isoformat() in detail["message"]
+    assert inspected_at.replace(tzinfo=timezone.utc).isoformat() in detail["message"]
+    assert replacement_leased_at.replace(tzinfo=timezone.utc).isoformat() in detail["message"]
     # The replacement acquisition is intact -- both the pointer and the token.
     assert await _row(db, workspace_id) == (item_id, "ACQ-2-bbb")
     # And nothing was logged as released. The success line must sit AFTER the
@@ -388,7 +391,7 @@ async def test_an_owner_release_during_the_inspection_refuses_honestly(
     assert "no longer leased" in message
     # leased_at survives release(), so the honest message must NOT present it
     # as the current state.
-    assert f"now reports leased_at {inspected_at.isoformat()}" not in message
+    assert f"now reports leased_at {inspected_at.replace(tzinfo=timezone.utc).isoformat()}" not in message
     (stored_leased_at,) = await _row(db, workspace_id, "leased_at")
     assert stored_leased_at is not None  # the trap this assertion guards
 

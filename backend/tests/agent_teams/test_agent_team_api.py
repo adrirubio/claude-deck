@@ -1,5 +1,5 @@
 """HTTP contract tests for Agent Team presets."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -22,6 +22,43 @@ from app.models.database import (
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 from app.services.github_app_auth_service import github_app_auth_service
+
+
+@pytest.mark.asyncio
+async def test_preset_http_timestamp_names_utc_without_changing_storage(client, db):
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    preset = AgentTeamPreset(name="UTC", created_at=stamp, updated_at=stamp)
+    db.add(preset)
+    await db.commit()
+    response = await client.get("/api/v1/agent-teams/presets")
+    assert response.status_code == 200
+    item = next(row for row in response.json()["presets"] if row["id"] == preset.id)
+    parsed = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
+    assert parsed == stamp.replace(tzinfo=timezone.utc)
+    await db.refresh(preset)
+    assert preset.updated_at == stamp
+    assert preset.updated_at.tzinfo is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation_zone", [None, timezone.utc, timezone(timedelta(hours=2))])
+@pytest.mark.parametrize("stale", [False, True])
+async def test_leader_timestamp_round_trip_preserves_instant_and_stale_refusal(client, db, tmp_path, confirmation_zone, stale):
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    created = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Confirm UTC", slots=[
+        AgentTeamSlotCreate(display_name="Leader", repo_path=str(tmp_path))]))
+    preset = await db.get(AgentTeamPreset, created.id)
+    preset.updated_at = stamp
+    await db.commit()
+    confirmed = stamp - timedelta(seconds=1) if stale else stamp
+    if confirmation_zone is not None:
+        confirmed = confirmed.replace(tzinfo=timezone.utc).astimezone(confirmation_zone)
+    response = await client.put(f"/api/v1/agent-teams/presets/{created.id}/leader", json={
+        "leader_slot_id": created.slots[0].id, "expected_leader_slot_id": None,
+        "expected_updated_at": confirmed.isoformat(), "reason": "UTC confirmation fixture"})
+    assert response.status_code == (409 if stale else 200)
+    await db.refresh(preset)
+    assert preset.leader_slot_id == (None if stale else created.slots[0].id)
 
 
 @pytest.mark.asyncio

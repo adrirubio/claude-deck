@@ -1,7 +1,8 @@
 """Bounded, public-safe coordination contracts. Assessments grant no authority."""
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+from app.models.api_model import ApiModel as BaseModel
 
 IssueNumber = Annotated[int, Field(gt=0, strict=True)]
 
