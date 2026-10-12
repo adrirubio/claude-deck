@@ -45,6 +45,8 @@ vi.mock("../src/features/agent-teams/api", async (importOriginal) => {
 });
 
 vi.mock("../src/features/agent-teams/BacklogCoordination", () => ({ BacklogCoordination: () => null }));
+// The summary card has its own tests. Its network read would change the timing of these route tests.
+vi.mock("../src/features/agent-teams/TeamSummaryCard", () => ({ TeamSummaryCard: () => null, TeamSummaries: () => null }));
 
 vi.mock("../src/hooks/useProviders", async (importOriginal) => {
   const actual =
