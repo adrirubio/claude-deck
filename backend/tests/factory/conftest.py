@@ -27,6 +27,8 @@ PRIVATE = "synthetic-private-forbidden"
 def pytest_addoption(parser):
     parser.addoption("--freeze-factory-fixtures", action="store_true",
                      help="Write the disposable schema-v1 API contract fixtures.")
+    parser.addoption("--factory-fixture-output", type=str,
+                     help="Write live contract responses to a disposable output directory.")
 
 
 @pytest_asyncio.fixture

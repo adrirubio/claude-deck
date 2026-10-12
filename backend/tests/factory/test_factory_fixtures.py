@@ -181,9 +181,11 @@ async def test_frozen_response_contract(factory_client, factory_store, monkeypat
         # JSON normalization turns immutable status tuples into artifact arrays.
         value = json.loads(json.dumps(value))
         assert "synthetic-private-forbidden" not in json.dumps(value)
-        path = FIXTURES / f"{name}.json"
-        if request.config.getoption("--freeze-factory-fixtures"):
-            FIXTURES.mkdir(parents=True, exist_ok=True)
+        output = request.config.getoption("--factory-fixture-output")
+        directory = Path(output) if output else FIXTURES
+        path = directory / f"{name}.json"
+        if output or request.config.getoption("--freeze-factory-fixtures"):
+            directory.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         else:
             assert json.loads(path.read_text()) == value, f"Contract changed: {path.name}"

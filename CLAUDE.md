@@ -19,6 +19,7 @@ cd frontend && npm run build     # Same as above
 
 # Test
 cd backend && source venv/bin/activate && pytest tests/  # Python tests
+cd frontend && npm ci && npm test                       # Install and run frontend tests
 bash backend/test_commands_api.sh                         # Curl-based API tests
 
 # Lint
@@ -91,5 +92,6 @@ GitHub Actions workflows in `.github/workflows/`:
 - No `.env` file needed — all config has defaults in `backend/app/config.py`
 - Database lives at `backend/claude_registry.db`, created automatically on first run
 - No database migration system — schema changes require deleting the db
-- Frontend tests not yet set up
+- Run `npm ci` in `frontend/` before `npm test`. This installs the locked test dependencies.
+- Backend dependencies are locked in `backend/uv.lock` and exported to `backend/requirements.txt`.
 - Backups stored in `~/.claude-registry/backups/`

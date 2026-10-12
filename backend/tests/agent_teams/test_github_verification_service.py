@@ -2067,6 +2067,7 @@ async def test_exhausted_diagnostic_instructs_owner_to_restore_and_complete(db):
         )
     ).scalars().all()
     assert len(messages) == 1
+    # These phrases enforce the diagnostic stop and baseline restoration gates.
     assert "Stop further diagnostic iteration" in messages[0].body_markdown
     assert "restore the exact baseline" in messages[0].body_markdown
     assert "diagnostic_completed" in messages[0].body_markdown

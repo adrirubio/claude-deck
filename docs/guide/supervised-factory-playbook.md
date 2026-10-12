@@ -147,6 +147,18 @@ These names are examples. Save the real paths. Check read and write access under
 
 Schedule shared-file edits. Set host limits for heavy suites, builds and browser workloads. Agent count is not build concurrency. Use an enforceable shared lock where required; lightweight checks can remain parallel.
 
+Run `npm ci` in `frontend/` before `npm test`. This installs the locked frontend test dependencies.
+
+Install backend dependencies with `python -m pip install -r backend/requirements.txt`.
+The requirements file exports the reviewed `backend/uv.lock` dependency versions.
+Use `uv lock` in `backend/` for an intentional dependency update.
+Then run `uv export --locked --no-emit-project --no-hashes --output-file requirements.txt`.
+
+Run `python scripts/factory-fixtures.py --write` from the checkout root to regenerate active factory fixtures.
+Run `python scripts/factory-fixtures.py --check` to check their current responses and hashes.
+The generator updates both `v1-p04` copies. It preserves the archived `v1` contract and historical review provenance.
+CI runs the fixture check after the backend suite.
+
 ## 4. Complete machine and startup checks
 
 Follow [Installation](./installation.md), [Autonomous dispatch](../autonomy.md) and [Agent Teams](../features/agent-teams.md). On a new machine, establish a new installation record. Do not copy old pane IDs, process identities or session bindings.
