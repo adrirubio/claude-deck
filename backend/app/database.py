@@ -880,6 +880,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_head_sha VARCHAR"))
     if work_item_columns and "verification_started_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_started_at DATETIME"))
+    if work_item_columns and "merge_wait_head_sha" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN merge_wait_head_sha VARCHAR"))
+    if work_item_columns and "merge_wait_started_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN merge_wait_started_at DATETIME"))
     if work_item_columns and "dispatched_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatched_at DATETIME"))
     if work_item_columns and "ack_received_at" not in work_item_columns:
