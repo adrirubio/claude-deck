@@ -12,8 +12,11 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "python-dotenv>=1.0.0",
     "aiosqlite>=0.19.0",
+    "aiofiles>=25.1.0",
+    "httpx>=0.28.1",
     "pyjwt[crypto]>=2.10.1",
     "cryptography>=44.0.0",
+    "pyyaml>=6.0.3",
     "tomlkit>=0.13.2",
     "pytest-asyncio>=0.24.0",
     "mcp>=1.2.0,<2",
@@ -23,3 +26,9 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+filterwarnings = [
+    'ignore:^datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
+]

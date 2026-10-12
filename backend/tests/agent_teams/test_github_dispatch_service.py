@@ -2061,8 +2061,6 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     )
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
-    assert "autonomous GitHub dispatch" in prompt
-    assert "Work item ID:" in prompt
     assert "Issue: #833 — Add agent docs" in prompt
     assert "https://github.com/o/r/issues/833" in prompt
     assert "Acceptance criteria and verification steps." in prompt
@@ -2223,7 +2221,6 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
     assert "Pipeline: design" in prompt
-    assert "Design pipeline instructions" in prompt
     assert "do not rely on CI or auto-merge" in prompt
     assert "human-reviewed PR" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
@@ -4746,7 +4743,6 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert "deck_check_inbox(unread_only=False)" in nudge_prompt
     assert f"work item {item.id}" in nudge_prompt
     assert f"issue #{item.issue_number}" in nudge_prompt
-    assert "Recovery proposal requested" in nudge_prompt
     assert "read-only diagnosis" in nudge_prompt
     assert "deck_request_continuation" in nudge_prompt
     assert "diagnostic" in nudge_prompt

@@ -10,6 +10,7 @@
     "work-item.json": "ed7c607b98dde6ba0201f4d50fe408cc07e7083eb409b5d57f7d583921d7b132",
     "work-items.json": "78baf0a4c839981b6980ab716eab3774b952f0a3d347c3ca757744fc736bf55c"
   },
+  "artifact_source": "current working tree; historical review fields do not approve regenerated artifacts",
   "based_on_p01_manifest_sha256": "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
   "change_summary": "P04 explicit Leader authority: approval source is explicit_assignment in work-item and work-items responses.",
   "changed_from_p01": [
@@ -17,6 +18,7 @@
     "work-items.json"
   ],
   "contract_version": "p04",
+  "generator": "scripts/factory-fixtures.py",
   "p01_source_sha": "eb31749bcae8f456d6df6709273afd5921d094ad",
   "reviewed_head": "7a032daf3147c03f0c030137973b292d05224bf6",
   "schema_version": 1,

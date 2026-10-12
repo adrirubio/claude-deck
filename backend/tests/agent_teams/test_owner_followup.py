@@ -746,6 +746,7 @@ async def test_fresh_sdk_idle_attestation_preserves_busy_leader_debt(db, watched
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("error:transaction already deassociated from connection:sqlalchemy.exc.SAWarning")
 async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched):
     """V17: mapped legacy migration fixture preserves authority through the real
     followup consumers: context, requests, report, assess, poll and guarded
@@ -761,6 +762,15 @@ async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched)
     lease_id = watched.lease.id
     leader_session_id = watched.leader.id
     owner_session_id = watched.owner.id
+
+    async def migrate_outside_session():
+        # Startup migrations commit their connection. They must not commit a
+        # transaction still owned by the ORM session used for consumer checks.
+        await db.rollback()
+        async with db.bind.connect() as connection:
+            await _run_sqlite_compat_migrations(connection)
+            await connection.commit()
+        db.expire_all()
 
     async def authority_snapshot():
         slots = [dict(row) for row in (await db.execute(text(
@@ -795,9 +805,7 @@ async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched)
     await db.execute(text("UPDATE agent_team_slots SET position = 0 WHERE preset_id = :p"), {"p": preset_id})
     await db.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
     await db.commit()
-    await _run_sqlite_compat_migrations(await db.connection())
-    await db.rollback()
-    db.expire_all()
+    await migrate_outside_session()
     migrated = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
     assert migrated.leader_slot_id == leader_slot_id
 
@@ -807,9 +815,7 @@ async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched)
         "UPDATE agent_team_slots SET position = CASE id WHEN :leader THEN 1 ELSE 0 END WHERE preset_id = :p"
     ), {"leader": leader_slot_id, "p": preset_id})
     await db.commit()
-    await _run_sqlite_compat_migrations(await db.connection())
-    await db.rollback()
-    db.expire_all()
+    await migrate_outside_session()
     migrated = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
     assert migrated.leader_slot_id == leader_slot_id
 
@@ -828,9 +834,7 @@ async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched)
     assert refused_all.value.code == "leader_unavailable"
 
     # Repeated startup with a disabled roster preserves every authority reference.
-    await _run_sqlite_compat_migrations(await db.connection())
-    await db.rollback()
-    db.expire_all()
+    await migrate_outside_session()
     disabled_refs = await authority_snapshot()
     assert disabled_refs["items"] == before["items"]
     assert disabled_refs["approvals"] == before["approvals"]

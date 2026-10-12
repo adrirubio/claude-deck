@@ -56,6 +56,7 @@ def test_github_app_settings_defaults():
 
 def test_github_app_dependencies_are_direct():
     from pathlib import Path
+    from packaging.requirements import Requirement
 
     root = Path(__file__).resolve().parents[2]
     requirements = (root / "requirements.txt").read_text().lower()
@@ -72,8 +73,15 @@ def test_github_app_dependencies_are_direct():
         requirement["name"]: requirement
         for requirement in root_package["metadata"]["requires-dist"]
     }
-    assert "pyjwt[crypto]" in requirements
-    assert "cryptography" in requirements
+    exported = {
+        requirement.name.lower(): requirement
+        for line in requirements.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+        for requirement in (Requirement(line.strip()),)
+    }
+    versions = {package["name"]: package["version"] for package in lock["package"]}
+    for name in ("pyjwt", "cryptography"):
+        assert str(exported[name].specifier) == f"=={versions[name]}"
     assert any(value.startswith("pyjwt[crypto]") for value in dependencies)
     assert any(value.startswith("cryptography") for value in dependencies)
     assert locked_dependencies["pyjwt"]["extras"] == ["crypto"]

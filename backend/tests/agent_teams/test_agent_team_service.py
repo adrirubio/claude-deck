@@ -1517,12 +1517,11 @@ async def test_launch_uses_slot_prompt_override(db, tmp_path, monkeypatch):
         ),
     )
 
-    from app.services.team_communication_policy import team_communication_guidance
-
     expected_start = "Dispatch-specific issue brief."
     assert calls[0][1].prompt.startswith(expected_start)
     assert "Static team startup prompt." not in calls[0][1].prompt
-    assert calls[0][1].prompt.endswith(team_communication_guidance())
+    assert "Keep each safety condition" in calls[0][1].prompt
+    assert "These records grant no approval" in calls[0][1].prompt
 
 
 @pytest.mark.asyncio

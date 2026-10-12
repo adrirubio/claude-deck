@@ -51,7 +51,9 @@ WRITES = _routes(write=True)
 
 
 @pytest_asyncio.fixture
-async def client():
+async def client(tmp_path, monkeypatch):
+    # A guard check must not read the developer's installed MCP servers.
+    monkeypatch.setenv("HOME", str(tmp_path))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
