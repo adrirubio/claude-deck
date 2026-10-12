@@ -14,7 +14,10 @@ export function RepositoryPage() {
   return (
     <section className="space-y-5">
       <h2 className="text-2xl font-semibold">Repository scope {scopeId}</h2>
-      <ReadStatus state={state} />
+      <ReadStatus
+        state={state}
+        back={{ to: "/repositories", label: "Back to Repositories" }}
+      />
       {state.data && (
         <>
           <RepositoryCard repository={state.data.repository} />

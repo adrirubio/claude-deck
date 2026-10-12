@@ -18,7 +18,10 @@ export function WorkDetailPage() {
   return (
     <section className="space-y-5">
       <h2 className="text-2xl font-semibold">Work details</h2>
-      <ReadStatus state={state} />
+      <ReadStatus
+        state={state}
+        back={{ to: "/work", label: "Back to Work" }}
+      />
       {w && (
         <>
           <article className={panel}>

@@ -1,7 +1,15 @@
+import { Link } from "react-router-dom";
 import { ApiHttpError } from "@/lib/api";
 import type { ReadState } from "../reads";
+import { anchor } from "./styles";
 
-export function ReadStatus<T>({ state }: { state: ReadState<T> }) {
+export function ReadStatus<T>({
+  state,
+  back,
+}: {
+  state: ReadState<T>;
+  back?: { to: string; label: string };
+}) {
   const error = state.error;
   return (
     <div aria-live="polite" className="text-sm">
@@ -21,6 +29,12 @@ export function ReadStatus<T>({ state }: { state: ReadState<T> }) {
             ? ` (${error.code ?? error.blockCode})`
             : ""}
         </p>
+      )}
+      {error && state.retrying && <p>Retrying…</p>}
+      {error && state.stopped && back && (
+        <Link className={anchor} to={back.to}>
+          {back.label}
+        </Link>
       )}
     </div>
   );
