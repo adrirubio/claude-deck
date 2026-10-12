@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import JSON, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -36,6 +36,7 @@ _MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
 _BOUNDED_PRIVATE_WORKERS = threading.BoundedSemaphore(1)
+_PROC = Path("/proc")
 
 
 @dataclass(frozen=True)
@@ -57,12 +58,12 @@ def _canonical_session_id(value: object) -> str | None:
 
 
 def _process(pid: int) -> tuple[str, str]:
-    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    fields = (_PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
     return fields[0], fields[19]  # state and kernel process start, not PID alone
 
 
 def _codex_home(pid: int) -> Path:
-    proc = Path(f"/proc/{pid}")
+    proc = _PROC / str(pid)
     # Cross-user controllers may read stat/cmdline but not environ. In that
     # case use the process owner's default home; custom homes remain unknown.
     try:
@@ -86,7 +87,7 @@ def _process_rollout_path(pid: int, home: Path, session_id: str) -> Path | None:
     This needs only read access. SQLite's live WAL index can require writable
     scratch files even for a mode=ro query from another controller user.
     """
-    descriptors = Path(f"/proc/{pid}/fd")
+    descriptors = _PROC / str(pid) / "fd"
     matches: set[Path] = set()
     try:
         with os.scandir(descriptors) as entries:
@@ -102,6 +103,51 @@ def _process_rollout_path(pid: int, home: Path, session_id: str) -> Path | None:
                     matches.add(target)
     except OSError:
         return None
+    if len(matches) > 1:
+        raise ValueError("Native conversation has ambiguous process descriptors")
+    return next(iter(matches), None)
+
+
+def _new_codex_rollout(pid: int, cwd: str, now: datetime, started_at: datetime) -> str | None:
+    """Capture one current rollout from this exact process. This is not work evidence."""
+    home = _codex_home(pid)
+    uid = (_PROC / str(pid)).stat().st_uid
+    matches = set()
+    with os.scandir(_PROC / str(pid) / "fd") as entries:
+        for index, entry in enumerate(entries):
+            if index >= _MAX_PROCESS_DESCRIPTORS:
+                raise ValueError("Process descriptor observation exceeds its bound")
+            try:
+                target = Path(os.readlink(entry.path))
+                identity = _canonical_session_id(target.stem[-36:])
+                if (identity is None or target.suffix != ".jsonl" or not target.is_absolute()
+                        or not target.resolve().is_relative_to((home / "sessions").resolve())):
+                    continue
+                descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(descriptor, "rb") as stream:
+                    info = os.fstat(stream.fileno())
+                    opened = os.stat(entry.path)
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid
+                            or info.st_mode & stat.S_IWOTH
+                            or (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino)):
+                        continue
+                    line = stream.readline(65537)
+                    if len(line) > 65536 or not line.endswith(b"\n"):
+                        continue
+                    row = json.loads(line)
+                    current = os.stat(entry.path)
+                    if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                        continue
+                payload = row.get("payload", {})
+                if (row.get("type") != "session_meta" or payload.get("id") != identity
+                        or Path(payload.get("cwd", "")).resolve() != Path(cwd).resolve()):
+                    continue
+                timestamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+                if timestamp.tzinfo is None or not started_at <= timestamp <= now + timedelta(seconds=5):
+                    continue
+                matches.add(identity)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
     if len(matches) > 1:
         raise ValueError("Native conversation has ambiguous process descriptors")
     return next(iter(matches), None)
@@ -262,6 +308,17 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
             return result("unknown", "duplicate_native_identity")
+        if provider == "codex-cli" and not session_id:
+            argv = (_PROC / str(pid) / "cmdline").read_bytes().split(b"\0")
+            if argv and Path(os.fsdecode(argv[0])).name == "codex":
+                identity = _new_codex_rollout(pid, cwd, now, _process_started_at(start))
+                process_state, current_start = _process(pid)
+                if current_start != start or process_state in _STOPPED_STATES:
+                    return result("unknown", "binding_changed")
+                if identity:
+                    if provenance is not None:
+                        provenance["discovered_session_id"] = identity
+                    return result("unknown", "restart_needed_for_observation")
         if not session_id or _canonical_session_id(session_id) != session_id:
             return result("unknown", "session_identity_unavailable")
         if provider == "claude-code":
@@ -276,10 +333,17 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             if provenance is not None and provenance.get("session_id"):
                 provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        argv = (_PROC / str(pid) / "cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
         from app.services.codex_process_identity import explicit_resume
         if not explicit_resume(argv, session_id):
+            if argv and Path(os.fsdecode(argv[0])).name == "codex":
+                identity = _new_codex_rollout(pid, cwd, now, _process_started_at(start))
+                process_state, current_start = _process(pid)
+                if current_start != start or process_state in _STOPPED_STATES:
+                    return result("unknown", "binding_changed")
+                if identity == session_id:
+                    return result("unknown", "restart_needed_for_observation")
             return result("unknown", "session_mismatch")
         home = _codex_home(pid)
         path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)
@@ -359,17 +423,53 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
 async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
     inputs = await _team_inputs(db, preset_id)
     now = datetime.now(timezone.utc)
+    metadata = [{} for _ in inputs]
     observations = await asyncio.to_thread(
-        lambda: [_observe(slot_id, provider, session_id, candidates, duplicate_identity, now)
-                 for slot_id, provider, session_id, candidates, duplicate_identity in inputs])
+        lambda: [_observe(*entry, now, provenance=details)
+                 for entry, details in zip(inputs, metadata)])
     current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
     for entry, observation in zip(inputs, observations):
         if current.get(entry[0]) != entry:
             observation.state = "unknown"
             observation.reason = "binding_changed"
             observation.observed_at = None
+    if await _save_codex_identities(db, inputs, metadata, current):
+        await db.commit()
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
+
+
+async def _save_codex_identities(db, inputs, metadata, current) -> bool:
+    """Save a captured first-launch ID only while its original binding remains current."""
+    changed = False
+    for entry, details in zip(inputs, metadata):
+        identity = details.get("discovered_session_id")
+        if (not identity or entry[1] != "codex-cli" or entry[2] is not None
+                or current.get(entry[0]) != entry):
+            continue
+        slot = await db.get(AgentTeamSlot, entry[0])
+        if slot is None or slot.provider != "codex-cli" or slot.launch_mode != "plain":
+            continue
+        previous = slot.launch_options
+        if (previous or {}).get("session_id"):
+            continue
+        duplicate = exists(select(AgentTeamSlot.id).where(
+            AgentTeamSlot.id != slot.id,
+            AgentTeamSlot.provider.in_(["claude-code", "codex-cli"]),
+            AgentTeamSlot.launch_options["session_id"].as_string() == identity))
+        options_match = (or_(AgentTeamSlot.launch_options.is_(None),
+                             AgentTeamSlot.launch_options == JSON.NULL)
+                         if previous is None else AgentTeamSlot.launch_options == previous)
+        result = await db.execute(update(AgentTeamSlot).where(
+            AgentTeamSlot.id == slot.id, AgentTeamSlot.provider == "codex-cli",
+            AgentTeamSlot.launch_mode == "plain", options_match,
+            ~duplicate,
+        ).values(launch_options={**(previous or {}), "session_id": identity, "use_last": False},
+                 launch_mode="resume").execution_options(synchronize_session=False))
+        changed = changed or result.rowcount == 1
+        if result.rowcount == 1:
+            await db.refresh(slot)
+    return changed
 
 
 @dataclass(frozen=True)
@@ -398,12 +498,14 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
                                max_input_rows: int | None = None) -> dict[int, PrivateActivity]:
     inputs = await _team_inputs(db, preset_id, max_input_rows)
     now = datetime.now(timezone.utc)
+    captured = []
 
     def observations():
         values = {}
         for entry in inputs:
             metadata = {}
             observed = _observe(*entry, now, provenance=metadata)
+            captured.append(metadata)
             identity = None
             binding_identity = None
             if metadata.get("session_id") and metadata.get("pane_pid"):
@@ -447,4 +549,5 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
     for entry in inputs:
         if current.get(entry[0]) != entry:
             values[entry[0]] = PrivateActivity("unknown", "binding_changed", None, None, None)
+    await _save_codex_identities(db, inputs, captured, current)
     return values

@@ -220,10 +220,15 @@ async def test_claude_code_apply_adds_user_scope_hooks_and_mcp(monkeypatch, db):
 
     await install.apply_claude_code_install(db)
 
-    assert {hook.event for hook in added_hooks} == set(install.MAIL_HOOK_EVENTS)
+    assert {hook.event for hook in added_hooks} == {
+        "SessionStart", "UserPromptSubmit", "SessionEnd", "PostToolUse", "PreToolUse",
+    }
     assert all(hook.scope == "user" for hook in added_hooks)
     post_tool = next(hook for hook in added_hooks if hook.event == "PostToolUse")
     assert post_tool.matcher == install.POST_TOOL_USE_MATCHER
+    question = next(hook for hook in added_hooks if hook.event == "PreToolUse")
+    assert question.matcher == "AskUserQuestion"
+    assert "team_question_hook.py" in question.command
     assert added_servers[0].scope == "user"
     assert added_servers[0].name == install.MCP_SERVER_NAME
 
@@ -507,3 +512,77 @@ async def test_install_endpoints_require_confirmation(client, monkeypatch):
     )
     assert resp.status_code == 200
     install.apply_claude_code_install.assert_awaited_once()
+
+
+@pytest.mark.parametrize("marker", [None, "", "0", "bad", "23"])
+def test_question_hook_blocks_only_team_sessions(tmp_path, marker):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "mcp_shim" / "team_question_hook.py"
+    environment = {"HOME": str(tmp_path), "PATH": os.defpath}
+    if marker is not None:
+        environment["CLAUDE_DECK_TEAM_SLOT_ID"] = marker
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        input=json.dumps({"tool_name": "AskUserQuestion"}),
+        env=environment, text=True, capture_output=True, timeout=5,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    if marker == "23":
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        assert output["hookEventName"] == "PreToolUse"
+        assert output["permissionDecision"] == "deny"
+        assert "Leader" in output["permissionDecisionReason"]
+        assert "Supervisor" in output["permissionDecisionReason"]
+        assert "operator action record" in output["permissionDecisionReason"]
+    else:
+        assert result.stdout == ""
+
+
+@pytest.mark.asyncio
+async def test_question_hook_install_status_and_remove_preserve_user_hooks(monkeypatch, db, tmp_path):
+    from app.services import hook_service
+
+    settings_file = tmp_path / ".claude" / "settings.json"
+    settings_file.parent.mkdir()
+    original = {"env": {"EXAMPLE_SETTING": "preserved"}, "hooks": {
+        "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [
+            {"id": "user-hook", "type": "command", "command": "echo user-hook"}]}]}}
+    settings_file.write_text(json.dumps(original))
+    monkeypatch.setattr(hook_service, "get_claude_user_settings_file", lambda: settings_file)
+    monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
+    monkeypatch.setattr(install.mcp_service, "get_server", AsyncMock(return_value=SimpleNamespace()))
+    monkeypatch.setattr(install.mcp_service, "remove_server", AsyncMock())
+    monkeypatch.setattr(install, "codex_cli_available", lambda: False)
+    monkeypatch.setattr(install, "codex_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_codex_hooks", lambda: [])
+    monkeypatch.setattr(install, "copilot_cli_available", lambda: False)
+    monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_copilot_hooks", lambda: [])
+    monkeypatch.setattr(install, "opencode_cli_available", lambda: False)
+    monkeypatch.setattr(install, "opencode_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_opencode_plugin_events", lambda: [])
+
+    status = await install.apply_claude_code_install(db)
+    assert status.claude_code_prompt_block_installed is True
+    assert "PreToolUse" in status.claude_code_hooks
+    await install.apply_claude_code_install(db)
+    installed = json.loads(settings_file.read_text())
+    questions = installed["hooks"]["PreToolUse"][0]["hooks"]
+    assert len(questions) == 2
+    assert questions[0] == original["hooks"]["PreToolUse"][0]["hooks"][0]
+    status = await install.uninstall_claude_code(db)
+    assert status.claude_code_prompt_block_installed is False
+    removed = json.loads(settings_file.read_text())
+    assert removed["env"] == original["env"]
+    assert removed["hooks"]["PreToolUse"] == original["hooks"]["PreToolUse"]
+
+
+def test_question_hook_marker_does_not_own_unrelated_commands(monkeypatch):
+    user_hook = SimpleNamespace(type="command", command="echo /custom/team_question_hook.py")
+    monkeypatch.setattr(install.hook_service, "list_hooks", lambda: [user_hook])
+    assert install._installed_mail_hooks() == []

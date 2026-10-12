@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from dataclasses import fields
 from datetime import datetime, timedelta
 from typing import Any
@@ -957,6 +958,8 @@ class AgentTeamService:
                 bootstrap_prompt,
                 repo_path_override,
             )
+            if slot.provider == "claude-code" and options.mode != "resume":
+                options = SpawnCommandOptions(**{**options.__dict__, "session_id": str(uuid.uuid4())})
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -969,6 +972,20 @@ class AgentTeamService:
                     **({"CLAUDE_DECK_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
+            if slot.provider == "claude-code" and options.session_id:
+                slot.launch_options = {**(slot.launch_options or {}), "session_id": options.session_id}
+                slot.launch_mode = "resume"
+            elif slot.provider == "codex-cli" and options.mode != "resume":
+                slot.launch_options = {key: value for key, value in (slot.launch_options or {}).items()
+                                       if key not in {"session_id", "use_last"}}
+                slot.launch_mode = "plain"
+            trust_changed = bool(spawned.get("workspace_trust_changed"))
+            observation_message = ""
+            if slot.provider == "codex-cli" and options.mode != "resume":
+                observation_message = (
+                    ". Codex: restart needed for observation. "
+                    "Resume the saved rollout ID through Deck after capture"
+                )
             result = AgentTeamLaunchResultItem(
                 slot_id=slot.id,
                 slot_name=slot.display_name,
@@ -979,7 +996,9 @@ class AgentTeamService:
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
                 pane_pid=spawned.get("pane_pid"),
-                message="Session spawned; waiting for Agent Mail registration",
+                message=("Workspace trust prepared. " if trust_changed else "")
+                        + "Session spawned; waiting for Agent Mail registration" + observation_message,
+                workspace_trust_changed=trust_changed,
                 warnings=plan_item.warnings,
             )
             await self._write_pane_binding(
@@ -998,6 +1017,9 @@ class AgentTeamService:
                 provider=slot.provider,
                 repo_path=repo_path_override or slot.repo_path,
                 error=str(exc),
+                workspace_trust_changed=bool(getattr(exc, "workspace_trust_changed", False)),
+                message=("Workspace trust prepared. Session spawn failed."
+                         if getattr(exc, "workspace_trust_changed", False) else None),
                 warnings=plan_item.warnings,
             )
         self._record_launch_item(db, launch_id, result)

@@ -496,6 +496,7 @@ def test_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
     monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", lambda *args: False)
     spawn.get_spawned_sessions().clear()
 
     spawn.spawn_session(
@@ -519,6 +520,7 @@ def test_claude_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path
 
     monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
     monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", lambda *args: False)
     spawn.get_spawned_sessions().clear()
 
     spawn.spawn_session(
@@ -546,3 +548,58 @@ def test_spawn_session_rejects_invalid_extra_env_names(monkeypatch, tmp_path):
         assert "Invalid environment variable name" in str(exc)
     else:
         raise AssertionError("Expected invalid env name to be rejected")
+
+
+def test_team_trust_is_prepared_before_tmux_spawn(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+    calls = []
+    def trust(provider, directory):
+        calls.append(("trust", provider, directory))
+        return True
+    def run(args, **kwargs):
+        calls.append(("spawn", args))
+        return SimpleNamespace(returncode=0, stdout="123\n", stderr="")
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", trust)
+    monkeypatch.setattr(spawn.subprocess, "run", run)
+    result = spawn.spawn_session("claude-code", SpawnCommandOptions(directory=str(tmp_path)),
+                                 extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+    assert calls[0] == ("trust", "claude-code", str(tmp_path))
+    assert calls[1][1][:2] == ["tmux", "new-session"]
+    assert result["workspace_trust_changed"] is True
+
+
+def test_trust_refusal_stops_team_spawn(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+    calls = []
+    def trust(*args):
+        raise ValueError("Workspace trust could not be prepared")
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", trust)
+    monkeypatch.setattr(spawn.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(ValueError, match="Workspace trust"):
+        spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
+                            extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+    assert calls == []
+
+
+def test_non_team_spawn_does_not_change_workspace_trust(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", lambda *args: pytest.fail("non-team trust mutation"))
+    monkeypatch.setattr(spawn.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout="123\n", stderr=""))
+    result = spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)))
+    assert result["workspace_trust_changed"] is False
+
+
+def test_failed_spawn_reports_completed_trust_change(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+    monkeypatch.setattr(spawn, "prepare_workspace_trust", lambda *args: True)
+    monkeypatch.setattr(spawn.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stdout="", stderr="fixture failure"))
+    with pytest.raises(ValueError) as error:
+        spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
+                            extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+    assert error.value.workspace_trust_changed is True

@@ -2160,6 +2160,7 @@ class AgentMailInstallStatus(BaseModel):
     pi_mail_reason: Optional[str] = None
     claude_code_hooks: List[str]
     claude_code_hooks_missing: List[str]
+    claude_code_prompt_block_installed: bool = False
     claude_code_mcp_installed: bool
     codex_cli_available: bool
     codex_mcp_installed: bool
@@ -2753,6 +2754,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     block_code: Optional[str] = None
     error: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
+    workspace_trust_changed: bool = False
 
 
 class AgentTeamLaunchResult(BaseModel):

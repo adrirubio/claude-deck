@@ -38,6 +38,7 @@ MAIL_HOOK_EVENTS = {
     "UserPromptSubmit": "user-prompt-submit",
     "SessionEnd": "session-end",
     "PostToolUse": "post-tool-use",
+    "PreToolUse": "team-question",
 }
 CODEX_MAIL_HOOK_EVENTS = {
     "SessionStart": "session-start",
@@ -61,6 +62,7 @@ OPENCODE_MAIL_PLUGIN_EVENTS = {
 _HOOK_URL_MARKER = "/api/v1/agent-mail/hooks/"
 _CODEX_HOOK_MARKER = "agent_mail_hook.py"
 _OPENCODE_PLUGIN_MARKER = "Claude Deck Agent Mail OpenCode plugin"
+_QUESTION_HOOK_MARKER = "team_question_hook.py"
 
 
 def deck_base_url() -> str:
@@ -76,6 +78,9 @@ def hook_shim_path() -> str:
 
 
 def hook_command(slug: str) -> str:
+    if slug == "team-question":
+        script = Path(__file__).resolve().parents[2] / "mcp_shim" / _QUESTION_HOOK_MARKER
+        return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
     return (
         f"curl -s -f --connect-timeout 0.25 -m 1 "
         f"-X POST {deck_base_url()}/api/v1/agent-mail/hooks/{slug} "
@@ -132,16 +137,33 @@ def _installed_mail_hooks() -> list:
     return [
         hook
         for hook in hook_service.list_hooks()
-        if hook.type == "command" and hook.command and _HOOK_URL_MARKER in hook.command
+        if hook.type == "command" and hook.command
+        and (_HOOK_URL_MARKER in hook.command or _managed_question_command(hook.command))
     ]
+
+
+def _managed_question_command(command: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    return (len(parts) == 2 and Path(parts[0]).name.startswith("python")
+            and Path(parts[1]).name == _QUESTION_HOOK_MARKER
+            and Path(parts[1]).parent.name == "mcp_shim")
 
 
 def _hook_is_current(hook, event: str, slug: str) -> bool:
     return (
         hook.event == event
         and hook.command == hook_command(slug)
-        and hook.matcher == (POST_TOOL_USE_MATCHER if event == "PostToolUse" else None)
+        and hook.matcher == _claude_matcher(event)
     )
+
+
+def _claude_matcher(event: str) -> str | None:
+    if event == "PreToolUse":
+        return "AskUserQuestion"
+    return POST_TOOL_USE_MATCHER if event == "PostToolUse" else None
 
 
 def _codex_expected_matcher(event: str) -> str | None:
@@ -760,6 +782,7 @@ async def get_install_status() -> AgentMailInstallStatus:
         pi_mail_reason=pi_reason,
         claude_code_hooks=installed_events,
         claude_code_hooks_missing=missing,
+        claude_code_prompt_block_installed="PreToolUse" in installed_events,
         claude_code_mcp_installed=server is not None,
         codex_cli_available=codex_cli_available(),
         codex_mcp_installed=codex_mcp_installed(),
@@ -798,7 +821,7 @@ async def apply_claude_code_install(db: AsyncSession) -> AgentMailInstallStatus:
         hook_service.add_hook(
             HookCreate(
                 event=event,
-                matcher=POST_TOOL_USE_MATCHER if event == "PostToolUse" else None,
+                matcher=_claude_matcher(event),
                 type="command",
                 command=hook_command(slug),
                 scope="user",

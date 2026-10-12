@@ -68,6 +68,9 @@ class ClaudeCodeProvider(AgentProvider):
         else:
             raise ValueError(f"Unsupported Claude Code mode: {options.mode}")
 
+        if options.mode != "resume" and options.session_id:
+            command += ["--session-id", options.session_id]
+
         if options.skip_permissions:
             command.append("--dangerously-skip-permissions")
         if options.prompt:

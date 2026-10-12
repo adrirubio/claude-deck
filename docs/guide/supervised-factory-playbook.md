@@ -186,21 +186,23 @@ Before enabling intake:
 - Save the intended Leader and roster. Confirm the selected native CLI and model access.
 - Launch or reuse sessions through Deck. Reuse only sessions with valid intended slot bindings.
 - Check each member's authenticated Mail identity and one successful tool call.
-- Complete first-use confirmation before launch, through the harness configuration, not by typing into panes:
-  - Claude Code: accept workspace trust for the **primary checkout** path. Claude Code records the trust for a linked worktree under its main repository.
-  - Codex: mark each workspace as a trusted project.
-  - Sign-in: make one real model call as the native user. A sign-in status command only reads a saved file and does not prove that the token is still valid.
-- Block interactive question prompts in every unattended native session. For example, add a Claude Code `PreToolUse` hook on `AskUserQuestion` that refuses the call and points the member to Mail. Nobody answers a question form in an unattended pane, so the member stops until someone presses a key.
-- Launch a new slot in `plain` mode. Resume mode needs an existing session ID. After launch:
-  1. Save each slot's session ID and set the slot to resume mode.
-  2. Restart each session through Deck, so that its command line resumes that ID.
-
-  Deck observes native activity only for a process started with the slot's session ID. A session still running from the `plain` launch reports `session_mismatch`, Deck never renews its owner contact, and the idle timeout escalates working owners. Check that every slot's activity state is not `session_mismatch` before you admit work.
+- Install Agent Mail through Deck before team launch. Confirm that Claude Code install status includes the prompt block.
+- Check sign-in with one real model call as the native user. A sign-in status command reads saved state and does not prove token validity.
+- Check the launch result. Deck prepares Claude and Codex workspace trust before team spawn. It preserves other configuration entries.
+  Claude trust uses the primary checkout. Inaccessible native configuration stops launch.
+- Check native activity before admitting work. Deck assigns new Claude sessions a UUID and saves it for later resume.
+  Deck captures a new Codex rollout ID from its bound process. Until that process resumes the ID, activity reports `restart_needed_for_observation`.
+  Restart that Codex session through Deck after the ID is saved. If capture is unavailable, use the documented progress-report policy.
+  Do not admit work with `session_mismatch`. Unknown activity does not renew owner contact or prove that work stopped.
 - Check the conversation, native process lifetime, tmux pane, working directory and workspace ownership.
 - Configure supervision for the actual preset, slots and supported native event formats. Confirm that it survives the supervisor's interactive turn.
 - Record activation readiness for every scope. Keep other campaigns in their intended state.
 
 Do not treat a configured model card, live pane or HTTP 200 response as proof of the complete startup path. A simple authenticated Mail canary helps establish that the native member can use the controller.
+
+The installed Claude `PreToolUse` hook refuses `AskUserQuestion` only in Deck team sessions. It checks `CLAUDE_DECK_TEAM_SLOT_ID`.
+Its refusal sends questions to Agent Mail. The Leader handles plans. The Supervisor handles incidents. Retained operator decisions require operator action records.
+Removing Agent Mail also removes this managed hook. Other sessions of the same native user keep their question tool.
 
 The checked-in `scripts/product-factory/` supervisor is a historical campaign example. It contains fixed team identities and installation assumptions. It is not a generic team installer. Prepare and review the watcher for the new installation; copying its timer unchanged is insufficient.
 
