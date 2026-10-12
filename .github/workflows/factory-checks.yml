@@ -2,7 +2,7 @@ name: Factory source checks
 
 on:
   pull_request:
-    branches: [master, feature/software-delivery-product-reposition]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1]
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
