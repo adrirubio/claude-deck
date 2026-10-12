@@ -20,10 +20,10 @@ function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate
 
 function App() {
   return (
-    <ProjectProvider>
-      <ProviderProvider>
+    <BrowserRouter>
+      <ProjectProvider>
+        <ProviderProvider>
 
-          <BrowserRouter>
             <Toaster richColors position="top-right" />
             <Routes>
               <Route path="/" element={<MainLayout />}>
@@ -50,7 +50,8 @@ function App() {
                 <Route path="agents" element={<NativeRoute surface="agents" />} />
                 <Route path="skills" element={<NativeRoute surface="skills" />} />
                 <Route path="memory" element={<NativeRoute surface="memory" />} />
-                <Route path="projects" element={<ProjectsPage />} />
+                <Route path="projects" element={<Navigate replace to="/harnesses/folders" />} />
+                <Route path="harnesses/folders" element={<ProjectsPage />} />
                 <Route path="backup" element={<NativeRoute surface="backup" />} />
                 <Route path="output-styles" element={<NativeRoute surface="output-styles" />} />
                 <Route path="statusline" element={<NativeRoute surface="statusline" />} />
@@ -66,10 +67,10 @@ function App() {
                 <Route path="usage" element={<NativeRoute surface="usage" />} />
               </Route>
             </Routes>
-          </BrowserRouter>
 
-      </ProviderProvider>
-    </ProjectProvider>
+        </ProviderProvider>
+      </ProjectProvider>
+    </BrowserRouter>
   )
 }
 

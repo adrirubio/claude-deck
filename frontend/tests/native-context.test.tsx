@@ -34,6 +34,7 @@ import {
   renderRoute,
   settle,
 } from "./helpers/factory";
+vi.mock("../src/contexts/ProjectContext", () => ({ useProjectContext: () => ({ projects: [], activeProject: null, knownFolders: [], setProjectPath: () => undefined, addProject: async () => undefined }) }))
 vi.mock("../src/features/config/ConfigViewerPage", () => ({
   ConfigViewerPage: function Config() {
     const { selectedProviderId } = useProviderContext();

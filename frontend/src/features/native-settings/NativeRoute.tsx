@@ -26,6 +26,8 @@ import { UsagePage } from "@/features/usage/UsagePage";
 import type { AgentProviderId } from "@/types/providers";
 import { useProviderOperations } from "@/hooks/useProviders";
 import { nativeAdapter, nativeAccess } from "./surfaceRegistry";
+import { ProjectSelector } from "@/features/projects/ProjectSelector";
+import { projectScopedSurface } from "./projectScope";
 const pages = {
   summary: DashboardPage,
   config: ConfigViewerPage,
@@ -110,6 +112,7 @@ export function NativeRoute({
           Native configuration · {metadata.display_name} ·{" "}
           {access.replaceAll("_", " ")} · independent of delivery filters
         </p>
+        {!detail && projectScopedSurface(`/harnesses/${provider}/${surface}`) && <ProjectSelector />}
         {surface === "summary" ? (
           <DashboardProvider>
             <DashboardPage />

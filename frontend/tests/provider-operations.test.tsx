@@ -25,7 +25,7 @@ vi.mock('../src/contexts/DashboardContext', () => ({
  DashboardProvider: ({children}: {children: React.ReactNode}) => children,
  useDashboard: () => ({stats: {providerId:'codex-cli',warnings:[],unsupportedFeatures:[], sessionMetricKind:'live',settingsKeys:0},loading:false,error:null,lastFetched:null,refreshDashboard:()=>undefined}),
 }))
-vi.mock('../src/contexts/ProjectContext', () => ({ useProjectContext: () => ({projects:[]}) }))
+vi.mock('../src/contexts/ProjectContext', () => ({ useProjectContext: () => ({ projects: [], activeProject: null, knownFolders: [], setProjectPath: () => undefined, addProject: async () => undefined }) }))
 
 const catalogs = fixture.providers as unknown as Record<AgentProviderId, ProviderOperations>
 const scenarios = fixture.scenarios as unknown as Record<string, ProviderOperations>
