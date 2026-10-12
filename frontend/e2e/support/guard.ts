@@ -1,4 +1,5 @@
 import { test as base, expect, type Page, type Request, type Response } from '@playwright/test'
+import { verifyInstance } from './instance-identity'
 
 /**
  * Every journey fails on:
@@ -93,7 +94,14 @@ export async function attachGuard(page: Page, guard: Guard): Promise<void> {
   page.on('pageerror', err => guard.violations.push(`page error: ${err.message}`))
 }
 
-export const test = base.extend<{ guard: Guard }>({
+export const test = base.extend<{ guard: Guard }, { ownInstance: void }>({
+  // Before the first journey of each worker: refuse a server that is not this
+  // run's test instance (#590).
+  // eslint-disable-next-line no-empty-pattern
+  ownInstance: [async ({}, use, workerInfo) => {
+    await verifyInstance(String(workerInfo.project.use.baseURL), process.env.E2E_RUN_TOKEN)
+    await use()
+  }, { scope: 'worker', auto: true }],
   guard: [async ({ page, baseURL }, use, testInfo) => {
     const guard = new Guard(baseURL ?? 'http://127.0.0.1')
     await attachGuard(page, guard)

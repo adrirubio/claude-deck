@@ -1,11 +1,19 @@
+import { randomBytes } from 'crypto'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { defineConfig, devices } from '@playwright/test'
+import { resolvePorts } from './e2e/support/ports'
 import { E2E_LOCALE, E2E_TIMEZONE } from './e2e/support/time'
 
 // One isolated Deck instance serves the built UI and the API on one origin.
 // scripts/e2e-instance.sh owns its temporary HOME, database and tmux server.
-const port = Number(process.env.E2E_PORT || 18765)
+// Free ports and a run token, chosen once in the main process. Workers load
+// this config again and inherit the values through process.env.
+const ports = await resolvePorts(process.env)
+process.env.E2E_PORT = String(ports.port)
+process.env.E2E_ISOLATION_PORT = String(ports.isolationPort)
+process.env.E2E_RUN_TOKEN ||= randomBytes(16).toString('hex')
+const port = ports.port
 const baseURL = `http://127.0.0.1:${port}`
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -45,6 +53,6 @@ export default defineConfig({
     stdout: 'pipe',
     stderr: 'pipe',
     gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
-    env: { E2E_PORT: String(port), E2E_SEED_NOW: process.env.E2E_SEED_NOW },
+    env: { E2E_PORT: String(port), E2E_SEED_NOW: process.env.E2E_SEED_NOW, E2E_RUN_TOKEN: process.env.E2E_RUN_TOKEN },
   },
 })

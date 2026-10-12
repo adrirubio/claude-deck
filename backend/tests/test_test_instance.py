@@ -115,3 +115,33 @@ async def test_github_app_auth_is_offline_on_a_test_instance():
     http = service._client()
     async with http:
         assert isinstance(http._transport, OfflineGithubTransport)
+
+
+@pytest.mark.asyncio
+async def test_health_reports_the_run_identity_only_on_a_test_instance(monkeypatch):
+    monkeypatch.setattr(settings, "test_instance", True)
+    monkeypatch.setattr(settings, "test_instance_root", "/tmp/deck-e2e.synthetic")
+    monkeypatch.setattr(settings, "test_instance_token", "synthetic-run-token-0001")
+    transport = httpx.ASGITransport(app=main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (await client.get("/health")).json()
+    assert body["test_instance"] == {
+        "root": "/tmp/deck-e2e.synthetic", "token": "synthetic-run-token-0001",
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_is_unchanged_on_a_normal_installation(monkeypatch):
+    monkeypatch.setattr(settings, "test_instance", False)
+    monkeypatch.setattr(settings, "test_instance_root", "/tmp/deck-e2e.synthetic")
+    monkeypatch.setattr(settings, "test_instance_token", "synthetic-run-token-0001")
+    transport = httpx.ASGITransport(app=main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (await client.get("/health")).json()
+    assert set(body) == {"name", "version", "status"}
+
+
+def test_run_identity_settings_stay_out_of_repr():
+    configured = Settings(_env_file=None, test_instance_root="/tmp/x", test_instance_token="secret-token")
+    assert "secret-token" not in repr(configured)
+    assert "/tmp/x" not in repr(configured)

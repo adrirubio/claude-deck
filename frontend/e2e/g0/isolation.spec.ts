@@ -2,15 +2,19 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createServer, type Server } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
+import { ForeignInstanceError, verifyInstance } from '../support/instance-identity'
+import { freePort, resolvePorts } from '../support/ports'
 
 // Harness safety journeys. They start a second instance, or try to, with
 // scripts/e2e-instance.sh. They need no page and no seeded UI state.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const script = path.join(repoRoot, 'scripts', 'e2e-instance.sh')
-const port = Number(process.env.E2E_ISOLATION_PORT || 18766)
+// playwright.config.ts sets it to a free port for each run.
+const port = Number(process.env.E2E_ISOLATION_PORT)
 
 function alive(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null
@@ -56,6 +60,26 @@ async function waitForExit(child: ChildProcess, deadlineMs: number): Promise<voi
   })
 }
 
+/** True when nothing listens on the port, so a new server can bind it. */
+function canBind(target: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const probe = createServer()
+    probe.once('error', () => resolve(false))
+    probe.listen(target, '127.0.0.1', () => probe.close(() => resolve(true)))
+  })
+}
+
+/** A server on a free port that answers /health with the given body. */
+async function healthServer(body: unknown): Promise<{ url: string; server: Server }> {
+  const target = await freePort()
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify(request.url === '/health' ? body : {}))
+  })
+  await new Promise<void>(resolve => server.listen(target, '127.0.0.1', () => resolve()))
+  return { url: `http://127.0.0.1:${target}`, server }
+}
+
 test.describe('instance isolation', () => {
   let scratch: string
   test.beforeEach(() => {
@@ -93,6 +117,7 @@ test.describe('instance isolation', () => {
       await waitForExit(instance, 20_000)
       expect(alive(decoy), 'decoy survives instance shutdown').toBe(true)
       expect(existsSync(root), 'teardown removes the temporary root').toBe(false)
+      expect(await canBind(port), 'teardown frees the instance port').toBe(true)
     } finally {
       if (instance && alive(instance)) instance.kill('SIGKILL')
       decoy.kill('SIGKILL')
@@ -145,5 +170,46 @@ test.describe('instance isolation', () => {
     expect(status).toBe(2)
     expect(stderr).toContain('is not empty')
     expect(existsSync(path.join(root, 'keep.txt'))).toBe(true)
+  })
+
+  // #590: a run must test its own instance, never another server on its port.
+  test('@active a run refuses a server that is not a Deck test instance', async () => {
+    const { url, server } = await healthServer({ name: 'Claude Deck', version: '3.0.0', status: 'running' })
+    try {
+      const refusal = verifyInstance(url, 'run-token-of-this-run-0001')
+      await expect(refusal).rejects.toThrow(ForeignInstanceError)
+      await expect(refusal).rejects.toThrow('is not a Deck test instance')
+    } finally {
+      server.close()
+    }
+  })
+
+  test('@active a run refuses the test instance of another run', async () => {
+    const { url, server } = await healthServer({
+      name: 'Claude Deck', status: 'running',
+      test_instance: { root: '/tmp/another-run', token: 'run-token-of-another-run-0002' },
+    })
+    try {
+      const refusal = verifyInstance(url, 'run-token-of-this-run-0001')
+      await expect(refusal).rejects.toThrow('belongs to another run')
+      // The message never shows a token or a root.
+      await expect(refusal).rejects.not.toThrow(/run-token-of|\/tmp\//)
+    } finally {
+      server.close()
+    }
+  })
+
+  test('@active a run accepts its own instance', async ({ baseURL }) => {
+    await expect(verifyInstance(String(baseURL), process.env.E2E_RUN_TOKEN)).resolves.toBeUndefined()
+  })
+
+  test('@active explicit ports override the free-port choice', async () => {
+    await expect(resolvePorts({ E2E_PORT: '12345', E2E_ISOLATION_PORT: '12346' })).resolves.toEqual({
+      port: 12345, isolationPort: 12346,
+    })
+    const chosen = await resolvePorts({})
+    expect(chosen.port).not.toBe(chosen.isolationPort)
+    expect(await canBind(chosen.port)).toBe(true)
+    await expect(resolvePorts({ E2E_PORT: 'not-a-port' })).rejects.toThrow('E2E_PORT is not a port')
   })
 })

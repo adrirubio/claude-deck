@@ -22,7 +22,7 @@ The E2E journeys drive the built Deck UI in Chromium against one isolated Deck i
 4. It proves that tmux is private: a probe session must show the private socket, no other session and the instance `HOME`.
 5. It builds `frontend/dist`, unless `E2E_SKIP_BUILD=1`.
 6. It writes the seed database with `scripts/e2e/seed.py`. The seed starts four fake panes for the "Release crew" team in the private tmux server.
-7. It starts the backend on `127.0.0.1:$E2E_PORT` (default `18765`) from the temporary root, so no `.env` file loads. The backend serves the UI on the same origin.
+7. It starts the backend on `127.0.0.1:$E2E_PORT` from the temporary root, so no `.env` file loads. The backend serves the UI on the same origin. The backend reports the instance root and the run token on `/health` (only on a test instance).
 8. On exit, it stops the backend, kills only the private tmux server and removes only a marked root.
 
 The instance sets `TEST_INSTANCE=1`. With this setting the backend does not start the dispatch scheduler and does not run the start-up relay cleanup. All GitHub HTTP calls fail as connection errors and open no socket.
@@ -39,6 +39,12 @@ The instance refuses to start (exit status 2) when:
 - `E2E_ROOT` is not empty and has no `.deck-e2e-root` marker. The instance never deletes such a directory.
 
 `g0/isolation.spec.ts` has one journey for each refusal. It also checks that a process named `tmux attach-session` outside the instance survives the instance start and stop.
+
+### Ports and run identity
+
+`playwright.config.ts` chooses two free ports for each run: `E2E_PORT` for the instance and `E2E_ISOLATION_PORT` for the second instance in `g0/isolation.spec.ts`. It also makes a random run token, `E2E_RUN_TOKEN`. So several runs on one host do not collide. Set `E2E_PORT` or `E2E_ISOLATION_PORT` to choose a port yourself.
+
+Before the first journey, the guard fixture reads `/health` and refuses to run when the server is not a Deck test instance, or when it reports another run token. A run therefore never tests another agent's instance. The refusal message shows neither the token nor the root. Teardown stops the instance, so both ports are free again.
 
 ### The seed clock
 
@@ -82,11 +88,15 @@ Set `E2E_TMUX` when the first `tmux` on `PATH` is a launcher script, for example
 To keep one instance running while you edit a journey:
 
 ```bash
+# Both terminals: the same port and run token
+export E2E_PORT=18785 E2E_RUN_TOKEN=local-run-token-0001
 # Terminal 1, from the repository root
 E2E_KEEP_ROOT=1 bash scripts/e2e-instance.sh
 # Terminal 2, from frontend/
 E2E_REUSE_INSTANCE=1 npx playwright test e2e/g0/routes.spec.ts --headed
 ```
+
+Without the same `E2E_RUN_TOKEN`, the journeys refuse the running instance.
 
 After a failure, open the trace: `npx playwright show-trace test-results/<journey>/trace.zip`.
 
