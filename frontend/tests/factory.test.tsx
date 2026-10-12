@@ -9,11 +9,9 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WorkPage,
-  OverviewPage,
-  WorkDetailPage,
-} from "../src/features/factory/FactoryPages";
+import { WorkPage } from "../src/features/factory/pages/WorkPage";
+import { OverviewPage } from "../src/features/factory/pages/OverviewPage";
+import { WorkDetailPage } from "../src/features/factory/pages/WorkDetailPage";
 import {
   resetFactoryReads,
   useObservation,
