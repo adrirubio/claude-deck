@@ -69,12 +69,67 @@ export interface AgentTeamPreset {
   id: number
   name: string
   description?: string | null
+  parent_issue_url?: string | null
   created_by?: string | null
   created_at: string
   updated_at: string
   autonomy_enabled: boolean
   leader_slot_id?: number | null
   slots: AgentTeamSlot[]
+}
+
+export type TeamSummaryAttentionCode =
+  | 'attempt_stopped' | 'recovery_decision' | 'human_review' | 'owner_stalled'
+  | 'observation_pause' | 'hold' | 'recovery_only' | 'hold_unavailable'
+
+export interface TeamSummaryAttention {
+  code: TeamSummaryAttentionCode
+  work_item_id?: number | null
+  scope_id?: number | null
+  issue_number?: number | null
+  pause_id?: number | null
+  observed_at?: string | null
+  resume_deadline?: string | null
+}
+
+export interface TeamSummaryHumanAction {
+  scope_id: number
+  issue_number: number
+  work_item_id?: number | null
+  kind: 'review_pr' | 'merge_pr' | 'inspect_attempt' | 'inspect_checkpoint' | 'milestone_acceptance'
+    | 'pilot_decision' | 'scope_clarification' | 'provide_evidence'
+  state: 'requested' | 'context_pending' | 'waiting_for_prerequisites' | 'historical' | 'resolved'
+    | 'head_changed' | 'pr_unavailable' | 'pr_identity_unavailable'
+  source: 'leader' | 'dispatch' | 'unknown'
+  assessment_current: boolean
+  pull_request_number?: number | null
+}
+
+export interface TeamRemainingWork {
+  state: 'known' | 'unknown'
+  unfinished_items: number
+  reported_items: number
+  effort_low_minutes?: number | null
+  effort_high_minutes?: number | null
+  confidence: 'unknown' | 'low' | 'medium' | 'high'
+  reason: 'complete' | 'report_unknown' | 'observation_incomplete' | 'context_changed'
+}
+
+// GET agent-teams/presets/{id}/summary. A display-only read: it grants no action.
+export interface AgentTeamSummary {
+  preset_id: number
+  description: string | null
+  parent_issue_url: string | null
+  supervisor: 'none'
+  checked_at: string
+  valid_until: string
+  coverage_complete: boolean
+  hold_code: 'hold' | 'recovery_only' | 'hold_unavailable' | null
+  attention: TeamSummaryAttention[]
+  human_actions: TeamSummaryHumanAction[]
+  remaining_work: TeamRemainingWork
+  next_actors: ('owner' | 'leader' | 'operator' | 'controller')[]
+  next_actor_coverage_complete: boolean
 }
 
 export interface AgentTeamPresetListResponse {

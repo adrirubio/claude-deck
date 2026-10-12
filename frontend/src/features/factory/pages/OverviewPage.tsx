@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { TeamSummaries } from "@/features/agent-teams/TeamSummaryCard";
 import type { OverviewResponse } from "@/types/factory";
 import { ReadStatus } from "../components/ReadStatus";
 import { RepositoryResults } from "../components/RepositoryResults";
@@ -56,6 +57,7 @@ export function OverviewPage() {
             set.
           </p>
           <Time value={state.data.generated_at} />
+          <TeamSummaries teamId={params.get("team_id")} />
           <section className={panel}>
             <h3 className="font-semibold">Automation observation</h3>
             <p>
