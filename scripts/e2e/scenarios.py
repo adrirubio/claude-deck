@@ -14,6 +14,7 @@ by their seeded names where they can.
 | Deleted team with history | Retired crew: audit events kept after the team is deleted. |
 | Mail with unacknowledged messages | Director and member messages without an ack. |
 | Locked Audit | Audit events exist; the browser has no Director key. |
+| One agent, one state (#540) | F2 Frontend: a live fake pane, a live MCP session and an observation 3 h old. |
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import asyncio
 import os
 import shutil
 import subprocess
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,9 @@ ITEM_ACTIVE = 3       # issue 103, dispatched
 ITEM_MERGED = 4       # issue 104, merged, PR 199
 ITEM_QUEUED = 5       # issue 105, pending
 ITEM_RETIRED = 6      # issue 7 in the retired scope
+
+# #540: the idle agent with an old observation and a live MCP session.
+IDLE_AGENT_SLOT = 5   # "F2 Frontend"; it also has a live fake pane
 
 # One seeded moment shown on Teams, Work and Audit (#521 journey).
 SHARED_MOMENT = SEED_NOW - timedelta(hours=3, minutes=17)
@@ -248,6 +252,28 @@ def seed_core(s: Seeder, root: Path) -> None:
     message(s, 5, sender=5, recipient=1, subject="Handoff: #103 docs",
             body="Synthetic handoff summary.", kind="handoff", request_status="pending",
             sent=at(minutes=50))
+
+    # One agent, one state (#540): slot 5 has a live fake pane (start_panes),
+    # a live MCP session and an old observation. "Live" is relative to the
+    # real clock: SEED_NOW can be up to an hour old, and Deck treats an MCP
+    # heartbeat older than 3600 s as offline. Only this row uses the real clock.
+    heartbeat = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=2)).isoformat(sep=" ")
+    idle = next(slot for slot in RELEASE_SLOTS if slot["id"] == IDLE_AGENT_SLOT)
+    for session_id, source, key, target, seen, status in (
+        (1, "mcp", "mcp:e2e-seed-idle-agent", None, heartbeat, "connected"),
+        (2, "observed", f"observed:deck-e2e-{IDLE_AGENT_SLOT}:0.0",
+         f"deck-e2e-{IDLE_AGENT_SLOT}:0.0", at(hours=3), "observed"),
+    ):
+        s.insert(
+            "mail_agent_sessions", id=session_id, member_id=IDLE_AGENT_SLOT,
+            provider=idle["provider"], source=source, session_key=key, cwd=str(sample),
+            tmux_target=target, pane_id=None, pid=None, team_preset_id=RELEASE_TEAM,
+            team_slot_id=IDLE_AGENT_SLOT,
+            capability_token_hash=digest("e2e-seed-idle-agent") if source == "mcp" else None,
+            bound_pane_pid=None, bound_pane_proc_start=None, closed_at=None,
+            wake_enabled=1, mailbox_status=status, activity=None, last_seen_at=seen,
+            created_at=at(days=1),
+        )
 
     # Backlog coordination for the release scope (observed state only).
     s.insert(
