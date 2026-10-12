@@ -740,10 +740,14 @@ function LaunchPlanDialog({
                   <p className="text-sm text-muted-foreground">
                     {item.tmux_target ?? item.session_name ?? item.error ?? item.repo_path}
                   </p>
+                  {item.message && <p className="mt-1 text-sm">{item.message}</p>}
                 </div>
-                <Badge variant={item.status === 'failed' ? 'destructive' : 'outline'}>
-                  {item.status}
-                </Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  {item.workspace_trust_changed && <Badge variant="secondary">Workspace trust changed</Badge>}
+                  <Badge variant={item.status === 'failed' ? 'destructive' : 'outline'}>
+                    {item.status}
+                  </Badge>
+                </div>
               </div>
             ))}
           </div>

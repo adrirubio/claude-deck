@@ -452,6 +452,7 @@ export interface AgentTeamLaunchResultItem {
   block_code?: string | null
   error?: string | null
   warnings?: string[]
+  workspace_trust_changed?: boolean
 }
 
 export interface AgentTeamLaunchResult {

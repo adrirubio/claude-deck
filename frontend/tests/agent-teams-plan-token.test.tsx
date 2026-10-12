@@ -332,6 +332,46 @@ describe("AgentTeamsPage launch authorization", () => {
       await screen.findByRole("dialog", { name: "Launch Plan" }),
     ).toBeInTheDocument();
   });
+
+  it("shows the launch result message and the workspace trust change", async () => {
+    setOperatorToken("test-token");
+    vi.mocked(launchAgentTeam).mockResolvedValueOnce({
+      ...result,
+      items: [
+        {
+          slot_id: 2,
+          slot_name: "Codex slot",
+          action: "spawn",
+          status: "spawned",
+          provider: "codex-cli",
+          repo_path: "/tmp/repo",
+          session_name: "codex-slot",
+          message:
+            "Workspace trust prepared. Session spawned; waiting for Agent Mail registration. Codex: restart needed for observation.",
+          workspace_trust_changed: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AgentTeamsPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Plan launch" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Launch Plan" });
+    await user.click(within(dialog).getByRole("button", { name: "Launch" }));
+
+    expect(
+      await within(dialog).findByText(/Codex: restart needed for observation/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Workspace trust changed"),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("Teams current route and stale reads", () => {

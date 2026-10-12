@@ -276,13 +276,19 @@ export function InstallTab({
                 variant="outline"
                 className={claudeHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
               >
-                hooks {claudeHooksInstalled ? 'installed' : `${status.claude_code_hooks.length}/4 installed`}
+                hooks {claudeHooksInstalled ? 'installed' : `${status.claude_code_hooks.length}/${status.claude_code_hooks.length + status.claude_code_hooks_missing.length} installed`}
               </Badge>
               <Badge
                 variant="outline"
                 className={status.claude_code_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
               >
                 MCP {status.claude_code_mcp_installed ? 'installed' : 'not installed'}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={status.claude_code_prompt_block_installed ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                question prompt block {status.claude_code_prompt_block_installed ? 'installed' : 'not installed'}
               </Badge>
               {status.claude_code_hooks_missing.length > 0 && (
                 <Badge variant="outline" className="border-amber-300 text-amber-700">
