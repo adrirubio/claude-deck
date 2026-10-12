@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test --grep @active",
+    "e2e:pending": "playwright test --grep @pending",
+    "e2e:typecheck": "tsc -p tsconfig.e2e.json"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.2.0",
@@ -43,6 +46,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
