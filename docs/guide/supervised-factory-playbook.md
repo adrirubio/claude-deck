@@ -31,6 +31,14 @@ Reading this playbook or loading its companion skill grants no execution authori
 
 The supervisor and Leader are separate roles. The supervisor can manage several campaigns. Each team has its own Leader, selected through `leader_slot_id`. A role name or pane title does not establish that authority.
 
+Give every member a supervisor address before activation. Until Deck has a supervisor identity, the supervisor can register as a local external Mail actor and start one "Supervisor channel" thread with each member. Members reply in that thread. Write the escalation order into each charter:
+
+1. The Leader decides assignment, plans and sequencing.
+2. The supervisor handles incidents, gates, harness and workspace problems, stalls and maintenance.
+3. The operator decides only retained decisions, such as roster, models, budget, promotion and publication. Members request these decisions through an operator action record on the GitHub issue.
+
+A member without an address asks whoever is at the keyboard. In an unattended pane, nobody answers.
+
 The supervisor records when it acts under delegation. It must not describe an agent check as a human trial. Independent review, hosted CI, integration merge and human acceptance are separate facts.
 
 ### What supplies each part
@@ -108,6 +116,8 @@ Review existing issues before creating new ones. Give each implementation issue 
 
 Create an integration branch for a large campaign. Implementation PRs target that branch. A later promotion PR targets the project's main branch. Record both names; projects need not call the main branch `master`.
 
+Add the integration branch to the `pull_request` and `push` triggers of every required CI workflow in the same step that creates it. Open a small PR to confirm that the checks run. A PR without checks never satisfies the delivery policy, so automatic merge cannot succeed. Configure the delivery policy's required checks with the **job** names that GitHub reports, not the workflow file names. Make sure that each head runs CI once. For example, a `ready_for_review` trigger runs every check again on an unchanged head.
+
 Begin with human or delegated supervisor merges. Enable automatic integration only after the current-head checks and independent review have an enforceable gate. A review comment or label alone does not establish enforcement. Design-labelled work retains Deck's human-review pipeline.
 
 For several repositories, configure one watched scope per repository in the same team. Each scope has its own checkout, base branch, labels, checks and delivery policy. The team shares slot capacity. Cross-repository dependencies still need explicit evidence and Leader assessment.
@@ -143,7 +153,11 @@ campaign/
 private-state/              Installation record, receipts and backups
 ```
 
-These names are examples. Save the real paths. Check read and write access under the actual native session OS user. Separate directories alone do not isolate credentials or the operator token from same-user processes.
+These names are examples. Save the real paths. Check read and write access under the actual native session OS user.
+
+When the controller and the native sessions run as different OS users, git refuses a repository that another user owns. Add each checkout to that user's `safe.directory` list: the controller's list for the primary checkout and slot workspaces, and the native user's list for the dispatch workspaces. Then confirm that every slot reports the same repository identity as the scope. If the identities differ, dispatch cannot match the slots to the scope. After you correct the ownership, save each slot's repository path again so that Deck recomputes the identity.
+
+Register one dispatch workspace for each concurrent item with `POST /api/v1/agent-teams/github-scopes/{scope_id}/workspaces`. Use a path that is a direct sibling of the scope checkout. The controller provisions the worktree. A scope without dispatchable workspaces dispatches nothing, and its items stay `pending` without an error. Separate directories alone do not isolate credentials or the operator token from same-user processes.
 
 Schedule shared-file edits. Set host limits for heavy suites, builds and browser workloads. Agent count is not build concurrency. Use an enforceable shared lock where required; lightweight checks can remain parallel.
 
@@ -171,7 +185,13 @@ Before enabling intake:
 - Prepare watched scopes and dispatch workspaces. Keep them disabled during setup.
 - Save the intended Leader and roster. Confirm the selected native CLI and model access.
 - Launch or reuse sessions through Deck. Reuse only sessions with valid intended slot bindings.
-- Check each member's authenticated Mail identity and one successful tool call. Complete first-use workspace confirmation.
+- Check each member's authenticated Mail identity and one successful tool call.
+- Complete first-use confirmation before launch, through the harness configuration, not by typing into panes:
+  - Claude Code: accept workspace trust for the **primary checkout** path. Claude Code records the trust for a linked worktree under its main repository.
+  - Codex: mark each workspace as a trusted project.
+  - Sign-in: make one real model call as the native user. A sign-in status command only reads a saved file and does not prove that the token is still valid.
+- Block interactive question prompts in every unattended native session. For example, add a Claude Code `PreToolUse` hook on `AskUserQuestion` that refuses the call and points the member to Mail. Nobody answers a question form in an unattended pane, so the member stops until someone presses a key.
+- Launch a new slot in `plain` mode. Resume mode needs an existing session ID. After launch, save each slot's session ID and set the slot to resume mode, so that a restart continues the same conversation. Activity observation also reads this ID.
 - Check the conversation, native process lifetime, tmux pane, working directory and workspace ownership.
 - Configure supervision for the actual preset, slots and supported native event formats. Confirm that it survives the supervisor's interactive turn.
 - Record activation readiness for every scope. Keep other campaigns in their intended state.
@@ -293,6 +313,11 @@ Read evidence before taking a remedy. Native liveness, activity, progress and au
 | Credits or access are exhausted | Hold affected work; after the operator resolves access, check actual readiness and notify the existing roster |
 | A real provider safety block or security HOLD exists | Stop affected autonomy and safely hold active execution; wait for operator instructions |
 | A CLI warning appears | Check its structured result and effect; do not classify the display text alone as a security block |
+| A member waits at an interactive screen (question form, trust prompt, sign-in) | Read the pane. Fix the cause in the harness configuration. Cancel a question form once, then send the decision through Mail. Do not answer an operator decision with keystrokes |
+| Automatic merge fell back to a human after `mergeable_state` `unstable` or `blocked` | Check that every required check passed on the exact verified head and that the merge tree is unchanged; then merge with the head SHA match. A check that is still running can cause this |
+| A test instance starts sessions in the team tmux server or registers in production Mail | Treat it as an incident. Remove the exact sessions through Deck. Require a private tmux socket and no real agent CLIs before the harness work continues |
+
+Verify a claim before you act on it or relay it. An agent's description of an incident is a report, not evidence. Run a read-only check and state what you checked.
 
 A suspected false positive is still an incident until classified. Preserve the notice and exact session context in protected evidence. Do not automatically retry, rephrase the task, clear a genuine HOLD or switch models to bypass it.
 
