@@ -65,7 +65,6 @@ import type {
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
-  cancelGithubContinuationRequest,
   createTeamGithubScope,
   createAgentTeamFromBridge,
   createAgentTeamFromMail,
@@ -76,11 +75,9 @@ import {
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
   fetchGithubWorkItems,
-  fetchGithubScopeRevisions,
   fetchTeamGithubScopes,
   launchAgentTeam,
   planAgentTeamLaunch,
-  retryGithubWorkItem,
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
   updateAgentTeamLeader,
@@ -1202,22 +1199,6 @@ export function AgentTeamsPage() {
     }
   }
 
-  const cancelGithubContinuation = async (
-    item: GithubWorkItem,
-    requestId: number,
-    operatorToken: string
-  ) => {
-    if (!selectedPreset) return
-    try {
-      await cancelGithubContinuationRequest(item.id, requestId, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success(`Continuation request #${requestId} cancelled`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to cancel continuation')
-      throw error
-    }
-  }
-
   const removeGithubScope = async (scope: TeamGithubScope, operatorToken: string) => {
     if (!selectedPreset) return
     try {
@@ -1226,20 +1207,6 @@ export function AgentTeamsPage() {
       toast.success('Watched repo removed')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to remove watched repo')
-      throw error
-    }
-  }
-
-  const retryWorkItem = async (item: GithubWorkItem, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      const updated = await retryGithubWorkItem(item.id, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success(updated.dispatch_status === 'pending'
-        ? `Issue #${item.issue_number} reset to pending`
-        : updated.status_note || `Retry requested for issue #${item.issue_number}; awaiting workspace release`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
       throw error
     }
   }
@@ -1641,7 +1608,6 @@ export function AgentTeamsPage() {
                   <AutonomyPanel
                     key={selectedPreset.id}
                     preset={selectedPreset}
-                    agentActivity={agentActivity}
                     scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
                     workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}
                     loading={autonomyLoading || autonomyDataPresetId !== selectedPreset.id}
@@ -1654,9 +1620,6 @@ export function AgentTeamsPage() {
                     onUpdateScope={updateGithubScope}
                     onUpdateContinuationPolicy={updateGithubContinuationPolicy}
                     onDeleteScope={removeGithubScope}
-                    onRetryWorkItem={retryWorkItem}
-                    onFetchScopeRevisions={fetchGithubScopeRevisions}
-                    onCancelContinuationRequest={cancelGithubContinuation}
                   />
                 </TabsContent>
               </Tabs>

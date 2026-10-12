@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import type { WorkDetailResponse, WorkProjection } from "@/types/factory";
+import { WorkItemPanel } from "@/features/agent-teams/WorkItemPanel";
 import { ContextLinks } from "../components/ContextLinks";
 import { GithubLink } from "../components/GithubLink";
 import { ProtectedRemedies } from "../components/ProtectedRemedies";
@@ -107,11 +108,18 @@ export function WorkDetailPage() {
               </p>
             </section>
           ) : (
-            <ProtectedRemedies
-              key={w.item.id}
-              work={w}
-              refresh={state.refresh}
-            />
+            <>
+              <ProtectedRemedies
+                key={w.item.id}
+                work={w}
+                refresh={state.refresh}
+              />
+              <WorkItemPanel
+                key={`panel-${w.item.id}`}
+                presetId={w.team.id}
+                workItemId={w.item.id}
+              />
+            </>
           )}
           <details className={panel}>
             <summary className="cursor-pointer font-semibold">

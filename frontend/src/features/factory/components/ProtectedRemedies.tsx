@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,10 +18,7 @@ import {
   AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import { ApiHttpError } from "@/lib/api";
-import {
-  fetchGithubScopeRevisions,
-  retryGithubWorkItem,
-} from "@/features/agent-teams/api";
+import { retryGithubWorkItem } from "@/features/agent-teams/api";
 import {
   clearOperatorToken,
   getOperatorToken,
@@ -30,7 +26,7 @@ import {
 } from "@/features/agent-teams/operatorAuth";
 import type { WorkProjection } from "@/types/factory";
 import { markWorkListsDirty } from "../reads";
-import { destination, panel } from "./styles";
+import { panel } from "./styles";
 
 export function ProtectedRemedies({
   work,
@@ -39,13 +35,12 @@ export function ProtectedRemedies({
   work: WorkProjection;
   refresh: () => Promise<void>;
 }) {
-  const [operation, setOperation] = useState<"retry" | "history" | null>(null);
+  const [operation, setOperation] = useState<"retry" | null>(null);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState<string[] | null>(null);
   const retry = work.actions.find((action) => action.name === "retry");
   const context = useRef({ generation: 0, active: false, work, refresh });
   const retryConfirmed = useRef(false);
@@ -64,7 +59,7 @@ export function ProtectedRemedies({
     };
   }, []);
 
-  async function run(action: "retry" | "history", credential: string) {
+  async function run(action: "retry", credential: string) {
     const target = context.current;
     if (!target.active || running.current) return;
     if (action === "retry") {
@@ -108,10 +103,6 @@ export function ProtectedRemedies({
             : `Retry response status: ${response.dispatch_status}. A new dispatch has not been observed. ${response.status_note ?? ""}`,
         );
         await context.current.refresh();
-      } else {
-        const revisions = await fetchGithubScopeRevisions(workItemId, credential);
-        if (!current()) return;
-        setHistory(revisions.map((r) => `Revision ${r.revision}: ${r.status}`));
       }
       if (!current()) return;
       setOperation(null);
@@ -133,7 +124,7 @@ export function ProtectedRemedies({
       if (current()) setBusy(false);
     }
   }
-  const begin = (action: "retry" | "history") => {
+  const begin = (action: "retry") => {
     if (!context.current.active || running.current) return;
     const credential = getOperatorToken();
     if (credential) void run(action, credential);
@@ -158,19 +149,6 @@ export function ProtectedRemedies({
         >
           Retry issue
         </Button>
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => begin("history")}
-        >
-          Inspect protected revision history
-        </Button>
-        <Link
-          className={destination}
-          to={`/teams/${work.team.id}?tab=autonomy&work_item_id=${work.item.id}`}
-        >
-          Existing attempt recovery and remedies
-        </Link>
       </div>
       <p>
         Retry: {retry?.state ?? "unknown"} · required actor{" "}
@@ -178,23 +156,8 @@ export function ProtectedRemedies({
         {(retry?.reason ?? "Eligibility unavailable").replace(/[.\s]+$/, "")}.
         Retrying may reset attempt markers.
       </p>
-      {work.actions
-        .filter((action) => action.name !== "retry")
-        .map((action) => (
-          <p key={action.name}>
-            {action.name.replaceAll("_", " ")}: {action.state} · {action.reason}{" "}
-            · required actor {action.required_actor}
-          </p>
-        ))}
       {error && <p role="alert">{error}</p>}
       {result && <p role="status">{result}</p>}
-      {history && (
-        <ul>
-          {history.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
       <AlertDialog
         open={confirmRetry}
         onOpenChange={(open) => {
@@ -245,10 +208,8 @@ export function ProtectedRemedies({
           <DialogHeader>
             <DialogTitle>Deck operator authorization</DialogTitle>
             <DialogDescription>
-              {operation === "retry"
-                ? "Retry this issue using current server eligibility. Attempt markers may reset."
-                : "Read protected revision history."}{" "}
-              Uses the existing per-tab operator credential.
+              Retry this issue using current server eligibility. Attempt markers may
+              reset. Uses the existing per-tab operator credential.
             </DialogDescription>
           </DialogHeader>
           <form

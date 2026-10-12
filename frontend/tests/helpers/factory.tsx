@@ -49,7 +49,11 @@ export function fixtureFetch(
         query: url.searchParams,
         method: options?.method ?? "GET",
       };
-      if (path === "factory/repositories" && url.searchParams.get("limit") === "100")
+      if (
+        (path === "factory/repositories" && url.searchParams.get("limit") === "100") ||
+        // The recovery panel on the Work item page reads these for the team of the item.
+        /^agent-teams\/presets(\/\d+\/(github-work-items|github-scopes|activity))?$/.test(path)
+      )
         optionRequests.push(entry);
       else requests.push(entry);
       return Promise.resolve(handler(path, url.searchParams, options));
