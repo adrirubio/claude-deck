@@ -18,6 +18,7 @@ from app.models.factory_schemas import (
 from app.services.github_coordination_service import hold_code
 from app.services.github_operator_attention_service import github_operator_attention_service
 from app.services.github_work_progress_service import github_work_progress_service
+from app.services.agent_team_campaign_service import agent_team_campaign_service
 
 _ACTORS = ("owner", "leader", "operator", "controller")
 _KINDS = {"review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
@@ -31,15 +32,17 @@ def _utc(value):
 
 
 class AgentTeamSummaryService:
-    def __init__(self, *, progress=None, attention=None, observation_seconds=8, item_limit=64):
+    def __init__(self, *, progress=None, attention=None, campaign=None, observation_seconds=8, item_limit=64):
         self.progress = progress or github_work_progress_service
         self.attention = attention or github_operator_attention_service
+        self.campaign = campaign or agent_team_campaign_service
         self.observation_seconds = min(8, max(0.001, observation_seconds))
         self.item_limit = min(64, max(1, item_limit))
 
     async def _snapshot(self, db, preset_id):
         team = (await db.execute(select(AgentTeamPreset.id, AgentTeamPreset.description,
-            AgentTeamPreset.parent_issue_url, AgentTeamPreset.autonomy_enabled, AgentTeamPreset.updated_at)
+            AgentTeamPreset.parent_issue_url, AgentTeamPreset.autonomy_enabled, AgentTeamPreset.updated_at,
+            AgentTeamPreset.backlog_milestone, AgentTeamPreset.planned_decisions)
             .where(AgentTeamPreset.id == preset_id))).one_or_none()
         if team is None:
             return None
@@ -183,11 +186,12 @@ class AgentTeamSummaryService:
             confidence=confidence, reason="complete" if known else "context_changed" if changed
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]
+        campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
         return AgentTeamSummaryResponse(preset_id=preset_id, description=final_team.description,
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
-            next_actor_coverage_complete=complete and len(observations) == total)
+            next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)
 
 
 agent_team_summary_service = AgentTeamSummaryService()

@@ -20,7 +20,7 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
-from app.services.github_client import GithubClient
+from app.services.github_client import GithubClient, GithubClientResponseError
 from app.services.github_watcher_service import github_watcher_service
 
 
@@ -32,6 +32,78 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request):
         self.requests.append(request)
         return self.handler(request)
+
+
+@pytest.mark.asyncio
+async def test_campaign_client_reads_all_milestone_pages_and_closed_issues():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.params["state"] == "all"
+        endpoint = request.url.path
+        if endpoint.endswith("milestones"):
+            data = [{"number": 7, "title": "Campaign"}]
+        elif request.url.params.get("page") == "2":
+            data = [{"number": 2, "title": "Closed", "state": "closed", "labels": [],
+                     "html_url": "https://github.com/o/r/issues/2", "milestone": {"number": 7}}]
+        else:
+            data = [{"number": 1, "title": "Open", "state": "open", "labels": [],
+                     "html_url": "https://github.com/o/r/issues/1", "milestone": {"number": 7}},
+                    {"number": 5, "pull_request": {}}]
+        headers = {}
+        if endpoint.endswith("issues") and not request.url.params.get("page"):
+            headers["Link"] = '<https://api.github.com/repos/o/r/issues?milestone=7&state=all&per_page=100&page=2>; rel="next"'
+        return httpx.Response(200, json=data, headers=headers)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.github.com") as http:
+        client = GithubClient(http=http, token="synthetic-test-key")
+        assert await client.list_milestones("o", "r") == [{"number": 7, "title": "Campaign"}]
+        issues = await client.list_milestone_issues("o", "r", 7)
+    assert [issue["number"] for issue in issues] == [1, 2]
+    assert len(requests) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link", [
+    "https://elsewhere.example/repos/o/r/milestones?state=all&per_page=100&page=2",
+    "https://api.github.com/repos/other/r/milestones?state=all&per_page=100&page=2",
+    "https://api.github.com/repos/o/r/milestones?state=open&per_page=100&page=2",
+    "https://api.github.com/repos/o/r/milestones?state=all&per_page=100&page=0",
+])
+async def test_campaign_client_rejects_unsafe_pagination_before_request(link):
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=[], headers={"Link": f'<{link}>; rel="next"'})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.github.com") as http:
+        with pytest.raises(GithubClientResponseError):
+            await GithubClient(http=http).list_milestones("o", "r")
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_campaign_client_rejects_wrong_milestone_issue():
+    data = [{"number": 1, "title": "Wrong campaign", "state": "open", "labels": [],
+             "html_url": "https://github.com/o/r/issues/1", "milestone": {"number": 8}}]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=data)),
+                                 base_url="https://api.github.com") as http:
+        with pytest.raises(GithubClientResponseError):
+            await GithubClient(http=http).list_milestone_issues("o", "r", 7)
+
+
+@pytest.mark.asyncio
+async def test_campaign_client_pagination_bound_never_returns_partial_backlog():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        page = int(request.url.params.get("page", "1"))
+        link = f'https://api.github.com/repos/o/r/milestones?state=all&per_page=100&page={page + 1}'
+        return httpx.Response(200, json=[{"number": page, "title": f"Campaign {page}"}],
+                              headers={"Link": f'<{link}>; rel="next"'})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.github.com") as http:
+        with pytest.raises(GithubClientResponseError, match="bound exceeded"):
+            await GithubClient(http=http).list_milestones("o", "r")
+    assert len(requests) == 10
 
 
 @pytest.mark.asyncio
@@ -222,6 +294,20 @@ async def test_poll_creates_pending_code_item(db):
     assert items[0].issue_number == 1
     assert items[0].issue_type == "code"
     assert items[0].dispatch_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_campaign_read_failure_cannot_discard_poll_results(db, monkeypatch):
+    scope = await _make_scope(db)
+    scope_id = scope.id
+    async def unavailable(*args):
+        raise OSError("synthetic cache failure")
+    monkeypatch.setattr("app.services.github_watcher_service.agent_team_campaign_service.refresh_scope", unavailable)
+    await github_watcher_service.poll_scope(db, scope, _FakeClient(labeled=[_issue(1, ["claude-deck-ready"])]))
+    item = await db.scalar(select(GithubWorkItem))
+    assert item.dispatch_status == "pending"
+    fresh = await db.get(TeamGithubScope, scope_id)
+    assert fresh.last_polled_at is not None
 
 
 @pytest.mark.asyncio

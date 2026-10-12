@@ -47,6 +47,31 @@ async def test_coordination_revisions_migrate_without_resetting_quota_or_linkage
 
 
 @pytest.mark.asyncio
+async def test_campaign_columns_migrate_existing_data_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            for name in ("backlog_milestone", "planned_decisions"):
+                if name in columns:
+                    await conn.execute(text(f"ALTER TABLE agent_team_presets DROP COLUMN {name}"))
+            await conn.execute(text("INSERT INTO agent_team_presets (name, description, created_at, updated_at, autonomy_enabled) "
+                                    "VALUES ('Existing', 'Preserve campaign data.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"))
+            await _run_sqlite_compat_migrations(conn)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            assert {"backlog_milestone", "planned_decisions"} <= columns
+            row = (await conn.execute(text("SELECT description, backlog_milestone, planned_decisions FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Preserve campaign data.", None, None)
+            await conn.execute(text("UPDATE agent_team_presets SET backlog_milestone='v3.1', planned_decisions='[]'"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT backlog_milestone, planned_decisions FROM agent_team_presets"))).one()
+            assert tuple(row) == ("v3.1", "[]")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migrations_repair_misdefined_named_indexes():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

@@ -2,6 +2,217 @@
   "models": {
     "AgentTeamSummaryResponse": {
       "$defs": {
+        "CampaignAreaGroup": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "title": "Area",
+              "type": "string"
+            },
+            "count": {
+              "minimum": 0,
+              "title": "Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "area",
+            "count"
+          ],
+          "title": "CampaignAreaGroup",
+          "type": "object"
+        },
+        "CampaignDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "later",
+                "now",
+                "done"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "state"
+          ],
+          "title": "CampaignDecision",
+          "type": "object"
+        },
+        "CampaignDoneItem": {
+          "additionalProperties": false,
+          "properties": {
+            "merged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merged At"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "merged_at"
+          ],
+          "title": "CampaignDoneItem",
+          "type": "object"
+        },
+        "CampaignQueuedItem": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "title": "CampaignQueuedItem",
+          "type": "object"
+        },
+        "CampaignUnderWayItem": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_short_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Short Name"
+            },
+            "state_phrase": {
+              "enum": [
+                "building it",
+                "reviewing it",
+                "waiting for checks",
+                "waiting for you"
+              ],
+              "title": "State Phrase",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "owner_short_name",
+            "state_phrase"
+          ],
+          "title": "CampaignUnderWayItem",
+          "type": "object"
+        },
+        "TeamCampaignSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "backlog_state": {
+              "enum": [
+                "available",
+                "backlog unavailable"
+              ],
+              "title": "Backlog State",
+              "type": "string"
+            },
+            "decisions_ahead": {
+              "items": {
+                "$ref": "#/$defs/CampaignDecision"
+              },
+              "title": "Decisions Ahead",
+              "type": "array"
+            },
+            "done_count": {
+              "minimum": 0,
+              "title": "Done Count",
+              "type": "integer"
+            },
+            "latest_done": {
+              "items": {
+                "$ref": "#/$defs/CampaignDoneItem"
+              },
+              "title": "Latest Done",
+              "type": "array"
+            },
+            "not_started_count": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Not Started Count"
+            },
+            "not_started_groups": {
+              "items": {
+                "$ref": "#/$defs/CampaignAreaGroup"
+              },
+              "title": "Not Started Groups",
+              "type": "array"
+            },
+            "queued": {
+              "items": {
+                "$ref": "#/$defs/CampaignQueuedItem"
+              },
+              "title": "Queued",
+              "type": "array"
+            },
+            "queued_count": {
+              "minimum": 0,
+              "title": "Queued Count",
+              "type": "integer"
+            },
+            "under_way": {
+              "items": {
+                "$ref": "#/$defs/CampaignUnderWayItem"
+              },
+              "title": "Under Way",
+              "type": "array"
+            },
+            "under_way_count": {
+              "minimum": 0,
+              "title": "Under Way Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "backlog_state",
+            "done_count",
+            "latest_done",
+            "under_way_count",
+            "under_way",
+            "queued_count",
+            "queued",
+            "not_started_count",
+            "not_started_groups",
+            "decisions_ahead"
+          ],
+          "title": "TeamCampaignSummary",
+          "type": "object"
+        },
         "TeamRemainingWork": {
           "additionalProperties": false,
           "properties": {
@@ -284,6 +495,9 @@
           "title": "Attention",
           "type": "array"
         },
+        "campaign": {
+          "$ref": "#/$defs/TeamCampaignSummary"
+        },
         "checked_at": {
           "format": "date-time",
           "title": "Checked At",
@@ -387,7 +601,8 @@
         "human_actions",
         "remaining_work",
         "next_actors",
-        "next_actor_coverage_complete"
+        "next_actor_coverage_complete",
+        "campaign"
       ],
       "title": "AgentTeamSummaryResponse",
       "type": "object"

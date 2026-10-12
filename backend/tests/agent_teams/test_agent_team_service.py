@@ -96,6 +96,24 @@ async def test_parent_issue_startup_migration_preserves_existing_data():
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_campaign_fields_are_persisted_omitted_copied_and_cleared(db):
+    from app.models.schemas import AgentTeamPresetUpdate
+    decisions = [{"text": "Approve promotion to the main branch", "state": "later"}]
+    request = AgentTeamPresetCreate(name="Campaign", backlog_milestone="v3.1", planned_decisions=decisions)
+    assert request.backlog_milestone == "v3.1"
+    result = await agent_team_service.create_preset(db, request)
+    assert result.backlog_milestone == "v3.1"
+    assert result.planned_decisions[0].text == decisions[0]["text"]
+    renamed = await agent_team_service.update_preset(db, result.id, name="Renamed campaign")
+    assert renamed.backlog_milestone == "v3.1"
+    clone = await agent_team_service.duplicate_preset(db, result.id)
+    assert clone.backlog_milestone == "v3.1" and clone.planned_decisions == renamed.planned_decisions
+    clear = AgentTeamPresetUpdate(backlog_milestone=None, planned_decisions=None)
+    cleared = await agent_team_service.update_preset(db, result.id, **clear.model_dump(exclude_unset=True))
+    assert cleared.backlog_milestone is None and cleared.planned_decisions is None
+
+
 def _ready_install_status():
     return SimpleNamespace(
         claude_code_mcp_installed=True,

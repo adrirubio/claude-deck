@@ -130,6 +130,9 @@ class AgentTeamService:
             name=name,
             description=self._clean_optional(request.description),
             parent_issue_url=request.parent_issue_url,
+            backlog_milestone=request.backlog_milestone,
+            planned_decisions=([decision.model_dump() for decision in request.planned_decisions]
+                               if request.planned_decisions is not None else None),
             created_by=self._clean_optional(request.created_by),
             autonomy_enabled=False,
         )
@@ -247,12 +250,25 @@ class AgentTeamService:
         description: str | None = None,
         autonomy_enabled: bool | None = None,
         parent_issue_url: str | None | object = _UNSET,
+        backlog_milestone: str | None | object = _UNSET,
+        planned_decisions: list | None | object = _UNSET,
     ) -> AgentTeamPresetResponse:
+        campaign_changes = {}
+        if backlog_milestone is not _UNSET:
+            campaign_changes["backlog_milestone"] = backlog_milestone
+        if planned_decisions is not _UNSET:
+            campaign_changes["planned_decisions"] = planned_decisions
+        validated_campaign = AgentTeamPresetUpdate(**campaign_changes)
         if parent_issue_url is not _UNSET:
             parent_issue_url = AgentTeamPresetUpdate(parent_issue_url=parent_issue_url).parent_issue_url
         preset = await self._require_preset(db, preset_id)
         if parent_issue_url is not _UNSET:
             preset.parent_issue_url = parent_issue_url
+        if backlog_milestone is not _UNSET:
+            preset.backlog_milestone = validated_campaign.backlog_milestone
+        if planned_decisions is not _UNSET:
+            preset.planned_decisions = ([decision.model_dump() for decision in validated_campaign.planned_decisions]
+                                        if validated_campaign.planned_decisions is not None else None)
         if name is not None:
             cleaned_name = self._clean_required(name, "Team name")
             await self._ensure_preset_name_is_unique(db, cleaned_name, exclude_preset_id=preset.id)
@@ -450,6 +466,9 @@ class AgentTeamService:
             name=self._clean_required(name or f"{source.name} copy", "Team name"),
             description=source.description,
             parent_issue_url=source.parent_issue_url,
+            backlog_milestone=source.backlog_milestone,
+            planned_decisions=([dict(decision) for decision in source.planned_decisions]
+                               if source.planned_decisions is not None else None),
             created_by=source.created_by,
         )
         await self._ensure_preset_name_is_unique(db, clone.name)
@@ -542,6 +561,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-mail",
                 parent_issue_url=request.parent_issue_url,
+                backlog_milestone=request.backlog_milestone,
+                planned_decisions=request.planned_decisions,
                 slots=slot_requests,
             ),
         )
@@ -589,6 +610,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-bridge",
                 parent_issue_url=request.parent_issue_url,
+                backlog_milestone=request.backlog_milestone,
+                planned_decisions=request.planned_decisions,
                 slots=slot_requests,
             ),
         )
@@ -1747,6 +1770,8 @@ class AgentTeamService:
             name=preset.name,
             description=preset.description,
             parent_issue_url=preset.parent_issue_url,
+            backlog_milestone=preset.backlog_milestone,
+            planned_decisions=preset.planned_decisions,
             created_by=preset.created_by,
             created_at=preset.created_at,
             updated_at=preset.updated_at,
