@@ -18,7 +18,6 @@ import detail from './fixtures/factory/v1/work-item.json'
 import overview from './fixtures/factory/v1/overview.json'
 import catalogs from './fixtures/provider-operations/v1/catalog.json'
 
-vi.mock('../src/features/projects/ProjectSwitcher', () => ({ ProjectSwitcher: () => <span>Project chooser</span> }))
 const providers = Object.entries(catalogs.providers).map(([id, catalog]) => ({
   id, display_name: id, installed: true, version: 'fixture', config_paths: {},
   capabilities: { config: true, plugins: true, usage: true },
@@ -93,7 +92,8 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(within(nav).getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
-    expect(within(nav).getAllByRole('link')).toHaveLength(9)
+    expect(within(nav).getAllByRole('link')).toHaveLength(8)
+    expect(within(nav).queryByRole('link', { name: 'Local projects' })).not.toBeInTheDocument()
     for (const link of within(nav).getAllByRole('link')) expect(link).toHaveAttribute('title', link.getAttribute('aria-label'))
     fireEvent.click(within(nav).getByRole('link', { name: 'Harnesses' })); await settle()
     expect(within(nav).getByRole('link', { name: 'Harnesses' })).toHaveAttribute('aria-current', 'page')
