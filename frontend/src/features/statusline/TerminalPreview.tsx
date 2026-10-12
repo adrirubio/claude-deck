@@ -27,6 +27,7 @@ export function TerminalPreview({
           <div className="w-3 h-3 rounded-full bg-yellow-500" />
           <div className="w-3 h-3 rounded-full bg-green-500" />
         </div>
+        {/* contrast-exempt: the title bar is bg-zinc-800 in both themes */}
         <span className="text-xs text-zinc-400 ml-2">Status Line Preview</span>
       </div>
 
@@ -37,8 +38,10 @@ export function TerminalPreview({
             Executing script...
           </span>
         ) : error ? (
+          // contrast-exempt: the terminal panel is bg-zinc-900 in both themes
           <span className="text-red-400 font-mono text-sm">{error}</span>
         ) : (
+          // contrast-exempt: the terminal panel is bg-zinc-900 in both themes
           <span className="text-green-400 font-mono text-sm whitespace-pre-wrap">
             {output || "(empty output)"}
           </span>
