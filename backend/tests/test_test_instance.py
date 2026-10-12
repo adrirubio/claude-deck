@@ -7,6 +7,7 @@ These tests replace the cleanup with a recorder: they never run the real one.
 
 import httpx
 import pytest
+from pydantic_settings import BaseSettings
 
 from app import main
 from app.config import Settings, settings
@@ -68,11 +69,19 @@ async def test_normal_instance_keeps_scheduler_and_relay_cleanup(monkeypatch, st
     ]
 
 
+def _settings_from_environment() -> Settings:
+    # The root conftest builds Settings() from defaults only. The instance
+    # script sets TEST_INSTANCE in the environment, so read it the real way.
+    built = Settings.__new__(Settings)
+    BaseSettings.__init__(built, _env_file=None)
+    return built
+
+
 def test_test_instance_setting_reads_the_environment(monkeypatch):
     monkeypatch.setenv("TEST_INSTANCE", "1")
-    assert Settings(_env_file=None).test_instance is True
+    assert _settings_from_environment().test_instance is True
     monkeypatch.delenv("TEST_INSTANCE")
-    assert Settings(_env_file=None).test_instance is False
+    assert _settings_from_environment().test_instance is False
 
 
 @pytest.mark.asyncio

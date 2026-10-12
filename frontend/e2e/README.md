@@ -16,14 +16,33 @@ The E2E journeys drive the built Deck UI in Chromium against one isolated Deck i
 
 `scripts/e2e-instance.sh` does these steps:
 
-1. It makes a temporary root. `HOME`, the database and `TMUX_TMPDIR` are in it. It unsets `TMUX`.
-2. It writes fake harness binaries (`claude`, `codex`, `copilot`, `opencode`, `pi`) first on `PATH`. Each one answers `--version` and echoes its input. A fake `gh` always fails.
-3. It builds `frontend/dist`, unless `E2E_SKIP_BUILD=1`.
-4. It writes the seed database with `scripts/e2e/seed.py`.
-5. It starts the backend on `127.0.0.1:$E2E_PORT` (default `18765`) from the temporary root, so no `.env` file loads. The backend serves the UI on the same origin.
-6. On exit, it stops the backend, stops its own tmux server and removes the temporary root.
+1. It makes a temporary root with a `.deck-e2e-root` marker. `HOME`, the database and the private tmux socket are in it.
+2. It writes fake harness binaries (`claude`, `codex`, `copilot`, `opencode`, `pi`) from `scripts/e2e/fake-harness.sh`. Each one answers `--version`, returns at once for probes, and echoes its input in a terminal. A fake `gh` always fails. A `tmux` shim always passes the private socket.
+3. It runs the seed, the backend and tmux with an allowlisted environment (`env -i`). `PATH` is the fake binaries and the system directories only. `CLAUDE_DECK_URL` is the instance itself.
+4. It proves that tmux is private: a probe session must show the private socket, no other session and the instance `HOME`.
+5. It builds `frontend/dist`, unless `E2E_SKIP_BUILD=1`.
+6. It writes the seed database with `scripts/e2e/seed.py`. The seed starts four fake panes for the "Release crew" team in the private tmux server.
+7. It starts the backend on `127.0.0.1:$E2E_PORT` (default `18765`) from the temporary root, so no `.env` file loads. The backend serves the UI on the same origin.
+8. On exit, it stops the backend, kills only the private tmux server and removes only a marked root.
 
-The instance sets `TEST_INSTANCE=1`. With this setting the backend does not start the dispatch scheduler and does not run the start-up relay cleanup. All GitHub HTTP calls fail as connection errors and open no socket. The journey `g0/isolation.spec.ts` checks that the instance does not signal a `tmux attach-session` process outside its own server.
+The instance sets `TEST_INSTANCE=1`. With this setting the backend does not start the dispatch scheduler and does not run the start-up relay cleanup. All GitHub HTTP calls fail as connection errors and open no socket.
+
+### Refusals
+
+The instance refuses to start (exit status 2) when:
+
+- the tmux executable is not a real tmux binary, for example a launcher script that forces a shared team socket;
+- the private tmux socket, the server session list or the server `HOME` is not the instance's own;
+- `CLAUDE_DECK_URL` names another Deck, or a `CLAUDE_DECK_*TOKEN*` variable is set;
+- the instance `HOME` holds an Agent Mail MCP configuration;
+- a harness name, `gh` or `tmux` does not resolve to the instance's fake binary;
+- `E2E_ROOT` is not empty and has no `.deck-e2e-root` marker. The instance never deletes such a directory.
+
+`g0/isolation.spec.ts` has one journey for each refusal. It also checks that a process named `tmux attach-session` outside the instance survives the instance start and stop.
+
+### The seed clock
+
+`playwright.config.ts` sets `E2E_SEED_NOW` once for each run: the start of the current UTC hour. The seed writes every time as a fixed offset from it. The journeys read the same value through `seedNow()` and `seedAgo()` in `e2e/support/time.ts`. The data is identical in each run, and it stays inside Deck's recent windows, for example the 7-day Audit window.
 
 ## Rules for every journey
 
@@ -36,10 +55,12 @@ Import `test` and `expect` from `e2e/support/guard.ts`. The guard fixture runs i
 
 Declare an expected status before the request: `guard.expectStatus('GET', /\/api\/v1\/work-items\/999999$/, 404)`. A repeat after that 4xx still fails.
 
+The guard has a self-test in `g0/guard.spec.ts`.
+
 Use the helpers:
 
 - `e2e/support/director-key.ts` enters the synthetic Director key when Deck asks for it.
-- `e2e/support/time.ts` gives the fixed browser zone and locale, the seed clock (`SEED_NOW`) and local-time assertions.
+- `e2e/support/time.ts` gives the fixed browser zone and locale, the seed clock (`seedNow()`, `seedAgo()`) and local-time assertions (`localClockPattern()`, `localTimeText()`, `expectLocalTime()`).
 
 Use seeded names from `scripts/e2e/scenarios.py`. Do not depend on database IDs that the seed does not fix.
 
@@ -54,7 +75,9 @@ npx playwright test e2e/g0/routes.spec.ts             # one file
 npx playwright test --grep "Overview"                 # journeys whose title matches
 ```
 
-The first run needs the backend venv (`backend/venv`) and Chromium (`npx playwright install chromium`).
+The first run needs the backend venv (`backend/venv`), tmux and Chromium (`npx playwright install chromium`).
+
+Set `E2E_TMUX` when the first `tmux` on `PATH` is a launcher script, for example on a shared agent host: `E2E_TMUX=/usr/bin/tmux npm run e2e`. Set `E2E_NO_TMUX=1` to run with no tmux server at all. The journeys that need live sessions then skip. CI never sets it.
 
 To keep one instance running while you edit a journey:
 

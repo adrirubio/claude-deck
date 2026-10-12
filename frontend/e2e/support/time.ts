@@ -54,3 +54,14 @@ export function localClockPattern(moment: Date): RegExp {
   const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
   return new RegExp(`\\b0?(${hour24}|${hour12}):${minute}\\b`)
 }
+
+/**
+ * The date-and-time text around the moment's clock, without labels around it.
+ * For example "Oct 12, 10:43 AM" from "repo · updated Oct 12, 10:43 AM".
+ */
+export function localTimeText(text: string, moment: Date): string | null {
+  const clock = localClockPattern(moment).source.replace(/^\\b|\\b$/g, '')
+  const date = String.raw`(?:[A-Z][a-z]{2,8}\.? \d{1,2},? (?:\d{4},? )?|\d{1,2}/\d{1,2}/\d{2,4},? |\d{4}-\d{2}-\d{2}[ T])?`
+  const match = new RegExp(`${date}(?:at )?${clock}(?::\\d{2})?(?: ?[AP]M)?`).exec(text)
+  return match ? match[0].trim() : null
+}

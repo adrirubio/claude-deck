@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test'
 import { enterDirectorKey } from '../support/director-key'
 import { expect, test } from '../support/guard'
-import { localClockPattern, seedAgo } from '../support/time'
+import { localClockPattern, localTimeText, seedAgo } from '../support/time'
 
 // #521: one seeded moment shows the same local time on Teams, Work and Audit.
 // The moment is SHARED_MOMENT in scripts/e2e/scenarios.py: item #103
@@ -18,7 +18,9 @@ async function timeText(page: Page, near: string): Promise<string> {
   const scope = (await row.count()) ? row : page.locator('main')
   const cell = scope.getByText(pattern).first()
   await expect(cell, `local time ${pattern} near "${near}"`).toBeVisible()
-  return (await cell.innerText()).trim()
+  const text = localTimeText(await cell.innerText(), moment)
+  expect(text, `a date and time near "${near}"`).not.toBeNull()
+  return text as string
 }
 
 test('@pending one seeded moment shows the same local time on Teams, Work and Audit', async ({ page }) => {
