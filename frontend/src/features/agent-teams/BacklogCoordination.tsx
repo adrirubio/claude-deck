@@ -232,7 +232,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       </div>
       <Button variant="outline" size="sm" disabled={!data} onClick={configure}>Configure backlog</Button>
     </div>
-    {error && <p role="alert" className="mt-2 text-amber-500">{error}</p>}
+    {error && <p role="alert" className="mt-2 text-amber-700 dark:text-amber-500">{error}</p>}
     {data && <>
       <p className="mt-2 text-muted-foreground">
         Last observed: {date(data.last_polled_at)} · Last Leader assessment: {date(data.last_assessed_at)}

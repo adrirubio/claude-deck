@@ -129,11 +129,16 @@ export function OverviewPage() {
           )}
           {(["attention", "review", "active"] as const).map((category) => (
             <section key={category} className="space-y-3">
-              <h3 className="text-lg font-semibold">
-                <Link className={anchor} to={workLink(params, category)}>
-                  {categories[category]}
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <h3 className="text-lg font-semibold">{categories[category]}</h3>
+                <Link
+                  className={anchor}
+                  aria-label={`View all ${categories[category]}`}
+                  to={workLink(params, category)}
+                >
+                  View all
                 </Link>
-              </h3>
+              </div>
               <WorkResults
                 query={factoryQuery(
                   new URLSearchParams(workLink(params, category).split("?")[1]),

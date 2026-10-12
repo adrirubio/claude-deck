@@ -132,9 +132,9 @@ function formatDate(value: string) {
 }
 
 function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {
-  if (action === 'spawn') return 'border-emerald-500/70 text-emerald-400'
-  if (action === 'reuse') return 'border-sky-500/70 text-sky-400'
-  if (action === 'adopt') return 'border-amber-500/70 text-amber-400'
+  if (action === 'spawn') return 'border-emerald-500/70 text-emerald-700 dark:text-emerald-400'
+  if (action === 'reuse') return 'border-sky-500/70 text-sky-700 dark:text-sky-400'
+  if (action === 'adopt') return 'border-amber-500/70 text-amber-700 dark:text-amber-400'
   if (action === 'blocked') return 'border-destructive/70 text-destructive'
   return 'border-muted-foreground/50 text-muted-foreground'
 }
@@ -716,13 +716,13 @@ function LaunchPlanDialog({
                   <p className="mt-3 text-sm text-muted-foreground">{item.reasons.join('; ')}</p>
                 )}
                 {(item.action === 'adopt' || item.block_code === 'unbound_pane_requires_operator_adoption') && (
-                  <p className="mt-2 text-sm text-amber-300">
+                  <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">
                     Unbound pane: {String(item.matching_session?.tmux_target ?? 'unknown')} (PID {String(item.matching_session?.pid ?? 'unknown')}).
                     Its current prompt and authority were not created by this roster.
                   </p>
                 )}
                 {item.warnings && item.warnings.length > 0 && (
-                  <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
+                  <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-300">
                     {item.warnings.join('; ')}
                   </div>
                 )}
@@ -1422,8 +1422,8 @@ export function AgentTeamsPage() {
                 type="button"
                 onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
                 className={cn(
-                  'mb-2 w-full rounded-md border p-3 text-left transition-colors hover:bg-accent',
-                  selectedPresetId === preset.id && 'border-primary bg-accent'
+                  'mb-2 w-full rounded-md border border-l-4 p-3 text-left transition-colors hover:bg-accent',
+                  selectedPresetId === preset.id && 'border-l-primary bg-accent'
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -1476,10 +1476,16 @@ export function AgentTeamsPage() {
                     <Copy className="mr-2 h-4 w-4" />
                     Duplicate
                   </Button>
-                  <Button variant="destructive" onClick={removePreset}>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete
-                  </Button>
+                  <div className="border-l pl-4">
+                    <Button
+                      variant="outline"
+                      className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={removePreset}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -1579,7 +1585,7 @@ export function AgentTeamsPage() {
                             </div>
                           )}
                           {slot.warnings && slot.warnings.length > 0 && (
-                            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
+                            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-300">
                               {slot.warnings.join('; ')}
                             </div>
                           )}
