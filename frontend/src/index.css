@@ -24,8 +24,8 @@
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 9%;
 
-    /* Primary - Matrix green (deeper for light mode contrast) */
-    --primary: 142 60% 35%;
+    /* Primary - Matrix green (deeper for light mode contrast, AA on white) */
+    --primary: 142 60% 29%;
     --primary-foreground: 0 0% 100%;
 
     /* Secondary - Neutral gray */
@@ -34,28 +34,28 @@
 
     /* Muted */
     --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 45%;
+    --muted-foreground: 0 0% 40%;
 
-    /* Accent - Matching green */
-    --accent: 142 60% 35%;
-    --accent-foreground: 0 0% 100%;
+    /* Accent - Neutral raised surface for hover and selected states */
+    --accent: 0 0% 92%;
+    --accent-foreground: 0 0% 9%;
 
     /* Destructive */
     --destructive: 0 70% 45%;
     --destructive-foreground: 0 0% 100%;
 
     /* Status Colors */
-    --success: 142 60% 35%;
+    --success: 142 60% 29%;
     --success-foreground: 0 0% 100%;
     --warning: 45 80% 45%;
     --warning-foreground: 0 0% 9%;
-    --info: 200 60% 45%;
+    --info: 200 80% 32%;
     --info-foreground: 0 0% 100%;
 
     /* Borders & Inputs */
     --border: 0 0% 88%;
     --input: 0 0% 88%;
-    --ring: 142 60% 35%;
+    --ring: 142 60% 29%;
 
     --radius: 0.5rem;
 
@@ -88,15 +88,15 @@
 
     /* Muted */
     --muted: 0 0% 14%;
-    --muted-foreground: 0 0% 55%;
+    --muted-foreground: 0 0% 60%;
 
-    /* Accent - Matching green */
-    --accent: 142 70% 45%;
-    --accent-foreground: 0 0% 6%;
+    /* Accent - Neutral raised surface for hover and selected states */
+    --accent: 0 0% 16%;
+    --accent-foreground: 0 0% 90%;
 
-    /* Destructive */
-    --destructive: 0 70% 50%;
-    --destructive-foreground: 0 0% 100%;
+    /* Destructive (light enough for text on the dark surfaces) */
+    --destructive: 0 72% 66%;
+    --destructive-foreground: 0 0% 6%;
 
     /* Status Colors */
     --success: 142 70% 45%;
@@ -104,7 +104,7 @@
     --warning: 45 90% 50%;
     --warning-foreground: 0 0% 6%;
     --info: 200 70% 50%;
-    --info-foreground: 0 0% 100%;
+    --info-foreground: 0 0% 6%;
 
     /* Borders & Inputs */
     --border: 0 0% 18%;
