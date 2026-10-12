@@ -164,6 +164,29 @@ async def require_operator(
         raise HTTPException(status_code=401, detail="operator_token_invalid")
 
 
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+async def require_operator_for_writes(
+    request: Request,
+    x_deck_operator_token: str | None = Header(default=None),
+) -> None:
+    """Guard the writes of a router that changes the controller's own settings.
+
+    Hooks, MCP servers and the status line are commands that run as the
+    controller, and the MCP test route starts a configured command at once, so
+    a write on these routers is as strong as running a command. When a Director
+    key is configured, every write needs it; reads stay open.
+
+    An install without a configured key (one user on a laptop) keeps working as
+    before. That is deliberate and is the only difference from require_operator,
+    which refuses with 503 when no key is configured.
+    """
+    if request.method in _READ_METHODS or not settings.operator_token:
+        return
+    await require_operator(x_deck_operator_token)
+
+
 async def require_mail_session_or_operator(
     x_deck_session_token: Optional[str] = Header(default=None),
     x_deck_operator_token: Optional[str] = Header(default=None),

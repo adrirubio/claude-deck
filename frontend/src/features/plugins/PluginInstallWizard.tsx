@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { operatorWriteHeaders } from "@/lib/api";
 import type { MarketplacePlugin, PluginInstallResponse, PluginScope } from "@/types/plugins";
 import {
   Dialog,
@@ -78,7 +79,7 @@ export function PluginInstallWizard({
     try {
       const response = await fetch("/api/v1/plugins/install", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...operatorWriteHeaders("POST") },
         body: JSON.stringify({
           name: plugin.name,
           marketplace_name: marketplaceName,
