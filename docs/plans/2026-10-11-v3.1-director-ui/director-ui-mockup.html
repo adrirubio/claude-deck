@@ -71,6 +71,38 @@
   .btn.sm { height:28px; padding:0 10px; font-size:13px; }
 
   /* needs you */
+
+  /* Progress card (proposal 2026-10-12): what has happened, what is happening, what still needs to happen */
+  .progress { background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); margin-bottom:22px; overflow:hidden; }
+  .camp { padding:16px 18px; }
+  .camp + .camp { border-top:1px solid var(--line); }
+  .camp .ch { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .camp .ch b { font-size:15px; }
+  .camp .ch .team { all:unset; color:var(--muted); font-size:12.5px; }
+  .camp .ch .frac { margin-left:auto; font-size:13px; color:var(--muted); }
+  .camp .ch .frac strong { color:var(--ink); font-size:15px; }
+  .bar { display:flex; height:10px; border-radius:6px; overflow:hidden; background:var(--raised); margin:10px 0 14px; border:1px solid var(--line); }
+  .bar span { display:block; height:100%; }
+  .bar .d { background:var(--green); }
+  .bar .u { background:var(--violet); }
+  .bar .q { background:color-mix(in srgb, var(--violet) 35%, var(--raised)); }
+  .cols3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; }
+  .cols3 h3 { margin:0 0 6px; font-size:12.5px; color:var(--muted); font-weight:600; display:flex; align-items:center; gap:7px; text-transform:none; }
+  .cols3 h3 .n { color:var(--ink); font-size:15px; font-weight:700; }
+  .cols3 .sw { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  .cols3 ul { list-style:none; margin:0; padding:0; font-size:13px; }
+  .cols3 li { padding:3px 0; line-height:1.35; }
+  .cols3 li .sub { display:block; font-size:12px; }
+  .cols3 .areas { display:flex; flex-wrap:wrap; gap:5px; margin-top:4px; }
+  .cols3 .area { font-size:12px; padding:1px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); background:var(--raised); }
+  .decide { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px dashed var(--line); font-size:13px; }
+  .decide .lbl { color:var(--muted); }
+  .decide .step { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px; background:var(--amber-soft); color:var(--amber-ink); font-weight:600; font-size:12.5px; }
+  .decide .step.later { background:var(--raised); color:var(--muted); font-weight:500; border:1px solid var(--line); }
+  .decide .links { margin-left:auto; display:flex; gap:14px; }
+  .decide .links a { color:var(--muted); text-decoration:none; font-size:12.5px; }
+  .decide .links a:hover { color:var(--ink); text-decoration:underline; }
+  @media (max-width: 900px) { .cols3 { grid-template-columns:1fr; } }
   .needs { border-radius:12px; background:var(--panel); border:1px solid var(--line); box-shadow:var(--shadow); overflow:hidden; margin-bottom:22px; }
   .needs.has { border-color:color-mix(in srgb, var(--amber) 55%, var(--line)); }
   .needs .nh { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--line); }
@@ -370,6 +402,64 @@
     </div>
     <div class="needs" data-idle hidden>
       <div class="empty"><span class="ok">✓</span>Nothing needs you right now.</div>
+    </div>
+
+
+    <!-- Progress (proposal 2026-10-12): one row per campaign -->
+    <div class="sec"><h2>Progress</h2><span class="meta">2 campaigns</span><a href="#">All work ›</a></div>
+    <div class="progress">
+      <div class="camp">
+        <div class="ch"><b>Deck v3.0.1 release</b><span class="team">major-release-v3 · parent issue #490</span>
+          <span class="frac" data-busy><strong>6</strong> of 9 done</span><span class="frac" data-idle hidden><strong>9</strong> of 9 done · released</span></div>
+        <div class="bar" data-busy aria-label="6 done, 2 under way, 1 queued, 0 not started"><span class="d" style="width:66.7%"></span><span class="u" style="width:22.2%"></span><span class="q" style="width:11.1%"></span></div>
+        <div class="bar" data-idle hidden aria-label="9 done"><span class="d" style="width:100%"></span></div>
+        <div class="cols3" data-busy>
+          <div><h3><span class="sw" style="background:var(--green)"></span>Done <span class="n">6</span></h3>
+            <ul><li>Release notes and version numbers<span class="sub">finished 25 min ago</span></li>
+                <li>Website pages for v3.0.1<span class="sub">finished 1 h ago</span></li>
+                <li class="sub">and 4 more ›</li></ul></div>
+          <div><h3><span class="sw" style="background:var(--violet)"></span>Under way <span class="n">2</span></h3>
+            <ul><li>Release files and checksums<span class="sub">R2 is building it · started 40 min ago</span></li>
+                <li>Public documentation<span class="sub">V1 is reviewing it</span></li></ul></div>
+          <div><h3><span class="sw" style="background:color-mix(in srgb, var(--violet) 35%, var(--raised))"></span>Still to do <span class="n">1</span></h3>
+            <ul><li>Announce the release<span class="sub">queued · starts when a member is free</span></li></ul></div>
+        </div>
+        <div class="cols3" data-idle hidden>
+          <div><h3><span class="sw" style="background:var(--green)"></span>Done <span class="n">9</span></h3>
+            <ul><li>Deck v3.0.1 published<span class="sub">yesterday, 18:40</span></li><li class="sub">and 8 more ›</li></ul></div>
+          <div><h3>Under way <span class="n">0</span></h3><ul><li class="sub">Nothing is under way.</li></ul></div>
+          <div><h3>Still to do <span class="n">0</span></h3><ul><li class="sub">Nothing remains. The campaign is complete.</li></ul></div>
+        </div>
+        <div class="decide" data-busy><span class="lbl">Your decisions ahead:</span>
+          <span class="step"><svg class="ic" style="width:12px;height:12px"><use href="#i-human"/></svg>Approve publication · now</span>
+          <span class="links"><a href="#">Work ›</a><a href="#">Parent issue #490 ›</a></span></div>
+        <div class="decide" data-idle hidden><span class="lbl">Your decisions ahead:</span><span class="sub">none</span>
+          <span class="links"><a href="#">Work ›</a><a href="#">Parent issue #490 ›</a></span></div>
+      </div>
+
+      <div class="camp">
+        <div class="ch"><b>Supervised delivery factory</b><span class="team">product-reposition-fork · parent issue #3</span>
+          <span class="frac"><strong>7</strong> of 29 done</span></div>
+        <div class="bar" data-busy aria-label="7 done, 2 under way, 1 queued, 19 not started"><span class="d" style="width:24.1%"></span><span class="u" style="width:6.9%"></span><span class="q" style="width:3.4%"></span></div>
+        <div class="bar" data-idle hidden aria-label="7 done, 22 not started"><span class="d" style="width:24.1%"></span></div>
+        <div class="cols3">
+          <div><h3><span class="sw" style="background:var(--green)"></span>Done <span class="n">7</span></h3>
+            <ul><li>Factory playbook and supervisor skill<span class="sub">finished yesterday</span></li>
+                <li>Repository setup page<span class="sub">finished 2 days ago</span></li>
+                <li class="sub">and 5 more ›</li></ul></div>
+          <div data-busy><h3><span class="sw" style="background:var(--violet)"></span>Under way <span class="n">2</span></h3>
+            <ul><li>Supervisor status on the team card<span class="sub">B3 is waiting: checks cannot be read</span></li>
+                <li>Overview layout for Directors<span class="sub">waiting for you: review the design</span></li></ul></div>
+          <div data-idle hidden><h3>Under way <span class="n">0</span></h3><ul><li class="sub">Paused. Nothing is under way.</li></ul></div>
+          <div><h3><span class="sw" style="background:color-mix(in srgb, var(--violet) 35%, var(--raised))"></span>Still to do <span class="n" data-busy>20</span><span class="n" data-idle hidden>22</span></h3>
+            <ul><li data-busy>1 queued · 19 not started yet</li><li data-idle hidden>22 not started · the team is paused</li></ul>
+            <div class="areas"><span class="area">Factory pages 6</span><span class="area">Teams 4</span><span class="area">Audit 4</span><span class="area">Agent Mail 3</span><span class="area">Other 3</span></div></div>
+        </div>
+        <div class="decide"><span class="lbl">Your decisions ahead:</span>
+          <span class="step" data-busy><svg class="ic" style="width:12px;height:12px"><use href="#i-human"/></svg>Review the Overview design · now</span>
+          <span class="step later">Approve promotion to the main branch · at the end</span>
+          <span class="links"><a href="#">Work ›</a><a href="#">Parent issue #3 ›</a></span></div>
+      </div>
     </div>
 
     <div class="tiles">
