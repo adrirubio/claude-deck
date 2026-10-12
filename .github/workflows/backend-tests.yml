@@ -3,7 +3,7 @@ name: Backend regression tests
 on:
   pull_request:
     branches: [master, feature/software-delivery-product-reposition, release/v3.1]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   push:
     branches: [master, feature/software-delivery-product-reposition, release/v3.1]
 
