@@ -1,3 +1,4 @@
+import type { AgentStatus } from '@/types/agentStatus'
 import type { AgentProviderId } from '@/types/providers'
 
 export interface AgentSession {
@@ -26,6 +27,7 @@ export interface AgentSession {
   mail_wake_state?: string | null
   mail_wake_reason?: string | null
   mail_wake_target?: string | null
+  agent_status?: AgentStatus | null
 }
 
 export interface MailWakeAttempt {
