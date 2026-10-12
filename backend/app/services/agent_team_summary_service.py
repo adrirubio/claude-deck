@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
+from mcp_shim.work_remaining_protocol import MAX_AGE
 
 from app.models.database import (
     AgentTeamPreset, GithubApprovalRequest, GithubOwnerObservationPause,
@@ -148,6 +149,8 @@ class AgentTeamSummaryService:
                     continue
                 observations.append(value)
                 expires.append(_utc(value.valid_until))
+                if value.remaining_work.state == "current" and value.remaining_work.reported_at is not None:
+                    expires.append(_utc(value.remaining_work.reported_at) + MAX_AGE)
                 if value.next_actor in _ACTORS:
                     actors.add(value.next_actor)
         except (TimeoutError, OSError):
@@ -163,17 +166,20 @@ class AgentTeamSummaryService:
         changed = final != initial or hold_code() != hold
         now = datetime.now(timezone.utc)
         complete = complete and not changed and min(expires) > now
-        known = complete and len(observations) == total and all(
-            value.remaining_work.state == "current" and value.remaining_work.effort_low_minutes is not None
+        current = [value for value in observations if value.remaining_work.state == "current"
+            and value.remaining_work.reported_at is not None
+            and -timedelta(minutes=5) <= now - _utc(value.remaining_work.reported_at) <= MAX_AGE]
+        known = complete and len(current) == total and all(
+            value.remaining_work.effort_low_minutes is not None
             and value.remaining_work.effort_high_minutes is not None
             and value.remaining_work.effort_low_minutes <= value.remaining_work.effort_high_minutes
-            and value.remaining_work.confidence != "unknown" for value in observations)
-        confidence = min((value.remaining_work.confidence for value in observations),
+            and value.remaining_work.confidence != "unknown" for value in current)
+        confidence = min((value.remaining_work.confidence for value in current),
             key={"low": 0, "medium": 1, "high": 2}.get, default="high") if known else "unknown"
         remaining = TeamRemainingWork(state="known" if known else "unknown", unfinished_items=final[3],
-            reported_items=sum(value.remaining_work.state == "current" for value in observations),
-            effort_low_minutes=sum(value.remaining_work.effort_low_minutes for value in observations) if known else None,
-            effort_high_minutes=sum(value.remaining_work.effort_high_minutes for value in observations) if known else None,
+            reported_items=len(current),
+            effort_low_minutes=sum(value.remaining_work.effort_low_minutes for value in current) if known else None,
+            effort_high_minutes=sum(value.remaining_work.effort_high_minutes for value in current) if known else None,
             confidence=confidence, reason="complete" if known else "context_changed" if changed
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]

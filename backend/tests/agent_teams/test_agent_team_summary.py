@@ -58,7 +58,7 @@ def progress(item_id, *, low=10, high=20, actor="owner", state="current", expire
         phase="implementation", next_actor=actor, next_action="Continue the approved work.",
         publication=GithubPublicationObservation(state="current"),
         remaining_work=GithubWorkRemainingView(state=state, effort_low_minutes=low,
-            effort_high_minutes=high, confidence=confidence, reason=None))
+            effort_high_minutes=high, confidence=confidence, reason=None, reported_at=now))
 
 
 class Progress:
@@ -306,3 +306,26 @@ async def test_more_than_64_items_cannot_produce_a_partial_total(db, monkeypatch
     assert len(reads.calls) == 64
     assert result.remaining_work.state == "unknown"
     assert not result.coverage_complete
+
+
+@pytest.mark.parametrize("age", [timedelta(hours=2, seconds=1), timedelta(minutes=-6)])
+@pytest.mark.asyncio
+async def test_report_age_is_rechecked_before_the_total(db, monkeypatch, age):
+    team, _, items = await seed(db)
+    value = progress(items[0].id)
+    value.remaining_work.reported_at = datetime.now(timezone.utc) - age
+    summary, _ = service(monkeypatch, {items[0].id: value})
+    result = await summary.summary(db, team.id)
+    assert result.remaining_work.state == "unknown"
+    assert result.remaining_work.effort_low_minutes is None
+
+
+@pytest.mark.asyncio
+async def test_summary_expiry_cannot_outlive_a_current_report(db, monkeypatch):
+    team, _, items = await seed(db)
+    value = progress(items[0].id)
+    value.remaining_work.reported_at = datetime.now(timezone.utc) - timedelta(hours=2) + timedelta(seconds=5)
+    summary, _ = service(monkeypatch, {items[0].id: value})
+    result = await summary.summary(db, team.id)
+    assert result.remaining_work.state == "known"
+    assert result.valid_until <= value.remaining_work.reported_at + timedelta(hours=2)
