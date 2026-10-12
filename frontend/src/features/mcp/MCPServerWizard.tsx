@@ -310,8 +310,8 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
             <Label htmlFor="scope">Scope</Label>
             <Select
               value={formData.scope}
-              onValueChange={(value: "user" | "project") =>
-                setFormData({ ...formData, scope: value })
+              onValueChange={(value) =>
+                setFormData({ ...formData, scope: value as "user" | "project" })
               }
             >
               <SelectTrigger id="scope">

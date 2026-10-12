@@ -23,7 +23,7 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/backend
       DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0

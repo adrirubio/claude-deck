@@ -152,7 +152,7 @@ export function PluginInstallWizard({
                   <FolderOpen className="h-4 w-4 text-muted-foreground" />
                   <Label>Installation Scope</Label>
                 </div>
-                <Select value={scope} onValueChange={(value: PluginScope) => setScope(value)}>
+                <Select value={scope} onValueChange={(value) => setScope(value as PluginScope)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
                       <div className="flex items-center gap-2">

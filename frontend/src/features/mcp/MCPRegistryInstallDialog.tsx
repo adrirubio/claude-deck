@@ -410,7 +410,7 @@ export function MCPRegistryInstallDialog({
           {effectiveStep === 3 && (
             <div className="space-y-4">
               <p className="text-sm font-medium">Where should this server be saved?</p>
-              <Select value={scope} onValueChange={(v: 'user' | 'project') => setScope(v)}>
+              <Select value={scope} onValueChange={(v) => setScope(v as 'user' | 'project')}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
