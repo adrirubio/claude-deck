@@ -273,7 +273,8 @@ async def actor_evidence(db, team_ids, authority):
     bindings = (await db.execute(select(AgentPaneBinding).where(AgentPaneBinding.preset_id.in_(team_ids)))).scalars().all()
     retired = (await db.execute(select(MailPaneLifecycle).where(
         MailPaneLifecycle.pane_pid.in_([b.pane_pid for b in bindings])))).scalars().all()
-    return slots, members, sessions, bindings, {(r.pane_pid, r.pane_proc_start) for r in retired}
+    return slots, members, sessions, bindings, {
+        (r.pane_pid, r.pane_proc_start): r.retired_at for r in retired}
 
 
 def association(slot, member, sessions, bindings, retired, now):
@@ -353,7 +354,8 @@ async def work_projections(db, rows, now):
     authority = await _load_work_item_authority(db, [item for item, _, _ in rows])
     team_ids = {team.id for _, _, team in rows}
     slots, members, sessions, bindings, retired = await actor_evidence(db, team_ids, authority)
-    display_statuses = await agent_status_service.for_members(db, members)
+    display_statuses = await agent_status_service.for_snapshot(
+        db, members, slots, sessions, bindings, retired, now=now)
     slots_by_id = {s.id: s for s in slots}
     members_by_id = {m.id: m for m in members}
     members_by_slot = defaultdict(list)

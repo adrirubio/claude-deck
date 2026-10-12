@@ -256,7 +256,7 @@ async def test_contract_versions_manifest_hashes():
         assert manifest["contract_version"] == "p04"
         assert manifest["reviewed_head"] == "7a032daf3147c03f0c030137973b292d05224bf6"
         assert manifest["p01_source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
-        assert manifest["changed_from_p01"] == ["work-item.json", "work-items.json"]
+        assert manifest["changed_from_p01"] == ["schema.json", "work-item.json", "work-items.json"]
         for name, digest in manifest["artifact_sha256"].items():
             actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
             assert actual == digest, f"Artifact hash mismatch: {directory}/{name}"

@@ -25,6 +25,38 @@ A Mail session that plans or launches cannot use prompt or path overrides, inclu
 
 ## Presets
 
+### Shared agent status
+
+The activity route returns `agent_status` for each slot.
+Agent Mail members, Live sessions, and factory session associations use the same status service.
+
+| Field | Values or meaning |
+| --- | --- |
+| `session_state` | `online`, `offline`, or `unknown` |
+| `activity_state` | `working`, `idle`, `stopped`, or `unknown` from native evidence |
+| `activity_reason` | Native observation reason |
+| `wake_state` | `can_wake`, `cannot_wake`, or `unknown` |
+| `wake_reason` | Existing delivery refusal code, or null when delivery has a wake target |
+| `idle_since` | Native idle event time, or null when that time is unknown |
+| `checked_at`, `valid_until` | UTC observation time and expiry; the validity interval is 15 seconds |
+
+Online status and wake status are separate facts.
+An old pane observation does not hide a live MCP session.
+It can still prevent delivery under the existing wake rules.
+For example, an agent can be online and idle, with `cannot_wake` and `wake_target_unbound`.
+
+Calculate idle duration only from `idle_since`.
+Do not use mailbox age as idle duration.
+Show unknown after `valid_until` expires.
+Unknown activity does not prove that work stopped.
+
+The shared status does not grant approval, execution, recovery, lease renewal, or delivery authority.
+Delivery checks its current target again.
+Legacy native observation fields and wake fields keep their existing meanings.
+Shared status reads send no input and change no heartbeat.
+They do not save native session identity.
+The existing Teams activity route retains its separate first-launch identity capture.
+
 ### List Presets
 
 ```http

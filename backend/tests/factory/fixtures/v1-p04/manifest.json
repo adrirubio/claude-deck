@@ -6,14 +6,15 @@
     "protected-errors.json": "dd54587e32b53c33ddde27b43bcd8be413662cc2153bf4dfba5a9e93be518151",
     "repositories.json": "1749e1b194b71859891d28adf7d1c2e8683ef0c6ac0ab7000b27fce00e6d9559",
     "repository.json": "0bb10513a04713b1ffefb5897bd765c1b5bea8596e50f3f968913bf02cde61d1",
-    "schema.json": "6816e998fe803098bc5a0b9d9dc88ae79e377dea14d300e28b41dc024a9ff7d5",
-    "work-item.json": "ed7c607b98dde6ba0201f4d50fe408cc07e7083eb409b5d57f7d583921d7b132",
-    "work-items.json": "78baf0a4c839981b6980ab716eab3774b952f0a3d347c3ca757744fc736bf55c"
+    "schema.json": "43f2bc37375c9c3cddf33a8439bcd5daed6b3793722330381b163b4ecb7cf18c",
+    "work-item.json": "13e70d69aaf1c1cc5010ea4cb34c3653a6dba127f3ed78d35fa5e94f30beebbd",
+    "work-items.json": "a91dbac3899d3b23575bc3f37cc15020d34d4a43c647aff1bbe0bb40dbe7a882"
   },
   "artifact_source": "current working tree; historical review fields do not approve regenerated artifacts",
   "based_on_p01_manifest_sha256": "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
   "change_summary": "P04 explicit Leader authority: approval source is explicit_assignment in work-item and work-items responses.",
   "changed_from_p01": [
+    "schema.json",
     "work-item.json",
     "work-items.json"
   ],

@@ -27,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailPaneLifecycle, MailTeamMember,
 )
-from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
+from app.models.schemas import (
+    AgentActivityDisplayObservation, AgentActivityObservation, AgentTeamActivityResponse,
+)
 from app.services.pi_activity_service import observe_pi
 from app.services.claude_activity_service import observe_claude
 
@@ -446,8 +448,11 @@ async def observe_team(db: AsyncSession, preset_id: int, *, include_agent_status
         from app.services.agent_status_service import agent_status_service, unknown_status
         statuses = await agent_status_service.for_team(
             db, preset_id, activities={entry.slot_id: entry for entry in observations})
-        for entry in observations:
-            entry.agent_status = statuses.get(entry.slot_id, unknown_status(now))
+        observations = [AgentActivityDisplayObservation(
+            **entry.model_dump(), agent_status=statuses.get(entry.slot_id, unknown_status(now)))
+            for entry in observations]
+    else:
+        observations = [AgentActivityDisplayObservation(**entry.model_dump()) for entry in observations]
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
 

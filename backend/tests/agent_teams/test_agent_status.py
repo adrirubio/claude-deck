@@ -2,11 +2,10 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
 
 from app.models.database import (
     AgentTeamPreset, AgentTeamSlot, AgentPaneBinding, MailTeamMember, MailAgentSession,
-    TeamGithubScope, GithubWorkItem, GithubWorkspace,
+    TeamGithubScope, GithubWorkItem, GithubWorkspace, MailPaneLifecycle,
 )
 from app.models.schemas import AgentActivityObservation
 from app.services import agent_activity_service as activity
@@ -162,3 +161,62 @@ async def test_shared_status_unknown_idle_time_is_not_mailbox_age(db,monkeypatch
     status=(await agent_status_service.for_members(db,[member]))[member.id]
     assert status.activity_state=="idle"
     assert status.idle_since is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case,reason", [
+    ("fresh", None), ("opted_out", "wake_opted_out"),
+    ("expired_mcp", "wake_target_unbound"), ("ambiguous", "wake_target_ambiguous"),
+    ("wrong_provider", "wake_target_unbound"), ("wrong_slot", "wake_target_unbound"),
+])
+async def test_shared_wake_state_matches_delivery_resolver(db, monkeypatch, case, reason):
+    from app.services.agent_status_service import agent_status_service
+    team, slot, member, pane, mcp, *_ = await seed_agent(
+        db, monkeypatch, observation_age=timedelta(seconds=1))
+    if case == "opted_out":
+        mcp.wake_enabled = False
+    elif case == "expired_mcp":
+        mcp.last_seen_at = datetime.utcnow() - timedelta(hours=3)
+    elif case == "wrong_provider":
+        mcp.provider = "claude-code"
+    elif case == "wrong_slot":
+        mcp.team_slot_id = slot.id + 100
+    elif case == "ambiguous":
+        db.add(MailAgentSession(
+            member_id=member.id, provider=mcp.provider, source="mcp", session_key="mcp:second",
+            team_preset_id=team.id, team_slot_id=slot.id, mailbox_status="connected",
+            capability_token_hash="synthetic-second-hash", last_seen_at=datetime.utcnow(),
+            bound_pane_pid=pane.pid, bound_pane_proc_start=mcp.bound_pane_proc_start,
+            cwd=slot.repo_path, wake_enabled=True))
+    await db.commit()
+    if reason is None:
+        assert (await agent_mail_service._nudge_session_for_member(db, member.id, datetime.utcnow())).id == pane.id
+    else:
+        with pytest.raises(MailWakeError, match=reason):
+            await agent_mail_service._nudge_session_for_member(db, member.id, datetime.utcnow())
+    status = (await agent_status_service.for_members(db, [member]))[member.id]
+    assert status.wake_state == ("can_wake" if reason is None else "cannot_wake")
+    assert status.wake_reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retired", [False, True])
+async def test_factory_native_inputs_match_team_inputs_for_lifecycle(db, monkeypatch, retired):
+    from app.services.agent_status_service import agent_status_service
+    from app.services.factory_projection_service import actor_evidence
+    team, slot, member, pane, mcp, *_ = await seed_agent(db, monkeypatch)
+    db.add(MailPaneLifecycle(pane_pid=pane.pid, pane_proc_start=mcp.bound_pane_proc_start,
+                            retired_at=datetime.utcnow() if retired else None))
+    await db.commit()
+    expected = await activity._team_inputs(db, team.id)
+    seen = []
+    def capture_inputs(slot_id, provider, session_id, bindings, duplicate, now):
+        seen.append((slot_id, provider, session_id, bindings, duplicate))
+        return AgentActivityObservation(slot_id=slot_id, state="unknown", reason="observation_unavailable")
+    monkeypatch.setattr(activity, "_observe", capture_inputs)
+    slots, members, sessions, bindings, lifecycles = await actor_evidence(db, {team.id}, {})
+    # Legacy association keeps membership for both lifecycle rows.
+    assert (pane.pid, mcp.bound_pane_proc_start) in lifecycles
+    await agent_status_service.for_snapshot(db, members, slots, sessions, bindings, lifecycles)
+    assert seen == expected
+    assert bool(seen[0][3]) is not retired

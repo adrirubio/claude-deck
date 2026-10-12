@@ -308,6 +308,13 @@ A review does not grant retry, budget, roster, merge or deployment authority. Th
 
 Read evidence before taking a remedy. Native liveness, activity, progress and authorization are different facts.
 
+Use the [shared agent status](../api/agent-teams.md#shared-agent-status) for online, activity, and wake displays.
+This removes manual comparison of Agent Mail, Live sessions, Teams, and factory status rules.
+Read `idle_since` for idle duration.
+Do not infer idle duration from mailbox age.
+Unknown or expired observations require current evidence.
+Status grants no approval, lease renewal, wake delivery, or recovery permission.
+
 | Observation | Response |
 |---|---|
 | Required CI is pending or cannot be read | Check the actual execution and credential read access; keep the item unverified |

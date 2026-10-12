@@ -2597,6 +2597,9 @@ class AgentActivityObservation(BaseModel):
     state: Literal["working", "idle", "stopped", "unknown"]
     reason: str
     observed_at: Optional[datetime] = None
+
+
+class AgentActivityDisplayObservation(AgentActivityObservation):
     agent_status: Optional[AgentStatus] = None
 
 
@@ -2604,7 +2607,7 @@ class AgentTeamActivityResponse(BaseModel):
     preset_id: int
     checked_at: datetime
     valid_until: datetime
-    slots: List[AgentActivityObservation] = Field(default_factory=list)
+    slots: List[AgentActivityDisplayObservation] = Field(default_factory=list)
 
 
 class GithubWorkItemResponse(BaseModel):
