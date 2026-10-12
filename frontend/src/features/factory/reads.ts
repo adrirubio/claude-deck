@@ -1,16 +1,37 @@
 import { useSyncExternalStore } from "react";
-import { apiClient } from "@/lib/api";
+import { ApiHttpError, apiClient } from "@/lib/api";
 
 // Shared per-URL read state. No mutation, credential, owner claim or GitHub poll.
 export interface ReadState<T> {
   data: T | null;
   error: Error | null;
   refreshing: boolean;
+  // A transient error: the next read is scheduled.
+  retrying: boolean;
+  // A permanent error: polling stopped until a manual refresh.
+  stopped: boolean;
+}
+const POLL_MS = 5000;
+const RETRY_MS = [5000, 10000, 30000, 60000];
+// The request will fail again until the URL or the server data changes.
+const PERMANENT = new Set([400, 401, 404, 410, 422]);
+function isPermanent(error: unknown) {
+  return error instanceof ApiHttpError && PERMANENT.has(error.status);
+}
+function retryDelay(failures: number) {
+  return RETRY_MS[Math.min(failures, RETRY_MS.length) - 1];
 }
 class Observation<T> {
-  state: ReadState<T> = { data: null, error: null, refreshing: false };
+  state: ReadState<T> = {
+    data: null,
+    error: null,
+    refreshing: false,
+    retrying: false,
+    stopped: false,
+  };
   listeners = new Set<() => void>();
-  timer: ReturnType<typeof setInterval> | null = null;
+  timer: ReturnType<typeof setTimeout> | null = null;
+  failures = 0;
   generation = 0;
   promise: Promise<void> | null = null;
   readonly endpoint: string;
@@ -21,18 +42,46 @@ class Observation<T> {
     this.state = state;
     this.listeners.forEach((fn) => fn());
   }
+  schedule(delay: number | null) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (delay !== null && this.listeners.size)
+      this.timer = setTimeout(this.tick, delay);
+  }
+  tick = () => {
+    this.timer = null;
+    if (document.visibilityState === "visible") void this.refresh();
+    else this.schedule(POLL_MS);
+  };
   refresh = () => {
     if (this.promise) return this.promise;
     const generation = this.generation;
     this.publish({ ...this.state, refreshing: true });
     this.promise = apiClient<T>(this.endpoint)
       .then((data) => {
-        if (generation === this.generation)
-          this.publish({ data, error: null, refreshing: false });
+        if (generation !== this.generation) return;
+        this.failures = 0;
+        this.publish({
+          data,
+          error: null,
+          refreshing: false,
+          retrying: false,
+          stopped: false,
+        });
+        this.schedule(POLL_MS);
       })
       .catch((error: Error) => {
-        if (generation === this.generation)
-          this.publish({ ...this.state, error, refreshing: false });
+        if (generation !== this.generation) return;
+        const stopped = isPermanent(error);
+        this.failures = stopped ? 0 : this.failures + 1;
+        this.publish({
+          ...this.state,
+          error,
+          refreshing: false,
+          retrying: !stopped,
+          stopped,
+        });
+        this.schedule(stopped ? null : retryDelay(this.failures));
       })
       .finally(() => {
         this.promise = null;
@@ -40,19 +89,19 @@ class Observation<T> {
     return this.promise;
   };
   visibleRefresh = () => {
-    if (document.visibilityState === "visible") void this.refresh();
+    if (document.visibilityState === "visible" && !this.state.stopped)
+      void this.refresh();
   };
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
     if (this.listeners.size === 1) {
-      this.visibleRefresh();
-      this.timer = setInterval(this.visibleRefresh, 5000);
+      if (!this.state.stopped) this.tick();
       document.addEventListener("visibilitychange", this.visibleRefresh);
     }
     return () => {
       this.listeners.delete(fn);
       if (!this.listeners.size) {
-        if (this.timer) clearInterval(this.timer);
+        this.schedule(null);
         document.removeEventListener("visibilitychange", this.visibleRefresh);
         queueMicrotask(() => {
           if (!this.listeners.size) {
@@ -104,9 +153,12 @@ class CursorList<T> {
     refreshing: false,
     paused: false,
     needsRefresh: false,
+    retrying: false,
+    stopped: false,
   };
   listeners = new Set<() => void>();
-  timer: ReturnType<typeof setInterval> | null = null;
+  timer: ReturnType<typeof setTimeout> | null = null;
+  failures = 0;
   generation = 0;
   firstRequest = 0;
   readonly endpoint: string;
@@ -152,26 +204,53 @@ class CursorList<T> {
         },
         error: null,
         refreshing: false,
+        retrying: false,
+        stopped: false,
       });
+      if (!cursor) {
+        this.failures = 0;
+        this.schedule(POLL_MS);
+      }
     } catch (error) {
       if (
         generation === this.generation &&
         (cursor || request === this.firstRequest)
-      )
+      ) {
+        // A failed older page is shown; only a first-page read retries.
+        const stopped = !cursor && isPermanent(error);
+        const retrying = !cursor && !stopped;
+        this.failures = retrying ? this.failures + 1 : 0;
         this.publish({
           ...this.state,
           error: error as Error,
           refreshing: false,
+          retrying,
+          stopped,
         });
+        if (!cursor) this.schedule(retrying ? retryDelay(this.failures) : null);
+      }
     }
   }
+  schedule(delay: number | null) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (delay !== null && this.listeners.size)
+      this.timer = setTimeout(this.tick, delay);
+  }
+  tick = () => {
+    this.timer = null;
+    this.poll();
+  };
   poll = () => {
+    if (this.state.stopped) return;
     if (
       this.state.paused ||
       this.state.refreshing ||
       document.visibilityState !== "visible"
-    )
+    ) {
+      this.schedule(POLL_MS);
       return;
+    }
     this.publish({ ...this.state, refreshing: true });
     void this.fetchPage(null, this.generation, ++this.firstRequest);
   };
@@ -192,7 +271,10 @@ class CursorList<T> {
       paused: false,
       refreshing: false,
       needsRefresh: false,
+      retrying: false,
+      stopped: false,
     });
+    this.failures = 0;
     this.poll();
   };
   markDirty = () => this.publish({ ...this.state, needsRefresh: true });
@@ -213,13 +295,12 @@ class CursorList<T> {
         }
       });
       this.poll();
-      this.timer = setInterval(this.poll, 5000);
       document.addEventListener("visibilitychange", this.poll);
     }
     return () => {
       this.listeners.delete(fn);
       if (!this.listeners.size) {
-        if (this.timer) clearInterval(this.timer);
+        this.schedule(null);
         document.removeEventListener("visibilitychange", this.poll);
         queueMicrotask(() => {
           if (!this.listeners.size) {

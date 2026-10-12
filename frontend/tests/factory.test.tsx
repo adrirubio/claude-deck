@@ -10,8 +10,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkPage } from "../src/features/factory/pages/WorkPage";
+import { RepositoryPage } from "../src/features/factory/pages/RepositoryPage";
 import { OverviewPage } from "../src/features/factory/pages/OverviewPage";
 import { WorkDetailPage } from "../src/features/factory/pages/WorkDetailPage";
+import { ReadStatus } from "../src/features/factory/components/ReadStatus";
 import {
   resetFactoryReads,
   useObservation,
@@ -620,4 +622,109 @@ describe("work details and protected controls", () => {
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(1);
   });
 
+});
+
+describe("polling after errors", () => {
+  const unprocessable = () =>
+    jsonResponse({ detail: { code: "invalid_id", message: "Bad ID." } }, 422);
+  const steps = async (ms: number) =>
+    act(async () => vi.advanceTimersByTimeAsync(ms));
+
+  it("stops an observation after a 422 and keeps a link back", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(unprocessable);
+    renderRoute(<RepositoryPage />, "/repositories/abc", "/repositories/:scopeId");
+    await settle();
+    expect(screen.getByRole("alert")).toHaveTextContent("Bad ID. (invalid_id)");
+    expect(screen.getByRole("link", { name: "Back to Repositories" })).toHaveAttribute(
+      "href",
+      "/repositories",
+    );
+    expect(screen.queryByText("Retrying…")).not.toBeInTheDocument();
+    await steps(120000);
+    await visibility("hidden");
+    await visibility("visible");
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("stops after a 404 or a 401 and sends no further request", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(() =>
+      jsonResponse({ detail: "Work item not found" }, 404),
+    );
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    expect(screen.getByRole("link", { name: "Back to Work" })).toBeInTheDocument();
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+    cleanup();
+    resetFactoryReads();
+    const denied = fixtureFetch(() => jsonResponse({ detail: "Denied" }, 401));
+    renderRoute(<OverviewPage />, "/", "/");
+    await settle();
+    await steps(120000);
+    expect(denied.requests).toHaveLength(1);
+  });
+
+  it("stops a list after a 422", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(unprocessable);
+    renderRoute(<WorkPage />, "/work?team_id=bad");
+    await settle();
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("resumes after a manual refresh that succeeds", async () => {
+    vi.useFakeTimers();
+    let broken = true;
+    const { requests } = fixtureFetch((path) =>
+      broken ? unprocessable() : standard(path),
+    );
+    renderRoute(<OverviewPage />, "/", "/");
+    await settle();
+    await steps(60000);
+    expect(requests).toHaveLength(1);
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh observation" }));
+    await settle();
+    const reads = requests.length;
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await steps(5000);
+    expect(requests.length).toBeGreaterThan(reads);
+  });
+
+  it("backs off 5, 10, 30 and 60 seconds after a transient error, then resets", async () => {
+    vi.useFakeTimers();
+    let broken = true;
+    const { requests } = fixtureFetch((path) =>
+      broken ? jsonResponse({ detail: "Unavailable" }, 503) : standard(path),
+    );
+    function Observer() {
+      const state = useObservation<unknown>("factory/overview");
+      return <ReadStatus state={state} />;
+    }
+    renderRoute(<Observer />);
+    await settle();
+    expect(screen.getByText("Retrying…")).toBeInTheDocument();
+    for (const [wait, total] of [
+      [5000, 2],
+      [10000, 3],
+      [30000, 4],
+      [60000, 5],
+      [60000, 6],
+    ]) {
+      await steps(wait - 1);
+      expect(requests).toHaveLength(total - 1);
+      await steps(1);
+      expect(requests).toHaveLength(total);
+    }
+    broken = false;
+    await steps(60000);
+    expect(requests).toHaveLength(7);
+    expect(screen.queryByText("Retrying…")).not.toBeInTheDocument();
+    await steps(5000);
+    expect(requests).toHaveLength(8);
+  });
 });
