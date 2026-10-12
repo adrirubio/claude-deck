@@ -24,6 +24,19 @@ ALLOWED_ACCENTS: tuple[str, ...] = (
     "slate",
 )
 
+# The automatic accent never uses a colour that means something in the UI:
+# red (error), orange (needs attention) or green (primary action, healthy).
+# Every colour in ALLOWED_ACCENTS stays available as an explicit choice.
+AUTO_ACCENTS: tuple[str, ...] = (
+    "blue",
+    "purple",
+    "pink",
+    "cyan",
+    "slate",
+)
+
+DEFAULT_INSTANCE_NAME = "This machine"
+
 _STARTED_AT = datetime.now(timezone.utc)
 _MAX_NAME_LENGTH = 64
 _MAX_ID_LENGTH = 64
@@ -68,7 +81,7 @@ def _stable_id(hostname: str, explicit_id: str | None) -> str:
 
 def _accent_from_hostname(hostname: str) -> str:
     digest = hashlib.sha256(hostname.encode("utf-8")).digest()
-    return ALLOWED_ACCENTS[digest[0] % len(ALLOWED_ACCENTS)]
+    return AUTO_ACCENTS[digest[0] % len(AUTO_ACCENTS)]
 
 
 def _resolve_accent(hostname: str, raw_accent: str | None) -> str:
@@ -91,10 +104,12 @@ def get_instance_identity() -> InstanceIdentity:
 
     hostname = _get_hostname()
     short_hostname = _short_hostname(hostname)
+    raw_name = os.getenv("CLAUDE_DECK_INSTANCE_NAME")
 
     return InstanceIdentity(
         id=_stable_id(hostname, os.getenv("CLAUDE_DECK_INSTANCE_ID")),
-        name=_clean_name(os.getenv("CLAUDE_DECK_INSTANCE_NAME"), short_hostname),
+        name=_clean_name(raw_name, DEFAULT_INSTANCE_NAME),
+        name_configured=bool(_remove_control_chars(raw_name or "")),
         hostname=hostname,
         short_hostname=short_hostname,
         accent=_resolve_accent(hostname, os.getenv("CLAUDE_DECK_INSTANCE_ACCENT")),

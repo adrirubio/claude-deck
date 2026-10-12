@@ -1786,6 +1786,7 @@ class InstanceIdentity(BaseModel):
 
     id: str
     name: str
+    name_configured: bool = False
     hostname: str
     short_hostname: str
     accent: InstanceAccent

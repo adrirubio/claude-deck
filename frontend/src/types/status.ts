@@ -13,6 +13,8 @@ export type InstanceAccent =
 export interface InstanceIdentity {
   id: string
   name: string
+  // True only when the operator set CLAUDE_DECK_INSTANCE_NAME.
+  name_configured?: boolean
   hostname: string
   short_hostname: string
   accent: InstanceAccent
