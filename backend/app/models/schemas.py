@@ -1808,6 +1808,19 @@ MAIL_MESSAGE_KINDS = ["message", "broadcast", "context_request", "handoff", "ans
 MAIL_REQUEST_KINDS = ["context_request", "handoff"]
 
 
+class AgentStatus(BaseModel):
+    """Read-only display facts. These facts grant no authority."""
+
+    session_state: Literal["online", "offline", "unknown"] = "unknown"
+    activity_state: Literal["working", "idle", "stopped", "unknown"] = "unknown"
+    activity_reason: str = "observation_unavailable"
+    wake_state: Literal["can_wake", "cannot_wake", "unknown"] = "unknown"
+    wake_reason: Optional[str] = "observation_unavailable"
+    idle_since: Optional[datetime] = None
+    checked_at: datetime
+    valid_until: datetime
+
+
 class MailSessionResponse(BaseModel):
     """One live/observed agent session attached to a member."""
 
@@ -1855,6 +1868,7 @@ class MailMemberResponse(BaseModel):
     wake_state: str = "delivered_waiting"
     last_inbox_checked_at: Optional[datetime] = None
     sessions: List[MailSessionResponse] = Field(default_factory=list)
+    agent_status: Optional[AgentStatus] = None
 
 
 class TeamListResponse(BaseModel):
@@ -2583,6 +2597,7 @@ class AgentActivityObservation(BaseModel):
     state: Literal["working", "idle", "stopped", "unknown"]
     reason: str
     observed_at: Optional[datetime] = None
+    agent_status: Optional[AgentStatus] = None
 
 
 class AgentTeamActivityResponse(BaseModel):

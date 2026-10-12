@@ -374,22 +374,12 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
 
     slots = [row[0] for row in await rows(select(AgentTeamSlot).where(
         AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))]
-    # A rollout identifies a conversation, not its writer PID. Conservatively
-    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
-    # so another harness cannot supply a false Working event for this owner.
-    native_identity_counts: dict[str, int] = {}
-    for (options,) in await rows(select(AgentTeamSlot.launch_options).where(
-            AgentTeamSlot.provider.in_(["codex-cli", "claude-code"]))):
-        session_id = _canonical_session_id((options or {}).get("session_id"))
-        if session_id is not None:
-            native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
+    options = await rows(select(AgentTeamSlot.launch_options).where(
+        AgentTeamSlot.provider.in_(["codex-cli", "claude-code"])))
     members = [row[0] for row in await rows(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
             MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
                 populate_existing=True))]
-    current_member = {}
-    for member in members:
-        current_member.setdefault(member.team_slot_id, member.id)
     bound_rows = await rows(select(AgentPaneBinding, MailAgentSession).join(
         MailAgentSession,
         (MailAgentSession.bound_pane_pid == AgentPaneBinding.pane_pid)
@@ -404,6 +394,22 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
             MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))
+    return _inputs_from_rows(slots, options, members, bound_rows)
+
+
+def _inputs_from_rows(slots, options, members, bound_rows):
+    """Build the same native inputs from an existing read snapshot."""
+    # A rollout identifies a conversation, not its writer PID. Conservatively
+    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
+    # so another harness cannot supply a false Working event for this owner.
+    native_identity_counts: dict[str, int] = {}
+    for (launch_options,) in options:
+        session_id = _canonical_session_id((launch_options or {}).get("session_id"))
+        if session_id is not None:
+            native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
+    current_member = {}
+    for member in sorted(members, key=lambda m: (m.updated_at, m.id), reverse=True):
+        current_member.setdefault(member.team_slot_id, member.id)
     bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
     for binding, session in bound_rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
@@ -420,7 +426,8 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
             for slot in slots]
 
 
-async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
+async def observe_team(db: AsyncSession, preset_id: int, *, include_agent_status: bool = True,
+                       persist_identities: bool = True) -> AgentTeamActivityResponse:
     inputs = await _team_inputs(db, preset_id)
     now = datetime.now(timezone.utc)
     metadata = [{} for _ in inputs]
@@ -433,8 +440,14 @@ async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityRes
             observation.state = "unknown"
             observation.reason = "binding_changed"
             observation.observed_at = None
-    if await _save_codex_identities(db, inputs, metadata, current):
+    if persist_identities and await _save_codex_identities(db, inputs, metadata, current):
         await db.commit()
+    if include_agent_status:
+        from app.services.agent_status_service import agent_status_service, unknown_status
+        statuses = await agent_status_service.for_team(
+            db, preset_id, activities={entry.slot_id: entry for entry in observations})
+        for entry in observations:
+            entry.agent_status = statuses.get(entry.slot_id, unknown_status(now))
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
 

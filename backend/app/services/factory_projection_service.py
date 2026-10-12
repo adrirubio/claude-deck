@@ -347,11 +347,13 @@ def actions(legacy):
 
 
 async def work_projections(db, rows, now):
+    from app.services.agent_status_service import agent_status_service
     if not rows:
         return []
     authority = await _load_work_item_authority(db, [item for item, _, _ in rows])
     team_ids = {team.id for _, _, team in rows}
     slots, members, sessions, bindings, retired = await actor_evidence(db, team_ids, authority)
+    display_statuses = await agent_status_service.for_members(db, members)
     slots_by_id = {s.id: s for s in slots}
     members_by_id = {m.id: m for m in members}
     members_by_slot = defaultdict(list)
@@ -401,6 +403,8 @@ async def work_projections(db, rows, now):
         if len(owner_members) > 1:
             owner_session = wire.SessionAssociation(state="ambiguous")
         leader_session = association(leader_slot, leader_member, sessions, bindings, retired, now)
+        owner_session.agent_status = display_statuses.get(member.id) if member else None
+        leader_session.agent_status = display_statuses.get(leader_member.id) if leader_member else None
         offline_slot = (slot if owner_session.state == "offline" else
                         leader_slot if leader_session.state == "offline" else None)
         safe = {name: getattr(legacy, name) for name in wire.SafeWorkItem.model_fields}
