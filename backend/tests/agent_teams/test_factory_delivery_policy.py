@@ -228,6 +228,97 @@ async def test_fresh_work_updates_contact_only_and_does_not_expire_acked_revisio
     assert workspace.lease_last_owner_contact_at == contact
 
 
+@pytest.mark.parametrize("initial", [True, False])
+@pytest.mark.asyncio
+async def test_native_contact_renews_from_slot_path_with_dispatch_lease(db, monkeypatch, tmp_path, initial):
+    scope, item, workspace, revision, _slot, _member, session, observed = await native_fixture(db, monkeypatch, tmp_path)
+    session.cwd = str(tmp_path / "slot")
+    workspace.path = str(tmp_path / "dispatch-1")
+    observed.binding_identity = native.activity.private_binding_identity(
+        session.provider, workspace.leased_owner_pid, workspace.leased_owner_proc_start, session.cwd)
+    if initial:
+        item.active_scope_revision = 0
+        item.dispatched_at = item.continuation_activated_at
+        item.ack_received_at = item.dispatched_at
+    await db.commit()
+    protected = {row.__tablename__: {column.name: getattr(row, column.name) for column in row.__table__.columns
+                                     if column.name != "lease_last_owner_contact_at"}
+                 for row in (item, workspace, revision)}
+    before = workspace.lease_last_owner_contact_at
+    assert await native.renew_native_owner_contact(db, scope, item, workspace, None if initial else revision)
+    assert workspace.lease_last_owner_contact_at > before
+    assert protected == {row.__tablename__: {column.name: getattr(row, column.name) for column in row.__table__.columns
+                                            if column.name != "lease_last_owner_contact_at"}
+                         for row in (item, workspace, revision)}
+
+
+@pytest.mark.parametrize("initial", [True, False])
+@pytest.mark.asyncio
+async def test_split_path_native_progress_keeps_owner_monitor_active(db, monkeypatch, tmp_path, initial):
+    scope, item, workspace, revision, slot, _member, session, observed = await native_fixture(db, monkeypatch, tmp_path)
+    old = datetime.utcnow() - timedelta(minutes=16)
+    item.continuation_activated_at = old
+    workspace.lease_last_owner_contact_at = old
+    session.cwd = str(tmp_path / "slot")
+    workspace.path = str(tmp_path / "dispatch-1")
+    observed.binding_identity = native.activity.private_binding_identity(
+        session.provider, workspace.leased_owner_pid, workspace.leased_owner_proc_start, session.cwd)
+    if initial:
+        item.active_scope_revision = 0
+        item.pr_number = None
+        item.dispatched_at = old
+        item.updated_at = old
+        item.ack_received_at = old
+    await db.commit()
+    protected = (item.dispatch_nonce, item.active_scope_revision, item.retry_count,
+                 revision.status, revision.acknowledged_at, revision.allowed_commands,
+                 revision.failed_head_count, workspace.lease_token)
+    notices = []
+    async def notice(*_args, **_kwargs):
+        notices.append(True)
+    async def brief(*_args):
+        return True
+    monkeypatch.setattr(github_dispatch_service, "notify_owner", notice)
+    monkeypatch.setattr(github_dispatch_service, "_nudge_owner_for_progress", notice)
+    monkeypatch.setattr(github_dispatch_service, "_brief_delivered", brief)
+    if initial:
+        await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id: "ready"})
+    else:
+        await github_dispatch_service.monitor_continuation(db, scope, [slot])
+    assert workspace.lease_last_owner_contact_at > old
+    assert item.dispatch_status == "dispatched" and item.escalation_reason is None
+    assert notices == []
+    assert protected == (item.dispatch_nonce, item.active_scope_revision, item.retry_count,
+                         revision.status, revision.acknowledged_at, revision.allowed_commands,
+                         revision.failed_head_count, workspace.lease_token)
+
+
+@pytest.mark.parametrize("split_paths", [False, True])
+@pytest.mark.parametrize("refusal", ["pane_pid", "pane_start", "empty_cwd", "expired_observation"])
+@pytest.mark.asyncio
+async def test_native_contact_refusals_do_not_depend_on_workspace_path(db, monkeypatch, tmp_path, split_paths, refusal):
+    scope, item, workspace, revision, _slot, _member, session, observed = await native_fixture(db, monkeypatch, tmp_path)
+    if split_paths:
+        session.cwd = str(tmp_path / "slot")
+        workspace.path = str(tmp_path / "dispatch-1")
+    if refusal == "pane_pid":
+        session.bound_pane_pid += 1
+    elif refusal == "pane_start":
+        session.bound_pane_proc_start = "different-start"
+    elif refusal == "empty_cwd":
+        session.cwd = ""
+        if not split_paths:
+            workspace.path = ""
+    else:
+        observed.observed_at = datetime.now(timezone.utc) - timedelta(minutes=4)
+    observed.binding_identity = native.activity.private_binding_identity(
+        session.provider, workspace.leased_owner_pid, workspace.leased_owner_proc_start, session.cwd)
+    await db.commit()
+    before = workspace.lease_last_owner_contact_at
+    assert not await native.renew_native_owner_contact(db, scope, item, workspace, revision)
+    assert workspace.lease_last_owner_contact_at == before
+
+
 @pytest.mark.parametrize("state", ["unknown", "idle", "stopped", "stale", "future", "missing_identity"])
 @pytest.mark.asyncio
 async def test_unproven_native_work_does_not_renew(db, monkeypatch, tmp_path, state):
