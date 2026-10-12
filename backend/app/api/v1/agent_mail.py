@@ -20,6 +20,7 @@ from app.api.v1.deps import (
     require_current_mail_session,
     require_mail_session,
     require_operator,
+    require_operator_for_writes,
     resolve_request_pane,
 )
 from app.config import settings
@@ -71,6 +72,11 @@ from app.services.github_approval_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# The install routes write the harnesses' native settings (hooks and MCP
+# servers), so they take the same Director key guard as the settings routers.
+# The Mail router's other writes stay open to agents.
+INSTALL_WRITES = [Depends(require_operator_for_writes)]
 _INITIAL_APPROVAL_MAX_ATTEMPTS = 2
 
 
@@ -1236,7 +1242,11 @@ async def install_status():
     return await agent_mail_install_service.get_install_status()
 
 
-@router.post("/install/claude-code/apply", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/claude-code/apply",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def install_claude_code(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1245,7 +1255,11 @@ async def install_claude_code(
     return await agent_mail_install_service.apply_claude_code_install(db)
 
 
-@router.post("/install/claude-code/uninstall", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/claude-code/uninstall",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def uninstall_claude_code(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1254,7 +1268,11 @@ async def uninstall_claude_code(
     return await agent_mail_install_service.uninstall_claude_code(db)
 
 
-@router.post("/install/codex/apply", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/codex/apply",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def install_codex(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1266,7 +1284,11 @@ async def install_codex(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/install/codex/uninstall", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/codex/uninstall",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def uninstall_codex(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1275,7 +1297,11 @@ async def uninstall_codex(
     return await agent_mail_install_service.uninstall_codex(db)
 
 
-@router.post("/install/copilot/apply", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/copilot/apply",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def install_copilot(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1287,7 +1313,11 @@ async def install_copilot(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/install/copilot/uninstall", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/copilot/uninstall",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def uninstall_copilot(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1296,7 +1326,11 @@ async def uninstall_copilot(
     return await agent_mail_install_service.uninstall_copilot(db)
 
 
-@router.post("/install/opencode/apply", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/opencode/apply",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def install_opencode(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1308,7 +1342,11 @@ async def install_opencode(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/install/opencode/uninstall", response_model=AgentMailInstallStatus)
+@router.post(
+    "/install/opencode/uninstall",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
 async def uninstall_opencode(
     body: dict[str, Any] | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
