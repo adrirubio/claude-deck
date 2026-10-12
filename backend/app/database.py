@@ -750,6 +750,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_presets)"))
     preset_columns = {row[1] for row in result.fetchall()}
+    if preset_columns and "parent_issue_url" not in preset_columns:
+        await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN parent_issue_url VARCHAR"))
     if preset_columns and "autonomy_enabled" not in preset_columns:
         await conn.execute(
             text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")

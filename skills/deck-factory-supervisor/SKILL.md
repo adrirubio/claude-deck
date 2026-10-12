@@ -9,6 +9,14 @@ Use this skill for the outer supervising agent. Keep the team's authenticated Le
 
 ## Load the operating reference
 
+Link the saved team to its parent issue with `parent_issue_url`.
+Use `description` for the outcome. Keep completion conditions in the parent issue.
+Use `deck_get_team_summary` to read existing attention, human actions, HOLD, pauses, effort totals, and next actors.
+Check expiry and coverage. Incomplete, stale, unknown, or changed-context reports keep the whole estimate Unknown.
+The read limits observations to eight seconds and 64 unfinished items. Its effort total excludes waiting time.
+The summary grants no approval, owner contact, resume, retry, lease, merge, or milestone authority.
+The supervisor field stays `none` until #549 supplies its separate contract.
+
 Locate the Deck source checkout supplied by the operator or recorded campaign. Read `docs/guide/supervised-factory-playbook.md` there. When this skill is used directly from its repository, that file is at `../../docs/guide/supervised-factory-playbook.md` relative to this directory.
 
 Read the campaign brief, current parent issue and protected installation record. Check their source versions. If the playbook is absent, obtain the matching Deck source or a path from the operator. Continue independent read-only discovery where useful; do not invent the maintenance procedure from an old session.

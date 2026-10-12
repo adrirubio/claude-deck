@@ -12,6 +12,7 @@ Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copi
 
 | Route | Access |
 | --- | --- |
+| GET `/api/v1/agent-teams/presets/{preset_id}/summary` | None |
 | GET `/api/v1/agent-teams/presets`, GET `/api/v1/agent-teams/presets/{preset_id}`, GET `/api/v1/agent-teams/presets/{preset_id}/activity`, GET `/api/v1/agent-teams/presets/{preset_id}/github-scopes` | None |
 | POST `/api/v1/agent-teams/presets`, `/api/v1/agent-teams/presets/from-agent-mail`, `/api/v1/agent-teams/presets/from-agent-bridge`, `/api/v1/agent-teams/presets/{preset_id}/duplicate` | Operator token |
 | PATCH and DELETE `/api/v1/agent-teams/presets/{preset_id}` | Operator token |
@@ -216,9 +217,41 @@ Use `deck_prepare_operator_action_contexts(scope_id, entries)` for intended Lead
 Use `deck_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
 The latter reads `human-actions?include_templates=true`. Ordinary UI reads omit templates to keep responses small.
 
+### Parent issue and team summary
+
+`parent_issue_url` is nullable. Create and update requests accept an HTTPS GitHub issue URL.
+Omit the field to keep its value. Send `null` in a PATCH request to clear it.
+The additive startup migration preserves existing teams and links.
+The existing `description` supplies the outcome. Completion conditions stay in the parent issue.
+
+`GET /api/v1/agent-teams/presets/{preset_id}/summary` returns one observation for the team card.
+It returns the outcome, parent link, existing attention signals, human actions, remaining effort, and next actors.
+The `description` field supplies the outcome text. No `outcome` or `done_when` field is added.
+`supervisor` stays `none` until #549 supplies the supervisor contract.
+`hold_code` uses the existing HOLD and recovery-only check.
+Attention uses existing recovery actions, recorded owner escalations, and recorded observation pauses.
+This read creates no monitor, dispatch action, approval, resume authority, or owner contact.
+The existing progress service can refresh its derived observation cache.
+
+The summary limits observations to eight seconds and 64 unfinished tracked items.
+The existing human-actions read also limits coverage to 32 repository scopes.
+It excludes `merged` and `completed` items from effort totals.
+The total is known only when every included report is current and has validated numeric bounds.
+Incomplete, stale, unknown, expired, or changed-context observations keep the whole estimate Unknown.
+The total excludes waiting time. Its confidence is the lowest reported confidence.
+An empty complete observation has zero remaining effort.
+`next_actors` preserves all observed actors. `next_actor_coverage_complete` states whether coverage is complete.
+Consumers must check `valid_until` and coverage. These observations grant no execution authority.
+
+MCP tools: `deck_get_team_summary` reads the summary.
+`deck_update_team_parent_issue` changes only the link. Its required nullable argument clears the link with `null`.
+`deck_create_team` accepts `parent_issue_url`. Existing preset reads return the link.
+
 ### Work remaining reports
 
 `GET /api/v1/agent-teams/github-work-items/{item_id}/progress` includes `remaining_work`.
+Current validated reports expose `effort_low_minutes`, `effort_high_minutes`, and `confidence`.
+Historical reports do not expose current numeric bounds.
 The view contains three short fields: `remaining`, `estimate`, and `next_action`.
 It includes report state, author, time, source SHA, and optional completed work and assumptions.
 The ordinary progress read makes no GitHub writes and changes no dispatch authority.

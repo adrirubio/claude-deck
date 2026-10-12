@@ -25,6 +25,8 @@ from app.api.v1.deps import (
 )
 from app.config import settings
 from app.database import get_db
+from app.models.factory_schemas import AgentTeamSummaryResponse
+from app.services.agent_team_summary_service import agent_team_summary_service
 from app.models.database import (
     AgentTeamSlot,
     AgentTeamPreset,
@@ -2272,6 +2274,15 @@ async def get_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/presets/{preset_id}/summary", response_model=AgentTeamSummaryResponse)
+async def get_team_summary(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    result = await agent_team_summary_service.summary(db, preset_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="preset_not_found")
+    return result
+
+
 @router.get("/presets/{preset_id}/activity", response_model=AgentTeamActivityResponse)
 async def get_team_activity(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
     try:
@@ -2296,6 +2307,8 @@ async def update_preset(
             name=request.name,
             description=request.description,
             autonomy_enabled=request.autonomy_enabled,
+            **({"parent_issue_url": request.parent_issue_url}
+               if "parent_issue_url" in request.model_fields_set else {}),
         )
     except ValueError as exc:
         if str(exc) == "leader_assignment_required":

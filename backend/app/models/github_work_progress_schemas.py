@@ -10,6 +10,9 @@ class GithubWorkRemainingView(BaseModel):
     state: Literal["current", "historical", "unavailable"] = "unavailable"
     remaining: str | None = None
     estimate: str | None = None
+    effort_low_minutes: int | None = Field(default=None, ge=0, le=43200)
+    effort_high_minutes: int | None = Field(default=None, ge=0, le=43200)
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
     next_action: str | None = None
     reported_at: datetime | None = None
     reported_by: str | None = None

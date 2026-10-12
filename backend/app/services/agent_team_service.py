@@ -37,6 +37,7 @@ from app.models.schemas import (
     AgentTeamLaunchResult,
     AgentTeamLaunchResultItem,
     AgentTeamPresetCreate,
+    AgentTeamPresetUpdate,
     AgentTeamPresetResponse,
     AgentTeamSlotCreate,
     AgentTeamSlotResponse,
@@ -92,6 +93,7 @@ class TeamDeletionConflictError(ValueError):
         self.blockers = blockers
 
 
+_UNSET = object()
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
 _PROVIDER_IDS = {provider.id for provider in get_providers()}
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$")
@@ -127,6 +129,7 @@ class AgentTeamService:
         preset = AgentTeamPreset(
             name=name,
             description=self._clean_optional(request.description),
+            parent_issue_url=request.parent_issue_url,
             created_by=self._clean_optional(request.created_by),
             autonomy_enabled=False,
         )
@@ -243,8 +246,13 @@ class AgentTeamService:
         name: str | None = None,
         description: str | None = None,
         autonomy_enabled: bool | None = None,
+        parent_issue_url: str | None | object = _UNSET,
     ) -> AgentTeamPresetResponse:
+        if parent_issue_url is not _UNSET:
+            parent_issue_url = AgentTeamPresetUpdate(parent_issue_url=parent_issue_url).parent_issue_url
         preset = await self._require_preset(db, preset_id)
+        if parent_issue_url is not _UNSET:
+            preset.parent_issue_url = parent_issue_url
         if name is not None:
             cleaned_name = self._clean_required(name, "Team name")
             await self._ensure_preset_name_is_unique(db, cleaned_name, exclude_preset_id=preset.id)
@@ -441,6 +449,7 @@ class AgentTeamService:
         clone = AgentTeamPreset(
             name=self._clean_required(name or f"{source.name} copy", "Team name"),
             description=source.description,
+            parent_issue_url=source.parent_issue_url,
             created_by=source.created_by,
         )
         await self._ensure_preset_name_is_unique(db, clone.name)
@@ -532,6 +541,7 @@ class AgentTeamService:
                 name=request.name,
                 description=request.description,
                 created_by="agent-mail",
+                parent_issue_url=request.parent_issue_url,
                 slots=slot_requests,
             ),
         )
@@ -578,6 +588,7 @@ class AgentTeamService:
                 name=request.name,
                 description=request.description,
                 created_by="agent-bridge",
+                parent_issue_url=request.parent_issue_url,
                 slots=slot_requests,
             ),
         )
@@ -1735,6 +1746,7 @@ class AgentTeamService:
             id=preset.id,
             name=preset.name,
             description=preset.description,
+            parent_issue_url=preset.parent_issue_url,
             created_by=preset.created_by,
             created_at=preset.created_at,
             updated_at=preset.updated_at,

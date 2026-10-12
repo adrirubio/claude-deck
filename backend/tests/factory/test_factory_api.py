@@ -186,6 +186,9 @@ async def test_redaction_list_detail_overview_and_repository(factory_client, fac
     result = await get_ok(factory_client, f"work-items/{factory_store.ids.by_status['escalated']}")
     item = result["work_item"]
     assert set(item["item"]) == set(wire.SafeWorkItem.model_fields)
+    assert set(item["team"]) == set(wire.TeamReference.model_fields)
+    assert "parent_issue_url" not in item["item"]
+    assert "outcome" not in item["item"]
     assert item["category"] == "attention"
     assert item["waiting"]["reason_code"] == "abandoned_by_operator"
     assert item["item"]["active_scope_status"] == "active"

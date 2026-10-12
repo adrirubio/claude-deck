@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from typing import Annotated, Any, Dict, List, Literal, Optional
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -2292,9 +2292,22 @@ class AgentTeamSlotResponse(BaseModel):
     updated_at: datetime
 
 
+def _parent_issue_url(value: str) -> str:
+    if value.split("/")[4] in {".", ".."}:
+        raise ValueError("Use a GitHub issue URL with a repository name")
+    return value
+
+
+GithubParentIssueUrl = Annotated[str, Field(
+    max_length=240,
+    pattern=r"^https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}/issues/[1-9][0-9]*$",
+), AfterValidator(_parent_issue_url)]
+
+
 class AgentTeamPresetCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     created_by: Optional[str] = None
     autonomy_enabled: bool = False
     slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
@@ -2303,6 +2316,7 @@ class AgentTeamPresetCreate(BaseModel):
 class AgentTeamPresetUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     autonomy_enabled: Optional[bool] = None
 
 
@@ -2310,6 +2324,7 @@ class AgentTeamPresetResponse(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -2360,6 +2375,7 @@ class AgentTeamPresetListResponse(BaseModel):
 class AgentTeamCreateFromMailRequest(BaseModel):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     member_ids: Optional[List[int]] = None
     include_offline: bool = True
 
@@ -2367,6 +2383,7 @@ class AgentTeamCreateFromMailRequest(BaseModel):
 class AgentTeamCreateFromBridgeRequest(BaseModel):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
 
 
 class AgentTeamSlotReorderRequest(BaseModel):
