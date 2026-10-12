@@ -68,7 +68,7 @@ describe("audit browser clients at the HTTP boundary", () => {
     expect(refusal).toBeInstanceOf(ApiHttpError);
     expect((refusal as ApiHttpError).status).toBe(401);
     expect((refusal as ApiHttpError).message).toBe(
-      "The Deck operator token was rejected. Clear it and enter a valid token.");
+      "The Director key was rejected. Clear it and enter a valid key.");
   });
 
   it("surfaces the exact unconfigured-operator 503 refusal", async () => {
@@ -79,7 +79,7 @@ describe("audit browser clients at the HTTP boundary", () => {
       .then(() => null, (error: unknown) => error);
     expect((refusal as ApiHttpError).status).toBe(503);
     expect((refusal as ApiHttpError).message).toBe(
-      "The Deck operator token is not configured on the backend.");
+      "The Director key is not configured on the backend.");
   });
 
   // C13: both reads carry the same supported history filters.

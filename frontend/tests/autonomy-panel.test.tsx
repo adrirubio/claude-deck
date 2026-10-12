@@ -2,7 +2,7 @@ import { StrictMode, useState } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { AutonomyPanel } from '../src/features/agent-teams/AutonomyPanel'
+import { AutonomyPanel, OperatorTokenDialog } from '../src/features/agent-teams/AutonomyPanel'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '../src/lib/api'
 import { fetchGithubRecoveryGateActive } from '../src/features/agent-teams/api'
@@ -130,10 +130,10 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
 }
 
 describe('AutonomyPanel', () => {
-  it('explains the operator token across protected settings and first-run actions', () => {
+  it('explains the Director key across protected settings and first-run actions', () => {
     render(<AutonomyPanel {...panelProps({ scopes: [], workItems: [] })} />)
     expect(screen.getByText('Needed for protected settings, launch, autonomy, and recovery actions')).toBeInTheDocument()
-    expect(screen.getByText(/The operator token protects roster and watched-repo settings/)).toHaveTextContent('separate from the GitHub polling token')
+    expect(screen.getByText(/The Director key protects roster and watched-repo settings/)).toHaveTextContent('separate from the GitHub polling token')
     expect(screen.queryByText(/only needed for protected recovery|needed only for protected recovery/i)).not.toBeInTheDocument()
   })
 
@@ -267,7 +267,7 @@ describe('AutonomyPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Recovery policy for example/project' }))
     expect(screen.getByText(/A failed head is a pushed PR commit whose checks fail/)).toBeInTheDocument()
     expect(screen.getByText('Scope revisions allowed across one attempt.')).toBeInTheDocument()
-    expect(screen.getByText('Saving requires the operator token.', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('Saving requires the Director key.', { exact: false })).toBeInTheDocument()
   })
 
   it('explains first-run setup and optional build hints', async () => {
@@ -287,10 +287,10 @@ describe('AutonomyPanel', () => {
     render(<AutonomyPanel {...props} />)
 
     await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    expect(screen.getByText('Enter an operator token to load recovery history.')).toBeInTheDocument()
+    expect(screen.getByText('Enter the Director key to load recovery history.')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry loading history' }))
     await user.type(screen.getByPlaceholderText('Enter secret value'), 'test-token')
-    await user.click(screen.getByRole('button', { name: 'Use token' }))
+    await user.click(screen.getByRole('button', { name: 'Use key' }))
 
     expect(await screen.findByText('Hosted-only diagnostic')).toBeInTheDocument()
     expect(props.onFetchScopeRevisions).toHaveBeenCalledWith(23, 'test-token')
@@ -305,9 +305,9 @@ describe('AutonomyPanel', () => {
     render(<AutonomyPanel {...panelProps({ onFetchScopeRevisions: fetchRevisions })} />)
 
     await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    expect(await screen.findByText('The operator token was rejected. Enter a valid token to retry.')).toBeInTheDocument()
+    expect(await screen.findByText('The Director key was rejected. Enter a valid key to retry.')).toBeInTheDocument()
     await user.type(screen.getByPlaceholderText('Enter secret value'), 'new-token')
-    await user.click(screen.getByRole('button', { name: 'Use token' }))
+    await user.click(screen.getByRole('button', { name: 'Use key' }))
 
     expect(await screen.findByText('Hosted-only diagnostic')).toBeInTheDocument()
     expect(fetchRevisions).toHaveBeenLastCalledWith(23, 'new-token')
@@ -365,15 +365,15 @@ describe('AutonomyPanel', () => {
     expect(props.onUpdateScope).not.toHaveBeenCalled()
   })
 
-  it('submits the operator token with Enter', async () => {
+  it('submits the Director key with Enter', async () => {
     clearOperatorToken()
     const user = userEvent.setup()
     render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
 
-    await user.click(screen.getByRole('button', { name: 'Set operator token' }))
+    await user.click(screen.getByRole('button', { name: 'Set Director key' }))
     await user.type(screen.getByPlaceholderText('Enter secret value'), 'test-token{Enter}')
 
-    expect(await screen.findByText('Token set for this tab')).toBeInTheDocument()
+    expect(await screen.findByText('Director key set for this tab')).toBeInTheDocument()
   })
 
   it('confirms watched-repo removal in the app instead of using a native dialog', async () => {
@@ -535,7 +535,7 @@ describe('AutonomyPanel numeric limits', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/whole number for Max approval rounds/)
     fireEvent.click(screen.getByRole('button', { name: 'Save repo' }))
     expect(await screen.findAllByText(/whole number for max approval rounds/i)).not.toHaveLength(0)
-    expect(screen.queryByRole('dialog', { name: 'Operator token' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Director key' })).not.toBeInTheDocument()
     expect(props.onUpdateScope).not.toHaveBeenCalled()
     await user.clear(input)
     await user.type(input, '5')
@@ -558,7 +558,7 @@ describe('AutonomyPanel numeric limits', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true')
     fireEvent.click(screen.getByRole('button', { name: 'Save recovery policy' }))
     expect(await screen.findAllByText(/whole number for max continuation failed heads/i)).not.toHaveLength(0)
-    expect(screen.queryByRole('dialog', { name: 'Operator token' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Director key' })).not.toBeInTheDocument()
     expect(props.onUpdateContinuationPolicy).not.toHaveBeenCalled()
   })
 
@@ -596,7 +596,7 @@ describe('AutonomyPanel numeric limits', () => {
     expect(perRevision.value).toBe('12')
     fireEvent.click(screen.getByRole('button', { name: 'Save recovery policy' }))
     expect(await screen.findByText(/whole number for max continuation failed heads/)).toBeInTheDocument()
-    expect(screen.queryByRole('dialog', { name: 'Operator token' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Director key' })).not.toBeInTheDocument()
     expect(props.onUpdateContinuationPolicy).not.toHaveBeenCalled()
   })
 
@@ -614,11 +614,11 @@ describe('AutonomyPanel numeric limits', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(props.onUpdateScope).not.toHaveBeenCalled()
     expect(props.onUpdateContinuationPolicy).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: 'Operator token' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Director key' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: open }))
     fireEvent.change(screen.getByLabelText(label), { target: { value: '0' } })
     fireEvent.click(screen.getByRole('button', { name: save }))
-    const tokenDialog = await screen.findByRole('dialog', { name: 'Operator token' })
+    const tokenDialog = await screen.findByRole('dialog', { name: 'Director key' })
     // Normalized values are visible before authorization; the token dialog is separate.
     expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('1')
     await user.click(within(tokenDialog).getByRole('button', { name: 'Cancel' }))
@@ -636,7 +636,7 @@ describe('AutonomyPanel numeric limits', () => {
     fireEvent.blur(screen.getByLabelText('Max approval rounds'))
     await user.click(screen.getByRole('button', { name: 'Save repo' }))
     expect(props.onUpdateScope).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: 'Operator token' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Director key' })).not.toBeInTheDocument()
   })
 
   it('preserves live recovery-enable confirmation after numeric normalization', async () => {
@@ -655,5 +655,25 @@ describe('AutonomyPanel numeric limits', () => {
     await user.click(screen.getByRole('button', { name: 'Save recovery policy' }))
     await waitFor(() => expect(props.onUpdateContinuationPolicy).toHaveBeenCalledWith(2,
       expect.objectContaining({ continuation_enabled: true, max_continuation_revisions: 1 }), 'synthetic-token'))
+  })
+})
+
+describe('OperatorTokenDialog', () => {
+  const noop = () => undefined
+
+  it('asks for one thing, states the reason and hides the setup steps', () => {
+    render(<OperatorTokenDialog open value="" error={null} reason="to read audit events" onValueChange={noop} onSubmit={noop} onCancel={noop} />)
+
+    const dialog = screen.getByRole('dialog', { name: 'Director key' })
+    expect(within(dialog).getByText(/It is the value of/)).toHaveTextContent('OPERATOR_TOKEN')
+    expect(within(dialog).getByText('Deck needs the key to read audit events.')).toBeInTheDocument()
+    expect(within(dialog).getByText('First time? Set up the key on the server').closest('details')).not.toHaveAttribute('open')
+    expect(within(dialog).getByRole('link', { name: 'installation guide', hidden: true })).toHaveAttribute('href', expect.stringContaining('docs/guide/installation.md'))
+  })
+
+  it('omits the reason line when the caller gives no reason', () => {
+    render(<OperatorTokenDialog open value="" error={null} onValueChange={noop} onSubmit={noop} onCancel={noop} />)
+
+    expect(screen.queryByText(/Deck needs the key/)).not.toBeInTheDocument()
   })
 })

@@ -85,7 +85,7 @@ describe("guided repository setup", () => {
     expect(mocks.fetchConfigurationObservation).not.toHaveBeenCalled();
     expect(mocks.apiClient).not.toHaveBeenCalled();
     fireEvent.change(tokenInput, { target: { value: "fixture-token" } });
-    fireEvent.click(screen.getByRole("button", { name: "Use token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use key" }));
 
     await waitFor(() => expect(mocks.fetchConfigurationObservation).toHaveBeenCalledTimes(1));
     expect(mocks.setOperatorToken).toHaveBeenCalledWith("fixture-token");
@@ -1101,7 +1101,7 @@ describe("guided repository setup", () => {
     const dialog = await screen.findByRole("dialog");
     expect(screen.queryByRole("button", { name: "Check access and labels" })).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "mount-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
 
     // With unchanged inputs the flow continues normally.
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
@@ -1195,7 +1195,7 @@ describe("guided repository setup", () => {
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "replacement-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
 
     // The retry is a pre-send cancellation: nothing was sent and no uncertain
     // latch is raised.
@@ -1242,7 +1242,7 @@ describe("guided repository setup", () => {
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "replacement-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
 
     await screen.findByText(/Inputs changed during the save/);
     expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
@@ -1281,7 +1281,7 @@ describe("guided repository setup", () => {
     // and retries the create with the new token.
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "fresh-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
     await screen.findByText(/Saved configuration/);
     expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(2);
     expect(mocks.setOperatorToken).toHaveBeenCalledWith("fresh-token");
@@ -1640,8 +1640,8 @@ describe("guided repository setup", () => {
     // unknown.
     rejectCreate?.(new mocks.ApiHttpError("The operator token was rejected.", 401));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/operator token/i), { target: { value: "replacement-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    fireEvent.change(within(dialog).getByLabelText(/Director key/i), { target: { value: "replacement-token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
     await waitFor(() => expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(2));
     retried = true;
     rejectCreate?.(new mocks.ApiHttpError("transport reset", 0));
