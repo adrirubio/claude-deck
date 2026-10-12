@@ -1,13 +1,18 @@
-import { useParams } from "react-router-dom";
-import type { WorkDetailResponse } from "@/types/factory";
+import { Link, useParams } from "react-router-dom";
+import type { WorkDetailResponse, WorkProjection } from "@/types/factory";
 import { ContextLinks } from "../components/ContextLinks";
 import { GithubLink } from "../components/GithubLink";
 import { ProtectedRemedies } from "../components/ProtectedRemedies";
 import { ReadStatus } from "../components/ReadStatus";
-import { panel } from "../components/styles";
+import { anchor, panel } from "../components/styles";
 import { Time } from "../components/Time";
 import { categories } from "../filterHelpers";
 import { useObservation } from "../reads";
+
+// Merged work is delivered: nothing can be recovered on it.
+function statusWord(w: WorkProjection) {
+  return w.item.dispatch_status === "merged" ? "Merged" : categories[w.category];
+}
 
 export function WorkDetailPage() {
   const { workItemId } = useParams();
@@ -15,33 +20,36 @@ export function WorkDetailPage() {
     `factory/work-items/${encodeURIComponent(workItemId ?? "")}`,
   );
   const w = state.data?.work_item;
+  const title = w ? `#${w.item.issue_number} ${w.item.issue_title}` : null;
   return (
     <section className="space-y-5">
-      <h2 className="text-2xl font-semibold">Work details</h2>
+      <nav aria-label="Breadcrumb" className="flex flex-wrap gap-2 text-sm">
+        <Link className={anchor} to="/work">
+          Work
+        </Link>
+        {title && (
+          <>
+            <span aria-hidden="true">›</span>
+            <span className="font-medium">{title}</span>
+          </>
+        )}
+      </nav>
+      <h2 className="text-2xl font-semibold">{title ?? "Work item"}</h2>
       <ReadStatus
         state={state}
         back={{ to: "/work", label: "Back to Work" }}
+        missing="work item"
       />
       {w && (
         <>
           <article className={panel}>
-            <h3 className="text-xl font-semibold">
-              #{w.item.issue_number} {w.item.issue_title}
-            </h3>
             <p>
-              {categories[w.category]} · raw status {w.item.dispatch_status} ·{" "}
-              {w.item.issue_type} · phase {w.item.attempt_phase}
-            </p>
-            <p>
-              {w.team.name} · {w.repository.display_name} · owner{" "}
-              {w.owner?.name ?? "Unassigned"} · configured harness{" "}
-              {w.owner?.provider_label ?? "unknown"}
-            </p>
-            <p>
-              Approver slot {w.approver?.slot_id ?? "unknown"} (
-              {w.approver?.source ?? "unknown"}) · owner session{" "}
-              {w.session.state} · observed runtime{" "}
-              {w.session.observed_provider ?? "unknown"}
+              <strong>{statusWord(w)}</strong>
+              {w.item.pr_number ? ` · PR #${w.item.pr_number}` : ""} ·{" "}
+              {w.repository.display_name} · {w.team.name} ·{" "}
+              {w.owner
+                ? `${w.owner.name} (${w.owner.provider_label ?? "harness unknown"})`
+                : "Unassigned"}
             </p>
             {w.waiting && (
               <p>
@@ -87,40 +95,67 @@ export function WorkDetailPage() {
                 </GithubLink>
               )}
             </div>
-            <p className="break-all">
-              PR verification head: {w.item.last_verified_sha ?? "Unconfirmed"}
-            </p>
             <Time value={w.item.updated_at} label="Deck record observation" />
-            <Time value={state.data!.generated_at} label="Details observed" />
           </article>
           <ContextLinks work={w} />
-          <section className={panel}>
-            <h3 className="font-semibold">Finite policy and authority</h3>
-            <p>
-              Merge policy: {w.policy.merge_policy} · maximum verification
-              retries {w.policy.max_verification_retries} · maximum approval
-              rounds {w.policy.max_approval_rounds}
-            </p>
-            <p>
-              Implementation retries {w.item.retry_count} · diagnostic failed
-              heads {w.item.diagnostic_retry_count} · approval rounds{" "}
-              {w.item.approval_round_count}
-            </p>
-            <p>
-              Continuation configured{" "}
-              {w.policy.continuation_enabled ? "enabled" : "disabled"}; this
-              does not grant revision authority. Active revision{" "}
-              {w.item.active_scope_revision}:{" "}
-              {w.item.active_scope_status ?? "none"}.
-            </p>
-            <p>
-              Workspace{" "}
-              {w.workspace
-                ? `${w.workspace.id} (${w.workspace.state})`
-                : "association unknown"}
-            </p>
-          </section>
-          <ProtectedRemedies key={w.item.id} work={w} refresh={state.refresh} />
+          {w.item.dispatch_status === "merged" ? (
+            <section className={panel}>
+              <h3 className="font-semibold">Outcome</h3>
+              <p>
+                Merged{w.item.pr_number ? ` PR #${w.item.pr_number}` : ""}. Nothing
+                is left to recover on this work.
+              </p>
+            </section>
+          ) : (
+            <ProtectedRemedies
+              key={w.item.id}
+              work={w}
+              refresh={state.refresh}
+            />
+          )}
+          <details className={panel}>
+            <summary className="cursor-pointer font-semibold">
+              Technical details
+            </summary>
+            <div className="mt-3 space-y-2">
+              <p>
+                Status {w.item.dispatch_status} · {w.item.issue_type} · phase{" "}
+                {w.item.attempt_phase}
+              </p>
+              <p>
+                Approver slot {w.approver?.slot_id ?? "unknown"} (
+                {w.approver?.source ?? "unknown"}) · owner session{" "}
+                {w.session.state} · observed runtime{" "}
+                {w.session.observed_provider ?? "unknown"}
+              </p>
+              <p className="break-all">
+                PR verification head: {w.item.last_verified_sha ?? "Unconfirmed"}
+              </p>
+              <p>
+                Merge policy: {w.policy.merge_policy} · most verification
+                retries {w.policy.max_verification_retries} · most approval
+                rounds {w.policy.max_approval_rounds}
+              </p>
+              <p>
+                Implementation retries {w.item.retry_count} · diagnostic failed
+                heads {w.item.diagnostic_retry_count} · approval rounds{" "}
+                {w.item.approval_round_count}
+              </p>
+              <p>
+                Continuation {w.policy.continuation_enabled ? "on" : "off"}; this
+                gives no right to revise by itself. Active revision{" "}
+                {w.item.active_scope_revision}:{" "}
+                {w.item.active_scope_status ?? "none"}.
+              </p>
+              <p>
+                Workspace{" "}
+                {w.workspace
+                  ? `${w.workspace.id} (${w.workspace.state})`
+                  : "association unknown"}
+              </p>
+              <Time value={state.data!.generated_at} label="Details observed" />
+            </div>
+          </details>
         </>
       )}
     </section>

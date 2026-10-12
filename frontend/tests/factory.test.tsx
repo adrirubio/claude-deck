@@ -621,7 +621,7 @@ describe("polling after errors", () => {
     const { requests } = fixtureFetch(unprocessable);
     renderRoute(<RepositoryPage />, "/repositories/abc", "/repositories/:scopeId");
     await settle();
-    expect(screen.getByRole("alert")).toHaveTextContent("Bad ID. (invalid_id)");
+    expect(screen.getByRole("alert")).toHaveTextContent("This repository does not exist.");
     expect(screen.getByRole("link", { name: "Back to Repositories" })).toHaveAttribute(
       "href",
       "/repositories",
@@ -820,4 +820,91 @@ describe("name filters", () => {
     expect(sent(requests, "team_id")).toContain("1");
     expect(sent(requests, "scope_id")).toEqual([]);
   });
+});
+
+describe("work item page", () => {
+  const itemFor = (response: unknown) => fixtureFetch(() => jsonResponse(response));
+
+  it("links back to Work from a breadcrumb and titles the page with the issue", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumbs).getByRole("link", { name: "Work" })).toHaveAttribute("href", "/work");
+    const title = `#${detail.completed.response.work_item.item.issue_number} ${detail.completed.response.work_item.item.issue_title}`;
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(title);
+    expect(within(crumbs).getByText(title)).toBeInTheDocument();
+  });
+
+  it("shows a merged item with an outcome, no recovery, and unknowns only in Technical details", async () => {
+    itemFor(detail.merged.response);
+    const { container } = renderRoute(<WorkDetailPage />, "/work/4", "/work/:workItemId");
+    await settle();
+    expect(screen.getByText("Merged", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Outcome" })).toBeInTheDocument();
+    expect(screen.queryByText("Protected recovery")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry issue|protected revision history/ })).not.toBeInTheDocument();
+    const details = container.querySelector("details")!;
+    expect(details.querySelector("summary")).toHaveTextContent("Technical details");
+    const outside = container.cloneNode(true) as HTMLElement;
+    outside.querySelector("details")!.remove();
+    expect(outside.textContent).not.toMatch(/unknown|Unconfirmed|raw status|Approver slot/i);
+    expect(details.textContent).toContain("Status merged");
+  });
+
+  it("keeps recovery for work that is not merged, with no doubled full stop", async () => {
+    const retryable = structuredClone(detail.escalated.response);
+    retryable.work_item.actions[0].reason = "Only escalated work can be retried.";
+    itemFor(retryable);
+    renderRoute(<WorkDetailPage />, "/work/6", "/work/:workItemId");
+    await settle();
+    expect(screen.getByText("Protected recovery")).toBeInTheDocument();
+    expect(screen.getByText(/Only escalated work can be retried\. Retrying may reset/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("..");
+  });
+
+  it("shows the two observation times as separate labels", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const record = screen.getByText(/Deck record observation:/);
+    const observed = screen.getByText(/Details observed:/);
+    expect(record).not.toBe(observed);
+    expect(record.textContent).not.toMatch(/Details observed/);
+  });
+
+  it("uses one style for every context link", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const links = within(screen.getByRole("navigation", { name: "Work context" })).getAllByRole("link");
+    expect(links.length).toBeGreaterThan(3);
+    for (const link of links) expect(link.className).toContain("underline");
+    expect(screen.queryByRole("link", { name: /Back to Work/ })).not.toBeInTheDocument();
+  });
+
+  for (const [id, status, code] of [
+    ["abc", 422, "invalid_filter"],
+    ["99999", 404, "resource_not_found"],
+  ] as const) {
+    it(`/work/${id} shows one plain message and a link back, with no ID in the heading`, async () => {
+      fixtureFetch(() => jsonResponse({ detail: { code, message: "Select valid compatible filters." } }, status));
+      renderRoute(<WorkDetailPage />, `/work/${id}`, "/work/:workItemId");
+      await settle();
+      expect(screen.getByRole("alert")).toHaveTextContent("This work item does not exist.");
+      expect(document.body.textContent).not.toMatch(/invalid_filter|resource_not_found|compatible filters/);
+      expect(screen.getByRole("link", { name: "Back to Work" })).toHaveAttribute("href", "/work");
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/^Work item$/);
+    });
+
+    it(`/repositories/${id} shows one plain message and a link back, with no ID in the heading`, async () => {
+      fixtureFetch(() => jsonResponse({ detail: { code, message: "Select valid compatible filters." } }, status));
+      renderRoute(<RepositoryPage />, `/repositories/${id}`, "/repositories/:scopeId");
+      await settle();
+      expect(screen.getByRole("alert")).toHaveTextContent("This repository does not exist.");
+      expect(document.body.textContent).not.toMatch(/invalid_filter|resource_not_found|compatible filters/);
+      expect(screen.getByRole("link", { name: "Back to Repositories" })).toHaveAttribute("href", "/repositories");
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/^Repository$/);
+    });
+  }
 });

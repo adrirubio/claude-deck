@@ -13,10 +13,13 @@ export function RepositoryPage() {
   );
   return (
     <section className="space-y-5">
-      <h2 className="text-2xl font-semibold">Repository scope {scopeId}</h2>
+      <h2 className="text-2xl font-semibold">
+        {state.data ? `Repository scope ${scopeId}` : "Repository"}
+      </h2>
       <ReadStatus
         state={state}
         back={{ to: "/repositories", label: "Back to Repositories" }}
+        missing="repository"
       />
       {state.data && (
         <>

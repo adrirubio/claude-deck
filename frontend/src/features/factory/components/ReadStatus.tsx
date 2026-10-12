@@ -3,20 +3,36 @@ import { ApiHttpError } from "@/lib/api";
 import type { ReadState } from "../reads";
 import { anchor } from "./styles";
 
+// The request can never succeed for this ID: the thing does not exist.
+const MISSING_STATUS = [400, 404, 410, 422];
+
 export function ReadStatus<T>({
   state,
   back,
+  missing,
 }: {
   state: ReadState<T>;
   back?: { to: string; label: string };
+  // Name of the thing the page shows, for example "work item".
+  missing?: string;
 }) {
   const error = state.error;
+  const absent =
+    Boolean(missing) &&
+    !state.data &&
+    error instanceof ApiHttpError &&
+    MISSING_STATUS.includes(error.status);
   return (
     <div aria-live="polite" className="text-sm">
       {state.refreshing && (
         <p>{state.data ? "Refreshing observation…" : "Loading…"}</p>
       )}
-      {error && (
+      {absent && (
+        <p role="alert" className="rounded border border-destructive p-3">
+          This {missing} does not exist.
+        </p>
+      )}
+      {error && !absent && (
         <p role="alert" className="rounded border border-destructive p-3">
           {state.data
             ? "Stale data — refresh failed. Last successful observation remains visible. "
@@ -33,6 +49,7 @@ export function ReadStatus<T>({
       {error && state.retrying && <p>Retrying…</p>}
       {error && state.stopped && back && (
         <Link className={anchor} to={back.to}>
+          <span aria-hidden="true">‹ </span>
           {back.label}
         </Link>
       )}
