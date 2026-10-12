@@ -47,7 +47,14 @@ def _routes(write: bool) -> list[tuple[str, str]]:
     return found
 
 
-WRITES = _routes(write=True)
+# Agent Mail install routes write the same native settings (hooks, MCP servers)
+# but live on the Mail router, whose other writes must stay open to agents.
+MAIL_INSTALL_WRITES = [
+    ("POST", f"{settings.api_v1_prefix}/agent-mail/install/{harness}/{action}")
+    for harness in ("claude-code", "codex", "copilot", "opencode")
+    for action in ("apply", "uninstall")
+]
+WRITES = _routes(write=True) + MAIL_INSTALL_WRITES
 
 
 @pytest_asyncio.fixture
