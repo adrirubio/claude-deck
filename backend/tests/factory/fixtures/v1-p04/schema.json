@@ -770,6 +770,88 @@
     },
     "WorkDetailResponse": {
       "$defs": {
+        "AgentStatus": {
+          "description": "Read-only display facts. These facts grant no authority.",
+          "properties": {
+            "activity_reason": {
+              "default": "observation_unavailable",
+              "title": "Activity Reason",
+              "type": "string"
+            },
+            "activity_state": {
+              "default": "unknown",
+              "enum": [
+                "working",
+                "idle",
+                "stopped",
+                "unknown"
+              ],
+              "title": "Activity State",
+              "type": "string"
+            },
+            "checked_at": {
+              "format": "date-time",
+              "title": "Checked At",
+              "type": "string"
+            },
+            "idle_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idle Since"
+            },
+            "session_state": {
+              "default": "unknown",
+              "enum": [
+                "online",
+                "offline",
+                "unknown"
+              ],
+              "title": "Session State",
+              "type": "string"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "wake_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "observation_unavailable",
+              "title": "Wake Reason"
+            },
+            "wake_state": {
+              "default": "unknown",
+              "enum": [
+                "can_wake",
+                "cannot_wake",
+                "unknown"
+              ],
+              "title": "Wake State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "checked_at",
+            "valid_until"
+          ],
+          "title": "AgentStatus",
+          "type": "object"
+        },
         "ApproverReference": {
           "additionalProperties": false,
           "properties": {
@@ -1221,6 +1303,17 @@
         "SessionAssociation": {
           "additionalProperties": false,
           "properties": {
+            "agent_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "bridge_target": {
               "anyOf": [
                 {
@@ -1519,6 +1612,88 @@
     },
     "WorkListResponse": {
       "$defs": {
+        "AgentStatus": {
+          "description": "Read-only display facts. These facts grant no authority.",
+          "properties": {
+            "activity_reason": {
+              "default": "observation_unavailable",
+              "title": "Activity Reason",
+              "type": "string"
+            },
+            "activity_state": {
+              "default": "unknown",
+              "enum": [
+                "working",
+                "idle",
+                "stopped",
+                "unknown"
+              ],
+              "title": "Activity State",
+              "type": "string"
+            },
+            "checked_at": {
+              "format": "date-time",
+              "title": "Checked At",
+              "type": "string"
+            },
+            "idle_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idle Since"
+            },
+            "session_state": {
+              "default": "unknown",
+              "enum": [
+                "online",
+                "offline",
+                "unknown"
+              ],
+              "title": "Session State",
+              "type": "string"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "wake_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "observation_unavailable",
+              "title": "Wake Reason"
+            },
+            "wake_state": {
+              "default": "unknown",
+              "enum": [
+                "can_wake",
+                "cannot_wake",
+                "unknown"
+              ],
+              "title": "Wake State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "checked_at",
+            "valid_until"
+          ],
+          "title": "AgentStatus",
+          "type": "object"
+        },
         "ApproverReference": {
           "additionalProperties": false,
           "properties": {
@@ -2012,6 +2187,17 @@
         "SessionAssociation": {
           "additionalProperties": false,
           "properties": {
+            "agent_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "bridge_target": {
               "anyOf": [
                 {

@@ -972,8 +972,11 @@ class AgentMailService:
         return context
 
     async def list_team(self, db: AsyncSession) -> List[MailMemberResponse]:
+        from app.services.agent_status_service import agent_status_service
+
         now = datetime.utcnow()
         members = (await db.execute(select(MailTeamMember))).scalars().all()
+        display_statuses = await agent_status_service.for_members(db, members)
         sessions = (await db.execute(select(MailAgentSession))).scalars().all()
         team_context = await self._team_context_by_session(db, sessions)
         member_team_context = await self._team_context_by_member(db, members)
@@ -1039,6 +1042,7 @@ class AgentMailService:
                     wake_state=wake_state,
                     last_inbox_checked_at=member.last_inbox_checked_at,
                     sessions=session_responses,
+                    agent_status=display_statuses.get(member.id),
                 )
             )
         responses.sort(key=lambda member: (member.status != "connected", member.display_name.lower()))
@@ -1887,6 +1891,11 @@ class AgentMailService:
         if member is None:
             raise MailWakeError("wake_target_unbound")
 
+        return self._nudge_from_sessions(observed, registered, member, now)
+
+    def _nudge_from_sessions(self, observed, registered, member, now):
+        """Apply the unchanged wake rules to an already loaded read snapshot."""
+        member_id = member.id
         def matching_bindings(pane: MailAgentSession) -> list[MailAgentSession]:
             if (
                 pane.mailbox_status != "observed"

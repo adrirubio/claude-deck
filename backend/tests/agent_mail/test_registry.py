@@ -1956,6 +1956,9 @@ async def test_connected_mcp_session_without_tmux_is_delivered_waiting(db, svc, 
     assert members[0].can_nudge is False
     assert members[0].wake_methods == []
     assert members[0].wake_state == "delivered_waiting"
+    assert members[0].agent_status.session_state == "online"
+    assert members[0].agent_status.wake_state == "cannot_wake"
+    assert members[0].agent_status.wake_reason == "wake_target_unbound"
 
 
 @pytest.mark.asyncio

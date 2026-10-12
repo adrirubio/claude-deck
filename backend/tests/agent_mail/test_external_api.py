@@ -81,6 +81,9 @@ async def test_external_actor_registration_and_auth(client, db):
     members = resp.json()["members"]
     assert members[0]["display_name"] == "alpha"
     assert "wake_state" in members[0]
+    assert members[0]["agent_status"]["session_state"] == "offline"
+    assert members[0]["agent_status"]["wake_state"] == "cannot_wake"
+    assert members[0]["agent_status"]["wake_reason"] == "wake_target_unbound"
 
     me = await client.get("/api/v1/external/agent-mail/actors/me", headers=_auth(token))
     assert me.status_code == 200
@@ -258,6 +261,11 @@ async def test_external_delivery_reports_non_tmux_agent_as_delivered_waiting(cli
     assert body["recipients"][0]["wake_state"] == "delivered_waiting"
     assert body["recipients"][0]["wake_attempted"] is False
     assert body["recipients"][0]["wake_succeeded"] is False
+    roster = await client.get("/api/v1/external/agent-mail/members", headers=_auth(token))
+    member = next(m for m in roster.json()["members"] if m["id"] == recipient.id)
+    assert member["agent_status"]["session_state"] == "online"
+    assert member["agent_status"]["wake_state"] == "cannot_wake"
+    assert member["agent_status"]["wake_reason"] == "wake_target_unbound"
 
 
 @pytest.mark.asyncio

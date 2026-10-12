@@ -363,6 +363,7 @@ def deck_list_team() -> dict:
                 "role",
                 "repo_name",
                 "status",
+                "agent_status",
                 "charter",
                 "team_preset_name",
                 "team_slot_name",

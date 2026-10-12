@@ -270,6 +270,22 @@ async def _project_mail_wake_state(
                 pane["mail_wake_state"] = "stale"
                 pane["mail_wake_reason"] = "wake_target_stale"
         projected.append(pane)
+    from app.services.agent_status_service import agent_status_service, unknown_status
+
+    member_ids = {pane["mail_member_id"] for pane in projected if pane["mail_member_id"] is not None}
+    members = list((await db.scalars(select(MailTeamMember).where(
+        MailTeamMember.id.in_(member_ids)))).all()) if member_ids else []
+    display_statuses = await agent_status_service.for_members(db, members)
+    for pane in projected:
+        status = display_statuses.get(pane["mail_member_id"])
+        if status is None:
+            status = unknown_status()
+            if pane["mail_wake_reason"] in {
+                "wake_target_unbound", "wake_target_stale", "wake_target_ambiguous", "wake_opted_out",
+            }:
+                status.wake_state = "cannot_wake"
+                status.wake_reason = pane["mail_wake_reason"]
+        pane["agent_status"] = status.model_dump(mode="json")
     return projected
 
 

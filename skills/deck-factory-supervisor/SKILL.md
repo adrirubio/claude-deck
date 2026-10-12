@@ -23,6 +23,11 @@ The playbook is the process reference. Load the relevant linked API or maintenan
 - **Maintain:** Use the playbook's safe handoff and reviewed operation. Disabling intake does not stop active owners. Bind review and proof to the deployed source. Check retained database, private configuration, sessions and leases before releasing operation-specific holds and resuming.
 - **Finish:** Complete the accepted outcome and any retained publication gate. Record exact sources, artifacts, checks and rollback. Reconcile requests and assessments. Disable completed dispatch. State what remains running, then complete the goal.
 
+Use the [shared agent status](../../docs/api/agent-teams.md#shared-agent-status) instead of comparing separate screen status rules.
+Keep online, activity, and wake facts separate.
+Use the native idle event time for idle duration.
+Unknown or expired status grants no approval, contact renewal, delivery, or recovery authority.
+
 ## Apply the campaign's authority
 
 Use existing explicit authorization. Do not ask again for an action already delegated. Finish authorized preparation so a retained decision is concrete and reviewable.

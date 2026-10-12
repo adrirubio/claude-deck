@@ -208,6 +208,8 @@ def test_deck_list_team_uses_cached_roster(monkeypatch):
                             "role": "Planner",
                             "repo_name": "deck",
                             "status": "connected",
+                            "agent_status": {"session_state": "online", "activity_state": "idle",
+                                             "wake_state": "cannot_wake", "wake_reason": "wake_target_unbound"},
                             "charter": "Plan work",
                             "team_preset_name": "Test team",
                             "team_slot_name": "Planner",
@@ -226,6 +228,7 @@ def test_deck_list_team_uses_cached_roster(monkeypatch):
 
     assert result["ok"] is True
     assert requests[0][1] == "/team?sync=false"
+    assert result["members"][0]["agent_status"]["wake_state"] == "cannot_wake"
 
 
 def test_deck_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):

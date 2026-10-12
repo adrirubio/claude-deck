@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from app.models.schemas import AgentStatus
 
 
 def _utc(value: datetime) -> datetime:
@@ -99,6 +100,7 @@ class SessionAssociation(FactoryModel):
     state: Literal["bound", "offline", "ambiguous", "unknown"]
     observed_provider: str | None = None
     bridge_target: BridgeTarget | None = None
+    agent_status: AgentStatus | None = None
 
 
 class MailHint(FactoryModel):

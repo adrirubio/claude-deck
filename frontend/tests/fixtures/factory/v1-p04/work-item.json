@@ -58,6 +58,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -118,6 +128,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "ambiguous"
@@ -194,6 +214,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -259,6 +289,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 4,
             "session_id": 4,
@@ -340,6 +380,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -405,6 +455,16 @@
           "scope_id": 1
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 2,
             "session_id": 2,
@@ -482,6 +542,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -547,6 +617,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 4,
             "session_id": 4,
@@ -628,6 +708,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -693,6 +783,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 4,
             "session_id": 4,
@@ -777,6 +877,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -842,6 +952,16 @@
           "scope_id": 1
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 2,
             "session_id": 2,
@@ -923,6 +1043,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -988,6 +1118,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 4,
             "session_id": 4,
@@ -1069,6 +1209,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1119,6 +1269,7 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": null,
           "bridge_target": null,
           "observed_provider": null,
           "state": "unknown"
@@ -1191,6 +1342,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1251,6 +1412,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "ambiguous"
@@ -1330,6 +1501,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1380,6 +1561,7 @@
           "scope_id": 1
         },
         "session": {
+          "agent_status": null,
           "bridge_target": null,
           "observed_provider": null,
           "state": "unknown"
@@ -1456,6 +1638,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1516,6 +1708,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "ambiguous"
@@ -1595,6 +1797,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1660,6 +1872,16 @@
           "scope_id": 1
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 2,
             "session_id": 2,
@@ -1741,6 +1963,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1801,6 +2033,16 @@
           "scope_id": 2
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1877,6 +2119,16 @@
           "source": "explicit_assignment"
         },
         "approver_session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "offline",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": null,
           "observed_provider": null,
           "state": "offline"
@@ -1942,6 +2194,16 @@
           "scope_id": 1
         },
         "session": {
+          "agent_status": {
+            "activity_reason": "no_current_binding",
+            "activity_state": "unknown",
+            "checked_at": "2026-09-30T12:00:00Z",
+            "idle_since": null,
+            "session_state": "online",
+            "valid_until": "2026-09-30T12:00:15Z",
+            "wake_reason": "wake_target_unbound",
+            "wake_state": "cannot_wake"
+          },
           "bridge_target": {
             "member_id": 2,
             "session_id": 2,

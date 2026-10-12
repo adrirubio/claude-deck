@@ -374,7 +374,7 @@ async def test_team_binding_is_checked_after_native_observation(native, monkeypa
         calls += 1
         return entries if calls == 1 else []
     monkeypatch.setattr(activity, "_team_inputs", inputs)
-    result = await activity.observe_team(None, 1)
+    result = await activity.observe_team(None, 1, include_agent_status=False)
     assert result.slots[0].state == "unknown"
     assert result.slots[0].reason == "binding_changed"
     assert result.slots[0].observed_at is None
