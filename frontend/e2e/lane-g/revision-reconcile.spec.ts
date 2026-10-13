@@ -3,12 +3,11 @@ import { expect, test } from '../support/guard'
 // #535: a merged item keeps no active continuation revision, and the metrics
 // report active_revisions 0 when all items with revisions are finished.
 // Seed (scripts/e2e/scenarios.py, seed_lane_g): merged item #104 has a
-// revision row in the "active" state. The #535 fix reconciles it through the
-// supported path; the implementer runs that path in the seed if it is not
-// part of the instance start.
+// legacy revision row in the "active" state. The seed reconciles it through
+// the supported #535 service before the instance starts.
 // The item page shows the item's own revision pointer ("Active revision 0:
 // none"), which is correct today; the defect is visible in the metrics.
-// @pending until #535 merges.
+// #535 is merged. This journey is active.
 
 interface Metric { name?: string; value?: number }
 
@@ -22,7 +21,7 @@ function metrics(node: unknown, found: Metric[] = []): Metric[] {
   return found
 }
 
-test('@pending finished work reports no active continuation revision', async ({ request }) => {
+test('@active finished work reports no active continuation revision', async ({ request }) => {
   const end = new Date()
   const start = new Date(end.getTime() - 7 * 24 * 3600 * 1000)
   const response = await request.get('/api/v1/factory/metrics', {

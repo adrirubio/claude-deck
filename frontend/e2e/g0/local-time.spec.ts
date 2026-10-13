@@ -8,7 +8,7 @@ import { localClockPattern, localTimeText, seedAgo } from '../support/time'
 // The moment is SHARED_MOMENT in scripts/e2e/scenarios.py: item #103
 // "Document the import format" was dispatched at seed time minus 3 h 17 min,
 // and its work_lifecycle audit event has the same time.
-// @pending until #521 and PR #532 merge.
+// Active since #521 and PR #532 merged.
 
 const moment = seedAgo({ hours: 3, minutes: 17 })
 

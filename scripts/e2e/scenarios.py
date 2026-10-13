@@ -338,7 +338,7 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
                          "issue_number": 104, "reminder_count": index + 1,
                          "reminder_cap": LANE_G_REMINDERS})
 
-    # #535: merged item #104 still has a continuation revision in an active state.
+    # #535: a legacy active revision on merged item #104. Reconcile it before startup.
     s.insert(
         "github_attempt_scope_revisions", id=1, work_item_id=ITEM_MERGED,
         dispatch_nonce=f"seed{ITEM_MERGED:012d}", revision=1, owner_slot_id=2, owner_member_id=2,
@@ -443,6 +443,41 @@ def seed_lane_b(s: Seeder, root: Path) -> None:
     docs = make_repo(root, "docs-site")
     preset(s, FOUR_MEMBER_TEAM, "Docs crew", "Write the user guide.", autonomy=False, leader_slot=12)
     slots(s, FOUR_MEMBER_TEAM, FOUR_MEMBER_SLOTS, docs)
+
+
+async def reconcile_lane_g_revision() -> None:
+    """Reconcile the synthetic terminal revision through the supported service."""
+    from unittest.mock import patch
+
+    from app.database import AsyncSessionLocal
+    from app.models.database import GithubWorkItem
+    from app.services import factory_audit_service as audit
+    from app.services import github_terminal_revision_service as revisions
+
+    # Use the seed clock. Keep the real reconciliation guards, writes and ledger.
+    reconciliation_time = SEED_NOW - timedelta(minutes=5)
+    record_event = audit.record_event
+
+    async def seed_event(db, **fields):
+        fields["occurred_at"] = reconciliation_time
+        return await record_event(db, **fields)
+
+    async with AsyncSessionLocal() as db:
+        report = await revisions.terminal_revision_report(db, RELEASE_TEAM)
+        rows = [row for row in report["revisions"] if row["work_item_id"] == ITEM_MERGED]
+        if report["truncated"] or len(rows) != 1:
+            raise SystemExit("seed: expected one legacy revision for the merged item")
+        row = rows[0]
+        item = await db.get(GithubWorkItem, ITEM_MERGED)
+        with patch.object(revisions, "datetime", wraps=datetime) as clock, \
+                patch.object(audit, "record_event", seed_event):
+            clock.utcnow.return_value = reconciliation_time
+            result = await revisions.reconcile_terminal_revision(
+                db, item, row["revision_id"], row["context_sha256"],
+                "e2e-reconcile-terminal-104", "Reconcile the synthetic merged item's legacy revision.",
+            )
+        if result["status"] != "reconciled" or result["revision_status"] != "superseded":
+            raise SystemExit("seed: terminal revision reconciliation did not finish")
 
 
 async def seed_history() -> None:
@@ -561,6 +596,7 @@ def start_panes(root: Path) -> None:
 def seed_all(s: Seeder, *, root: Path) -> None:
     seed_core(s, root)
     s.conn.commit()
+    asyncio.run(reconcile_lane_g_revision())
     asyncio.run(seed_history())
     delete_retired_team(s)
     seed_campaign_backlogs(s, root)

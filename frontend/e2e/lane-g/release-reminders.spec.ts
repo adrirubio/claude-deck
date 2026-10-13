@@ -6,9 +6,9 @@ import { expect, test } from '../support/guard'
 // number of messages per day") is scheduler logic; the test instance runs no
 // scheduler, so the #528 backend tests cover it.
 // Seed (scripts/e2e/scenarios.py, seed_lane_g): merged item #104 holds a
-// workspace lease; its owner "B1 Backend" has 8 unanswered release reminders.
-// The #528 implementer sets LANE_G_REMINDERS to the cap if it differs.
-// @pending until #528 merges.
+// workspace lease; its owner "B1 Backend" has 4 unanswered release reminders.
+// LANE_G_REMINDERS matches the backend cap.
+// @pending: Overview and the team card do not show reminder_attention yet. This is the frontend part of #528, split to a frontend follow-up.
 
 const AGENT = 'B1 Backend'
 const DURATION = /\b\d+\s?(min|minutes?|h|hours?)\b/i
