@@ -97,8 +97,6 @@ function describeFilters(filters: AppliedFilters, names: FilterNames) {
 function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilters, names: FilterNames) {
   if (state === "pending") return "a newer read is pending";
   if (state === "failed") return "the latest read failed";
-  if (state === "cancelled") return "the latest read was cancelled";
-  if (state === "locked") return "the events are locked";
   if (!matches) return `it does not match the applied selection (${describeFilters(applied, names)})`;
   return null;
 }
@@ -242,6 +240,8 @@ export function AuditMetricsPage() {
     // #515: the key dialog opens only when the Director chooses Unlock events.
     if (!ask && !getOperatorToken()) {
       setUnlocking(false);
+      // #659: no key, so no protected rows, labels or counts stay on the page.
+      setEventsResult(null);
       setEventsState("locked");
       setEventsError("");
       setStatus("Audit events are locked. Safe metrics remain available.");
@@ -252,6 +252,7 @@ export function AuditMetricsPage() {
     if (!current()) return null;
     if (!token) {
       setUnlocking(false);
+      setEventsResult(null);
       setEventsState("cancelled");
       setStatus("Audit read cancelled. Safe metrics remain available.");
       return null;
@@ -285,6 +286,8 @@ export function AuditMetricsPage() {
       if (!current()) return null;
       setEventsRefused(refused);
       setUnlocking(false);
+      // #659: a refused key shows nothing protected. A 5xx or a network error keeps the earlier data.
+      if (refused) setEventsResult(null);
       setEventsState("failed");
       setEventsError(cause instanceof Error ? cause.message : "Audit read refused.");
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
