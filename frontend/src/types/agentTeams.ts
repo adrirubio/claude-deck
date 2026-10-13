@@ -169,6 +169,22 @@ export interface TeamWaitingInput {
   label: 'Waiting for input'
 }
 
+// One unanswered-reminder signal (#528). Read it through parseReminders: the wire is not trusted.
+export interface ReminderAttention {
+  kind: 'workspace_release' | 'backlog_reconcile'
+  scope_id: number
+  work_item_id?: number | null
+  issue_number?: number | null
+  issue_numbers?: number[]
+  owner_slot_id?: number | null
+  owner_name?: string | null
+  reminder_count: number
+  reminder_cap: number
+  waiting_since?: string | null
+  elapsed_seconds?: number | null
+  notification_budget_resets_at?: string | null
+}
+
 // GET agent-teams/presets/{id}/summary. A display-only read: it grants no action.
 export interface AgentTeamSummary {
   preset_id: number
@@ -178,6 +194,9 @@ export interface AgentTeamSummary {
   // Missing on an older server. Null means Deck could not read it.
   supervisor_observation?: SupervisorObservation | null
   waiting_input?: TeamWaitingInput[] | null
+  // Missing on an older server. A row that cannot be read is ignored.
+  reminder_attention?: ReminderAttention[]
+  reminder_attention_complete?: boolean
   checked_at: string
   valid_until: string
   coverage_complete: boolean

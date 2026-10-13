@@ -10,6 +10,7 @@ import type {
 } from '@/types/agentTeams'
 import { ACTION_TEXT, ATTENTION_TEXT } from './summaryText'
 import { waitingText } from './supervisorText'
+import { parseReminders, reminderAge } from './reminderText'
 import { SupervisorStatus } from './SupervisorStatus'
 
 const HOLD_TEXT: Record<NonNullable<AgentTeamSummary['hold_code']>, string> = {
@@ -76,6 +77,7 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
   const unreadable = summary?.required_ci_unreadable ?? []
   const waiting = summary?.waiting_input ?? []
   const overdue = summary?.supervisor_observation?.attention ?? null
+  const reminders = parseReminders(summary?.reminder_attention)
   const actions = summary?.human_actions.filter(
     (action) => action.state === 'requested' || action.state === 'context_pending',
   ) ?? []
@@ -124,7 +126,7 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
             )}
             <Row label="Supervisor"><SupervisorStatus summary={summary} /></Row>
             <Row label="Attention">
-              {summary.attention.length === 0 && unreadable.length === 0 && !overdue ? 'None open.' : (
+              {summary.attention.length === 0 && unreadable.length === 0 && !overdue && reminders.length === 0 ? 'None open.' : (
                 <ul className="space-y-1">
                   {summary.attention.map((item, index) => (
                     <li
@@ -135,6 +137,25 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                         <>{ATTENTION_TEXT[item.code]} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link></>
                       ) : ATTENTION_TEXT[item.code]}
                       {item.resume_deadline && <> · resume by {formatServerTime(item.resume_deadline)}</>}
+                    </li>
+                  ))}
+                  {reminders.map((row) => (
+                    <li key={`reminder-${row.kind}-${row.workItemId ?? row.issueNumbers.join('-')}`} className="text-amber-800 dark:text-amber-300">
+                      {row.kind === 'workspace_release' ? (
+                        <>
+                          <span>Release reminders unanswered</span> on{' '}
+                          {row.workItemId
+                            ? <Link className={anchor} to={`/work/${row.workItemId}`}>#{row.issueNumber}</Link>
+                            : <>#{row.issueNumber}</>}
+                          . {row.owner ?? 'The owner'} · {row.count} of {row.cap} reminders
+                          {reminderAge(row.elapsedSeconds) ? ` · ${reminderAge(row.elapsedSeconds)}` : ''}
+                        </>
+                      ) : (
+                        <>
+                          <span>Backlog requests unanswered</span>. {row.owner ?? 'The Leader'} · {row.count} of {row.cap} requests
+                          {reminderAge(row.elapsedSeconds) ? ` · ${reminderAge(row.elapsedSeconds)}` : ''}
+                        </>
+                      )}
                     </li>
                   ))}
                   {overdue && (
@@ -178,7 +199,7 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
               </Row>
             )}
           </dl>
-          {(!summary.coverage_complete || !summary.next_actor_coverage_complete) && (
+          {(!summary.coverage_complete || !summary.next_actor_coverage_complete || summary.reminder_attention_complete === false) && (
             <p role="note" className="text-xs text-muted-foreground">
               This summary may be incomplete: Deck did not read every item.
             </p>
