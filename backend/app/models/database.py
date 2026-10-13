@@ -555,6 +555,12 @@ class AgentPaneBinding(Base):
         Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
     )
     tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    waiting_input_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    waiting_input_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_input_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_input_notice_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_messages.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (

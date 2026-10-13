@@ -387,3 +387,34 @@ async def test_summary_expiry_cannot_outlive_a_current_report(db, monkeypatch):
     result = await summary.summary(db, team.id)
     assert result.remaining_work.state == "known"
     assert result.valid_until <= value.remaining_work.reported_at + timedelta(hours=2)
+
+
+@pytest.mark.asyncio
+async def test_team_summary_exports_fixed_current_input_wait_only(db, monkeypatch):
+    from sqlalchemy import select
+    from app.models.database import AgentPaneBinding, MailAgentSession, MailTeamMember
+    from app.models.schemas import AgentActivityObservation, NativeInputWait
+    from app.services import agent_activity_service as activity
+    team, _, _ = await seed(db, ())
+    slot = await db.scalar(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == team.id))
+    member = MailTeamMember(identity_key="summary-wait", repo_id="fixture", repo_path="/synthetic/project",
+        repo_name="fixture", display_name="Worker", team_preset_id=team.id, team_slot_id=slot.id)
+    db.add(member); await db.flush()
+    binding = AgentPaneBinding(pane_pid=41000, pane_proc_start="27", slot_id=slot.id, preset_id=team.id, tmux_target="%8")
+    session = MailAgentSession(member_id=member.id, provider=slot.provider, source="mcp", session_key="summary-wait",
+        team_slot_id=slot.id, team_preset_id=team.id, bound_pane_pid=41000, bound_pane_proc_start="27",
+        cwd="/synthetic/project", capability_token_hash="synthetic-hash", mailbox_status="connected")
+    db.add_all([binding, session]); await db.commit()
+
+    def observe(slot_id, provider, session_id, bindings, duplicate, now, *, provenance=None):
+        return AgentActivityObservation(slot_id=slot_id, state="idle", reason="native_input_wait",
+            observed_at=now, waiting_input=NativeInputWait(reason="sign_in", observed_at=now))
+
+    monkeypatch.setattr(activity, "_observe", observe)
+    summary, _ = service(monkeypatch)
+    slot_id = slot.id
+    result = await summary.summary(db, team.id)
+    assert [entry.model_dump() for entry in result.waiting_input] == [
+        {"slot_id": slot_id, "reason": "sign_in", "label": "Waiting for input"}]
+    assert "synthetic/project" not in result.model_dump_json()
+    assert "private-launch" not in result.model_dump_json()

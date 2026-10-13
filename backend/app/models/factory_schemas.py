@@ -341,12 +341,19 @@ class TeamRequiredCIUnreadable(RequiredCIUnreadableSignal):
     issue_number: PositiveId
 
 
+class TeamWaitingInput(FactoryModel):
+    slot_id: PositiveId
+    reason: Literal["question", "trust", "sign_in"]
+    label: Literal["Waiting for input"] = "Waiting for input"
+
+
 class AgentTeamSummaryResponse(FactoryModel):
     preset_id: PositiveId
     description: str | None
     parent_issue_url: str | None
     supervisor: Literal["none"] = "none"
     supervisor_observation: SupervisorObservation | None = None
+    waiting_input: list[TeamWaitingInput] | None = None
     checked_at: Timestamp
     valid_until: Timestamp
     coverage_complete: bool

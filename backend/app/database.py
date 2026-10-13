@@ -728,6 +728,15 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             )
         )
 
+    binding_columns = await _sqlite_columns(conn, "agent_pane_bindings")
+    for column, definition in (
+        ("waiting_input_reason", "VARCHAR"), ("waiting_input_started_at", "DATETIME"),
+        ("waiting_input_observed_at", "DATETIME"),
+        ("waiting_input_notice_id", "INTEGER REFERENCES mail_messages(id) ON DELETE SET NULL"),
+    ):
+        if binding_columns and column not in binding_columns:
+            await conn.execute(text(f"ALTER TABLE agent_pane_bindings ADD COLUMN {column} {definition}"))
+
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}
     if slot_columns and await _sqlite_agent_team_slots_has_unique_preset_repo_index(conn):

@@ -14,7 +14,7 @@ from app.models.database import (
 )
 from app.models.factory_schemas import (
     AgentTeamSummaryResponse, TeamRemainingWork, TeamSummaryAttention, TeamSummaryHumanAction,
-    TeamRequiredCIUnreadable,
+    TeamRequiredCIUnreadable, TeamWaitingInput,
 )
 from app.services.github_coordination_service import hold_code
 from app.services.github_operator_attention_service import github_operator_attention_service
@@ -104,6 +104,7 @@ class AgentTeamSummaryService:
                     and len(scope_rows) <= 32 and len(approvals) <= 64)
         scopes = [SimpleNamespace(**row._mapping) for row in scope_rows[:32]]
         attention, human_actions, actors, observations = [], [], set(), []
+        waiting_input, native_fence = None, {}
         expires = [started + timedelta(seconds=15)]
         hold = hold_code()
         if hold:
@@ -117,6 +118,12 @@ class AgentTeamSummaryService:
             return await asyncio.wait_for(read(), timeout=remaining)
 
         try:
+            from app.services.agent_activity_service import observe_team, _team_inputs
+            native = await bounded(lambda: observe_team(db, preset_id, include_agent_status=False,
+                persist_identities=False, max_input_rows=256, input_fence=native_fence))
+            waiting_input = [TeamWaitingInput(slot_id=entry.slot_id, reason=entry.waiting_input.reason)
+                for entry in native.slots if entry.waiting_input is not None]
+            expires.append(_utc(native.valid_until))
             dispatch = await bounded(lambda: self.attention.dispatch_snapshot(db, scopes))
             complete = complete and dispatch["complete"]
             for action in dispatch["actions"]:
@@ -166,7 +173,11 @@ class AgentTeamSummaryService:
                     expires.append(_utc(value.remaining_work.reported_at) + MAX_AGE)
                 if value.next_actor in _ACTORS:
                     actors.add(value.next_actor)
-        except (TimeoutError, OSError):
+            native_current = {entry[0]: entry for entry in await bounded(lambda: _team_inputs(db, preset_id, 256))}
+            if native_current != native_fence:
+                waiting_input = None
+        except (TimeoutError, OSError, ValueError):
+            waiting_input = None
             complete = False
             if db.in_transaction():
                 await db.rollback()
@@ -216,7 +227,7 @@ class AgentTeamSummaryService:
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
             required_ci_unreadable=unreadable,
-            supervisor_observation=supervisor,
+            supervisor_observation=supervisor, waiting_input=waiting_input if not changed else None,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
             next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)
 

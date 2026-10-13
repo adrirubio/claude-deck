@@ -40,6 +40,15 @@ Members find `supervisor_address` in `deck_whoami` and the dispatch brief.
 Use `deck_send_message(to_supervisor_actor_id=..., body=...)` to contact the current bound supervisor.
 The external actor reads direct messages with `GET /api/v1/external/agent-mail/supervisor-inbox`.
 Foreign actors and unbound teams cannot use this route.
+
+Deck recognizes supported question, trust and sign-in screens in the current authenticated pane.
+It reads visible screen text locally. It never exports that text or sends keys.
+One fixed notice goes to the bound Supervisor per continuous wait.
+The Leader receives the notice only when no Supervisor is bound.
+A new pane starts with an empty latch. A known idle screen clears it. An unknown screen preserves it.
+The latch survives Mail session registration. Screen formats outside the captured fixtures remain unknown.
+A sign-in screen before authenticated Mail registration remains unknown.
+
 Write the escalation order into each charter:
 
 1. The Leader decides assignment, plans and sequencing.
@@ -75,7 +84,10 @@ A known team effort total requires current numeric reports for every unfinished 
 An incomplete, stale, unknown, or changed-context read keeps the whole estimate Unknown.
 The read has an eight-second observation limit and a 64-item limit. Waiting time is excluded.
 Check observation expiry and next-actor coverage. Keep each separate approval, recovery, review, CI, and milestone gate.
-The supervisor field stays `none` until the separate #549 contract is available.
+The original `supervisor` field stays `none` for older clients.
+Read optional `supervisor_observation` for the bound actor, clock health and overdue attention.
+Read optional `waiting_input` for verified slot waits. Its reasons are `question`, `trust` and `sign_in`.
+An unknown or changed read supplies no current wait claim.
 
 Keep a short campaign record. Use the parent GitHub issue for public scope and current status. Keep the machine record and sensitive runtime details in protected local storage.
 

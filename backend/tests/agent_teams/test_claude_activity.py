@@ -50,7 +50,7 @@ def test_claude_main_turn_boundaries(native, count, expected):
     native["write"](native["records"][:count])
     result = native["observe"]()
     assert result.state == expected
-    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at"}
+    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at", "waiting_input"}
     assert str(native["cwd"]) not in result.model_dump_json()
 
 

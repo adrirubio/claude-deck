@@ -218,9 +218,18 @@ async def send_supervisor_message(db, session, request):
     return await agent_mail_service._message_response(db, message, member.id)
 
 
+def _is_native_wait_notice(root) -> bool:
+    payload = root.payload
+    return (root.sender_member_id is None and root.sender_actor_id is None
+        and root.recipient_member_id is None and root.subject == "Waiting for input"
+        and isinstance(payload, dict) and set(payload) == {"notice", "slot_id", "reason", "supervisor_actor_id"}
+        and payload["notice"] == "native_input_wait" and type(payload["slot_id"]) is int and payload["slot_id"] > 0
+        and payload["reason"] in {"question", "trust", "sign_in"})
+
+
 def is_supervisor_message(root) -> bool:
     return (root.kind == "message" and root.audience_type == "team_preset"
-            and root.sender_member_id is not None and root.thread_root_id is None
+            and (root.sender_member_id is not None or _is_native_wait_notice(root)) and root.thread_root_id is None
             and isinstance(root.payload, dict) and "supervisor_actor_id" in root.payload)
 
 
@@ -242,9 +251,9 @@ async def supervisor_inbox(db, actor, *, limit: int = 50):
         raise PermissionError("supervisor_actor_not_bound")
     roots = (await db.scalars(select(MailMessage).where(
         MailMessage.thread_root_id.is_(None), MailMessage.kind == "message",
-        MailMessage.sender_member_id.is_not(None), MailMessage.audience_type == "team_preset",
+        MailMessage.audience_type == "team_preset",
         MailMessage.audience_id.in_([str(team_id) for team_id in teams]),
         MailMessage.payload["supervisor_actor_id"].as_integer() == actor.id)
         .order_by(MailMessage.id.desc()).limit(max(1, min(100, limit))))).all()
     from app.services.agent_mail_service import agent_mail_service
-    return [await agent_mail_service._message_response(db, root, None) for root in roots]
+    return [await agent_mail_service._message_response(db, root, None) for root in roots if is_supervisor_message(root)]

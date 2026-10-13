@@ -1629,3 +1629,26 @@ async def test_compat_adds_merge_wait_clock_without_changing_rows():
                 assert tuple(row) == ("ready_for_review", 2, None, None)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_input_wait_latch_migrates_without_changing_pane_identity():
+    columns = ("waiting_input_reason", "waiting_input_started_at", "waiting_input_observed_at", "waiting_input_notice_id")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP TABLE agent_pane_bindings"))
+            await conn.execute(text("CREATE TABLE agent_pane_bindings (id INTEGER PRIMARY KEY, pane_pid INTEGER NOT NULL, "
+                "pane_proc_start VARCHAR NOT NULL, slot_id INTEGER, preset_id INTEGER, tmux_target VARCHAR, "
+                "created_at DATETIME NOT NULL, UNIQUE(pane_pid, pane_proc_start))"))
+            await conn.execute(text("INSERT INTO agent_pane_bindings (id, pane_pid, pane_proc_start, slot_id, preset_id, created_at) "
+                                    "VALUES (1, 41000, '27', NULL, NULL, CURRENT_TIMESTAMP)"))
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                assert set(columns) <= await _sqlite_columns(conn, "agent_pane_bindings")
+                row = (await conn.execute(text("SELECT pane_pid, pane_proc_start, waiting_input_reason, "
+                    "waiting_input_started_at, waiting_input_observed_at, waiting_input_notice_id FROM agent_pane_bindings WHERE id = 1"))).one()
+                assert tuple(row) == (41000, "27", None, None, None, None)
+    finally:
+        await engine.dispose()

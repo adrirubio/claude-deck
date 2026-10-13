@@ -678,6 +678,37 @@
           ],
           "title": "TeamSummaryHumanAction",
           "type": "object"
+        },
+        "TeamWaitingInput": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "slot_id",
+            "reason"
+          ],
+          "title": "TeamWaitingInput",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -799,6 +830,21 @@
           "format": "date-time",
           "title": "Valid Until",
           "type": "string"
+        },
+        "waiting_input": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/TeamWaitingInput"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting Input"
         }
       },
       "required": [
@@ -1641,6 +1687,17 @@
               "title": "Valid Until",
               "type": "string"
             },
+            "waiting_input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NativeInputWait"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "wake_reason": {
               "anyOf": [
                 {
@@ -1914,6 +1971,37 @@
             "member_id"
           ],
           "title": "MailHint",
+          "type": "object"
+        },
+        "NativeInputWait": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "observed_at"
+          ],
+          "title": "NativeInputWait",
           "type": "object"
         },
         "OwnerReference": {
@@ -2569,6 +2657,17 @@
               "title": "Valid Until",
               "type": "string"
             },
+            "waiting_input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NativeInputWait"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "wake_reason": {
               "anyOf": [
                 {
@@ -2884,6 +2983,37 @@
             "member_id"
           ],
           "title": "MailHint",
+          "type": "object"
+        },
+        "NativeInputWait": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "observed_at"
+          ],
+          "title": "NativeInputWait",
           "type": "object"
         },
         "OwnerReference": {

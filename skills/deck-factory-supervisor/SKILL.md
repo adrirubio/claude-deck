@@ -40,6 +40,13 @@ Members use the `supervisor_address` from `deck_whoami` or their dispatch brief.
 They send messages with `deck_send_message(to_supervisor_actor_id=..., body=...)`.
 The actor reads `GET /api/v1/external/agent-mail/supervisor-inbox`.
 Foreign actors and unbound teams get a refusal.
+
+Read optional `waiting_input` for verified question, trust and sign-in waits.
+Deck stores one fixed notice per continuous wait for the bound Supervisor.
+The Leader receives the notice only when no Supervisor is bound.
+Known idle clears the pane latch. Unknown screens preserve it. A new pane starts with an empty latch.
+The observer reads only the current authenticated pane. It exports no screen text and sends no keys.
+Unsupported screens and sign-in screens before Mail registration remain unknown.
 Keep Leader, Supervisor, and retained operator decisions in their existing escalation order.
 
 Locate the Deck source checkout supplied by the operator or recorded campaign. Read `docs/guide/supervised-factory-playbook.md` there. When this skill is used directly from its repository, that file is at `../../docs/guide/supervised-factory-playbook.md` relative to this directory.

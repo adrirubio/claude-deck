@@ -1810,6 +1810,13 @@ MAIL_MESSAGE_KINDS = ["message", "broadcast", "context_request", "handoff", "ans
 MAIL_REQUEST_KINDS = ["context_request", "handoff"]
 
 
+class NativeInputWait(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Literal["question", "trust", "sign_in"]
+    label: Literal["Waiting for input"] = "Waiting for input"
+    observed_at: datetime
+
+
 class AgentStatus(BaseModel):
     """Read-only display facts. These facts grant no authority."""
 
@@ -1819,6 +1826,7 @@ class AgentStatus(BaseModel):
     wake_state: Literal["can_wake", "cannot_wake", "unknown"] = "unknown"
     wake_reason: Optional[str] = "observation_unavailable"
     idle_since: Optional[datetime] = None
+    waiting_input: NativeInputWait | None = None
     checked_at: datetime
     valid_until: datetime
 
@@ -2684,6 +2692,7 @@ class AgentActivityObservation(BaseModel):
     state: Literal["working", "idle", "stopped", "unknown"]
     reason: str
     observed_at: Optional[datetime] = None
+    waiting_input: NativeInputWait | None = None
 
 
 class AgentActivityDisplayObservation(AgentActivityObservation):

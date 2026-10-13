@@ -84,6 +84,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -162,6 +163,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -276,6 +278,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -471,6 +474,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -549,6 +553,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -658,6 +663,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -736,6 +742,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -817,6 +824,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -895,6 +903,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1009,6 +1018,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1087,6 +1097,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1168,6 +1179,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1246,6 +1258,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1356,6 +1369,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1434,6 +1448,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1515,6 +1530,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1593,6 +1609,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1707,6 +1724,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1785,6 +1803,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1899,6 +1918,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -1977,6 +1997,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -2091,6 +2112,7 @@
               "idle_since": null,
               "session_state": "offline",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
@@ -2169,6 +2191,7 @@
               "idle_since": null,
               "session_state": "online",
               "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
               "wake_reason": "wake_target_unbound",
               "wake_state": "cannot_wake"
             },
