@@ -3,7 +3,9 @@ import { Button } from "@/components/ui/button";
 import { formatServerTime } from "@/lib/serverTime";
 import { ApiHttpError } from "@/lib/api";
 import type { AuditEventPage, AuditEventRead, MetricsWindow } from "./auditApi";
-import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
+import type { ContextKeyList } from "./auditApi";
+import { fetchAuditEvents, fetchContextKeys, fetchMetricsWindow } from "./auditApi";
+import { WINDOW_OPTIONS, filterOptions, isNoEventKey, windowBounds, type WindowId } from "./auditFilters";
 import { groupRefusals, type RefusalGroup } from "./auditRefusals";
 import { NeedsALookPanel, type RefusalReadState } from "./NeedsALookPanel";
 import { fetchAgentMailTeam } from "@/features/agent-mail/api";
@@ -62,7 +64,7 @@ const SAFE_SNAPSHOT_FIELDS = [
   "slot_created_at",
 ] as const;
 
-type AppliedFilters = { teamKey: string; scopeKey: string };
+type AppliedFilters = { teamKey: string; scopeKey: string; windowId: WindowId };
 // C13: each retained result keeps the identity of its own successful read.
 type MetricsResult = { data: MetricsWindow; filters: AppliedFilters; observedAt: string };
 type EventsResult = {
@@ -76,28 +78,27 @@ type RefusalResult = { groups: RefusalGroup[]; truncated: boolean };
 // #520: "Show events" narrows the events table to the refused requests of one item.
 type EventFocus = { itemContextKey: string; label: string };
 
-const NO_FILTERS: AppliedFilters = { teamKey: "", scopeKey: "" };
+const NO_FILTERS: AppliedFilters = { teamKey: "", scopeKey: "", windowId: "last7" };
 
 function sameFilters(left: AppliedFilters, right: AppliedFilters) {
-  return left.teamKey === right.teamKey && left.scopeKey === right.scopeKey;
+  return left.teamKey === right.teamKey && left.scopeKey === right.scopeKey && left.windowId === right.windowId;
 }
 
-function describeFilters(filters: AppliedFilters) {
-  return `team ${filters.teamKey || "all"}, scope ${filters.scopeKey || "all"}`;
+type FilterNames = { team: (key: string) => string; scope: (key: string) => string };
+
+// #516: the page names the choice. It never shows a context key.
+function describeFilters(filters: AppliedFilters, names: FilterNames) {
+  const team = filters.teamKey ? names.team(filters.teamKey) : "all";
+  const scope = filters.scopeKey ? names.scope(filters.scopeKey) : "all";
+  const window = WINDOW_OPTIONS.find((option) => option.id === filters.windowId)?.label ?? "";
+  return `team ${team}, scope ${scope}${filters.windowId === "last7" ? "" : `, ${window.toLowerCase()}`}`;
 }
 
-// C15: window bounds are computed at invocation time, never during render.
-function windowBounds() {
-  const windowEnd = new Date().toISOString();
-  const windowStart = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-  return { windowStart, windowEnd };
-}
-
-function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilters) {
+function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilters, names: FilterNames) {
   if (state === "pending") return "a newer read is pending";
   if (state === "failed") return "the latest read failed";
   if (state === "cancelled") return "the latest read was cancelled";
-  if (!matches) return `it does not match the applied selection (${describeFilters(applied)})`;
+  if (!matches) return `it does not match the applied selection (${describeFilters(applied, names)})`;
   return null;
 }
 
@@ -121,8 +122,7 @@ export function AuditMetricsPage() {
   const [memberNames, setMemberNames] = useState<Record<number, string>>({});
   const [teamNames, setTeamNames] = useState<Record<number, string>>({});
   const [focus, setFocus] = useState<EventFocus | null>(null);
-  const [teamKey, setTeamKey] = useState("");
-  const [scopeKey, setScopeKey] = useState("");
+  const [contextKeys, setContextKeys] = useState<ContextKeyList | null>(null);
   const [applied, setApplied] = useState<AppliedFilters>(NO_FILTERS);
   const [status, setStatus] = useState("No audit data loaded yet.");
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
@@ -143,7 +143,9 @@ export function AuditMetricsPage() {
   // R11: focus returns to the invoking control, or to Apply filters, after
   // the token dialog closes by Escape, Cancel or submission.
   const focusReturnRef = useRef<HTMLElement | null>(null);
-  const applyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const teamSelectRef = useRef<HTMLSelectElement | null>(null);
+  const instrumentationRef = useRef<string | null>(null);
+  const optionsLoadedRef = useRef(false);
   const dialogWasOpenRef = useRef(false);
 
   const requestToken = useCallback((message: string | null = null): Promise<string | null> => {
@@ -171,7 +173,7 @@ export function AuditMetricsPage() {
     // Runs after the dialog's own unmount focus handling.
     const timer = window.setTimeout(() => {
       const preferred = focusReturnRef.current;
-      const target = preferred && preferred.isConnected ? preferred : applyButtonRef.current;
+      const target = preferred && preferred.isConnected ? preferred : teamSelectRef.current;
       focusReturnRef.current = null;
       target?.focus();
     }, 0);
@@ -199,7 +201,7 @@ export function AuditMetricsPage() {
   async function loadMetrics(filters: AppliedFilters, applyId: number = applyEpochRef.current) {
     const epoch = ++metricsEpochRef.current;
     const current = () => epoch === metricsEpochRef.current && applyId === applyEpochRef.current;
-    const { windowStart, windowEnd } = windowBounds();
+    const { windowStart, windowEnd } = windowBounds(filters.windowId, instrumentationRef.current, Date.now());
     setMetricsState("pending");
     try {
       const data = await fetchMetricsWindow({
@@ -210,6 +212,7 @@ export function AuditMetricsPage() {
         scopeContextKey: filters.scopeKey || undefined,
       });
       if (!current()) return;
+      instrumentationRef.current = data.instrumentation_start ?? null;
       setMetricsResult({ data, filters, observedAt: new Date().toISOString() });
       setMetricsState("idle");
       setMetricsError("");
@@ -242,6 +245,7 @@ export function AuditMetricsPage() {
       const data = await fetchAuditEvents({
         page: requestedPage,
         pageSize: PAGE_SIZE,
+        occurredAfter: windowBounds(filters.windowId, instrumentationRef.current, Date.now()).windowStart,
         eventKind: focusRef.current ? "continuation_request" : undefined,
         itemContextKey: focusRef.current?.itemContextKey,
         teamContextKey: filters.teamKey || undefined,
@@ -274,7 +278,7 @@ export function AuditMetricsPage() {
   async function loadRefusals(filters: AppliedFilters, token: string, applyId: number) {
     const epoch = ++refusalEpochRef.current;
     const current = () => epoch === refusalEpochRef.current && applyId === applyEpochRef.current;
-    const windowStartMs = Date.parse(windowBounds().windowStart);
+    const windowStartMs = Date.parse(windowBounds(filters.windowId, instrumentationRef.current, Date.now()).windowStart);
     setRefusalState("loading");
     try {
       const collected: AuditEventRead[] = [];
@@ -322,6 +326,20 @@ export function AuditMetricsPage() {
     }
   }
 
+  // The Team and Repository choices. The route needs the Director key. While
+  // the page is locked the selects offer only "All".
+  async function loadFilterOptions(token: string, current: () => boolean) {
+    if (optionsLoadedRef.current) return;
+    try {
+      const list = await fetchContextKeys(token);
+      if (!current()) return;
+      optionsLoadedRef.current = true;
+      setContextKeys(list);
+    } catch {
+      // keep the minimal selects
+    }
+  }
+
   function showRefusalEvents(group: RefusalGroup) {
     if (!group.itemContextKey) return;
     const next = { itemContextKey: group.itemContextKey, label: group.itemLabel };
@@ -352,6 +370,7 @@ export function AuditMetricsPage() {
     if (applyId !== applyEpochRef.current) return;
     if (token) {
       void loadFeedContext(() => applyId === applyEpochRef.current);
+      void loadFilterOptions(token, () => applyId === applyEpochRef.current);
       await loadRefusals(filters, token, applyId);
     } else {
       setRefusalState("locked");
@@ -384,11 +403,17 @@ export function AuditMetricsPage() {
   const total = eventsResult?.data.total ?? 0;
   const page = eventsResult?.page ?? 1;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const teamOptions = filterOptions("team", contextKeys?.teams ?? []);
+  const scopeOptions = filterOptions("scope", contextKeys?.repositories ?? []);
+  const filterNames: FilterNames = {
+    team: (key) => teamOptions.find((option) => option.value === key)?.label ?? "selected",
+    scope: (key) => scopeOptions.find((option) => option.value === key)?.label ?? "selected",
+  };
   const metricsRetained = metricsResult
-    ? retainedReason(metricsState, sameFilters(metricsResult.filters, applied), applied)
+    ? retainedReason(metricsState, sameFilters(metricsResult.filters, applied), applied, filterNames)
     : null;
   const eventsRetained = eventsResult
-    ? retainedReason(eventsState, sameFilters(eventsResult.filters, applied), applied)
+    ? retainedReason(eventsState, sameFilters(eventsResult.filters, applied), applied, filterNames)
     : null;
   // C13: paging uses the identity of the rows on screen. It waits while those
   // rows belong to another selection or a read is pending.
@@ -419,12 +444,42 @@ export function AuditMetricsPage() {
         </p>
       </header>
 
+      <section aria-label="Filters" className="flex flex-wrap items-end gap-3 rounded border p-3">
+        {/* R10: selects stay inside the card at narrow widths. */}
+        <div className="w-full min-w-0 text-sm sm:w-auto">
+          <label htmlFor="audit-filter-team" className={labelClass}>Team</label>
+          <select id="audit-filter-team" ref={teamSelectRef} value={applied.teamKey}
+            onChange={(event) => void applyReads({ ...applied, teamKey: event.target.value }, 1)}
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64">
+            <option value="">All teams</option>
+            {teamOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+        <div className="w-full min-w-0 text-sm sm:w-auto">
+          <label htmlFor="audit-filter-scope" className={labelClass}>Repository</label>
+          <select id="audit-filter-scope" value={applied.scopeKey}
+            onChange={(event) => void applyReads({ ...applied, scopeKey: event.target.value }, 1)}
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64">
+            <option value="">All repositories</option>
+            {scopeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+        <div className="w-full min-w-0 text-sm sm:w-auto">
+          <label htmlFor="audit-filter-window" className={labelClass}>Window</label>
+          <select id="audit-filter-window" value={applied.windowId}
+            onChange={(event) => void applyReads({ ...applied, windowId: event.target.value as WindowId }, 1)}
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64">
+            {WINDOW_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </div>
+      </section>
+
       <AuditSummary metrics={metrics} />
 
       <div className="space-y-1">
         {metricsResult && (
           <p className="text-xs text-muted-foreground">
-            Showing metrics for {describeFilters(metricsResult.filters)}, observed at {formatServerTime(metricsResult.observedAt)}.
+            Showing metrics for {describeFilters(metricsResult.filters, filterNames)}, observed at {formatServerTime(metricsResult.observedAt)}.
           </p>
         )}
         {metricsRetained && (
@@ -444,38 +499,11 @@ export function AuditMetricsPage() {
         onUnlock={() => void applyReads(applied, 1)}
       />
 
-      <section aria-labelledby="filters" className="space-y-2 rounded border p-3">
-        <h3 id="filters" className="font-semibold">Historical filters</h3>
-        <p className="text-sm">
-          Context keys address retained history after deletion. A key without a current resource has no
-          present-state population. Both reads use the same applied filters.
-        </p>
-        <div className="flex flex-wrap items-end gap-3">
-          {/* R10: inputs stay inside the card at narrow widths. */}
-          <label className="w-full min-w-0 text-sm sm:w-auto">
-            <span className={labelClass}>Team context key</span>
-            <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64"
-              value={teamKey} onChange={(event) => setTeamKey(event.target.value)} />
-          </label>
-          <label className="w-full min-w-0 text-sm sm:w-auto">
-            <span className={labelClass}>Scope context key</span>
-            <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 sm:w-64"
-              value={scopeKey} onChange={(event) => setScopeKey(event.target.value)} />
-          </label>
-          <Button ref={applyButtonRef}
-            onClick={() => void applyReads({ teamKey: teamKey.trim(), scopeKey: scopeKey.trim() }, 1)}>
-            Apply filters
-          </Button>
-          <Button variant="outline" onClick={() => void loadMetrics(applied)}>Reload safe metrics</Button>
-        </div>
-        <p className="text-xs text-muted-foreground">Applied selection: {describeFilters(applied)}.</p>
+      <section aria-labelledby="events" className="space-y-2 rounded border p-3">
+        <h3 id="events" className="font-semibold">Audit events</h3>
         {labels.length > 0 && (
           <p className="text-xs text-muted-foreground">Snapshot labels in page: {labels.join(", ")}</p>
         )}
-      </section>
-
-      <section aria-labelledby="events" className="space-y-2 rounded border p-3">
-        <h3 id="events" className="font-semibold">Audit events</h3>
         {focus && (
           <p className="flex flex-wrap items-center gap-2 text-sm">
             Showing refused requests for {focus.label} only.
@@ -484,7 +512,7 @@ export function AuditMetricsPage() {
         )}
         {eventsResult && (
           <p className="text-sm text-muted-foreground">
-            Showing events for {describeFilters(eventsResult.filters)}, page {eventsResult.page}, observed
+            Showing events for {describeFilters(eventsResult.filters, filterNames)}, page {eventsResult.page}, observed
             at {formatServerTime(eventsResult.observedAt)}.
           </p>
         )}
@@ -494,6 +522,11 @@ export function AuditMetricsPage() {
           </p>
         )}
         {eventsError && <p role="alert" className="text-sm text-destructive">{eventsError}</p>}
+        {(isNoEventKey(applied.teamKey) || isNoEventKey(applied.scopeKey)) && (
+          <p className="text-sm">
+            No recorded events for this {isNoEventKey(applied.teamKey) ? "team" : "repository"} yet.
+          </p>
+        )}
         <ActivityFeed
           feed={feed}
           now={eventsResult ? Date.parse(eventsResult.observedAt) : 0}
