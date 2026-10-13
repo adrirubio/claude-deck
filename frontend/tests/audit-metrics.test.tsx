@@ -190,7 +190,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(within(codeRow).getAllByText("3", { selector: "td" })).toHaveLength(2);
     // The notes sit once below the table, not in each row.
     expect(screen.getByText(/merged design or exact accepted design version; review is separate/)).toBeInTheDocument();
-    expect(screen.getByText(/Showing metrics for team all, scope all/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing metrics for all teams, all repositories/)).toBeInTheDocument();
     // The first event has no team link left, so its team shows "(deleted)" (#519).
     expect(screen.getByText("(deleted)")).toBeInTheDocument();
     expect(screen.getByText(/Snapshot labels in page: team_display_name/)).toBeInTheDocument();
@@ -225,8 +225,8 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       }
       expect(b.url.searchParams.get("team_context_key")).toBe("team:b");
       // The mount result stays visible under its own identity while A2 is pending.
-      expect(screen.getByText(/Showing metrics for team all, scope all/)).toBeInTheDocument();
-      expect(screen.getByText("Retained metrics: a newer read is pending.")).toBeInTheDocument();
+      expect(screen.getByText(/Showing metrics for all teams, all repositories/)).toBeInTheDocument();
+      expect(screen.getByText("Showing earlier metrics: a newer read is pending.")).toBeInTheDocument();
 
       if (order === "old-first") {
         a1.respond(windowBody("A1"));
@@ -250,8 +250,8 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       expect(screen.getByText("note A2")).toBeInTheDocument();
       expect(screen.queryByText("note A1")).not.toBeInTheDocument();
       expect(screen.queryByText(/synthetic metrics failure/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/Retained metrics/)).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing metrics for team Team A, scope all/)).toBeInTheDocument();
+      expect(screen.queryByText(/Showing earlier metrics/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Showing metrics for team Team A, all repositories/)).toBeInTheDocument();
       expect(stub.audit()).toHaveLength(2);
     },
   );
@@ -283,7 +283,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
         await flushLate();
         expect(screen.getByText(/mount-event/)).toBeInTheDocument();
         expect(screen.getByText("Total audit events matching filters: 1")).toBeInTheDocument();
-        expect(screen.getByText("Retained events: a newer read is pending.")).toBeInTheDocument();
+        expect(screen.getByText("Showing earlier events: a newer read is pending.")).toBeInTheDocument();
         a2.respond(eventsBody("A2-event", 1, 43));
         await waitFor(() => expect(screen.getByText(/A2-event/)).toBeInTheDocument());
       } else {
@@ -296,7 +296,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       expect(screen.queryByText("A1-event")).not.toBeInTheDocument();
       expect(screen.queryByText("B-event")).not.toBeInTheDocument();
       expect(screen.getByText("Total audit events matching filters: 43")).toBeInTheDocument();
-      expect(screen.getByText(/Showing events for team Team A, scope all, page 1/)).toBeInTheDocument();
+      expect(screen.getByText(/Showing events for team Team A, all repositories, page 1/)).toBeInTheDocument();
     },
   );
 
@@ -339,15 +339,15 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(stub.audit()[4].url.searchParams.get("team_context_key")).toBe("team:b");
     stub.audit()[4].respond({ detail: "synthetic page failure" }, 500);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("synthetic page failure"));
-    expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument();
-    expect(screen.getByText(/Showing events for team Team B, scope all, page 1/)).toBeInTheDocument();
+    expect(screen.getByText("Showing earlier events: the latest read failed.")).toBeInTheDocument();
+    expect(screen.getByText(/Showing events for team Team B, all repositories, page 1/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     await waitFor(() => expect(stub.audit()).toHaveLength(6));
     stub.audit()[5].respond({ ...eventsBody("b-page-two", 2, 27, 300), page: 2 });
     await waitFor(() => expect(screen.getAllByText(/b-page-two/)).toHaveLength(2));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Retained events/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing earlier events/)).not.toBeInTheDocument();
   });
 
   it("asks for the Director key only through Unlock events and sends one audit read (#515)", async () => {
@@ -598,10 +598,10 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.metrics()[2].respond({ detail: "synthetic metrics failure" }, 500);
     await waitFor(() => expect(stub.audit()).toHaveLength(3));
     stub.audit()[2].respond({ detail: "synthetic audit failure" }, 500);
-    await waitFor(() => expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument());
-    expect(screen.getByText("Retained metrics: the latest read failed.")).toBeInTheDocument();
-    expect(screen.getByText(/Showing metrics for team Team B, scope all/)).toBeInTheDocument();
-    expect(screen.getByText(/Showing events for team Team B, scope all, page 1/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Showing earlier events: the latest read failed.")).toBeInTheDocument());
+    expect(screen.getByText("Showing earlier metrics: the latest read failed.")).toBeInTheDocument();
+    expect(screen.getByText(/Showing metrics for team Team B, all repositories/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing events for team Team B, all repositories, page 1/)).toBeInTheDocument();
     expect(screen.getByText(/b-event/)).toBeInTheDocument();
     expect(screen.queryByText(/Showing .* team Team C/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
@@ -675,7 +675,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       stub.metrics()[1].respond(windowBody("30"));
       await screen.findByTestId("events-locked");
       hidden();
-      expect(screen.queryByText(/Retained events/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Showing earlier events/)).not.toBeInTheDocument();
     });
 
     // A1's three sequences (G-C gate): one refused key withdraws every protected panel and every active read.
@@ -770,7 +770,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       stub.metrics()[1].respond(windowBody("30"));
       await waitFor(() => expect(stub.audit()).toHaveLength(2));
       stub.audit()[1].respond({ detail: "synthetic server failure" }, 500);
-      await waitFor(() => expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("Showing earlier events: the latest read failed.")).toBeInTheDocument());
       expect(screen.getByText(/mount-event/)).toBeInTheDocument();
       expect(screen.queryByTestId("events-locked")).not.toBeInTheDocument();
       expect(getOperatorToken()).toBe("synthetic-operator");

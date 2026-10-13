@@ -407,7 +407,7 @@ export function RepositorySetupPage() {
           item.repo_name.toLowerCase() === draft.repo.trim().toLowerCase() && item.repo_path === draft.path.trim() &&
           item.dispatch_label === draft.dispatch.trim() && item.design_label === draft.design.trim() && item.base_ref === draft.baseRef.trim() &&
           item.github_auth_mode === (draft.authMode === "github_app" ? "app" : "ambient"));
-        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Scope #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record, requestedIntentKey });
+        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Repository record #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record, requestedIntentKey });
       }
       setError("The create response was uncertain. Review fresh matching records and select one, or stop. Do not repeat the create request.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not reconcile the uncertain create result."); }
@@ -532,7 +532,7 @@ export function RepositorySetupPage() {
       if (savedScope && !scopeMatchesDraft(savedScope, draft)) {
         setScope(savedScope);
         setStep(5);
-        throw new Error("This team already has a scope for the repository with different saved settings. The existing scope remains unchanged. Review it in Agent Teams before making a separate edit.");
+        throw new Error("This team already has a scope for the repository with different saved settings. The existing scope remains unchanged. Review it in Teams before making a separate edit.");
       }
       if (!savedScope) {
         if (intentChanged()) {
@@ -672,7 +672,7 @@ export function RepositorySetupPage() {
       setTeamActivationAck(false);
       const reviewBlockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(freshScope, operatorToken));
       if (!fresh.complete) {
-        reviewBlockers.push("The configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+        reviewBlockers.push("The configuration check is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
       }
       setActivationReadiness(reviewBlockers);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not refresh activation checks."); }
@@ -703,7 +703,7 @@ export function RepositorySetupPage() {
       // overlap recheck follows the last slow await (R2).
       const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(scope, operatorToken));
       if (!initial.complete) {
-        blockers.push("The configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+        blockers.push("The configuration check is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
       }
       // Re-read configuration after the GitHub checks and readiness wait, then
       // compare the reviewed set and invalidate stale acknowledgements.
@@ -711,7 +711,7 @@ export function RepositorySetupPage() {
       if (!fresh.complete) {
         // A final incomplete observation blocks the write even when the
         // truncated snapshot matches the reviewed set.
-        blockers.push("The final configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+        blockers.push("The final configuration check is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
       }
       setActivationReadiness(blockers);
       if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
@@ -773,7 +773,7 @@ export function RepositorySetupPage() {
       const activationTargets = [...new Map([freshScope, ...siblings].map((item) => [item.id, item])).values()];
       if (!fresh.complete) {
         // The initial observation gate blocks before any remote work.
-        throw new Error("The initial configuration observation is incomplete. Collisions may be missing. No remote checks were made. (configuration_observation_incomplete)");
+        throw new Error("The initial configuration check is incomplete. Collisions may be missing. No remote checks were made. (configuration_observation_incomplete)");
       }
       // Remote observations run first. Configuration is re-read after these HTTP checks.
       // Bounded remote work: at most 16 targets in batches of 4. Oversize or
@@ -800,7 +800,7 @@ export function RepositorySetupPage() {
       }
       const incomplete = observations.filter(({ result }) => result.status !== "ready");
       if (boundedWork) {
-        throw new Error("Team activation is blocked. The sibling set exceeds the bounded activation observation. Observed collisions are kept; no further remote checks were made.");
+        throw new Error("Team activation is blocked. The sibling set exceeds the bounded activation check. Observed collisions are kept; no further remote checks were made.");
       }
       if (incomplete.length) {
         throw new Error(`Team activation remains blocked. Recheck scope ${incomplete.map(({ scopeId, result }) => `${scopeId} (${result.status} at ${result.observed_at}: ${Object.values(result.checks).filter((check) => check.status !== "ready").map((check) => `${check.code}: ${check.remedy}`).join("; ")})`).join(", ")}.`);
@@ -810,7 +810,7 @@ export function RepositorySetupPage() {
       const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(scope, operatorToken));
       const reviewed = await refreshConfiguration();
       if (!reviewed.complete) {
-        blockers.push("The final configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+        blockers.push("The final configuration check is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
       }
       setActivationReadiness(blockers);
       if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
@@ -855,7 +855,7 @@ export function RepositorySetupPage() {
         setError("Launch plan changed or needs confirmation. Review a new launch plan before launching.");
         return;
       }
-      setError(`Launch outcome is uncertain. Do not launch again until an operator reconciles the team sessions. ${cause instanceof Error ? cause.message : "No safe result was returned."}`);
+      setError(`Launch outcome is uncertain. Do not launch again until the Director reconciles the team sessions. ${cause instanceof Error ? cause.message : "No safe result was returned."}`);
       setUncertainLaunch({ slotIds: [...launchSlots], planHash: launchPlan.plan_hash });
       setLaunchPlan(null); setLaunchUncertain(true);
     }
@@ -873,7 +873,7 @@ export function RepositorySetupPage() {
       setLaunchReconciliationReady(confirmed);
       setError(confirmed
         ? `Fresh planning found an existing session for every originally requested slot. Original plan ${uncertainLaunch.planHash}; review the plan, then confirm this reconciliation.`
-        : `Fresh planning did not confirm an existing session for every originally requested slot from plan ${uncertainLaunch.planHash}. Keep launch blocked and ask an operator to reconcile the remaining slots.`);
+        : `Fresh planning did not confirm an existing session for every originally requested slot from plan ${uncertainLaunch.planHash}. Keep launch blocked and ask the Director to reconcile the remaining slots.`);
     } catch (cause) {
       setError(`Launch outcome remains uncertain. ${cause instanceof Error ? cause.message : "Fresh session planning failed."}`);
     } finally { setBusy(false); }
@@ -913,7 +913,7 @@ export function RepositorySetupPage() {
     {step === 2 && <div className={panelClass}><p>Repository dispatch and design labels apply to the scope. Worker routes are separate for each slot. The Leader has no worker route.</p>{draft.teamMode === "new" ? draft.workerNames.split("\n").map((rawName) => rawName.trim()).filter(Boolean).map((name) => <fieldset key={name} className="space-y-2 rounded border p-3"><legend className="font-medium">{name}</legend><label className={labelClass}>Area labels, comma separated<input className={inputClass} value={slotRouting[name]?.areaLabels ?? ""} onChange={(e) => { setConfirmSave(false); setSlotRouting((current) => ({ ...current, [name]: { areaLabels: e.target.value, expertise: current[name]?.expertise ?? "" } })); }} /></label><label className={labelClass}>Expertise<input className={inputClass} value={slotRouting[name]?.expertise ?? ""} onChange={(e) => { setConfirmSave(false); setSlotRouting((current) => ({ ...current, [name]: { areaLabels: current[name]?.areaLabels ?? "", expertise: e.target.value } })); }} /></label></fieldset>) : <p>Existing team routing stays unchanged.</p>}<p>Potential enabled overlaps: {matchingOverlap.map((item) => `team ${item.preset_id}/scope ${item.id}`).join(", ") || "none found in loaded data"}.</p><div className="flex flex-wrap gap-2"><Button onClick={() => setStep(3)}>Continue</Button><Button variant="outline" onClick={() => setStep(4)}>Skip optional steps</Button></div></div>}
     {step === 3 && <div className={panelClass}><h3 className="font-semibold">Policy</h3><p>Merge policy: human approval.</p><p>New scope limits: concurrency 1; verification retries 1; automatic merges 0.</p><p>Base branch: {draft.baseRef}. Scope is saved disabled, even when checks have gaps.</p><p>Existing team settings remain unchanged. Launch and activation require separate choices.</p><Button onClick={() => setStep(4)}>Review setup</Button></div>}
     {step === 4 && <div className={panelClass}><h3 className="font-semibold">Review</h3><p>Repository: {draft.owner}/{draft.repo}</p><p>Checkout: {draft.path}</p><p>Base: {draft.baseRef}</p><p>Labels: {draft.dispatch} / {draft.design}</p><p>Authentication: {draft.authMode}; credentials are not stored in this draft.</p><p>Preflight: {currentPreflight?.status ?? "not checked or stale"}. Saving remains disabled and does not need ready checks.</p>{currentPreflight && <p className="text-sm">Configuration presence, boolean only: {Object.entries(currentPreflight.configuration_presence ?? {}).map(([name, present]) => `${name}: ${present ? "present" : "missing"}`).join(", ") || "not reported"}.</p>}{(currentPreflight?.host_guidance ?? []).length > 0 && <div className="text-sm"><p className="font-medium">Host procedure</p><ol className="list-decimal pl-5">{(currentPreflight?.host_guidance ?? []).map((line) => <li key={line}>{line}</li>)}</ol></div>}<p className="text-sm">Runtime recovery-only restrictions are separate from credential readiness. Activation needs every required check ready in a fresh observation.</p><p>Team: {draft.teamMode === "existing" ? presets.find((item) => item.id === draft.teamId)?.name ?? "Select a team" : draft.teamName || "New team"}; Leader: {draft.teamMode === "new" ? draft.leaderName : "preserved"}; worker slots: {draft.teamMode === "new" ? draft.workerNames.split("\n").filter((name) => name.trim()).length : "preserved"}.</p><p>Potential overlap: {matchingOverlap.map((item) => `team ${item.preset_id}/scope ${item.id}`).join(", ") || "none found"}.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={confirmSave} onChange={(e) => setConfirmSave(e.target.checked)} />Save configuration only. Keep launch, team activation, scope activation, and merge decisions separate.</label><div className="flex flex-wrap gap-2"><Button disabled={busy || Boolean(recovery) || !confirmSave || (draft.teamMode === "existing" && !draft.teamId)} onClick={() => void saveSetup()}>{busy ? "Saving…" : "Save configuration"}</Button><Link className="self-center underline" to="/teams">Manage teams</Link></div></div>}
-    {step === 5 && team && scope && <div className={panelClass}><h3 className="font-semibold">Saved configuration</h3><p>Team {team.name} (#{team.id}) is {team.autonomy_enabled ? "active" : "paused"}. Scope #{scope.id} is {scope.enabled ? "enabled" : "disabled"}.</p><p>Saving did not launch workers or activate this scope.</p>
+    {step === 5 && team && scope && <div className={panelClass}><h3 className="font-semibold">Saved configuration</h3><p>Team {team.name} (#{team.id}) is {team.autonomy_enabled ? "active" : "paused"}. Repository record #{scope.id} is {scope.enabled ? "enabled" : "disabled"}.</p><p>Saving did not launch workers or activate this scope.</p>
       <section className="space-y-2 rounded border p-3" aria-live="polite"><h4 className="font-semibold">Saved-stage preflight</h4>
         {preflight ? (<>
           <p className="text-sm">{currentPreflight ? "Current result" : "Stale result"}; observed {new Date(preflight.value.observed_at ?? preflight.value.checked_at ?? "").toLocaleString()}; status {preflight.value.status}.</p>

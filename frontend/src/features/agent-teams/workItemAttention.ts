@@ -8,11 +8,11 @@ const humanMergeFallbacks = ['Auto-merge blocked', 'Auto-merge budget exhausted'
 
 export function workItemAttention(item: GithubWorkItem, scope?: TeamGithubScope): WorkItemAttention | null {
   if (item.dispatch_status === 'escalated' && ['decision_hold', 'ack_hold'].includes(item.recovery_checkpoint_stage ?? '')) {
-    return { label: 'Your recovery decision is needed', reason: 'Recovery is paused at an operator checkpoint. Open the details to inspect and release or cancel the hold.', linkLabel: 'Open PR' }
+    return { label: 'Your recovery decision is needed', reason: 'Recovery is paused at a Director checkpoint. Open the details to inspect and release or cancel the hold.', linkLabel: 'Open PR' }
   }
   if (item.pending_approval_status === 'pending' && ['escalated', 'failed'].includes(item.dispatch_status)
       && item.pending_approval_kind === 'initial_plan') {
-    return { label: 'Your intervention is needed', reason: 'The initial approval is stranded on a stopped attempt. Open the recovery details to inspect operator remedies; the Leader cannot decide this request.', linkLabel: 'Open PR' }
+    return { label: 'Your intervention is needed', reason: 'The initial approval is stranded on a stopped attempt. Open the recovery details to inspect Director remedies; the Leader cannot decide this request.', linkLabel: 'Open PR' }
   }
   if (item.pending_approval_status === 'pending') return null // the Leader must decide
   if (item.dispatch_status === 'awaiting_human_review') {

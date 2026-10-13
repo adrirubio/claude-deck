@@ -88,16 +88,16 @@ type FilterNames = { team: (key: string) => string; scope: (key: string) => stri
 
 // #516: the page names the choice. It never shows a context key.
 function describeFilters(filters: AppliedFilters, names: FilterNames) {
-  const team = filters.teamKey ? names.team(filters.teamKey) : "all";
-  const scope = filters.scopeKey ? names.scope(filters.scopeKey) : "all";
+  const team = filters.teamKey ? `team ${names.team(filters.teamKey)}` : "all teams";
+  const scope = filters.scopeKey ? `repository ${names.scope(filters.scopeKey)}` : "all repositories";
   const window = WINDOW_OPTIONS.find((option) => option.id === filters.windowId)?.label ?? "";
-  return `team ${team}, scope ${scope}${filters.windowId === "last7" ? "" : `, ${window.toLowerCase()}`}`;
+  return `${team}, ${scope}${filters.windowId === "last7" ? "" : `, ${window.toLowerCase()}`}`;
 }
 
 function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilters, names: FilterNames) {
   if (state === "pending") return "a newer read is pending";
   if (state === "failed") return "the latest read failed";
-  if (!matches) return `it does not match the applied selection (${describeFilters(applied, names)})`;
+  if (!matches) return `they do not match the applied selection (${describeFilters(applied, names)})`;
   return null;
 }
 
@@ -277,7 +277,7 @@ export function AuditMetricsPage() {
       setUnlocking(false);
       setEventsResult(null);
       setEventsState("cancelled");
-      setStatus("Audit read cancelled. Safe metrics remain available.");
+      setStatus("You cancelled the Director key prompt. Safe metrics remain available.");
       return null;
     }
     try {
@@ -545,12 +545,12 @@ export function AuditMetricsPage() {
       <div className="space-y-1">
         {metricsResult && (
           <p className="text-xs text-muted-foreground">
-            Showing metrics for {describeFilters(metricsResult.filters, filterNames)}, observed at {formatServerTime(metricsResult.observedAt)}.
+            Showing metrics for {describeFilters(metricsResult.filters, filterNames)}, updated {formatServerTime(metricsResult.observedAt)}.
           </p>
         )}
         {metricsRetained && (
           <p role="status" className="text-sm text-muted-foreground">
-            Retained metrics: {metricsRetained}.
+            Showing earlier metrics: {metricsRetained}.
           </p>
         )}
         {metricsError && <p role="alert" className="text-sm text-destructive">{metricsError}</p>}
@@ -579,13 +579,13 @@ export function AuditMetricsPage() {
         )}
         {eventsResult && (
           <p className="text-sm text-muted-foreground">
-            Showing events for {describeFilters(eventsResult.filters, filterNames)}, page {eventsResult.page}, observed
-            at {formatServerTime(eventsResult.observedAt)}.
+            Showing events for {describeFilters(eventsResult.filters, filterNames)}, page {eventsResult.page}, updated
+            {formatServerTime(eventsResult.observedAt)}.
           </p>
         )}
         {eventsRetained && (
           <p role="status" className="text-sm text-muted-foreground">
-            Retained events: {eventsRetained}.
+            Showing earlier events: {eventsRetained}.
           </p>
         )}
         {eventsError && <p role="alert" className="text-sm text-destructive">{eventsError}</p>}

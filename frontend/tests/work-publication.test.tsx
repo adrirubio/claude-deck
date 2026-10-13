@@ -49,7 +49,7 @@ describe('Work publication observations', () => {
     value.publication.state = 'historical'; value.publication.reason = 'workspace_not_leased'
     vi.mocked(apiClient).mockResolvedValue({ ...value })
     fireEvent.click(screen.getByRole('button', { name: 'Refresh progress' }))
-    expect(await screen.findByText('Previous publication observation')).toBeTruthy()
+    expect(await screen.findByText('Previous publication check')).toBeTruthy()
     expect(screen.queryByText('2 unpublished commits')).toBeNull()
     view.unmount()
   })
@@ -61,7 +61,7 @@ describe('Work publication observations', () => {
     expect(screen.getByText('2 unpublished commits')).toBeTruthy()
     await act(async () => { await vi.advanceTimersByTimeAsync(15001) })
     expect(screen.queryByText('2 unpublished commits')).toBeNull()
-    expect(screen.getByText('Previous publication observation')).toBeTruthy()
+    expect(screen.getByText('Previous publication check')).toBeTruthy()
     await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
     expect(screen.getByText(/Unable to refresh progress/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Refresh progress' })).not.toBeDisabled()
@@ -89,7 +89,7 @@ describe('Work publication observations', () => {
     render(<WorkPublicationPanel item={{ ...item, dispatch_status: 'ready_for_review' }} ownerActivity={{ slot_id: 2, state: 'idle', reason: 'native_turn_completed', observed_at: new Date().toISOString() }} />)
     expect(await screen.findByText('Read the issue summary.', { selector: 'p' })).toBeTruthy()
     expect(screen.getByText(/completed turn does not establish/)).toBeTruthy()
-    expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
+    expect(screen.getByText(/Next actor/).textContent).toContain('Director')
   })
 })
 
@@ -109,5 +109,5 @@ it('renders the current design human-review instruction', async () => {
   vi.mocked(apiClient).mockResolvedValue(progress({ phase: 'review', next_actor: 'operator', next_action: 'Read the human summary and review the design PR.' }))
   render(<WorkPublicationPanel item={{ ...item, dispatch_status: 'awaiting_human_review' }} />)
   expect(await screen.findByText('Read the human summary and review the design PR.', { selector: 'p' })).toBeTruthy()
-  expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
+  expect(screen.getByText(/Next actor/).textContent).toContain('Director')
 })

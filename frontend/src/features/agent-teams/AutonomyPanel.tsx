@@ -209,7 +209,7 @@ export function AutonomyPanel({
             {operatorTokenStored ? 'Clear Director key' : 'Set Director key'}
           </Button>
           <span className="self-center text-xs text-muted-foreground">
-            {operatorTokenStored ? 'Director key set for this tab' : 'Needed for protected settings, launch, autonomy, and recovery actions'}
+            {operatorTokenStored ? 'Director key set for this tab' : 'Protects settings, launch, autonomy and recovery'}
           </span>
           <Button variant="outline" onClick={() => { void onRefresh(); void checkGateStatus() }} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
@@ -238,7 +238,7 @@ export function AutonomyPanel({
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
-            <p className="mt-2">The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
+            <p className="mt-2">The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and Director remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
           </div>
         )}
         {scopes.map((scope) => (

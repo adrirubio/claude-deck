@@ -113,7 +113,7 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
 describe('AutonomyPanel', () => {
   it('explains the Director key across protected settings and first-run actions', () => {
     render(<AutonomyPanel {...panelProps({ scopes: [], workItems: [] })} />)
-    expect(screen.getByText('Needed for protected settings, launch, autonomy, and recovery actions')).toBeInTheDocument()
+    expect(screen.getByText('Protects settings, launch, autonomy and recovery')).toBeInTheDocument()
     expect(screen.getByText(/The Director key protects roster and watched-repo settings/)).toHaveTextContent('separate from the GitHub polling token')
     expect(screen.queryByText(/only needed for protected recovery|needed only for protected recovery/i)).not.toBeInTheDocument()
   })

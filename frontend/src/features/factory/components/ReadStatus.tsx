@@ -25,7 +25,7 @@ export function ReadStatus<T>({
   return (
     <div aria-live="polite" className="text-sm">
       {state.refreshing && (
-        <p>{state.data ? "Refreshing observation…" : "Loading…"}</p>
+        <p>{state.data ? "Refreshing…" : "Loading…"}</p>
       )}
       {absent && (
         <p role="alert" className="rounded border border-destructive p-3">
@@ -35,7 +35,7 @@ export function ReadStatus<T>({
       {error && !absent && (
         <p role="alert" className="rounded border border-destructive p-3">
           {state.data
-            ? "Stale data — refresh failed. Last successful observation remains visible. "
+            ? "Data may be out of date. The refresh failed. The last good data stays visible. "
             : ""}
           {error instanceof ApiHttpError && error.status === 404
             ? "Not found. "

@@ -1,6 +1,6 @@
 export function Time({
   value,
-  label = "Observed",
+  label = "Updated",
 }: {
   value: string | null;
   label?: string;

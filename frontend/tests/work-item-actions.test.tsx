@@ -281,7 +281,7 @@ describe('A1 findings on the Work item page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }))
     await settle()
     const dialog = screen.getByRole('dialog')
-    fireEvent.change(within(dialog).getByLabelText('Operator token'), { target: { value: 'test-operator' } })
+    fireEvent.change(within(dialog).getByLabelText('Director key'), { target: { value: 'test-operator' } })
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Authorize retry' }).closest('form')!)
     await settle()
     expect(calls.some((call) => call.path.endsWith('/retry') && call.key === 'test-operator')).toBe(true)

@@ -18,13 +18,13 @@ type HumanAction = {
 type Summary = { preset_id: number; observation_expires_at: string; coverage_complete: boolean; actions: HumanAction[] }
 const kinds: Record<string, string> = {
   review_pr: 'Review the pull request', merge_pr: 'Review the evidence and merge on GitHub when ready',
-  pilot_decision: 'Operator pilot decision', milestone_acceptance: 'Milestone acceptance',
+  pilot_decision: 'Director pilot decision', milestone_acceptance: 'Milestone acceptance',
   provide_evidence: 'Provide acceptance or pilot evidence', scope_clarification: 'Clarify the remaining scope',
   inspect_attempt: 'Inspect the stopped attempt in Autonomy',
-  inspect_checkpoint: 'Inspect the operator recovery checkpoint in Autonomy',
+  inspect_checkpoint: 'Inspect the Director recovery checkpoint in Autonomy',
 }
 const states: Record<string, string> = {
-  requested: 'Operator action requested', waiting_for_prerequisites: 'Decision gate — waiting for prerequisites',
+  requested: 'Director action requested', waiting_for_prerequisites: 'Decision gate — waiting for prerequisites',
   context_pending: 'Action details pending — Leader must update the issue',
   historical: 'Last reported — awaiting confirmation', head_changed: 'PR head changed — Leader confirmation needed',
   pr_unavailable: 'PR status unavailable — verify on GitHub',
@@ -103,7 +103,7 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
     </summary>
     <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
       <div>
-        {!historical && data && !data.coverage_complete && actions.length>0 && <p className="mt-1 text-muted-foreground">The Leader’s assessment or some observations need confirmation. This is not a complete list of current actions.</p>}
+        {!historical && data && !data.coverage_complete && actions.length>0 && <p className="mt-1 text-muted-foreground">The Leader’s assessment or some data needs confirmation. This is not a complete list of current actions.</p>}
       </div>
       <Button variant="outline" size="sm" onClick={onInspectAutonomy}>Open Autonomy details</Button>
     </div>
@@ -121,7 +121,7 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
       {!historical && action.state==='waiting_for_prerequisites' && <p className="mt-2 text-muted-foreground">This decision is not ready. Complete its required evidence first.</p>}
       {action.prerequisite_issue_numbers.length>0 && <p className="mt-2 text-muted-foreground">Required prerequisite evidence: {action.prerequisite_issue_numbers.map((n) => `#${n}`).join(', ')}. Their closure alone does not record acceptance.</p>}
       {action.expected_head_sha && <p className="mt-1 text-muted-foreground">Reported PR head: {action.expected_head_sha.slice(0, 8)}. Review current checks and evidence on GitHub.</p>}
-      {action.pr_observed_at && <p className="mt-1 text-muted-foreground">PR observed: {formatServerTime(action.pr_observed_at)}</p>}
+      {action.pr_observed_at && <p className="mt-1 text-muted-foreground">PR checked: {formatServerTime(action.pr_observed_at)}</p>}
       {action.instructions_updated_at && <p className="mt-1 text-muted-foreground">Issue instructions updated: {formatServerTime(action.instructions_updated_at)}</p>}
       <p className="mt-1 text-muted-foreground">{action.repo} · {action.source==='leader' ? 'Reported by the Leader' : 'Reported by dispatch'}{action.last_assessed_at ? ` · Assessment ${formatServerTime(action.last_assessed_at)}` : ''}</p>
       </details>

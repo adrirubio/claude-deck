@@ -938,7 +938,7 @@ export function AgentTeamsPage() {
       }
 
     } catch (error) {
-      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to load Agent Teams')
+      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to load teams')
     } finally {
       if (requestId === presetRequestIdRef.current) setLoading(false)
     }
@@ -1305,7 +1305,7 @@ export function AgentTeamsPage() {
         <div>
           <h1 className="flex items-center gap-2 text-3xl font-bold">
             <UsersRound className="h-8 w-8" />
-            Agent Teams
+            Teams
           </h1>
           <p className="mt-1 text-muted-foreground">
             Teams of agents that work on your repositories.

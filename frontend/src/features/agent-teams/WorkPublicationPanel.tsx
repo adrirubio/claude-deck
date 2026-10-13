@@ -46,18 +46,18 @@ const phases: Record<string, string> = {
 const reasons: Record<string, string> = {
   workspace_not_leased: 'The workspace is no longer leased to this item.',
   workspace_identity_unavailable: 'The registered workspace identity could not be confirmed.',
-  git_unavailable: 'Git observations are unavailable.',
+  git_unavailable: 'Git data is unavailable.',
   invalid_git_observation: 'The Git result could not be confirmed.',
-  observation_limit: 'The observation exceeded its supported size.',
-  observation_timeout: 'The observation exceeded its time limit.',
+  observation_limit: 'The check exceeded its supported size.',
+  observation_timeout: 'The check exceeded its time limit.',
   branch_not_assigned: 'No valid task branch is assigned.',
   detached_head: 'The workspace has a detached head. The task-branch comparison is unavailable.',
   branch_mismatch: 'The workspace is not on the assigned task branch.',
   remote_unavailable: 'The published branch head could not be confirmed.',
   published_object_unavailable: 'The published commit is unavailable in the local checkout.',
   ancestry_unavailable: 'This checkout has incomplete history. Commit counts are unavailable.',
-  changed_during_read: 'The source or its lease changed during the observation.',
-  snapshot_unavailable: 'The previous observation could not be confirmed.',
+  changed_during_read: 'The source or its lease changed during the check.',
+  snapshot_unavailable: 'The previous check could not be confirmed.',
 }
 
 function timestamp(value: string | null | undefined) {
@@ -125,7 +125,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
             deadline = setTimeout(() => { controller.abort(); reject(new Error('Progress timeout')) }, 12_000)
           }),
         ])
-        if (!valid(next, id, nonce, owner)) throw new Error('Invalid progress observation')
+        if (!valid(next, id, nonce, owner)) throw new Error('Invalid progress data')
         if (active && !controller.signal.aborted) {
           setResult({ key: requestKey, data: next }); setError(false); setClock(Date.now())
         }
@@ -154,7 +154,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const current = Boolean(matches && !error && clock < expiry)
   const publication = matches ? data?.publication : null
   const publicationCurrent = current && publication?.state === 'current'
-  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Operator', controller: 'Deck', none: 'None' }
+  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Deck', none: 'None' }
   const branchUrl = item.dispatch_head_ref ? `https://github.com/${encodeURIComponent(item.repo_owner)}/${encodeURIComponent(item.repo_name)}/tree/${item.dispatch_head_ref.split('/').map(encodeURIComponent).join('/')}` : null
   let summary = 'Publication status unavailable'
   if (publicationCurrent && publication?.relation === 'synchronized') summary = 'Local HEAD matches the published SHA'
@@ -162,7 +162,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   else if (publicationCurrent && publication?.unpublished_commits != null && publication.unpublished_commits > 0) {
     summary = `${publication.unpublished_commits} unpublished ${publication.unpublished_commits === 1 ? 'commit' : 'commits'}`
   } else if (publicationCurrent && publication?.relation === 'behind') summary = 'The local branch is behind the published branch'
-  else if (publication?.state === 'historical' || matches && !current) summary = 'Previous publication observation'
+  else if (publication?.state === 'historical' || matches && !current) summary = 'Previous publication check'
 
   return <section className="space-y-3 rounded-lg border p-4" aria-label="Progress and publication">
     <div className="flex items-center justify-between gap-3">
@@ -178,7 +178,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
       {' '}Owner activity can cover other items. The Leader follow-up view records any current settlement action.
     </p>}
     {error && <p role="status" className="text-sm text-muted-foreground">Unable to refresh progress. Retained details are historical.</p>}
-    {!matches || !data ? <p className="text-sm text-muted-foreground">{loading ? 'Reading progress…' : 'No progress observation is available.'}</p> : <>
+    {!matches || !data ? <p className="text-sm text-muted-foreground">{loading ? 'Reading progress…' : 'No progress data is available.'}</p> : <>
       <p className="text-sm"><span className="font-medium">{current ? 'Phase' : 'Previous phase'}:</span> {phases[data.phase] ?? 'Unknown'}
         {' · '}{current ? 'Next actor' : 'Previous actor'}: {actors[data.next_actor]}</p>
       <p className="text-sm">{current ? data.next_action : `Previous next action: ${data.next_action}`}</p>
@@ -186,24 +186,24 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
         nextAction={data.next_action} item={item} />
       <p className="text-sm font-medium">{summary}</p>
       <p className="text-xs text-muted-foreground">File-change counts are unavailable in this metadata read. Matching commits do not establish that the workspace has no edits.</p>
-      {publication?.reason && <p className="text-sm text-muted-foreground">{reasons[publication.reason] ?? 'The observation is incomplete.'}</p>}
+      {publication?.reason && <p className="text-sm text-muted-foreground">{reasons[publication.reason] ?? 'The data is incomplete.'}</p>}
       <details className="text-sm">
         <summary className="cursor-pointer font-medium">Source and publication details</summary>
         <dl className="mt-3 grid gap-3 sm:grid-cols-2">
           {[
-            ['Local SHA observed', publication?.local_sha ?? 'Unavailable'],
-            ['Published SHA observed', publication?.published_sha ?? 'Unavailable'],
+            ['Local SHA', publication?.local_sha ?? 'Unavailable'],
+            ['Published SHA', publication?.published_sha ?? 'Unavailable'],
             ['Unpublished commits', publication?.unpublished_commits ?? 'Unavailable'],
             ['Branch relationship', publication?.relation ?? 'Unavailable'],
             ['Changed tracked files', publication?.tracked_changes ?? 'Unavailable'],
             ['Untracked files', publication?.untracked_files ?? 'Unavailable'],
-            ['Source observation', date(publication?.observed_at)],
-            ['Checkpoint first observed', date(publication?.publication_first_observed_at)],
+            ['Source checked', date(publication?.observed_at)],
+            ['Checkpoint first seen', date(publication?.publication_first_observed_at)],
             ['Last check head recorded by Deck', data.last_check_head ?? 'Unavailable'],
             ['Next expected controller poll', date(data.next_poll_expected_at)],
           ].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-all">{value}</dd></div>)}
         </dl>
-        <p className="mt-3 text-xs text-muted-foreground">The checkpoint time is a GitHub head observation. Push time is unavailable. The controller poll time is an estimate.</p>
+        <p className="mt-3 text-xs text-muted-foreground">The checkpoint time comes from a GitHub head check. Push time is unavailable. The controller poll time is an estimate.</p>
         <p className="mt-1 text-xs text-muted-foreground">Publication and a recorded check head do not prove review acceptance or merge eligibility.</p>
         {branchUrl && <a className="mt-3 inline-flex font-medium text-primary" href={branchUrl} target="_blank" rel="noreferrer">Open assigned branch on GitHub</a>}
       </details>

@@ -66,7 +66,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(url.pathname).toBe('/agent-bridge'); expect(Object.fromEntries(url.searchParams)).toEqual({ team_id: '1', slot_id: '2', member_id: '2', session_id: '2', context: 'readonly' })
     expect(within(context).getByRole('link', { name: 'Review launch for Leader' })).toHaveAttribute('href', '/teams/1?slot_id=1&review_launch=1')
     expect(within(context).getByRole('link', { name: 'Team' })).toHaveAttribute('href', '/teams/1')
-    expect(within(context).getByRole('link', { name: 'Repository scope' })).toHaveAttribute('href', '/repositories/1')
+    expect(within(context).getByRole('link', { name: 'Repository' })).toHaveAttribute('href', '/repositories/1')
     expect(within(context).getByRole('link', { name: 'Mail context' })).toHaveAttribute('href', '/agent-mail?team_id=1&slot_id=2&member_id=2')
     expect(screen.getByRole('link', { name: 'Open issue' })).toHaveAttribute('target', '_blank')
     expect(screen.getByRole('link', { name: 'Open issue' })).toHaveAttribute('rel', 'noreferrer')

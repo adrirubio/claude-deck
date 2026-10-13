@@ -48,14 +48,14 @@ test('@active a repository loads', async ({ page }) => {
 
 test('@active Teams lists the seeded teams', async ({ page }) => {
   await page.goto('/teams')
-  await expect(page.getByRole('heading', heading('Agent Teams'))).toBeVisible()
+  await expect(page.getByRole('heading', heading('Teams'))).toBeVisible()
   await expect(page.getByText('Release crew').first()).toBeVisible()
   await expect(page.getByText('Quiet team').first()).toBeVisible()
 })
 
 test('@active a team shows its eight members', async ({ page }) => {
   await page.goto('/teams/1?tab=roster')
-  await expect(page.getByRole('heading', heading('Agent Teams'))).toBeVisible()
+  await expect(page.getByRole('heading', heading('Teams'))).toBeVisible()
   for (const member of ['L1 Leader', 'B1 Backend', 'F1 Frontend', 'V1 Verifier']) {
     await expect(page.getByText(member).first()).toBeVisible()
   }

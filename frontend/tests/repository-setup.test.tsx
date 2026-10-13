@@ -508,7 +508,7 @@ describe("guided repository setup", () => {
     expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
     expect(mocks.updateAgentTeamLeader).not.toHaveBeenCalled();
     expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
-    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository record #55 is disabled/)).toBeInTheDocument();
   });
 
   it("recovers an interrupted save without duplicating the disabled scope (V28)", async () => {
@@ -540,11 +540,11 @@ describe("guided repository setup", () => {
 
     await screen.findByText(/Reconcile uncertain create/);
     expect((await screen.findAllByText(/Do not repeat the create request/)).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /Use Scope #55/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Use Repository record #55/ }));
     await screen.findByText(/Saved configuration/);
     // V28: no duplicate create, and the recovered scope stays disabled.
     expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository record #55 is disabled/)).toBeInTheDocument();
     expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
   });
 
@@ -582,14 +582,14 @@ describe("guided repository setup", () => {
 
     // Actual recovery controls with fresh reads select the created scope.
     await screen.findByText(/Reconcile uncertain create/);
-    fireEvent.click(screen.getByRole("button", { name: /Use Scope #55/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Use Repository record #55/ }));
     await screen.findByText(/Saved configuration/);
     // No second creation and no unrelated writes.
     expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
     expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
     expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
     expect(mocks.updateAgentTeamLeader).not.toHaveBeenCalled();
-    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository record #55 is disabled/)).toBeInTheDocument();
 
     // Unrelated state is unchanged: no write touched the siblings and the
     // recovery used fresh reads that still observe both existing scopes.
@@ -779,7 +779,7 @@ describe("guided repository setup", () => {
     await runDraftToSavedSetupWithExistingTeam(12);
 
     fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
-    await screen.findByText(/The configuration observation is incomplete/);
+    await screen.findByText(/The configuration check is incomplete/);
     // Observed collisions are still shown while readiness is blocked.
     expect(screen.getByText(/Prospective overlap/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Enable this scope" })).toBeDisabled();
@@ -809,7 +809,7 @@ describe("guided repository setup", () => {
     // truncated snapshot matches the reviewed set.
     incomplete = true;
     fireEvent.click(screen.getByRole("button", { name: "Enable this scope" }));
-    await screen.findByText(/The final configuration observation is incomplete/);
+    await screen.findByText(/The final configuration check is incomplete/);
     expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
   });
 
@@ -1490,7 +1490,7 @@ describe("guided repository setup", () => {
     expect(scopePayload.github_auth_mode).toBe("ambient");
     // The saved configuration shown to the operator equals the created records.
     expect(screen.getByText(/Team Synthetic team \(#12\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository record #55 is disabled/)).toBeInTheDocument();
     expect(screen.getByText(/A cached fallback is not current evidence/)).toBeInTheDocument();
   });
 
@@ -1658,7 +1658,7 @@ describe("guided repository setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.change(screen.getByLabelText("Dispatch label"), { target: { value: "changed-before-selection" } });
-    fireEvent.click(screen.getByRole("button", { name: /Use Scope #55/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Use Repository record #55/ }));
 
     await screen.findByText(/The selected record is preserved/);
     expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
