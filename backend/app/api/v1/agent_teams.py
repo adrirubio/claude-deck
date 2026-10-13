@@ -104,8 +104,10 @@ from app.services.github_initial_approval_recovery import cancel_stranded_initia
 from app.services.github_dispatch_service import (
     HandoffExternalEffectError,
     ResumeAttemptError,
+    _item_identity,
     github_dispatch_service,
 )
+from app.services.github_terminal_revision_service import TERMINAL_ITEMS
 
 
 _CONTINUATION_POLICY_FIELDS = (
@@ -884,6 +886,27 @@ async def _authorize_dispatch_report(
             )
 
 
+async def _observe_terminal_dispatch_report(db, item, report, session):
+    """Keep an authorized status note without changing terminal item facts."""
+    from app.services import factory_audit_service as _audit
+
+    observed = await _audit.record_observation(
+        db,
+        event_kind="owner_status_report",
+        source="agent_teams.report_dispatch_status",
+        occurred_at=datetime.now(timezone.utc),
+        actor=_session_actor(session),
+        scope_id=item.scope_id,
+        item_id=item.id,
+        action_outcome="rejected",
+        sanitized_reason="terminal_status_report_ignored",
+        after_values={"status": report.status, "dispatch_status": item.dispatch_status,
+                      "status_note": report.note},
+    )
+    if observed is None:
+        raise HTTPException(status_code=503, detail="terminal_status_report_audit_unavailable")
+
+
 @router.post("/git-credential", response_model=GithubCredentialResponse)
 async def get_github_credential(
     credential: GithubCredentialRequest,
@@ -1090,7 +1113,9 @@ async def report_dispatch_status(
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 
-    if report.status == "triaging":
+    if item.dispatch_status in TERMINAL_ITEMS and report.status != "workspace_released":
+        await _observe_terminal_dispatch_report(db, item, report, session)
+    elif report.status == "triaging":
         if report.note is not None:
             item.status_note = report.note
             item.updated_at = datetime.utcnow()
@@ -1191,8 +1216,17 @@ async def report_dispatch_status(
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
-        await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
-        await db.commit()
+        scope_id, owner_slot_id = item.scope_id, item.owner_slot_id
+        applied = await github_dispatch_service._escalate_current_item(
+            db, item, _item_identity(item), "plan_blocked", report.note)
+        if not applied:
+            # A merge can win after authorization. The guarded escalation
+            # refreshes the item and cannot overwrite the newer state.
+            if (item.dispatch_status in TERMINAL_ITEMS and item.scope_id == scope_id
+                    and item.owner_slot_id == owner_slot_id):
+                await _observe_terminal_dispatch_report(db, item, report, session)
+            else:
+                raise HTTPException(status_code=409, detail="dispatch_report_context_changed")
     elif report.status == "ack_received":
         evidence = await github_dispatch_service.record_ack_received(db, item, scope)
         if not evidence.ok:
