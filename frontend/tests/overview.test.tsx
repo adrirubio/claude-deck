@@ -261,7 +261,7 @@ describe('Progress', () => {
     const card = screen.getByRole('article', { name: /Progress: Release Deck v3.0.1/ })
     expect(within(card).getByText('of 12 done', { exact: false })).toBeInTheDocument()
     expect(within(card).getByText('major-release-v3', { exact: false })).toHaveTextContent('parent issue #490')
-    expect(within(card).getByRole('img')).toHaveAttribute('aria-label', '6 done, 2 under way, 4 still to do')
+    expect(within(card).getByRole('img')).toHaveAttribute('aria-label', '6 done, 2 under way, 4 still to do, backlog known')
     for (const name of ['Done', 'Under way', 'Still to do']) expect(within(card).getByRole('heading', { name: new RegExp(`^${name}`) })).toBeInTheDocument()
     expect(within(card).getByText('R2 is building it')).toBeInTheDocument()
     expect(within(card).getByText('Waiting for you')).toBeInTheDocument()
@@ -281,14 +281,47 @@ describe('Progress', () => {
     expect(screen.getByText('3 not started · the team is paused')).toBeInTheDocument()
   })
 
-  it('does not guess the total when the backlog cannot be read', async () => {
-    run({ backlog_state: 'backlog unavailable', not_started_count: null, not_started_groups: [] })
+  const unavailable = { backlog_state: 'backlog unavailable', not_started_count: null, not_started_groups: [] } as const
+
+  it('draws the bar over the known work when the backlog cannot be read, and says the backlog is unknown', async () => {
+    run(unavailable)
     await open()
     const card = screen.getByRole('article', { name: /Progress:/ })
+    // 6 done, 2 under way and 1 queued are known; the total is not guessed.
+    expect(within(card).getByText('of 9 known items done', { exact: false })).toBeInTheDocument()
+    expect(within(card).getByText('backlog unknown')).toBeInTheDocument()
+    const bar = within(card).getByRole('img')
+    expect(bar).toHaveAttribute('aria-label', '6 done, 2 under way, 1 still to do, backlog unknown')
+    // A dashed end marks the unknown remainder, so the bar never looks nearly complete.
+    expect(within(bar).getByTestId('unknown-remainder')).toBeInTheDocument()
     expect(within(card).getByText(/The backlog cannot be read/)).toBeInTheDocument()
-    expect(within(card).queryByRole('img')).not.toBeInTheDocument()
-    expect(within(card).queryByText(/of \d+ done/)).not.toBeInTheDocument()
     expect(within(card).queryByText(/not started/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the known work at 80% of the bar and leaves the rest to the unknown remainder', async () => {
+    run({ ...unavailable, done_count: 4, under_way_count: 0, under_way: [], queued_count: 0, queued: [] })
+    await open()
+    const bar = screen.getByRole('img')
+    const done = bar.querySelector('span.bg-primary') as HTMLElement
+    expect(done.style.width).toBe('80%')
+    expect(bar).toHaveAttribute('aria-label', '4 done, 0 under way, 0 still to do, backlog unknown')
+  })
+
+  it('draws no unknown remainder when the backlog is known, and fills the whole bar', async () => {
+    run()
+    await open()
+    const bar = screen.getByRole('img')
+    expect(within(bar).queryByTestId('unknown-remainder')).not.toBeInTheDocument()
+    const widths = [...bar.querySelectorAll('span')].map((item) => Number.parseFloat((item as HTMLElement).style.width))
+    expect(widths.reduce((sum, value) => sum + value, 0)).toBeCloseTo(100)
+  })
+
+  it('draws no bar when nothing is known and the backlog cannot be read', async () => {
+    run({ ...unavailable, done_count: 0, latest_done: [], under_way_count: 0, under_way: [], queued_count: 0, queued: [] })
+    await open()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.getByText(/The backlog cannot be read/)).toBeInTheDocument()
+    expect(screen.getByText('backlog unknown')).toBeInTheDocument()
   })
 
   it('omits a campaign with nothing to show', async () => {
