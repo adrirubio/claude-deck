@@ -85,13 +85,14 @@ function eventsBody(marker: string, count = 1, total = count, firstId = 1): Audi
   return {
     items: Array.from({ length: count }, (_, index) => ({
       id: firstId + index,
-      occurred_at: "2026-10-06T10:00:00Z", recorded_at: "2026-10-06T10:00:01Z",
-      event_kind: marker, source: "agent_teams.update_github_scope",
+      // One minute apart, so the feed never groups the rows of one page.
+      occurred_at: `2026-10-06T10:${String(index).padStart(2, "0")}:00Z`, recorded_at: "2026-10-06T10:59:01Z",
+      event_kind: "policy_change", source: "agent_teams.update_github_scope",
       record_kind: "observed", actor_kind: "operator",
       actor_reference: "shared-operator-credential",
       sanitized_reason: `reason for ${marker}`,
       context_snapshot: {
-        team_display_name: "Deleted team", configured_provider: "codex-cli",
+        team_display_name: "Deleted team", repo_name: marker, configured_provider: "codex-cli",
         raw_blob: { nested: "private-detail" },
       },
       before_values: { merge_policy: "human" }, after_values: { merge_policy: "auto" },
@@ -157,7 +158,8 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     const designRow = screen.getByText("delivered_design_in_window").closest("tr")!;
     expect(within(designRow).getByText(/review is separate/)).toBeInTheDocument();
     expect(screen.getByText(/Showing metrics for team all, scope all/)).toBeInTheDocument();
-    expect(screen.getByText("unavailable")).toBeInTheDocument();
+    // The first event has no team link left, so its team shows "(deleted)" (#519).
+    expect(screen.getByText("(deleted)")).toBeInTheDocument();
     expect(screen.getByText(/Snapshot labels in page: team_display_name/)).toBeInTheDocument();
 
     const toggle = screen.getByRole("button", { name: "Show detail" });
@@ -209,7 +211,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       await waitFor(() => expect(stub.audit()).toHaveLength(2));
       expect(stub.audit()[1].url.searchParams.get("team_context_key")).toBe("team:a");
       stub.audit()[1].respond(eventsBody("A2-event"));
-      await waitFor(() => expect(screen.getByText("A2-event")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText(/A2-event/)).toBeInTheDocument());
       await flushLate();
 
       expect(screen.getByText("note A2")).toBeInTheDocument();
@@ -246,14 +248,14 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
         a1.respond(eventsBody("A1-event", 1, 41));
         b.respond(eventsBody("B-event", 1, 42));
         await flushLate();
-        expect(screen.getByText("mount-event")).toBeInTheDocument();
+        expect(screen.getByText(/mount-event/)).toBeInTheDocument();
         expect(screen.getByText("Total audit events matching filters: 1")).toBeInTheDocument();
         expect(screen.getByText("Retained events: a newer read is pending.")).toBeInTheDocument();
         a2.respond(eventsBody("A2-event", 1, 43));
-        await waitFor(() => expect(screen.getByText("A2-event")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/A2-event/)).toBeInTheDocument());
       } else {
         a2.respond(eventsBody("A2-event", 1, 43));
-        await waitFor(() => expect(screen.getByText("A2-event")).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/A2-event/)).toBeInTheDocument());
         a1.respond(eventsBody("A1-event", 1, 41));
         b.respond(eventsBody("B-event", 1, 42));
         await flushLate();
@@ -269,7 +271,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     const stub = stubFetch();
     setOperatorToken("synthetic-operator");
     await mountWith(stub, eventsBody("page-one", 25, 27));
-    expect(screen.getAllByText("page-one")).toHaveLength(25);
+    expect(screen.getAllByText(/page-one/)).toHaveLength(25);
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
@@ -277,7 +279,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(stub.audit()[1].url.searchParams.get("page")).toBe("2");
     expect(stub.audit()[1].url.searchParams.has("team_context_key")).toBe(false);
     stub.audit()[1].respond({ ...eventsBody("page-two", 2, 27, 100), page: 2 });
-    await waitFor(() => expect(screen.getAllByText("page-two")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText(/page-two/)).toHaveLength(2));
     expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
@@ -297,7 +299,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.metrics()[1].respond(windowBody("B"));
     await waitFor(() => expect(stub.audit()).toHaveLength(4));
     stub.audit()[3].respond(eventsBody("b-page-one", 25, 27, 200));
-    await waitFor(() => expect(screen.getAllByText("b-page-one")).toHaveLength(25));
+    await waitFor(() => expect(screen.getAllByText(/b-page-one/)).toHaveLength(25));
 
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     await waitFor(() => expect(stub.audit()).toHaveLength(5));
@@ -310,7 +312,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     await waitFor(() => expect(stub.audit()).toHaveLength(6));
     stub.audit()[5].respond({ ...eventsBody("b-page-two", 2, 27, 300), page: 2 });
-    await waitFor(() => expect(screen.getAllByText("b-page-two")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText(/b-page-two/)).toHaveLength(2));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/Retained events/)).not.toBeInTheDocument();
   });
@@ -338,7 +340,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-submitted");
     expect(stub.audit()[0].url.searchParams.get("team_context_key")).toBe("team:b");
     stub.audit()[0].respond(eventsBody("B-event"));
-    await waitFor(() => expect(screen.getByText("B-event")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/B-event/)).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(stub.audit()).toHaveLength(1);
   });
@@ -380,20 +382,19 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText(/Audit events could not be loaded/)).toBeInTheDocument();
   });
 
-  it("shows expanded detail outside the scrolled table and bounds the filters (R10)", async () => {
+  it("opens the detail under its own row and bounds the filters (R10)", async () => {
     const stub = stubFetch();
     setOperatorToken("synthetic-operator");
     await mountWith(stub);
 
     const toggle = screen.getByRole("button", { name: "Show detail" });
-    expect(toggle).toHaveAttribute("aria-controls", "audit-event-detail");
+    expect(toggle).toHaveAttribute("aria-controls", "feed-detail-event-1");
     fireEvent.click(toggle);
-    const region = screen.getByRole("region", { name: "Event detail" });
-    expect(region).toHaveAttribute("id", "audit-event-detail");
-    expect(within(region).getByText("team_display_name: Deleted team")).toBeInTheDocument();
-    for (const element of screen.getAllByRole("table")) {
-      expect(element.contains(region)).toBe(false);
-    }
+    const row = toggle.closest("article")!;
+    const detail = row.querySelector("#feed-detail-event-1") as HTMLElement;
+    expect(detail).not.toBeNull();
+    expect(within(detail).getByText("team_display_name: Deleted team")).toBeInTheDocument();
+    expect(row.querySelector("table")).toBeNull();
     for (const label of ["Team context key", "Scope context key"]) {
       expect(screen.getByLabelText(label).className).toContain("w-full");
     }
@@ -441,7 +442,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.getByText(
       "Audit read cancelled. Safe metrics remain available.")).toBeInTheDocument());
-    expect(screen.getByText("mount-event")).toBeInTheDocument();
+    expect(screen.getByText(/mount-event/)).toBeInTheDocument();
     expect(screen.getByText(/Showing events for team all, scope all, page 1/)).toBeInTheDocument();
     expect(screen.getByText("Retained events: the latest read was cancelled.")).toBeInTheDocument();
     expect(stub.audit()).toHaveLength(1);

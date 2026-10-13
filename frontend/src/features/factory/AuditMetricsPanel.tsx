@@ -7,6 +7,9 @@ import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
 import { groupRefusals, type RefusalGroup } from "./auditRefusals";
 import { NeedsALookPanel, type RefusalReadState } from "./NeedsALookPanel";
 import { fetchAgentMailTeam } from "@/features/agent-mail/api";
+import { fetchAgentTeamPresets } from "@/features/agent-teams/api";
+import { ActivityFeed } from "./ActivityFeed";
+import { buildFeed } from "./auditFeed";
 import { OperatorTokenDialog } from "@/features/agent-teams/AutonomyPanel";
 import {
   clearOperatorToken,
@@ -111,10 +114,10 @@ export function AuditMetricsPage() {
   const [eventsState, setEventsState] = useState<ReadState>("idle");
   const [metricsError, setMetricsError] = useState("");
   const [eventsError, setEventsError] = useState("");
-  const [expanded, setExpanded] = useState<number | null>(null);
   const [refusalResult, setRefusalResult] = useState<RefusalResult | null>(null);
   const [refusalState, setRefusalState] = useState<RefusalReadState>("loading");
   const [memberNames, setMemberNames] = useState<Record<number, string>>({});
+  const [teamNames, setTeamNames] = useState<Record<number, string>>({});
   const [focus, setFocus] = useState<EventFocus | null>(null);
   const [teamKey, setTeamKey] = useState("");
   const [scopeKey, setScopeKey] = useState("");
@@ -293,7 +296,6 @@ export function AuditMetricsPage() {
       const groups = groupRefusals(collected, windowStartMs);
       setRefusalResult({ groups, truncated });
       setRefusalState("ready");
-      if (groups.some((group) => group.memberId != null)) void loadMemberNames(current);
     } catch (cause) {
       if (!current()) return;
       if (cause instanceof ApiHttpError && cause.status === 401) {
@@ -305,14 +307,16 @@ export function AuditMetricsPage() {
     }
   }
 
-  // Names are a courtesy. Without them the panel shows "member N".
-  async function loadMemberNames(current: () => boolean) {
-    try {
-      const team = await fetchAgentMailTeam(false);
-      if (!current()) return;
-      setMemberNames(Object.fromEntries(team.members.map((member) => [member.id, member.display_name])));
-    } catch {
-      // keep the fallback labels
+  // Names are a courtesy. Without them the feed shows "member N" and the
+  // stored team name. The two reads are public and need no key.
+  async function loadFeedContext(current: () => boolean) {
+    const [team, presets] = await Promise.allSettled([fetchAgentMailTeam(false), fetchAgentTeamPresets()]);
+    if (!current()) return;
+    if (team.status === "fulfilled") {
+      setMemberNames(Object.fromEntries(team.value.members.map((member) => [member.id, member.display_name])));
+    }
+    if (presets.status === "fulfilled") {
+      setTeamNames(Object.fromEntries(presets.value.presets.map((preset) => [preset.id, preset.name])));
     }
   }
 
@@ -344,8 +348,12 @@ export function AuditMetricsPage() {
     if (applyId !== applyEpochRef.current) return;
     const token = await loadAudit(filters, requestedPage, applyId);
     if (applyId !== applyEpochRef.current) return;
-    if (token) await loadRefusals(filters, token, applyId);
-    else setRefusalState("locked");
+    if (token) {
+      void loadFeedContext(() => applyId === applyEpochRef.current);
+      await loadRefusals(filters, token, applyId);
+    } else {
+      setRefusalState("locked");
+    }
   }
 
   useEffect(() => {
@@ -368,6 +376,7 @@ export function AuditMetricsPage() {
 
   const metrics = metricsResult?.data ?? null;
   const events = eventsResult?.data.items ?? [];
+  const feed = buildFeed(events, { teams: teamNames, members: memberNames });
   const labels = eventsResult?.data.snapshot_labels ?? [];
   const total = eventsResult?.data.total ?? 0;
   const page = eventsResult?.page ?? 1;
@@ -547,7 +556,7 @@ export function AuditMetricsPage() {
         {eventsResult && (
           <p className="text-sm text-muted-foreground">
             Showing events for {describeFilters(eventsResult.filters)}, page {eventsResult.page}, observed
-            at {eventsResult.observedAt}.
+            at {formatServerTime(eventsResult.observedAt)}.
           </p>
         )}
         {eventsRetained && (
@@ -556,77 +565,11 @@ export function AuditMetricsPage() {
           </p>
         )}
         {eventsError && <p role="alert" className="text-sm text-destructive">{eventsError}</p>}
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left">
-                <th className="p-2">Occurred</th>
-                <th className="p-2">Kind</th>
-                <th className="p-2">Actor</th>
-                <th className="p-2">Action</th>
-                <th className="p-2">Delivery</th>
-                <th className="p-2">Live links</th>
-                <th className="p-2">Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((event) => (
-                <tr key={event.id} className="border-t align-top">
-                  <td className="p-2">{formatServerTime(event.occurred_at)}</td>
-                  <td className="p-2 break-words">{event.event_kind}</td>
-                  <td className="p-2 break-words">{event.actor_kind}</td>
-                  <td className="p-2">{event.action_outcome ?? "unknown"}</td>
-                  <td className="p-2">{event.delivery_outcome ?? "null"}</td>
-                  <td className="p-2">{event.live_links_available ? "available" : "unavailable"}</td>
-                  <td className="p-2">
-                    <Button variant="outline" aria-expanded={expanded === event.id}
-                      aria-controls="audit-event-detail"
-                      onClick={() => setExpanded(expanded === event.id ? null : event.id)}>
-                      {expanded === event.id ? "Hide detail" : "Show detail"}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {/* R10: the detail is outside the horizontally scrolled table, so it
-            stays readable in the visible area at every width. */}
-        {events.filter((event) => event.id === expanded).map((event) => (
-          <section key={event.id} id="audit-event-detail" aria-label="Event detail"
-            className="min-w-0 rounded border bg-muted/40 p-3">
-            <p className="mb-2 text-sm font-medium break-words">
-              Detail for event {event.id}
-            </p>
-            <dl className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
-              <div className="break-words"><span className={labelClass}>Source</span>{event.source}</div>
-              <div><span className={labelClass}>Record kind</span>{event.record_kind}</div>
-              <div className="break-words"><span className={labelClass}>Fact source</span>{event.fact_source ?? "unavailable"}</div>
-              <div><span className={labelClass}>Fact time</span>{event.fact_time ?? "unavailable"}</div>
-              <div className="break-words"><span className={labelClass}>Actor reference</span>{event.actor_reference ?? "none"}</div>
-              <div className="break-words"><span className={labelClass}>Reason</span>{event.sanitized_reason ?? "none"}</div>
-              <div><span className={labelClass}>Completion kind</span>{event.completion_kind ?? "null"}</div>
-              <div><span className={labelClass}>Revision</span>{event.revision_id ?? "none"}</div>
-              <div className="break-words sm:col-span-2">
-                <span className={labelClass}>Context keys</span>
-                team {event.team_context_key ?? "none"}; scope {event.scope_context_key ?? "none"};
-                item {event.item_context_key ?? "none"}
-              </div>
-              <div className="sm:col-span-2">
-                <span className={labelClass}>Stored snapshot labels</span>
-                {namedSnapshotValues(event).length
-                  ? namedSnapshotValues(event).map(({ name, text }) => (
-                      <div key={name} className="break-words">{name}: {text}</div>
-                    ))
-                  : "none named in this event"}
-              </div>
-              <div className="break-words sm:col-span-2">
-                <span className={labelClass}>Before / after (allowlisted)</span>
-                {JSON.stringify(event.before_values ?? {})} → {JSON.stringify(event.after_values ?? {})}
-              </div>
-            </dl>
-          </section>
-        ))}
+        <ActivityFeed
+          feed={feed}
+          now={eventsResult ? Date.parse(eventsResult.observedAt) : 0}
+          snapshotLabels={namedSnapshotValues}
+        />
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="outline" disabled={pagingBlocked || page <= 1}
             onClick={() => eventsResult && void loadAudit(eventsResult.filters, eventsResult.page - 1)}>
