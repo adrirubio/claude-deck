@@ -9,7 +9,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // already belong to a team are clearly marked.
 // Every create request is intercepted in the browser and answered with 503,
 // so the journey writes nothing to the instance.
-// Seed: four fake panes of "Release crew" (deck-e2e-1, -2, -3, -5); the Mail
+// Seed: eight fake panes of "Release crew" (deck-e2e-1 to -8); the Mail
 // members are offline or in a temporary folder.
 // Design reference: screen 06 (Teams).
 // @active since #543 merged into release/v3.1 (PR #665).
@@ -46,7 +46,8 @@ test('@active From Bridge marks sessions of another team and preselects none of 
   const dialog = await openDialog(page, 'From Bridge')
   await expect(dialog.getByText(/Already in Release crew/i)).toBeVisible()
   const boxes = dialog.getByRole('checkbox')
-  await expect(boxes).toHaveCount(4)
+  // All 8 Release crew slots have a fake pane (scenarios.py LIVE_SLOTS, #667).
+  await expect(boxes).toHaveCount(8)
   for (const box of await boxes.all()) await expect(box).not.toBeChecked()
   const create = dialog.getByRole('button', { name: /^Create team with/ })
   await expect(create).toHaveText('Create team with 0 members')
@@ -66,7 +67,7 @@ test('@active From Bridge creates a team from exactly the selected session', asy
   const body = seen.bodies[0] as { name?: string; slots?: unknown[] }
   expect(body.name).toBe('E2E picked team')
   expect(body.slots, 'exactly the selected session').toHaveLength(1)
-  expect(JSON.stringify(body.slots)).not.toMatch(/deck-e2e-(1|3|5)\b/)
+  expect(JSON.stringify(body.slots)).not.toMatch(/deck-e2e-(1|3|4|5|6|7|8)\b/)
   expect(seen.oldBridge, 'no create from every live session').toEqual([])
   // A failed create keeps the dialog open.
   await expect(page.getByRole('dialog').filter({ hasText: /Create From Agent Bridge/ })).toBeVisible()

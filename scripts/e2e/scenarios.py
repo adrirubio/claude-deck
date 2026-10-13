@@ -10,7 +10,7 @@ by their seeded names where they can.
 | Idle and paused | Quiet team: autonomy off, scope intake disabled, no open work. |
 | Item that needs attention | Release crew: item #101 is escalated. |
 | Refused agent requests | Three rejected continuation requests on item #101. |
-| 8-member team | Release crew has eight slots; four have live fake panes. |
+| 8-member team | Release crew has eight slots; all eight have live fake panes. |
 | Deleted team with history | Retired crew: audit events kept after the team is deleted. |
 | Mail with unacknowledged messages | Director and member messages without an ack. |
 | Locked Audit | Audit events exist; the browser has no Director key. |
@@ -72,7 +72,8 @@ RETIRED_SLOTS: list[dict[str, Any]] = [
     {"id": 11, "name": "R1 Leader", "role": "leader", "provider": "claude-code", "color": "slate"},
 ]
 # Slots that get a live fake pane in the instance's tmux server.
-LIVE_SLOTS = (1, 2, 3, 5)
+# All 8 Release crew slots have a live fake pane (#512: Team lanes with 8 members).
+LIVE_SLOTS = (1, 2, 3, 4, 5, 6, 7, 8)
 
 
 def session_uuid(slot_id: int) -> str:
