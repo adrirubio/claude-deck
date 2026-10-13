@@ -67,11 +67,35 @@ def notice(record):
                     return error[field]
     if kind == 'event_msg':
         payload = record.get('payload') or {}
-        if payload.get('type') in {'error', 'warning', 'agent_message'}:
+        if payload.get('type') in {'error', 'warning', 'stream_error', 'agent_message'}:
             text = str(payload.get('message', ''))
-            for rule, pattern in NOTICES.items():
-                if pattern.search(text):
-                    return rule
+            found = _match(text)
+            if found:
+                return found
+            if payload.get('type') in {'error', 'stream_error'}:
+                for code in ERROR_CODES:
+                    if code in text.lower() or code in str(payload.get('codex_error_info', '')).lower():
+                        return code
+        # Codex 0.159: the agent's own text arrives as a completed AgentMessage item.
+        item = payload.get('item') if payload.get('type') == 'item_completed' else None
+        if isinstance(item, dict) and item.get('type') == 'AgentMessage':
+            return _match(_texts(item.get('content')))
+    if kind == 'response_item':
+        # Codex 0.159: the assistant message. Tool output and user input are not checked.
+        payload = record.get('payload') or {}
+        if payload.get('type') == 'message' and payload.get('role') == 'assistant':
+            return _match(_texts(payload.get('content')))
+    return None
+
+def _texts(content):
+    if not isinstance(content, list):
+        return ''
+    return '\n'.join(str(block.get('text', '')) for block in content if isinstance(block, dict))
+
+def _match(text):
+    for rule, pattern in NOTICES.items():
+        if pattern.search(text):
+            return rule
     return None
 
 class Supervisor:
@@ -90,7 +114,7 @@ class Supervisor:
     def bindings(self):
         with sqlite3.connect('file:' + self.config['database'] + '?mode=ro', uri=True, timeout=2) as db:
             db.row_factory = sqlite3.Row
-            rows = db.execute('SELECT b.*, s.launch_options, s.repo_path FROM agent_pane_bindings b JOIN agent_team_slots s ON s.id=b.slot_id WHERE b.preset_id=?', (self.config['preset_id'],)).fetchall()
+            rows = db.execute('SELECT b.*, s.launch_options, s.repo_path, s.provider FROM agent_pane_bindings b JOIN agent_team_slots s ON s.id=b.slot_id WHERE b.preset_id=?', (self.config['preset_id'],)).fetchall()
         live = []
         for row in rows:
             if row['slot_id'] not in self.config['slot_ids']:
@@ -157,11 +181,7 @@ class Supervisor:
             native_id = options.get('session_id')
             if not native_id or not re.fullmatch(r'[0-9a-f-]{36}', native_id):
                 raise ValueError('native_session_identity_missing')
-            folder = '-' + binding['repo_path'].strip('/').replace('/', '-')
-            path = pathlib.Path(self.config['native_project_root']) / folder / (native_id + '.jsonl')
-            if not path.exists():
-                raise FileNotFoundError('native_transcript_missing')
-            paths.add(path)
+            paths.add(self.transcript(binding.get('provider') or 'claude-code', binding['repo_path'], native_id))
         for path in paths:
             key = str(path)
             offset = int(self.state['offsets'].get(key, 0))
@@ -189,6 +209,29 @@ class Supervisor:
                 self.state['offsets'][key] = stream.tell()
         return True
 
+    def transcript(self, provider, repo_path, native_id):
+        """Return the native transcript of one bound session, or fail closed."""
+        if provider == 'claude-code':
+            folder = '-' + repo_path.strip('/').replace('/', '-')
+            path = pathlib.Path(self.config['native_project_root']) / folder / (native_id + '.jsonl')
+        elif provider == 'codex-cli':
+            # Codex writes one rollout per session under sessions/YYYY/MM/DD/.
+            # Its file name ends with the session UUID; cache the path once found.
+            known = self.state.setdefault('native_paths', {})
+            path = pathlib.Path(known[native_id]) if native_id in known else None
+            if path is None or not path.exists():
+                root = pathlib.Path(self.config['codex_sessions_root'])
+                found = sorted(root.glob('*/*/*/rollout-*-' + native_id + '.jsonl'))
+                if len(found) != 1:
+                    raise FileNotFoundError('native_transcript_missing' if not found else 'native_transcript_ambiguous')
+                path = found[0]
+                known[native_id] = str(path)
+        else:
+            raise ValueError('native_provider_unsupported')
+        if not path.exists():
+            raise FileNotFoundError('native_transcript_missing')
+        return path
+
     def tick(self):
         if self.hold_path.exists():
             self.api('PATCH', '/agent-teams/presets/' + str(self.config['preset_id']), {'autonomy_enabled': False})
@@ -205,7 +248,10 @@ class Supervisor:
             return
         members = self.api('GET', '/agent-mail/team?sync=true')['members']
         connected = {m.get('team_slot_id') for m in members if m.get('team_preset_id') == self.config['preset_id'] and m.get('status') == 'connected' and m.get('wake_state') == 'wakeable'}
-        missing = set(self.config['slot_ids']) - connected
+        # An on-demand slot (for example a reviewer launched at gates) may be stopped.
+        # It is still scanned whenever it is bound.
+        required = set(self.config['slot_ids']) - set(self.config.get('on_demand_slot_ids', []))
+        missing = required - connected
         self.state['binding_failures'] = self.state.get('binding_failures', 0) + 1 if missing else 0
         if preset['autonomy_enabled'] and self.state['binding_failures'] >= 3:
             self.stop('authenticated_member_missing')
