@@ -205,7 +205,7 @@ export function SkillDetailDialog({
                         <span className="text-muted-foreground">Context:</span>
                         <Badge
                           variant="outline"
-                          className="text-purple-600 border-purple-200 bg-purple-50"
+                          className="text-purple-600 dark:text-purple-300 border-purple-200 bg-purple-50"
                         >
                           {fm.context}
                         </Badge>
@@ -347,7 +347,7 @@ export function SkillDetailDialog({
                       {depStatus.all_satisfied ? (
                         <Badge
                           variant="outline"
-                          className="text-green-600 border-green-200 bg-green-50"
+                          className="text-green-600 dark:text-green-300 border-green-200 bg-green-50"
                         >
                           <CheckCircle2 className="h-3 w-3 mr-1" />
                           All satisfied
@@ -355,7 +355,7 @@ export function SkillDetailDialog({
                       ) : (
                         <Badge
                           variant="outline"
-                          className="text-amber-600 border-amber-200 bg-amber-50"
+                          className="text-amber-600 dark:text-amber-300 border-amber-200 bg-amber-50"
                         >
                           <AlertTriangle className="h-3 w-3 mr-1" />
                           {

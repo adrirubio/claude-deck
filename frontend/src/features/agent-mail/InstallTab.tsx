@@ -52,7 +52,7 @@ function InstalledBadge({
   missingLabel?: string
 }) {
   return installed ? (
-    <Badge variant="outline" className="border-emerald-300 text-emerald-700">
+    <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:text-emerald-300">
       {installedLabel}
     </Badge>
   ) : (
@@ -274,24 +274,24 @@ export function InstallTab({
               </Badge>
               <Badge
                 variant="outline"
-                className={claudeHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+                className={claudeHooksInstalled ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 hooks {claudeHooksInstalled ? 'installed' : `${status.claude_code_hooks.length}/${status.claude_code_hooks.length + status.claude_code_hooks_missing.length} installed`}
               </Badge>
               <Badge
                 variant="outline"
-                className={status.claude_code_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+                className={status.claude_code_mcp_installed ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 MCP {status.claude_code_mcp_installed ? 'installed' : 'not installed'}
               </Badge>
               <Badge
                 variant="outline"
-                className={status.claude_code_prompt_block_installed ? 'border-emerald-300 text-emerald-700' : ''}
+                className={status.claude_code_prompt_block_installed ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 question prompt block {status.claude_code_prompt_block_installed ? 'installed' : 'not installed'}
               </Badge>
               {status.claude_code_hooks_missing.length > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                   missing {status.claude_code_hooks_missing.length}
                 </Badge>
               )}
@@ -353,18 +353,18 @@ export function InstallTab({
               </Badge>
               <Badge
                 variant="outline"
-                className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+                className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 MCP {status.codex_mcp_installed ? 'installed' : 'not installed'}
               </Badge>
               <Badge
                 variant="outline"
-                className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+                className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 hooks {codexHooksInstalled ? 'installed' : `${status.codex_hooks.length}/2 installed`}
               </Badge>
               {status.codex_hooks_missing.length > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                   missing {status.codex_hooks_missing.length}
                 </Badge>
               )}
@@ -430,18 +430,18 @@ export function InstallTab({
               </Badge>
               <Badge
                 variant="outline"
-                className={status.copilot_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+                className={status.copilot_mcp_installed ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 MCP {status.copilot_mcp_installed ? 'installed' : 'not installed'}
               </Badge>
               <Badge
                 variant="outline"
-                className={copilotHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+                className={copilotHooksInstalled ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 hooks {copilotHooksInstalled ? 'installed' : `${status.copilot_hooks.length}/5 installed`}
               </Badge>
               {status.copilot_hooks_missing.length > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                   missing {status.copilot_hooks_missing.length}
                 </Badge>
               )}
@@ -507,18 +507,18 @@ export function InstallTab({
               </Badge>
               <Badge
                 variant="outline"
-                className={status.opencode_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+                className={status.opencode_mcp_installed ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 MCP {status.opencode_mcp_installed ? 'installed' : 'not installed'}
               </Badge>
               <Badge
                 variant="outline"
-                className={opencodePluginInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+                className={opencodePluginInstalled ? 'border-emerald-300 text-emerald-700 dark:text-emerald-300' : ''}
               >
                 plugin {opencodePluginInstalled ? 'installed' : `${status.opencode_plugin_events.length}/5 events`}
               </Badge>
               {status.opencode_plugin_events_missing.length > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                   missing {status.opencode_plugin_events_missing.length}
                 </Badge>
               )}

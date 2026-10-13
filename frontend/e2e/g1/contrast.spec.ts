@@ -5,7 +5,8 @@ import { expect, test } from '../support/guard'
 // #510: all text meets WCAG AA contrast in both themes, and each colour has
 // one meaning across Overview, Work and Teams.
 // @active: Overview, Work, the Teams roster with the selected team card, and
-// the full Teams page with the Autonomy tab (#577 fixed AutonomyPanel.tsx).
+// the full Teams page with the Autonomy tab (#577 fixed AutonomyPanel.tsx),
+// and the Agent Mail Team and Requests tabs (#611 fixed the badge tones).
 
 const THEMES: Theme[] = ['light', 'dark']
 
@@ -35,7 +36,25 @@ async function backgroundOf(locator: Locator): Promise<string> {
   return locator.evaluate(element => getComputedStyle(element).backgroundColor)
 }
 
+const MAIL_TABS = [
+  { name: 'Team', tab: 'Team', seen: 'F2 Frontend' },
+  { name: 'Requests', tab: 'Requests', seen: 'stale' },
+]
+
 for (const theme of THEMES) {
+  for (const { name, tab, seen } of MAIL_TABS) {
+    test(`@active the Agent Mail ${name} tab meets AA contrast in the ${theme} theme`, async ({ page }) => {
+      await useTheme(page, theme)
+      await open(page, '/agent-mail', 'Agent Mail')
+      await page.getByRole('tab', { name: tab, exact: true }).click()
+      // The badges that #611 fixed must be on screen, or the check proves nothing.
+      await expect(page.getByRole('tabpanel').getByText(seen, { exact: true }).first()).toBeVisible()
+      await expect(page.getByText('unseen', { exact: false }).first()).toBeVisible()
+      const failures = await contrastFailures(page.locator('body'))
+      expect(failures, describeFailures(failures)).toEqual([])
+    })
+  }
+
   for (const { name, route, ready } of ACTIVE_ROUTES) {
     test(`@active ${name} text meets AA contrast in the ${theme} theme`, async ({ page }) => {
       await useTheme(page, theme)

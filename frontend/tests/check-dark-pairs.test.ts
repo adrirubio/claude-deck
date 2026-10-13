@@ -21,6 +21,25 @@ describe('check-dark-pairs', () => {
     expect(find(`const a = 'dark:text-blue-300'`)).toEqual([])
   })
 
+  it('fails on a badge tone with no dark text partner (#611)', () => {
+    expect(find(`const a = 'border-amber-300 text-amber-700'`)).toEqual([{ line: 1, className: 'text-amber-700' }])
+    expect(find(`const a = cond ? 'border-blue-200 text-blue-600' : ''`)).toEqual([{ line: 1, className: 'text-blue-600' }])
+  })
+
+  it('passes a badge tone with a dark text partner', () => {
+    expect(find(`const a = 'border-amber-300 text-amber-700 dark:text-amber-300'`)).toEqual([])
+  })
+
+  it('does not flag plain dark text or a different colour pair', () => {
+    expect(find(`const a = 'text-amber-700'`)).toEqual([])
+    expect(find(`const a = 'border-amber-300 text-blue-700'`)).toEqual([])
+    expect(find(`const a = 'border-amber-500 text-amber-700'`)).toEqual([])
+  })
+
+  it('allows an exception on a badge tone with a reason', () => {
+    expect(find(`// contrast-exempt: bg-zinc-900 in both themes\nconst a = 'border-amber-300 text-amber-700'`)).toEqual([])
+  })
+
   it('allows an exception with a reason on the same line or the line above', () => {
     expect(find(`// contrast-exempt: bg-zinc-900 in both themes\nconst a = 'text-red-400'`)).toEqual([])
     expect(find(`const a = 'text-red-400' // contrast-exempt: bg-zinc-900 in both themes`)).toEqual([])
