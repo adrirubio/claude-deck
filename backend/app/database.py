@@ -804,6 +804,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
     scope_columns = {row[1] for row in result.fetchall()}
+    if scope_columns and "review_hold_label" not in scope_columns:
+        await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN review_hold_label VARCHAR"))
     if scope_columns and "delivery_policy" not in scope_columns:
         await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN delivery_policy JSON DEFAULT '{}' NOT NULL"))
     if scope_columns and "delivery_policy_revision" not in scope_columns:

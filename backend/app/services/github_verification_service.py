@@ -1982,6 +1982,14 @@ class GithubVerificationService:
             return
         if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
             return
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        hold_note = await self._review_hold_note(scope, item, client, pull)
+        if hold_note is not None:
+            await self._record_readiness_hold(db, item, hold_note)
+            return
         approval_reason = await self._approval_gate_reason(db, scope, item)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
@@ -2028,6 +2036,39 @@ class GithubVerificationService:
             item.updated_at = datetime.utcnow()
             await db.commit()
             return
+        # Owner readiness and labels can change while checks are read.
+        try:
+            fresh_pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        except (httpx.HTTPError, GithubClientResponseError):
+            await self._record_readiness_hold(
+                db, item, "PR readiness could not be read; automatic merge is blocked.")
+            return
+        if not await self._validate_polled_pull_identity(
+            db, scope, item, client, fresh_pull, retry_status=item.dispatch_status,
+        ):
+            return
+        if self._classify_pull(fresh_pull) != "open":
+            await self._process_review_item(db, scope, item, client, pull=fresh_pull)
+            return
+        if self._head_sha(fresh_pull) != current_head:
+            item.dispatch_status = "verifying"
+            await self._record_readiness_hold(
+                db, item, "Head changed before auto-merge; verifying the current head.")
+            return
+        readiness_note = self._draft_readiness_note(item, fresh_pull)
+        if readiness_note is not None:
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        hold_note = await self._review_hold_note(scope, item, client, fresh_pull)
+        if hold_note is not None:
+            await self._record_readiness_hold(db, item, hold_note)
+            return
+        approval_reason = await self._approval_gate_reason(db, scope, item)
+        if approval_reason is not None:
+            await self._fallback_to_human_merge(
+                db, item, "Auto-merge blocked: distinct current-round leader approval is "
+                f"required ({approval_reason}).")
+            return
         try:
             await client.merge_pull(
                 scope.repo_owner,
@@ -2063,6 +2104,46 @@ class GithubVerificationService:
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
+
+    @staticmethod
+    def _draft_readiness_note(item: GithubWorkItem, pull: dict) -> str | None:
+        if type(pull.get("draft")) is not bool:
+            return "PR draft state could not be read; automatic merge is blocked."
+        if pull["draft"]:
+            return f"PR #{item.pr_number} is draft. The owner must mark it ready."
+        return None
+
+    @staticmethod
+    async def _record_readiness_hold(db: AsyncSession, item: GithubWorkItem, note: str) -> None:
+        item.status_note = note
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def _review_hold_note(
+        self, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient, pull: dict,
+    ) -> str | None:
+        label = scope.review_hold_label
+        if label is None:
+            return None
+        unknown = "Review hold labels could not be read; automatic merge is blocked."
+        if not isinstance(label, str) or not label.strip():
+            return "Review hold label is invalid; automatic merge is blocked."
+        try:
+            issue = await client.get_issue(scope.repo_owner, scope.repo_name, item.issue_number)
+        except (httpx.HTTPError, GithubClientResponseError):
+            return unknown
+        if not isinstance(issue, dict) or type(issue.get("number")) is not int or issue["number"] != item.issue_number:
+            return unknown
+        for record in (pull, issue):
+            labels = record.get("labels")
+            if not isinstance(labels, list) or any(
+                not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+                for entry in labels
+            ):
+                return unknown
+        if any(entry["name"] == label for record in (pull, issue) for entry in record["labels"]):
+            return f"PR #{item.pr_number} is held for independent review. Hold label: {label}."
+        return None
 
     async def _validate_polled_pull_identity(
         self,
@@ -2359,16 +2440,30 @@ class GithubVerificationService:
         policy_guard = policy_guard if policy_guard is not None else policy_context(item)
         if not await claim_policy_context(db, item, policy_guard):
             return
-        was_draft = bool(pull.get("draft") and pull.get("node_id"))
-        if was_draft:
-            await client.mark_pull_ready_for_review(str(pull["node_id"]))
-        if was_draft or revision is not None:
-            pull = await client.get_pull(
-                scope.repo_owner,
-                scope.repo_name,
-                int(item.pr_number),
-            )
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            item.last_verified_sha = head_sha
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         if not await claim_policy_context(db, item, policy_guard):
+            return
+        if not await self._validate_polled_pull_identity(
+            db, scope, item, client, pull, retry_status=item.dispatch_status, revision=revision,
+        ):
+            return
+        if revision is not None and not await self._submitted_head_is_current(
+            db, item, revision, self._head_sha(pull),
+        ):
+            return
+        if self._head_sha(pull) != head_sha:
+            await self._record_readiness_hold(
+                db, item, "Head changed before readiness; verifying the current head.")
+            return
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            item.last_verified_sha = head_sha
+            await self._record_readiness_hold(db, item, readiness_note)
             return
         if revision is not None:
             if not await self._submitted_head_is_current(
