@@ -14,6 +14,7 @@ by their seeded names where they can.
 | Deleted team with history | Retired crew: audit events kept after the team is deleted. |
 | Mail with unacknowledged messages | Director and member messages without an ack. |
 | Locked Audit | Audit events exist; the browser has no Director key. |
+| Lane B (#668) | #544 routing labels, expertise and a 4-minute assessment age; #542 a 4-member 'Docs crew'. |
 | Lane C (#604) | #516 a live team named like the deleted one; #520 a second group of refused requests. |
 | Lane G (#606) | #527 mail senders, #528 lease and reminders, #535 active revision, #549 supervisor. |
 | One agent, one state (#540) | F2 Frontend: a live fake pane, a live MCP session and an observation 3 h old. |
@@ -297,6 +298,7 @@ def seed_core(s: Seeder, root: Path) -> None:
     )
     seed_lane_g(s, root, sample)
     seed_lane_c(s)
+    seed_lane_b(s, root)
 
 
 # Lane G (#606): states for the backend journeys in frontend/e2e/lane-g/.
@@ -415,6 +417,31 @@ def seed_campaign_backlogs(s: Seeder, root: Path) -> None:
          "milestones": [{"number": 8, "title": "Sample app 2.0"}], "issues": []},
     ]}
     (root / "campaign-backlog.json").write_text(json.dumps(data))
+
+
+# Lane B (#668): states for the Teams journeys in frontend/e2e/lane-b/.
+# - #544: a slot with routing area labels and a slot with expertise text, and a
+#   backlog assessment 4 minutes old (the short age text).
+# - #542: a 4-member team with no scope and no work items, so the Overview
+#   count stays "5 matching work items".
+FOUR_MEMBER_TEAM = 5
+FOUR_MEMBER_SLOTS: list[dict[str, Any]] = [
+    {"id": 12, "name": "D2 Docs lead", "role": "leader", "provider": "claude-code", "color": "purple"},
+    {"id": 13, "name": "D3 Writer", "role": "implementer", "provider": "claude-code", "color": "green"},
+    {"id": 14, "name": "D4 Editor", "role": "implementer", "provider": "codex-cli", "color": "amber"},
+    {"id": 15, "name": "D5 Reviewer", "role": "reviewer", "provider": "claude-code", "color": "blue"},
+]
+
+
+def seed_lane_b(s: Seeder, root: Path) -> None:
+    s.conn.execute("UPDATE agent_team_slots SET area_labels = ? WHERE id = ?", (json.dumps(["backend"]), 2))
+    s.conn.execute("UPDATE agent_team_slots SET expertise = ? WHERE id = ?",
+                   ("Frontend pages and accessibility.", 4))
+    s.conn.execute("UPDATE github_backlog_coordination SET last_assessed_at = ? WHERE scope_id = ?",
+                   (at(minutes=4), RELEASE_SCOPE))
+    docs = make_repo(root, "docs-site")
+    preset(s, FOUR_MEMBER_TEAM, "Docs crew", "Write the user guide.", autonomy=False, leader_slot=12)
+    slots(s, FOUR_MEMBER_TEAM, FOUR_MEMBER_SLOTS, docs)
 
 
 async def seed_history() -> None:
