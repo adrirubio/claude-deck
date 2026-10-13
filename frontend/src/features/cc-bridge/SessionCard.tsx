@@ -1,10 +1,8 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { AgentStatusBadges } from '@/components/shared/AgentStatusBadges'
 import { Button } from '@/components/ui/button'
-import { CLICKABLE_CARD } from '@/lib/constants'
 import { getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
 import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
@@ -34,6 +32,8 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
   const [wakeSaving, setWakeSaving] = useState(false)
   const [wakeError, setWakeError] = useState<string | null>(null)
   const [hasOperatorToken, setHasOperatorToken] = useState(() => Boolean(getOperatorToken()))
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const projectName = session.cwd.split('/').pop() || session.cwd
   const isActive = gridPosition !== null
   const teamSlotLabel = session.team_slot_name?.trim()
@@ -53,6 +53,21 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
     : session.cwd
   const isMailBound = Boolean(session.mail_member_id && session.mail_mcp_session_id)
   const canUpdateWake = hasOperatorToken && isMailBound
+
+  // The menu closes on Escape and on a click outside it.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false) }
+    const onPointer = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onPointer)
+    }
+  }, [menuOpen])
 
   async function openDetails() {
     setDetailsOpen((open) => !open)
@@ -87,83 +102,71 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
   }
 
   return (
-    <Card
-      className={cn(
-        CLICKABLE_CARD,
-        colorClasses.card,
-        isActive && 'border-primary bg-primary/5'
-      )}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onClick()
-        }
-      }}
-      tabIndex={0}
-      role="button"
-    >
-      <CardContent className="p-3">
-        <div className="flex items-center justify-between">
-          <div className="flex min-w-0 items-center gap-2">
-            {session.team_slot_color && (
-              <span
-                className={cn('h-2 w-2 shrink-0 rounded-full', colorClasses.dot)}
-                title={`Slot color: ${session.team_slot_color}`}
-              />
-            )}
+    <div className={cn('border-b px-3 py-3 last:border-b-0', isActive && 'bg-primary/5')}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2">
+          {session.team_slot_color && (
             <span
-              className="truncate text-sm font-medium"
-              title={teamSlotLabel ? `${session.session_name} · ${session.tmux_target}` : session.tmux_target}
-            >
-              {primaryLabel}
-            </span>
+              className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', colorClasses.dot)}
+              title={`Slot color: ${session.team_slot_color}`}
+            />
+          )}
+          <div className="min-w-0">
+            <p className="break-words text-sm font-medium">{primaryLabel}</p>
+            <p className="text-xs text-muted-foreground">
+              {session.provider_display_name}{showRole ? ` · ${teamRoleLabel}` : ''}
+            </p>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground/50 hover:text-destructive transition-colors"
-              onClick={(e) => { e.stopPropagation(); onKill(session) }}
-              onKeyDown={(e) => e.stopPropagation()}
-              title="Kill session"
-              aria-label={`Kill ${primaryLabel}`}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            type="button"
+            variant={isActive ? 'default' : 'outline'}
+            size="sm"
+            className="h-7 px-2 text-xs"
+            aria-pressed={isActive}
+            aria-label={`${isActive ? 'Stop watching' : 'Watch'} ${primaryLabel}`}
+            onClick={onClick}
+          >
+            {isActive ? `Watching · ${gridPosition + 1}` : 'Watch'}
+          </Button>
+          <div className="relative" ref={menuRef}>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-7 w-7"
+              aria-label={`More actions for ${primaryLabel}`}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
             >
-              <Trash2 className="h-3 w-3" />
-            </button>
-            {isActive ? (
-              <span className="h-5 w-5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
-                {gridPosition + 1}
-              </span>
-            ) : (
-              <span className="h-2 w-2 rounded-full bg-green-500" />
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </Button>
+            {menuOpen && (
+              <div role="menu" className="absolute right-0 z-20 mt-1 w-40 rounded-md border bg-popover p-1 shadow-md">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-destructive hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => { setMenuOpen(false); onKill(session) }}
+                >
+                  Kill session…
+                </button>
+              </div>
             )}
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <Badge variant="outline" className="max-w-full truncate">
-            {session.provider_display_name}
-          </Badge>
-          {showRole && (
-            <Badge variant="secondary" className="max-w-full truncate" title={`Role: ${teamRoleLabel}`}>
-              {teamRoleLabel}
-            </Badge>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-1" title={contextTitle}>
-          {contextLine}
-        </p>
-        <p
-          className="text-xs text-muted-foreground mt-0.5 truncate"
-          title={instance ? `${instance.name} · tmux: ${session.tmux_target}` : session.tmux_target}
-        >
-          {instance ? `${instance.name} · ` : ''}tmux: {session.tmux_target}
-        </p>
-        <div
-          className="mt-2 rounded border bg-muted/30 p-2"
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          <AgentStatusBadges status={session.agent_status} className="mb-1.5" />
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      </div>
+      <AgentStatusBadges status={session.agent_status} className="mt-2" />
+      <details className="mt-2 text-xs">
+        <summary className="cursor-pointer text-muted-foreground">Technical details</summary>
+        <div className="mt-2 space-y-1">
+          <p className="truncate text-muted-foreground" title={contextTitle}>{contextLine}</p>
+          <p className="break-all text-muted-foreground" title={instance ? `${instance.name} · tmux: ${session.tmux_target}` : session.tmux_target}>
+            {instance ? `${instance.name} · ` : ''}tmux: {session.tmux_target}
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="outline">{session.mail_member_id ? `Mail member #${session.mail_member_id}` : 'Mail unbound'}</Badge>
             {session.mail_member_name && <span className="truncate" title={session.mail_member_name}>{session.mail_member_name}</span>}
             <span className="text-muted-foreground">Repo: {session.mail_repo_id ?? '—'}</span>
@@ -171,11 +174,11 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
               {session.mail_wake_enabled == null ? 'Wake participation unknown' : `Wake participation ${session.mail_wake_enabled ? 'enabled' : 'disabled'}`}
             </Badge>
           </div>
-          <p className="mt-1 break-all text-xs text-muted-foreground">
+          <p className="break-all text-muted-foreground">
             MCP binding: {session.mail_mcp_session_id ?? 'none'}
           </p>
           {session.mail_wake_target && (
-            <p className="mt-1 break-all text-xs" title="Exact wake target">Wake target: {session.mail_wake_target}</p>
+            <p className="break-all" title="Exact wake target">Wake target: {session.mail_wake_target}</p>
           )}
           <div className="mt-2 flex items-center gap-2">
             <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={openDetails}>
@@ -184,7 +187,7 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
             </Button>
             {!canUpdateWake && (
               <span className="text-xs text-muted-foreground">
-                {!hasOperatorToken ? 'Operator token required · read-only' : 'Exact MCP binding required · read-only'}
+                {!hasOperatorToken ? 'Director key required · read-only' : 'Exact MCP binding required · read-only'}
               </span>
             )}
           </div>
@@ -215,7 +218,7 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
               {wakeError && <p className="text-xs text-destructive">{wakeError}</p>}
               <div>
                 <p className="text-xs font-medium">Recent wake audit · member #{session.mail_member_id ?? '—'}</p>
-                {!hasOperatorToken && <p className="text-xs text-muted-foreground">Operator token required to view audit.</p>}
+                {!hasOperatorToken && <p className="text-xs text-muted-foreground">Director key required to view audit.</p>}
                 {!session.mail_member_id && <p className="text-xs text-muted-foreground">No member binding; audit is unavailable.</p>}
                 {auditLoading && <p className="text-xs text-muted-foreground">Loading audit…</p>}
                 {auditError && <p className="text-xs text-destructive">{auditError}</p>}
@@ -231,7 +234,7 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
             </div>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </details>
+    </div>
   )
 }
