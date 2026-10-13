@@ -89,6 +89,7 @@ describe.each(['abc', '999', '0', '1e3'])('/teams/%s', (id) => {
     await settle()
     expect(screen.getByText('Release crew')).toBeInTheDocument()
     expect(screen.getByText('Quiet team')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit team' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
     for (const name of ['Save', 'Duplicate', 'Delete']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
@@ -111,29 +112,31 @@ describe.each(['abc', '999', '0', '1e3'])('/teams/%s', (id) => {
 describe('known and missing team ids', () => {
   it('/teams selects the first team', async () => {
     open('/teams')
-    expect(await screen.findByDisplayValue('Release crew')).toBeInTheDocument()
-    expect(screen.getByLabelText('Name')).toBeInTheDocument()
-    for (const name of ['Save', 'Duplicate']) expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Release crew' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit team' })).toBeInTheDocument()
     expect(screen.queryByText(/does not exist/)).not.toBeInTheDocument()
   })
 
   it('/teams/2 selects that team and reads only its activity', async () => {
     open('/teams/2')
-    expect(await screen.findByDisplayValue('Quiet team')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Quiet team' })).toBeInTheDocument()
     await waitFor(() => expect(fetchAgentTeamActivity).toHaveBeenCalledWith(2, expect.anything()))
     expect(vi.mocked(fetchAgentTeamActivity).mock.calls.every(([presetId]) => presetId === 2)).toBe(true)
   })
 })
 
 describe('routing label', () => {
+  // The routing block shows when the member row is expanded.
   const card = async (name: string) => {
     open('/teams/1?tab=roster')
-    const heading = await screen.findByText(name, { selector: 'p' })
-    return heading.closest('div.rounded-lg') as HTMLElement
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: `Details for ${name}` }))
+    return screen.getByRole('button', { name: `Details for ${name}` }).closest('li') as HTMLElement
   }
 
   it('says none for a leader without area labels, and keeps expertise under its own label', async () => {
     const leader = await card('R1 Leader')
+    expect(leader).toHaveTextContent('Folder')
     expect(within(leader).queryByText('GitHub dispatch routing')).not.toBeInTheDocument()
     cleanup()
     resetFactoryReads()

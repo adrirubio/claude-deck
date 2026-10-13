@@ -52,6 +52,19 @@ describe('Leader backlog coordination', () => {
     expect(screen.queryByText(/Next actor: Leader/)).toBeNull()
     expect(screen.queryByText(/A supervisor can contact/)).toBeNull()
   })
+  it('collapses the historical records into a closed History disclosure, with relative times', async () => {
+    vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, owner_followups: [{ ...followup, notification_limit: 'daily' }] })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    const followups = await screen.findByLabelText('Owner follow-ups')
+    const history = followups.closest('details')!
+    expect(history).toBeTruthy()
+    expect(history).not.toHaveAttribute('open')
+    expect(history.querySelector('summary')).toHaveTextContent('History')
+    // The coordination line stays outside History and uses relative age with the exact time on hover.
+    const line = screen.getByText(/Last observed:/)
+    expect(history.contains(line)).toBe(false)
+    expect(line.querySelector('time')).toHaveAttribute('title')
+  })
   it.each(['daily', 'delivery', 'unknown'])('distinguishes the %s limit without changing quotas', async (limit) => {
     vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, owner_followups: [{ ...followup, notification_limit: limit }] })
     render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
@@ -220,7 +233,7 @@ describe('Leader backlog coordination', () => {
     render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     await act(async () => { await vi.advanceTimersByTimeAsync(240000) })
-    expect(screen.getByText(/\(4 min ago\)/)).toBeTruthy()
+    expect(screen.getAllByText(/4 min ago/).length).toBeGreaterThan(0)
     expect(screen.getByText('Coordination status is unavailable')).toBeTruthy()
   })
 })

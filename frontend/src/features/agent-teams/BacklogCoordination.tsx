@@ -8,6 +8,12 @@ import { apiClient } from '@/lib/api'
 import { relativeAge } from '@/lib/relativeAge'
 import { formatServerTime, parseServerTime } from '@/lib/serverTime'
 
+// A relative age with the exact time on hover and for a screen reader.
+function AgeText({ value, now }: { value: string | null | undefined; now: number }) {
+  if (!value) return <>never</>
+  return <time dateTime={value} title={formatServerTime(value)}>{relativeAge(value, now)}<span className="sr-only"> ({formatServerTime(value)})</span></time>
+}
+
 type Entry = {
   issue_number: number
   disposition: string
@@ -214,8 +220,6 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
   }
   const expired = !Number.isFinite(expiresAt) || clock >= expiresAt
   const current = Boolean(data?.assessment_current && !error && !expired && data.scope_id === scopeId)
-  const assessedAt = timestamp(data?.last_assessed_at)
-  const assessmentAge = Number.isFinite(assessedAt) ? Math.max(0, Math.floor((clock - assessedAt) / 60000)) : null
   const observations = data?.observations ?? []
   const followups = data?.owner_followups ?? []
   const followupsFresh = Boolean(data && data.scope_id === scopeId && !error && !expired
@@ -236,8 +240,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     {error && <p role="alert" className="mt-2 text-amber-700 dark:text-amber-500">{error}</p>}
     {data && <>
       <p className="mt-2 text-muted-foreground">
-        Last observed: {date(data.last_polled_at)} · Last Leader assessment: {date(data.last_assessed_at)}
-        {assessmentAge !== null && data.last_assessed_at && ` (${relativeAge(data.last_assessed_at, clock)})`}
+        Last observed: <AgeText value={data.last_polled_at} now={clock} /> · Last Leader assessment: <AgeText value={data.last_assessed_at} now={clock} />
       </p>
       <p className="mt-1 text-muted-foreground">
         Last observed execution: {data.active_implementations ?? 'unknown'}/{data.execution_limit} · Available workspaces: {data.available_workspaces ?? 'unknown'} · Leased: {data.leased_workspaces ?? 'unknown'}
@@ -255,6 +258,8 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
         {!current && <p className="mt-1 text-muted-foreground">The retained assessment is historical. A notification limit alone does not require a human decision.</p>}
         {followupsFresh && !current && <p className="mt-1">Next actor: Team Leader. Refresh the assessment through the existing team channel. The budget reset time is not a promised assessment time.</p>}
       </div>}
+      {(followups.length > 0 || observations.length > 0 || data.entries.length > 0) && <details className="mt-3 rounded border p-3">
+        <summary className="cursor-pointer font-medium">History</summary>
       {followups.length > 0 && <section aria-label="Owner follow-ups" className="mt-3 rounded border p-3">
         <h5 className="font-medium">{needsLeader ? 'Owner completion needs Leader disposition' : 'Owner follow-ups'}</h5>
         <p className="mt-1 text-muted-foreground">These records are separate from backlog eligibility. They do not establish that an agent is idle or that its work is accepted.</p>
@@ -299,6 +304,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
           <span className="ml-2 text-muted-foreground">Evidence: {entry.evidence_issue_numbers.map((n) => `#${n}`).join(', ')}</span>
         </li>)}</ul>
       </div>}
+      </details>}
     </>}
     <Dialog open={open} onOpenChange={(next) => { if (!saving) setOpen(next) }}>
       <DialogContent><DialogHeader><DialogTitle>Leader backlog coordination</DialogTitle>

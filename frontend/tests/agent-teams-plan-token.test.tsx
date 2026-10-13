@@ -213,7 +213,7 @@ describe("Autonomy refresh and recurring polling", () => {
     expect(refresh().querySelector("svg")).not.toHaveClass("animate-spin");
   });
 
-  it("stops recurring scope/work-item polls on hidden document, Roster, and unmount", async () => {
+  it("stops recurring scope/work-item polls on hidden document, Members, and unmount", async () => {
     const view = renderAutonomy(); await flush();
     const counts = () => [vi.mocked(fetchTeamGithubScopes).mock.calls.length, vi.mocked(fetchGithubWorkItems).mock.calls.length];
     const initial = counts();
@@ -222,8 +222,8 @@ describe("Autonomy refresh and recurring polling", () => {
     const hidden = counts(); await advance(10000); expect(counts()).toEqual(hidden);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     await advance(5000); expect(counts()).toEqual(hidden.map(n => n + 1));
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Roster" }), { button: 0, ctrlKey: false }); await flush();
-    expect(screen.getByRole("tab", { name: "Roster" })).toHaveAttribute("data-state", "active");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Members" }), { button: 0, ctrlKey: false }); await flush();
+    expect(screen.getByRole("tab", { name: "Members" })).toHaveAttribute("data-state", "active");
     const roster = counts(); await advance(15000); expect(counts()).toEqual(roster);
     view.unmount(); await advance(15000); expect(counts()).toEqual(roster);
   });
@@ -416,10 +416,10 @@ describe("Teams current route and stale reads", () => {
     await waitFor(() => expect(fetchAgentTeamPresets).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () => release({ presets: [{ ...preset, name: "Team1" }] }));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
     setOperatorToken("synthetic-route-operator");
     fireEvent.click(
       screen.getByRole("button", {
@@ -447,13 +447,13 @@ describe("Teams current route and stale reads", () => {
       );
     renderTeams();
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team1"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team1" })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() => expect(fetchAgentTeamPresets).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
     await act(async () => release(teams));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
   });
   it("does not expose an old pending launch plan after navigating to another team", async () => {
     let release!: (value: AgentTeamLaunchPlan) => void;
@@ -476,7 +476,7 @@ describe("Teams current route and stale reads", () => {
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () => release(plan));
     expect(
@@ -510,7 +510,7 @@ describe("Teams current route and stale reads", () => {
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     expect(
       screen.queryByRole("dialog", { name: "Director key" }),
@@ -569,7 +569,7 @@ describe("Teams current route and stale reads", () => {
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     const reads = vi.mocked(fetchAgentTeamPresets).mock.calls.length;
     await act(async () => release(result));
@@ -577,7 +577,7 @@ describe("Teams current route and stale reads", () => {
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
   });
   it("retires an old initial scope response before it can switch the current roster tab", async () => {
     let release!: (
@@ -596,7 +596,7 @@ describe("Teams current route and stale reads", () => {
     await waitFor(() => expect(fetchTeamGithubScopes).toHaveBeenCalledWith(1));
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () =>
       release({
@@ -605,8 +605,8 @@ describe("Teams current route and stale reads", () => {
         >["scopes"],
       }),
     );
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
-    expect(screen.getByLabelText("Name")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Plan launch" })).toBeVisible();
     expect(fetchTeamGithubScopes).toHaveBeenCalledTimes(1);
   });

@@ -1,27 +1,19 @@
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDown,
-  ArrowUp,
   BookOpen,
   ChevronDown,
-  Copy,
-  Edit,
   GitBranch,
   MonitorPlay,
   Plus,
-  Play,
   RefreshCw,
   Rocket,
-  Save,
-  Trash2,
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatServerTime } from '@/lib/serverTime'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -43,13 +35,17 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
+import { TEAM_SLOT_COLOR_OPTIONS } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
 import { ApiHttpError } from '@/lib/api'
 import { autonomousLeaderSlotId } from './leaderSlot'
 import { fetchCCSessions } from '@/features/cc-bridge/api'
 import type { AgentSession } from '@/features/cc-bridge/types'
 import { TeamMemberPicker } from './TeamMemberPicker'
+import { TeamHeader } from './TeamHeader'
+import { EditTeamDialog } from './EditTeamDialog'
+import { TeamMemberRow } from './TeamMemberRow'
+import { TeamProgress } from './TeamProgress'
 import { PROVIDER_IDS, isHiddenByDefault, memberItems, sessionItems, sessionKey, sessionsToSlots, usableSessions } from './teamSources'
 import type {
   AgentTeamLaunchPlan,
@@ -89,7 +85,6 @@ import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunch
 import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
 import { HumanActionSummary } from './HumanActionSummary'
 import { TeamSummaryCard } from './TeamSummaryCard'
-import { AgentStatusBadges } from '@/components/shared/AgentStatusBadges'
 import { useAgentActivity } from './useAgentActivity'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
@@ -821,6 +816,7 @@ export function AgentTeamsPage() {
   const [adoptUnboundSessions, setAdoptUnboundSessions] = useState(false)
   const [reuseExistingSessions, setReuseExistingSessions] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [editTeamOpen, setEditTeamOpen] = useState(false)
   const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
   const [githubScopes, setGithubScopes] = useState<TeamGithubScope[]>([])
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
@@ -1063,22 +1059,13 @@ export function AgentTeamsPage() {
     }
   }, [autonomyTab, loadAutonomy, knownPresetId])
 
-  const stats = useMemo(() => {
-    const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
-    const enabled = presets.reduce(
-      (count, preset) => count + preset.slots.filter((slot) => slot.enabled).length,
-      0
-    )
-    return { slots, enabled }
-  }, [presets])
-
   const replacePreset = (preset: AgentTeamPreset) => {
     setPresets((current) => current.map((item) => (item.id === preset.id ? preset : item)))
     setSelectedPresetId(preset.id)
   }
 
-  const savePreset = async () => {
-    if (!selectedPreset) return
+  const savePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     setSaving(true)
     try {
       const updated = await withOperatorToken((token) => updateAgentTeamPreset(selectedPreset.id, {
@@ -1087,8 +1074,10 @@ export function AgentTeamsPage() {
       }, token))
       replacePreset(updated)
       toast.success('Team saved')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save team')
+      return false
     } finally {
       setSaving(false)
     }
@@ -1132,8 +1121,8 @@ export function AgentTeamsPage() {
     }
   }
 
-  const duplicatePreset = async () => {
-    if (!selectedPreset) return
+  const duplicatePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     try {
       const created = await withOperatorToken((token) => duplicateAgentTeamPreset(selectedPreset.id, {
         name: `${selectedPreset.name} copy`,
@@ -1141,13 +1130,15 @@ export function AgentTeamsPage() {
       setPresets((current) => [created, ...current])
       setSelectedPresetId(created.id)
       toast.success('Team duplicated')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to duplicate team')
+      return false
     }
   }
 
-  const removePreset = async () => {
-    if (!selectedPreset) return
+  const removePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     try {
       await withOperatorToken((token) => deleteAgentTeamPreset(selectedPreset.id, token))
       setPresets((current) => current.filter((preset) => preset.id !== selectedPreset.id))
@@ -1156,8 +1147,10 @@ export function AgentTeamsPage() {
         return remaining[0]?.id ?? null
       })
       toast.success('Team deleted')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to delete team')
+      return false
     }
   }
 
@@ -1172,6 +1165,12 @@ export function AgentTeamsPage() {
       : addAgentTeamSlot(selectedPreset.id, normalizedInput, token))
     replacePreset(saved)
     toast.success('Slot saved')
+  }
+
+  // The switch, its confirmation and the Director key stay in the Autonomy tab. The header button opens it there.
+  const openAutonomySwitch = () => {
+    setAutonomyTab('autonomy')
+    window.setTimeout(() => document.getElementById('autonomy-enabled')?.focus(), 50)
   }
 
   const refreshAutonomy = async () => {
@@ -1309,7 +1308,7 @@ export function AgentTeamsPage() {
             Agent Teams
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Saved agent rosters with launch plans for local Claude Code, Codex, and Copilot sessions.
+            Teams of agents that work on your repositories.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1336,66 +1335,27 @@ export function AgentTeamsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Teams</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{presets.length}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Slots</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{stats.slots}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Enabled</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{stats.enabled}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="min-w-0 rounded-lg border">
-          <div className="border-b p-3 text-sm font-medium">Saved Teams</div>
-          <div className="max-h-[620px] overflow-y-auto p-2">
-            {presets.length === 0 && (
-              <div className="p-4 text-sm text-muted-foreground">No teams saved.</div>
-            )}
-            {presets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
-                className={cn(
-                  'mb-2 w-full rounded-md border border-l-4 p-3 text-left transition-colors hover:bg-accent',
-                  selectedPresetId === preset.id && 'border-l-primary bg-accent'
-                )}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-medium">{preset.name}</p>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {preset.autonomy_enabled && (
-                      <Badge variant="outline" className="border-primary text-primary">⚡ Autonomy</Badge>
-                    )}
-                    <Badge variant="secondary">{preset.slots.length}</Badge>
-                  </div>
-                </div>
-                <p className="mt-1 truncate text-xs text-muted-foreground">
-                  Updated {formatDate(preset.updated_at)}
-                </p>
-              </button>
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <nav aria-label="Saved teams" className="flex flex-wrap items-center gap-2">
+          {presets.length === 0 && <span className="text-sm text-muted-foreground">No teams saved.</span>}
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
+              aria-current={selectedPresetId === preset.id ? 'page' : undefined}
+              title={`Updated ${formatDate(preset.updated_at)}`}
+              className={cn(
+                'flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-colors hover:bg-accent',
+                selectedPresetId === preset.id && 'border-primary bg-accent font-medium'
+              )}
+            >
+              {preset.name}
+              <Badge variant="secondary">{preset.slots.length}</Badge>
+              {preset.autonomy_enabled && <span className="text-xs text-primary">⚡ Autonomy</span>}
+            </button>
+          ))}
+        </nav>
 
         <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
@@ -1404,196 +1364,72 @@ export function AgentTeamsPage() {
             </div>
           ) : (
             <div className="space-y-6 p-5">
-              <TeamSummaryCard
-                key={`summary-${selectedPreset.id}`}
-                presetId={selectedPreset.id}
-                slotNames={Object.fromEntries(selectedPreset.slots.map((slot) => [slot.id, slot.display_name]))}
-              />
               {contextParams.get('review_launch') === '1' && <section className="space-y-2 rounded border p-3"><h3 className="font-semibold">Review selected slot launch</h3><p>{selectedPreset.slots.find(slot => slot.id === requestedSlotId)?.display_name ?? 'Selected slot not found'} · slot {requestedSlotId ?? 'unknown'}. Opening this page does not launch or approve work.</p><Button className="h-auto whitespace-normal text-left" variant="outline" disabled={!selectedPreset.slots.some(slot => slot.id === requestedSlotId)} onClick={() => void openPlan(requestedSlotId ? [requestedSlotId] : null)}>Review current authenticated launch plan</Button></section>}
 
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="grid flex-1 gap-3">
-                  <div className="grid gap-2">
-                    <Label htmlFor="preset-name">Name</Label>
-                    <Input id="preset-name" value={name} onChange={(event) => setName(event.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="preset-description">Description</Label>
-                    <Textarea
-                      id="preset-description"
-                      value={description}
-                      onChange={(event) => setDescription(event.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={savePreset} disabled={saving || !name.trim()}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save
-                  </Button>
-                  <Button variant="outline" onClick={duplicatePreset}>
-                    <Copy className="mr-2 h-4 w-4" />
-                    Duplicate
-                  </Button>
-                  <div className="border-l pl-4">
-                    <Button
-                      variant="outline"
-                      className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={removePreset}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
-                    </Button>
-                  </div>
-                </div>
-              </div>
+              <TeamHeader
+                key={`header-${selectedPreset.id}`}
+                preset={selectedPreset}
+                onEdit={() => setEditTeamOpen(true)}
+                onPlan={() => void openPlan(null)}
+                planDisabled={selectedPreset.slots.every((slot) => !slot.enabled) || planLoading}
+                onAutonomy={openAutonomySwitch}
+              />
 
               <HumanActionSummary key={selectedPreset.id} presetId={selectedPreset.id} onInspectAutonomy={() => setAutonomyTab('autonomy')} />
               <Tabs value={autonomyTab} onValueChange={(value) => setAutonomyTab(value as 'roster' | 'autonomy')} className="border-t pt-5">
                 <TabsList>
-                  <TabsTrigger value="roster">Roster</TabsTrigger>
+                  <TabsTrigger value="roster">Members</TabsTrigger>
                   <TabsTrigger value="autonomy">Autonomy</TabsTrigger>
                 </TabsList>
-                <TabsContent value="roster" className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">Roster</h2>
-                  <p className="text-sm text-muted-foreground">{selectedPreset.slots.length} slots</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setSlotDialog({ mode: 'add' })}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add slot
-                  </Button>
-                  <Button
-                    onClick={() => openPlan(null)}
-                    disabled={selectedPreset.slots.every((slot) => !slot.enabled) || planLoading}
-                  >
-                    <Play className="mr-2 h-4 w-4" />
-                    Plan launch
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground">
-                <p>
-                  For same-repo planner/reviewer workflows, create separate slots with distinct
-                  names and launch them from this team. That gives Agent Mail separate inboxes and
-                  reliable routing for each role.
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                {selectedPreset.slots.length === 0 && (
-                  <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-                    No slots in this team.
+                <TabsContent value="roster" className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-lg font-semibold">
+                      Members <span className="text-sm font-normal text-muted-foreground">{selectedPreset.slots.length}</span>
+                    </h3>
+                    <Button variant="outline" onClick={() => setSlotDialog({ mode: 'add' })}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add member
+                    </Button>
                   </div>
-                )}
-                {selectedPreset.slots.map((slot, index) => {
-                  const colorClasses = getTeamSlotColorClasses(slot.ui_color)
-                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.leader_slot_id ?? null, selectedPreset.slots)
-                  return (
-                    <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
-                      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold">{slot.display_name}</p>
-                            <AgentStatusBadges status={agentActivity.get(slot.id)?.agent_status} />
-                            {isLeader && <Badge variant="outline" title="This slot has the explicit Leader assignment.">Leader for autonomous dispatch</Badge>}
-                            {!isLeader && slot.enabled && !selectedPreset.autonomy_enabled && (
-                              <Button size="sm" variant="outline" onClick={() => void assignLeader(slot)}>Set Leader</Button>
-                            )}
-                            <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
-                              {slot.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
-                            <Badge variant="secondary">{slot.provider}</Badge>
-                            <Badge variant="secondary">{slot.launch_mode}</Badge>
-                            <Badge variant="outline">
-                              {slot.controlled_language_enabled === false ? 'Own writing style' : 'ASD-STE100'}
-                            </Badge>
-                            {slot.ui_color && (
-                              <Badge variant="outline" className={colorClasses.badge}>
-                                {slot.ui_color}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="mt-1 truncate text-sm text-muted-foreground">{slot.repo_path}</p>
-                          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
-                            <div>
-                              <p className="text-xs uppercase text-muted-foreground">Repo</p>
-                              <p>{slot.repo_name}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs uppercase text-muted-foreground">Role</p>
-                              <p>{slot.role || 'Unassigned'}</p>
-                            </div>
-                          </div>
-                          {(slot.area_labels?.length || slot.expertise) && (
-                            <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
-                              <p className="text-xs uppercase text-muted-foreground">GitHub dispatch routing</p>
-                              {slot.area_labels && slot.area_labels.length > 0 ? (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {slot.area_labels.map((label) => (
-                                    <Badge key={label} variant="secondary">{label}</Badge>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="mt-2">{isLeader ? 'None (the Leader routes this slot)' : 'None'}</p>
-                              )}
-                              {slot.expertise && (
-                                <>
-                                  <p className="mt-3 text-xs uppercase text-muted-foreground">Expertise</p>
-                                  <p className="mt-1 text-muted-foreground">{slot.expertise}</p>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          {slot.warnings && slot.warnings.length > 0 && (
-                            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-300">
-                              {slot.warnings.join('; ')}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => moveSlot(slot, -1)}
-                            disabled={index === 0}
-                          >
-                            <ArrowUp className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => moveSlot(slot, 1)}
-                            disabled={index === selectedPreset.slots.length - 1}
-                          >
-                            <ArrowDown className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openPlan([slot.id])}
-                            disabled={!slot.enabled}
-                          >
-                            <Play className="mr-2 h-4 w-4" />
-                            Launch
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => setSlotDialog({ mode: 'edit', slot })}>
-                            <Edit className="mr-2 h-4 w-4" />
-                            Edit
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => removeSlot(slot)}>
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </Button>
-                        </div>
+                  <p className="text-xs text-muted-foreground">
+                    For a planner and a reviewer in the same repository, add separate members with different names. Each gets its own Agent Mail inbox.
+                  </p>
+                  {selectedPreset.slots.length === 0 && (
+                    <div className="rounded-lg border p-5 text-sm text-muted-foreground">No members in this team.</div>
+                  )}
+                  <ul className="space-y-2">
+                    {selectedPreset.slots.map((slot, index) => {
+                      const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.leader_slot_id ?? null, selectedPreset.slots)
+                      return (
+                        <TeamMemberRow
+                          key={slot.id}
+                          slot={slot}
+                          isLeader={isLeader}
+                          first={index === 0}
+                          last={index === selectedPreset.slots.length - 1}
+                          status={agentActivity.get(slot.id)?.agent_status}
+                          actions={{
+                            onLaunch: () => void openPlan([slot.id]),
+                            onEdit: () => setSlotDialog({ mode: 'edit', slot }),
+                            onSetLeader: !isLeader && slot.enabled && !selectedPreset.autonomy_enabled ? () => void assignLeader(slot) : null,
+                            onMove: (direction) => void moveSlot(slot, direction),
+                            onDelete: () => void removeSlot(slot),
+                          }}
+                        />
+                      )
+                    })}
+                  </ul>
+                    <TeamProgress key={`progress-${selectedPreset.id}`} preset={selectedPreset} />
+                    <details className="rounded-lg border">
+                      <summary className="cursor-pointer px-4 py-2 text-sm font-medium">Team status</summary>
+                      <div className="p-3">
+                        <TeamSummaryCard
+                          key={`summary-${selectedPreset.id}`}
+                          presetId={selectedPreset.id}
+                          slotNames={Object.fromEntries(selectedPreset.slots.map((slot) => [slot.id, slot.display_name]))}
+                        />
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
+                    </details>
                 </TabsContent>
                 <TabsContent value="autonomy" className="mt-5">
                   <AutonomyPanel
@@ -1616,6 +1452,18 @@ export function AgentTeamsPage() {
       </div>
 
       <NewPresetDialog mode={presetDialog} onOpenChange={setPresetDialog} onCreate={createPreset} />
+      <EditTeamDialog
+        open={editTeamOpen && selectedPreset !== undefined}
+        onOpenChange={setEditTeamOpen}
+        name={name}
+        onNameChange={setName}
+        description={description}
+        onDescriptionChange={setDescription}
+        saving={saving}
+        onSave={savePreset}
+        onDuplicate={duplicatePreset}
+        onDelete={removePreset}
+      />
       <SlotDialog
         state={slotDialog}
         onOpenChange={setSlotDialog}
