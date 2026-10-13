@@ -227,6 +227,24 @@ export function AuditMetricsPage() {
     }
   }
 
+  // #659: one path withdraws everything protected when the Director key is
+  // refused in ANY read. It ends every active read, so a late response cannot
+  // bring rows or groups back, and it hides the events and the refused requests.
+  function revokeProtected(message: string) {
+    auditEpochRef.current += 1;
+    refusalEpochRef.current += 1;
+    focusRef.current = null;
+    setFocus(null);
+    setEventsResult(null);
+    setRefusalResult(null);
+    setRefusalState("locked");
+    setUnlocking(false);
+    setEventsRefused(true);
+    setEventsState("failed");
+    setEventsError(message);
+    setStatus("Audit events could not be loaded. Safe metrics remain available.");
+  }
+
   // C01: audit reads use the per-tab operator workflow with the operator
   // credential header. Exact 503 and 401 refusals surface to the operator.
   async function loadAudit(
@@ -284,14 +302,18 @@ export function AuditMetricsPage() {
         clearOperatorToken();
       }
       if (!current()) return null;
-      setEventsRefused(refused);
+      const message = cause instanceof Error ? cause.message : "Audit read refused.";
+      if (refused) {
+        revokeProtected(message);
+        return null;
+      }
+      // A 5xx or a network error keeps the earlier data.
+      setEventsRefused(false);
       setUnlocking(false);
-      // #659: a refused key shows nothing protected. A 5xx or a network error keeps the earlier data.
-      if (refused) setEventsResult(null);
       setEventsState("failed");
-      setEventsError(cause instanceof Error ? cause.message : "Audit read refused.");
+      setEventsError(message);
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
-      return refused ? null : token;
+      return token;
     }
   }
 
@@ -328,7 +350,7 @@ export function AuditMetricsPage() {
       if (!current()) return;
       if (cause instanceof ApiHttpError && cause.status === 401) {
         if (getOperatorToken() === token) clearOperatorToken();
-        setRefusalState("locked");
+        revokeProtected(cause.message);
       } else {
         setRefusalState("failed");
       }

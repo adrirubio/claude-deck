@@ -669,6 +669,89 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       expect(screen.queryByText(/Retained events/)).not.toBeInTheDocument();
     });
 
+    // A1's three sequences (G-C gate): one refused key withdraws every protected panel and every active read.
+    function refusalEvents(): AuditEventPage {
+      const at = new Date(Date.now() - 3600_000).toISOString();
+      return {
+        items: [1, 2].map((id) => ({
+          id: 900 + id, occurred_at: at, recorded_at: at, event_kind: "continuation_request", source: "test",
+          record_kind: "observed", actor_kind: "member", actor_reference: "member:2", item_id: 7, item_context_key: "item-7",
+          sanitized_reason: "allowed_paths_invalid", action_outcome: "rejected", live_links_available: true,
+          context_snapshot: { repo_name: "sample-app", issue_number: 101 },
+        })),
+        total: 2, page: 1, page_size: 100, snapshot_labels: [],
+      } as unknown as AuditEventPage;
+    }
+    const groupText = /were refused on sample-app #101/;
+
+    it("hides the Needs a look group and the events when Next page returns 401", async () => {
+      const stub = stubFetch();
+      setOperatorToken("synthetic-operator");
+      await mountWith(stub, eventsBody("mount-event", 25, 27));
+      await waitFor(() => expect(stub.refusals()).toHaveLength(1));
+      stub.refusals()[0].respond(refusalEvents());
+      expect(await screen.findByText(groupText)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+      await waitFor(() => expect(stub.audit()).toHaveLength(2));
+      stub.audit()[1].respond({ detail: "operator_token_invalid" }, 401);
+
+      await screen.findByTestId("events-locked");
+      hidden();
+      expect(screen.queryByText(groupText)).not.toBeInTheDocument();
+      expect(screen.getByText("The Director key is needed to read refused requests.")).toBeInTheDocument();
+      expect(getOperatorToken()).toBeNull();
+    });
+
+    it("hides the events when the refusal read returns 401 after the main events loaded", async () => {
+      const stub = stubFetch();
+      setOperatorToken("synthetic-operator");
+      await mountWith(stub);
+      expect(screen.getByText(/mount-event/)).toBeInTheDocument();
+      await waitFor(() => expect(stub.refusals()).toHaveLength(1));
+      stub.refusals()[0].respond({ detail: "operator_token_invalid" }, 401);
+
+      await screen.findByTestId("events-locked");
+      hidden();
+      expect(screen.getByRole("button", { name: "Unlock events" })).toBeInTheDocument();
+      expect(getOperatorToken()).toBeNull();
+    });
+
+    it("does not let a held refusal read restore the group after Next page returned 401", async () => {
+      const stub = stubFetch();
+      setOperatorToken("synthetic-operator");
+      await mountWith(stub, eventsBody("mount-event", 25, 27));
+      await waitFor(() => expect(stub.refusals()).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+      await waitFor(() => expect(stub.audit()).toHaveLength(2));
+      stub.audit()[1].respond({ detail: "operator_token_invalid" }, 401);
+      await screen.findByTestId("events-locked");
+
+      // The held read resolves late. It must not bring the group back.
+      stub.refusals()[0].respond(refusalEvents());
+      await flushLate();
+      expect(screen.queryByText(groupText)).not.toBeInTheDocument();
+      expect(screen.getByText("The Director key is needed to read refused requests.")).toBeInTheDocument();
+      hidden();
+    });
+
+    it("does not let a held events read restore the rows after the refusal read returned 401", async () => {
+      const stub = stubFetch();
+      setOperatorToken("synthetic-operator");
+      await mountWith(stub, eventsBody("mount-event", 25, 27));
+      await waitFor(() => expect(stub.refusals()).toHaveLength(1));
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+      await waitFor(() => expect(stub.audit()).toHaveLength(2));
+
+      stub.refusals()[0].respond({ detail: "operator_token_invalid" }, 401);
+      await screen.findByTestId("events-locked");
+      stub.audit()[1].respond({ ...eventsBody("late-event", 2, 27, 100), page: 2 });
+      await flushLate();
+      expect(screen.queryByText(/late-event/)).not.toBeInTheDocument();
+      hidden();
+    });
+
     it("keeps the earlier events after a transient 5xx, as before", async () => {
       const stub = stubFetch();
       setOperatorToken("synthetic-operator");
