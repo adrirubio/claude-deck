@@ -5,6 +5,7 @@ import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
 import { TerminalView } from './TerminalView'
 import { TeamLanesView } from './TeamLanesView'
+import { LANE_COUNT, clampStart, shiftStart, startToShow } from './teamLanesWindow'
 import { LeaderHintOverlay } from './LeaderHintOverlay'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
@@ -22,7 +23,7 @@ type TeamFilter = 'all' | number
 type LayoutMode =
   | { kind: 'grid' }
   | { kind: 'single'; target: string }
-  | { kind: 'lanes'; teamId: number }
+  | { kind: 'lanes'; teamId: number; start: number; zoomed?: string }
 
 interface TeamFilterOption {
   id: number
@@ -121,22 +122,25 @@ export function CCBridgePage() {
     ? null
     : teamOptions.find((team) => team.id === laneTeamId)?.name ?? `Team ${laneTeamId}`
 
-  const teamLanes = useMemo(() => {
-    if (laneTeamId === null) return { sessions: [], overflowCount: 0 }
-    const teamSessions = sessions
+  // Every member of the lanes team, in slot order. The lanes show a window of four.
+  const laneMembers = useMemo(() => {
+    if (laneTeamId === null) return []
+    return sessions
       .filter((session) => session.team_preset_id === laneTeamId)
       .sort(compareTeamLaneSessions)
-    return {
-      sessions: teamSessions.slice(0, MAX_GRID_PANES),
-      overflowCount: Math.max(0, teamSessions.length - MAX_GRID_PANES),
-    }
   }, [laneTeamId, sessions])
+  const laneStart = layoutMode.kind === 'lanes' ? clampStart(layoutMode.start, laneMembers.length) : 0
+  const laneVisible = useMemo(() => laneMembers.slice(laneStart, laneStart + LANE_COUNT), [laneMembers, laneStart])
+  const laneZoomed = layoutMode.kind === 'lanes' && layoutMode.zoomed
+    && laneVisible.some((session) => session.tmux_target === layoutMode.zoomed)
+    ? layoutMode.zoomed
+    : null
 
   const displayedTargets = useMemo(() => {
-    if (layoutMode.kind === 'lanes') return teamLanes.sessions.map((session) => session.tmux_target)
+    if (layoutMode.kind === 'lanes') return laneZoomed ? [laneZoomed] : laneVisible.map((session) => session.tmux_target)
     if (layoutMode.kind === 'single') return [layoutMode.target]
     return activeTargets
-  }, [activeTargets, layoutMode, teamLanes.sessions])
+  }, [activeTargets, layoutMode, laneVisible, laneZoomed])
 
   const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
     Boolean(provider?.installed)
@@ -198,9 +202,34 @@ export function CCBridgePage() {
     const target = teamId ?? effectiveTeamFilter
     if (target === 'all') return
     if (teamId !== undefined) applyTeamFilter(teamId)
-    setLayoutMode({ kind: 'lanes', teamId: target })
+    setLayoutMode({ kind: 'lanes', teamId: target, start: 0 })
     setFocusedTarget(null)
   }, [effectiveTeamFilter, applyTeamFilter])
+
+  const shiftLanes = useCallback((delta: number) => {
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes' && !cur.zoomed
+        ? { ...cur, start: shiftStart(cur.start, laneMembers.length, delta) }
+        : cur
+    ))
+  }, [laneMembers.length])
+
+  // Brings a member into the window. While a lane is zoomed, it zooms that member instead.
+  const showLaneMember = useCallback((target: string) => {
+    const index = laneMembers.findIndex((session) => session.tmux_target === target)
+    if (index === -1) return
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes'
+        ? { ...cur, start: startToShow(cur.start, laneMembers.length, index), zoomed: cur.zoomed ? target : undefined }
+        : cur
+    ))
+  }, [laneMembers])
+
+  const toggleLaneZoom = useCallback((target: string) => {
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes' ? { ...cur, zoomed: cur.zoomed === target ? undefined : target } : cur
+    ))
+  }, [])
 
   const exitFullscreen = useCallback(() => {
     setLayoutMode({ kind: 'grid' })
@@ -235,13 +264,22 @@ export function CCBridgePage() {
   useEffect(() => {
     if (!isFullscreen) return
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') exitFullscreen()
+      if (e.key === 'Escape') {
+        // In lanes, the first Escape restores the four lanes. The second one exits.
+        if (layoutMode.kind === 'lanes' && layoutMode.zoomed) setLayoutMode({ ...layoutMode, zoomed: undefined })
+        else exitFullscreen()
+        return
+      }
+      if (layoutMode.kind === 'lanes' && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        shiftLanes(e.key === 'ArrowLeft' ? -1 : 1)
+      }
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [exitFullscreen, isFullscreen])
+  }, [exitFullscreen, isFullscreen, layoutMode, shiftLanes])
 
-  const shouldExitEmptyLanes = layoutMode.kind === 'lanes' && teamLanes.sessions.length === 0
+  const shouldExitEmptyLanes = layoutMode.kind === 'lanes' && laneMembers.length === 0
 
   useEffect(() => {
     if (!shouldExitEmptyLanes) return
@@ -419,13 +457,17 @@ export function CCBridgePage() {
         <div className="flex-1 min-w-0 relative">
           {layoutMode.kind === 'lanes' ? (
             <TeamLanesView
-              sessions={teamLanes.sessions}
-              overflowCount={teamLanes.overflowCount}
+              sessions={laneMembers}
+              start={laneStart}
+              zoomed={laneZoomed}
               teamLabel={laneTeamLabel}
               focusedTarget={focusedTarget}
               onFocusTarget={setFocusedTarget}
               onLeaderNavigate={handleLeaderNavigate}
               onLeaderStateChange={handleLeaderStateChange}
+              onShift={shiftLanes}
+              onShowMember={showLaneMember}
+              onToggleZoom={toggleLaneZoom}
               onExit={exitFullscreen}
               instance={instance}
             />

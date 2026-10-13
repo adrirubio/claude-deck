@@ -27,7 +27,6 @@ interface TerminalViewProps {
   forceReadOnly?: boolean
   target: string | null
   fullscreen?: boolean
-  inLanes?: boolean
   focused?: boolean
   onToggleFullscreen?: () => void
   onClose?: () => void
@@ -74,7 +73,6 @@ export function TerminalView({
   forceReadOnly = false,
   target,
   fullscreen,
-  inLanes,
   focused,
   onToggleFullscreen,
   onClose,
@@ -352,7 +350,7 @@ export function TerminalView({
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onToggleFullscreen && !inLanes && (
+            {onToggleFullscreen && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
                 {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
               </Button>

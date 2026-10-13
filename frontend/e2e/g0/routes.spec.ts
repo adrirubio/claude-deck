@@ -77,7 +77,7 @@ test('@active Team lanes shows the release crew', async ({ page }) => {
   await page.getByRole('button', { name: /^Release crew \(4\)$/ }).click()
   await page.getByRole('button', { name: 'Team lanes' }).click()
   await expect(page.getByText('Team lanes').first()).toBeVisible()
-  await expect(page.getByText(/4 shown/)).toBeVisible()
+  await expect(page.getByText('Showing 1–4 of 4')).toBeVisible()
 })
 
 test('@active Agent Mail shows unacknowledged messages', async ({ page }) => {
