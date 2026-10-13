@@ -38,7 +38,7 @@ async function backgroundOf(locator: Locator): Promise<string> {
 
 const MAIL_TABS = [
   { name: 'Team', tab: 'Team', seen: 'F2 Frontend' },
-  { name: 'Requests', tab: 'Requests', seen: 'stale' },
+  { name: 'Conversations', tab: 'Conversations', seen: 'stale' },
 ]
 
 for (const theme of THEMES) {

@@ -227,7 +227,7 @@ describe('Agent Mail page', () => {
     vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue(status())
     render(<MemoryRouter><AgentMailPage /></MemoryRouter>)
     expect(await screen.findByRole('tab', { name: 'Team' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Requests' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Conversations' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: /install/i })).not.toBeInTheDocument()
     expect(await screen.findByText(/Mail is set up for Claude Code, Codex and Pi/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Manage in Harnesses' })).toHaveAttribute('href', '/harnesses')

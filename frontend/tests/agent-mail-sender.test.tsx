@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import { RequestsTab } from "../src/features/agent-mail/RequestsTab";
+import { ConversationsTab } from "../src/features/agent-mail/ConversationsTab";
+import { buildConversations } from "../src/features/agent-mail/conversations";
 import { ThreadDialog } from "../src/features/agent-mail/ThreadDialog";
 import { LEGACY_SENDER_LABEL, senderKind, senderName } from "../src/features/agent-mail/utils";
 import type { MailMemberResponse, MailMessageResponse } from "../src/types/agentMail";
@@ -64,9 +65,10 @@ const NOOP = vi.fn();
 
 function renderRequests(messages: MailMessageResponse[], search = "") {
   return render(
-    <RequestsTab
-      messages={messages} members={MEMBERS} loading={false} search={search} kindFilter="all" statusFilter="all"
-      onSearchChange={NOOP} onKindFilterChange={NOOP} onStatusFilterChange={NOOP} onOpenThread={NOOP} onCompose={NOOP}
+    <ConversationsTab
+      conversations={buildConversations(messages, MEMBERS)} members={MEMBERS} loading={false} search={search}
+      chip="all" team="" recipientMemberId={null} messageCount={messages.length}
+      onSearchChange={NOOP} onChipChange={NOOP} onClearRecipient={NOOP} onOpenThread={NOOP}
     />,
   );
 }
@@ -75,7 +77,7 @@ function card(subject: string): HTMLElement {
   return screen.getByText(subject).closest("[class*='rounded-lg']") as HTMLElement;
 }
 
-describe("Requests list", () => {
+describe("Conversations list", () => {
   it("shows one label and the right icon for each sender type", () => {
     renderRequests(Object.values(BY_TYPE));
     const expected: Array<[string, string, RegExp | null]> = [
@@ -97,7 +99,7 @@ describe("Requests list", () => {
   it("does not show a scheduler message as sent by the Director", () => {
     renderRequests([BY_TYPE.deck]);
     const row = card("Subject 1");
-    expect(row.textContent).toContain("Deck to B1 Backend");
+    expect(row.textContent).toContain("Deck→B1 Backend");
     expect(row.textContent).not.toContain("Director");
   });
 
