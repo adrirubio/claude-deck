@@ -19,6 +19,7 @@ vi.mock('../src/features/config/ConfigViewerPage', () => ({ ConfigViewerPage: fu
   return <><p>Mounted {selectedProviderId} editor</p><input aria-label="Unsaved setting" value={setting} onChange={e=>setSetting(e.target.value)}/></>
 } }))
 vi.mock('../src/features/plans/PlanDetailPage', () => ({ PlanDetailPage: () => <p>Mounted plan</p> }))
+vi.mock('../src/features/plans/PlansPage', () => ({ PlansPage: () => <p>Mounted plans</p> }))
 vi.mock('../src/features/sessions/SessionViewPage', () => ({ SessionViewPage: () => <p>Mounted transcript</p> }))
 vi.mock('../src/contexts/DashboardContext', () => ({
  DashboardProvider: ({children}: {children: React.ReactNode}) => children,
@@ -148,6 +149,27 @@ describe('required catalog native guards', () => {
   renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses/codex-cli','/harnesses/:providerId');await settle()
   expect(screen.getByRole('heading',{name:'Codex CLI'})).toBeInTheDocument()
   const before=requests.length;await expect(apiClient('codex-config')).rejects.toThrow(/unavailable/);await expect(apiClient('providers/codex-cli/features')).rejects.toThrow(/unavailable/);expect(requests).toHaveLength(before)
+ })
+ it('gives a native page a breadcrumb, a sub-navigation of its harness and a tab title', async () => {
+  fixtureFetch(answer); native('/harnesses/codex-cli/config'); await settle()
+  const crumbs=screen.getByRole('navigation',{name:'Breadcrumb'})
+  expect(within(crumbs).getByRole('link',{name:'Harnesses'})).toHaveAttribute('href','/harnesses')
+  expect(within(crumbs).getByRole('link',{name:'Codex CLI'})).toHaveAttribute('href','/harnesses/codex-cli')
+  expect(within(crumbs).getByText('Configuration')).toHaveAttribute('aria-current','page')
+  const subnav=screen.getByRole('navigation',{name:'Codex CLI pages'})
+  expect(within(subnav).getByRole('link',{name:'Configuration'})).toHaveAttribute('aria-current','page')
+  for(const [name,surface] of [['MCP servers','mcp'],['Plugins','plugins'],['Plans','plans']]) expect(within(subnav).getByRole('link',{name})).toHaveAttribute('href',`/harnesses/codex-cli/${surface}`)
+  expect(within(subnav).getByRole('link',{name:'Codex CLI'})).toHaveAttribute('href','/harnesses/codex-cli')
+  expect(document.title).toBe('Configuration · Codex CLI · Claude Deck')
+ })
+ it('shows View only on a read-only native page and restores the tab title on leaving',async()=>{
+  const before=document.title
+  fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(scenarios.read_only_config):answer(path))
+  const view=native('/harnesses/codex-cli/plans'); await settle()
+  expect(screen.getByText('View only')).toBeInTheDocument()
+  expect(document.title).toBe('Plans · Codex CLI · Claude Deck')
+  view.unmount()
+  expect(document.title).toBe(before)
  })
  it('permits only the known exact operations GET bootstrap and no catalog POST/subpaths', async()=>{
   const {requests}=fixtureFetch(answer);window.history.replaceState({},'', '/harnesses/codex-cli/config')

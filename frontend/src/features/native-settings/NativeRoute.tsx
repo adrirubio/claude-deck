@@ -26,6 +26,11 @@ import { useProviderOperations } from "@/hooks/useProviders";
 import { nativeAdapter, nativeAccess } from "./surfaceRegistry";
 import { ProjectSelector } from "@/features/projects/ProjectSelector";
 import { projectScopedSurface } from "./projectScope";
+import { HarnessBreadcrumb, HarnessSubNav } from "@/features/harnesses/HarnessNav";
+import { useDocumentTitle } from "@/features/harnesses/harnessPages";
+import { surfaceInfo } from "@/features/harnesses/surfaceCatalog";
+import { harnesses } from "@/features/factory/filterHelpers";
+import { Lock } from "lucide-react";
 const pages = {
   config: ConfigViewerPage,
   mcp: MCPServersPage,
@@ -61,6 +66,9 @@ export function NativeRoute({
   const Page = Object.hasOwn(pages, surface) ? pages[surface as keyof typeof pages] : undefined;
   const catalog = useProviderOperations(entry && Page && metadata && !context.loading && !context.error ? metadata.id : undefined);
   const access = nativeAccess(provider, surface, metadata, catalog.catalog ?? undefined);
+  const pageName = surfaceInfo[surface as keyof typeof surfaceInfo]?.name ?? null;
+  const harnessName = harnesses[provider as AgentProviderId] ?? provider;
+  useDocumentTitle(pageName && metadata ? `${pageName} · ${harnessName} · Claude Deck` : null);
   if (context.loading) return <p role="status">Loading harness registry…</p>;
   if (entry && Page && metadata && !context.error && (catalog.state === "idle" || catalog.state === "loading"))
     return <p role="status">Loading required operating catalog…</p>;
@@ -105,18 +113,23 @@ export function NativeRoute({
       onSelect={(id) => navigate(`/harnesses/${id}/${surface}`)}
     >
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Native configuration · {metadata.display_name} ·{" "}
-          {access.replaceAll("_", " ")} · independent of delivery filters
-        </p>
-        {!detail && projectScopedSurface(`/harnesses/${provider}/${surface}`) && <ProjectSelector />}
-        {detail === "session" ? (
-          <SessionViewPage />
-        ) : detail === "plan" ? (
-          <PlanDetailPage />
-        ) : (
-          <Page />
-        )}
+        <HarnessBreadcrumb harnessId={provider as AgentProviderId} page={pageName ?? surface} />
+        <div className="grid gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
+          <HarnessSubNav harnessId={provider as AgentProviderId} metadata={metadata} catalog={catalog.catalog} current={surface} />
+          <div className="min-w-0 space-y-4">
+            {access === "read_only" && (
+              <p className="inline-flex items-center gap-1 text-sm text-muted-foreground"><Lock className="h-3 w-3" aria-hidden="true" />View only</p>
+            )}
+            {!detail && projectScopedSurface(`/harnesses/${provider}/${surface}`) && <ProjectSelector />}
+            {detail === "session" ? (
+              <SessionViewPage />
+            ) : detail === "plan" ? (
+              <PlanDetailPage />
+            ) : (
+              <Page />
+            )}
+          </div>
+        </div>
       </div>
     </NativeProviderScope>
   );
