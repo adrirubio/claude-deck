@@ -51,18 +51,41 @@ test('@active the Progress card shows Done, Under way, Still to do and the decis
   expect(headings.findIndex(text => /^Needs you/.test(text))).toBeLessThan(headings.findIndex(text => /^Progress/.test(text)))
 })
 
-test('@active the Progress card draws a bar over the known work when the backlog is unknown', async ({ page }) => {
-  // The seed has no readable backlog (#643 part 2 adds one). The bar must still show.
-  await page.goto('/')
-  const card = page.locator('main').getByRole('article', { name: /^Progress:/ }).first()
-  await expect(card).toBeVisible()
-  const bar = card.getByRole('img')
-  await expect(bar).toBeVisible()
-  await expect(bar).toHaveAttribute('aria-label', /^\d+ done, \d+ under way, \d+ still to do, backlog unknown$/)
-  await expect(card.getByText('backlog unknown', { exact: true })).toBeVisible()
-  await expect(card.getByText(/known items? done/)).toBeVisible()
-  await expect(bar.getByTestId('unknown-remainder')).toBeVisible()
-})
+for (const theme of ['light', 'dark'] as Theme[]) {
+  test(`@active the Progress card draws a bar over the known work when the backlog is unknown in the ${theme} theme`, async ({ page }) => {
+    // Release crew has an unavailable milestone in the offline seed (#652).
+    await useTheme(page, theme)
+    await page.goto('/')
+    const card = page.locator('main').getByRole('article', { name: /^Progress:/ }).filter({ hasText: 'Release crew' })
+    await expect(card).toBeVisible()
+    const bar = card.getByRole('img')
+    await expect(bar).toBeVisible()
+    await expect(bar).toHaveAttribute('aria-label', /^\d+ done, \d+ under way, \d+ still to do, backlog unknown$/)
+    await expect(card.getByText('backlog unknown', { exact: true })).toBeVisible()
+    await expect(card.getByText(/known items? done/)).toBeVisible()
+    await expect(bar.getByTestId('unknown-remainder')).toBeVisible()
+  })
+
+  test(`@active the Progress card draws the full readable backlog in the ${theme} theme`, async ({ page }) => {
+    // The live duplicate-name Retired crew has one not-started issue (#652).
+    await useTheme(page, theme)
+    await page.goto('/?team_id=4')
+    const card = page.locator('main').getByRole('article', { name: /^Progress:/ })
+    await expect(card).toBeVisible()
+    const bar = card.getByRole('img')
+    await expect(bar).toBeVisible()
+    await expect(bar).toHaveAttribute('aria-label', '0 done, 0 under way, 1 still to do, backlog known')
+    await expect(card.getByText('0 of 1 done', { exact: false })).toBeVisible()
+    await expect(card.getByText('1 not started', { exact: false })).toBeVisible()
+    await expect(card.getByText('backlog unknown', { exact: true })).toHaveCount(0)
+    await expect(bar.getByTestId('unknown-remainder')).toHaveCount(0)
+    const segments = await bar.locator(':scope > span').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().width))
+    const width = await bar.evaluate(element => element.getBoundingClientRect().width)
+    expect(segments.reduce((sum, value) => sum + value, 0)).toBeCloseTo(width, 0)
+    expect(segments[2]).toBeCloseTo(width, 0)
+    expect(await contrastFailures(card)).toEqual([])
+  })
+}
 
 test('@active no empty section shows a filter message when no filter is set', async ({ page }) => {
   await page.goto('/')
