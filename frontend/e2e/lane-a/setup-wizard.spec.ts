@@ -7,21 +7,24 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // cancelled key dialog leaves a clear way to enter the key later.
 // The seed's team folders (sample-app, quiet-lib) are the choices for step 1.
 // Design reference: screen 09 (add a repository).
-// @pending until #537 merges.
+// @active until #537 merges.
 
-test('@pending opening the wizard shows no dialog', async ({ page }) => {
+test('@active opening the wizard shows no dialog', async ({ page }) => {
   await page.goto('/repositories/new')
   await expect(page.locator('main').getByText(/^(Set up|Add) a repository$/i).first()).toBeVisible()
   await page.waitForLoadState('networkidle').catch(() => undefined)
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })
 
-test('@pending step 1 can be completed without typing a path or a branch name', async ({ page }) => {
+test('@active step 1 can be completed without typing a path or a branch name', async ({ page }) => {
   await page.goto('/repositories/new')
   const main = page.locator('main')
   // The checkout path and the base branch are choices, not text inputs.
   await expect(main.getByRole('textbox', { name: /path/i })).toHaveCount(0)
   await expect(main.getByRole('textbox', { name: /branch/i })).toHaveCount(0)
+  // No endpoint reads the owner and name from a checkout, so the person gives
+  // them in the GitHub repository field. Nothing else is typed.
+  await main.getByRole('textbox', { name: /GitHub repository/i }).fill('example-org/sample-app')
   const checkout = main.getByRole('combobox', { name: /checkout|folder|repository/i }).first()
   await expect(checkout).toBeVisible()
   await checkout.selectOption({ index: 1 })
@@ -31,7 +34,7 @@ test('@pending step 1 can be completed without typing a path or a branch name', 
   await expect(main.getByText(/2\.\s*Team|Team and roles/).first()).toBeVisible()
 })
 
-test('@pending a cancelled key dialog leaves a clear way to enter the key later', async ({ page }) => {
+test('@active a cancelled key dialog leaves a clear way to enter the key later', async ({ page }) => {
   await page.goto('/repositories/new')
   const main = page.locator('main')
   const askForKey = main.getByRole('button', { name: /Director key|unlock|enter (the )?key/i }).first()
@@ -42,7 +45,7 @@ test('@pending a cancelled key dialog leaves a clear way to enter the key later'
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the wizard meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the wizard meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/repositories/new')
     await expect(page.locator('main').getByText(/^(Set up|Add) a repository$/i).first()).toBeVisible()
