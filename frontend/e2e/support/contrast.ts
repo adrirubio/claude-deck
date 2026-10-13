@@ -16,13 +16,57 @@ export interface ContrastFailure {
   background: string
 }
 
+// The theme that useTheme() set for each page, so the settle step can wait for it.
+const expectedThemes = new WeakMap<Page, Theme>()
+
 /** Open pages in this theme. ThemeContext reads localStorage "theme" on load. */
 export async function useTheme(page: Page, theme: Theme): Promise<void> {
+  expectedThemes.set(page, theme)
   await page.addInitScript(value => window.localStorage.setItem('theme', value), theme)
 }
 
-/** Every visible text element under `root` that fails AA contrast. */
+// A settled page has its theme class and no running transition. A transition
+// that does not end within this time fails the journey instead of hanging it.
+export const SETTLE_TIMEOUT_MS = 3_000
+
+/**
+ * Wait until colours are final before a contrast measurement (#644):
+ * - <html> has the theme class that useTheme() asked for. ThemeContext adds it
+ *   after the first paint, and `transition-colors` then animates every button
+ *   from its light colours to its dark ones for about 150 ms;
+ * - the pointer is away from the content, so no hover state is active;
+ * - no finite animation or transition is running, for two frames in a row.
+ *   Infinite animations (spinners) are ignored: they never end.
+ */
+export async function settleForContrast(page: Page): Promise<void> {
+  await page.mouse.move(0, 0)
+  const theme = expectedThemes.get(page) ?? null
+  try {
+    await page.waitForFunction(expected => {
+      if (expected && !document.documentElement.classList.contains(expected)) return false
+      const running = document.getAnimations().filter(animation => {
+        const timing = animation.effect?.getComputedTiming()
+        const finite = timing ? Number.isFinite(timing.endTime as number) : true
+        return finite && (animation.playState === 'running' || animation.pending)
+      })
+      const state = window as unknown as { __e2eQuietFrames?: number }
+      state.__e2eQuietFrames = running.length === 0 ? (state.__e2eQuietFrames ?? 0) + 1 : 0
+      return state.__e2eQuietFrames >= 2
+    }, theme, { timeout: SETTLE_TIMEOUT_MS, polling: 'raf' })
+  } catch (error) {
+    throw new Error(
+      `contrast: the page did not settle within ${SETTLE_TIMEOUT_MS} ms ` +
+      `(theme ${theme ?? 'not set'}; a transition or animation is still running)`,
+      { cause: error },
+    )
+  } finally {
+    await page.evaluate(() => { delete (window as unknown as { __e2eQuietFrames?: number }).__e2eQuietFrames })
+  }
+}
+
+/** Every visible text element under `root` that fails AA contrast, measured once the page settles. */
 export async function contrastFailures(root: Locator): Promise<ContrastFailure[]> {
+  await settleForContrast(root.page())
   return root.evaluate((rootElement: Element) => {
     const canvas = document.createElement('canvas')
     canvas.width = 1
