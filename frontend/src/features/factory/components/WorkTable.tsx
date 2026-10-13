@@ -72,6 +72,14 @@ export function WorkTable({ rows }: { rows: WorkProjection[] }) {
                     >
                       {stateLabel(work)}
                     </span>
+                    {work.item.required_ci_unreadable && (
+                      <span
+                        className="shrink-0 rounded border border-amber-500/60 px-2 text-xs font-medium text-amber-800 dark:text-amber-300"
+                        title={work.item.required_ci_unreadable.label}
+                      >
+                        CI unreadable
+                      </span>
+                    )}
                     {waiting && (
                       <span
                         className="truncate text-xs text-muted-foreground"

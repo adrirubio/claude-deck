@@ -4,6 +4,7 @@ import { WorkItemPanel } from "@/features/agent-teams/WorkItemPanel";
 import { ContextLinks } from "../components/ContextLinks";
 import { GithubLink } from "../components/GithubLink";
 import { ProtectedRemedies } from "../components/ProtectedRemedies";
+import { RequiredCiNotice } from "../components/RequiredCiNotice";
 import { ReadStatus } from "../components/ReadStatus";
 import { anchor, panel } from "../components/styles";
 import { Time } from "../components/Time";
@@ -93,6 +94,12 @@ export function WorkDetailPage() {
             </div>
             <Time value={w.item.updated_at} label="Deck record observation" />
           </article>
+          {w.item.required_ci_unreadable && (
+            <RequiredCiNotice
+              signal={w.item.required_ci_unreadable}
+              pullRequest={w.item.pr_number}
+            />
+          )}
           <ContextLinks work={w} />
           {w.item.dispatch_status === "merged" ? (
             <section className={panel}>

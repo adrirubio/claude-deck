@@ -367,8 +367,16 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
             (LANE_G_SUPERVISOR_ACTOR, next_check, RELEASE_TEAM),
         )
 
-    # #550: the #550 implementer adds the stored "required CI cannot be read"
-    # state for item #102 here, in the PR that activates its journey.
+    # #550: item #102 (PR #202) cannot have its required CI read for 2 hours,
+    # past the 15-minute grace period. Its status stays "awaiting_human_review".
+    # The columns exist from #621; an older database has none, so skip then.
+    item_columns = {name for name, _, _ in s.columns("github_work_items")}
+    if {"checks_unavailable_since", "checks_unavailable_reason"} <= item_columns:
+        s.conn.execute(
+            "UPDATE github_work_items SET checks_unavailable_since = ?, "
+            "checks_unavailable_reason = ? WHERE id = ?",
+            (at(hours=2), "permission_missing", ITEM_REVIEW),
+        )
 
 
 # Lane C (#604): states for the Audit journeys in frontend/e2e/lane-c/.

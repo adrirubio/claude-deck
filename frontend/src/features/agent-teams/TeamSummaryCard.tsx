@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 
 import { ReadStatus } from '@/features/factory/components/ReadStatus'
 import { anchor } from '@/features/factory/components/styles'
+import { requiredCiReason } from '@/features/factory/components/RequiredCiNotice'
 import { useObservation } from '@/features/factory/reads'
 import { formatServerTime } from '@/lib/serverTime'
 import type {
@@ -80,6 +81,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: string }) {
   const state = useObservation<AgentTeamSummary>(`agent-teams/presets/${presetId}/summary`)
   const summary = state.data
+  const unreadable = summary?.required_ci_unreadable ?? []
   const actions = summary?.human_actions.filter(
     (action) => action.state === 'requested' || action.state === 'context_pending',
   ) ?? []
@@ -117,7 +119,7 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
             </Row>
             <Row label="Supervisor">{summary.supervisor === 'none' ? 'None, not required.' : summary.supervisor}</Row>
             <Row label="Attention">
-              {summary.attention.length === 0 ? 'None open.' : (
+              {summary.attention.length === 0 && unreadable.length === 0 ? 'None open.' : (
                 <ul className="space-y-1">
                   {summary.attention.map((item, index) => (
                     <li
@@ -128,6 +130,12 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
                         <>{ATTENTION_TEXT[item.code]} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link></>
                       ) : ATTENTION_TEXT[item.code]}
                       {item.resume_deadline && <> · resume by {formatServerTime(item.resume_deadline)}</>}
+                    </li>
+                  ))}
+                  {unreadable.map((item) => (
+                    <li key={`ci-${item.work_item_id}`} className="text-amber-800 dark:text-amber-300">
+                      {item.label} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link>
+                      . {requiredCiReason(item.reason)} {item.next_steps[0]}
                     </li>
                   ))}
                 </ul>
