@@ -101,6 +101,9 @@ function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilt
   return null;
 }
 
+// How long the rows wait for the member and team names before they show the fallback.
+const NAME_WAIT_LIMIT_MS = 5000;
+
 /**
  * P05 audit coverage and delivery metrics view.
  *
@@ -123,6 +126,8 @@ export function AuditMetricsPage() {
   const [refusalResult, setRefusalResult] = useState<RefusalResult | null>(null);
   const [refusalState, setRefusalState] = useState<RefusalReadState>("loading");
   const [memberNames, setMemberNames] = useState<Record<number, string>>({});
+  // True once the name reads have ended, with or without names. Rows wait for it (#676).
+  const [namesSettled, setNamesSettled] = useState(false);
   const [teamNames, setTeamNames] = useState<Record<number, string>>({});
   const [focus, setFocus] = useState<EventFocus | null>(null);
   const [contextKeys, setContextKeys] = useState<ContextKeyList | null>(null);
@@ -357,17 +362,24 @@ export function AuditMetricsPage() {
     }
   }
 
-  // Names are a courtesy. Without them the feed shows "member N" and the
-  // stored team name. The two reads are public and need no key.
+  // Names are a courtesy. Without them the feed shows "An agent" and the
+  // stored team name. The two reads are public and need no key. The rows wait
+  // until both reads have ended, so a slow read never shows a half-named row.
+  // A read that fails ends the wait too.
   async function loadFeedContext(current: () => boolean) {
-    const [team, presets] = await Promise.allSettled([fetchAgentMailTeam(false), fetchAgentTeamPresets()]);
-    if (!current()) return;
-    if (team.status === "fulfilled") {
-      setMemberNames(Object.fromEntries(team.value.members.map((member) => [member.id, member.display_name])));
-    }
-    if (presets.status === "fulfilled") {
-      setTeamNames(Object.fromEntries(presets.value.presets.map((preset) => [preset.id, preset.name])));
-    }
+    const reads = Promise.allSettled([fetchAgentMailTeam(false), fetchAgentTeamPresets()]).then(([team, presets]) => {
+      if (!current()) return;
+      if (team.status === "fulfilled") {
+        setMemberNames(Object.fromEntries(team.value.members.map((member) => [member.id, member.display_name])));
+      }
+      if (presets.status === "fulfilled") {
+        setTeamNames(Object.fromEntries(presets.value.presets.map((preset) => [preset.id, preset.name])));
+      }
+    });
+    // A read that stalls ends the wait too. Late names still update the rows.
+    const limit = new Promise<void>((resolve) => { window.setTimeout(resolve, NAME_WAIT_LIMIT_MS); });
+    await Promise.race([reads, limit]);
+    if (current()) setNamesSettled(true);
   }
 
   // The Team and Repository choices. The route needs the Director key. While
@@ -548,6 +560,7 @@ export function AuditMetricsPage() {
         state={refusalState}
         groups={refusalResult?.groups ?? []}
         names={memberNames}
+        namesReady={namesSettled}
         truncated={refusalResult?.truncated ?? false}
         onShowEvents={showRefusalEvents}
         onUnlock={unlockEvents}
@@ -599,7 +612,10 @@ export function AuditMetricsPage() {
             No recorded events for this {isNoEventKey(applied.teamKey) ? "team" : "repository"} yet.
           </p>
         )}
-        {eventsResult && (
+        {eventsResult && !namesSettled && (
+          <p role="status" className="text-sm text-muted-foreground">Reading names.</p>
+        )}
+        {eventsResult && namesSettled && (
           <ActivityFeed
             feed={feed}
             now={Date.parse(eventsResult.observedAt)}
