@@ -130,7 +130,7 @@ export function HarnessMailSetup({ providerId, harnessInstalled, setup }: Harnes
           </AlertDialogHeader>
           <div className="space-y-2 rounded-lg border bg-muted/40 p-3 text-sm">
             {confirm?.mutations.map((mutation) => (
-              <div key={mutation} className="break-words">{mutation}</div>
+              <div key={mutation} className="wrap-break-word">{mutation}</div>
             ))}
           </div>
           <AlertDialogFooter>

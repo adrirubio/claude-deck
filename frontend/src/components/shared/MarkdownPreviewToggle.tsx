@@ -28,7 +28,7 @@ export function MarkdownPreviewToggle({
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full p-4 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
+          className="w-full p-4 font-mono text-sm border rounded-md resize-y focus:outline-hidden focus:ring-2 focus:ring-ring bg-background text-foreground"
           style={{ minHeight }}
           placeholder={placeholder}
           disabled={disabled}

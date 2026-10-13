@@ -200,7 +200,7 @@ function HarnessCard({ id, metadata, registryLoading, teamCount }: { id: AgentPr
   const stop = (event: MouseEvent) => event.stopPropagation();
   return (
     <article
-      className={cn("flex min-w-0 items-start gap-3 rounded-lg bg-card p-4 break-words", CLICKABLE_CARD)}
+      className={cn("flex min-w-0 items-start gap-3 rounded-lg bg-card p-4 wrap-break-word", CLICKABLE_CARD)}
       tabIndex={0}
       onClick={open}
       onKeyDown={onKeyDown}

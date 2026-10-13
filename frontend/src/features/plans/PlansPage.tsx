@@ -236,7 +236,7 @@ export function PlansPage() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             <h3 className="font-medium truncate">{plan.title}</h3>
                           </div>
                           <p className="text-sm text-muted-foreground line-clamp-2">
@@ -259,7 +259,7 @@ export function PlansPage() {
                             </div>
                           )}
                         </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        <div className="flex flex-col items-end gap-1 shrink-0">
                           <span
                             className="text-xs text-muted-foreground"
                             title={new Date(plan.modified_at).toLocaleString()}

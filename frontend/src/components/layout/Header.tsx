@@ -48,14 +48,14 @@ export function Header() {
         <div className="flex flex-wrap items-center gap-2">
           {!status && (
             // Reserve the badge space so the header does not shift when the status loads.
-            <span aria-hidden="true" className="inline-block h-[1.375rem] w-32" />
+            <span aria-hidden="true" className="inline-block h-5.5 w-32" />
           )}
           {status && (
             <>
               {instance && (
                 <Badge
                   variant="outline"
-                  className={cn("gap-1 text-xs max-w-[12rem] truncate", accentClasses.badge)}
+                  className={cn("gap-1 text-xs max-w-48 truncate", accentClasses.badge)}
                   title={instanceTitle}
                 >
                   <Server className="h-3 w-3 shrink-0" />
@@ -85,7 +85,7 @@ export function Header() {
               {status.environment?.agent_cli_warning && (
                 <Badge
                   variant="outline"
-                  className="gap-1 text-xs border-destructive/40 text-destructive max-w-[22rem]"
+                  className="gap-1 text-xs border-destructive/40 text-destructive max-w-88"
                   title={status.environment.agent_cli_warning}
                 >
                   <AlertCircle className="h-3 w-3 shrink-0" />

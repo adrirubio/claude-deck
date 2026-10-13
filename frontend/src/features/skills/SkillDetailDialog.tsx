@@ -167,7 +167,7 @@ export function SkillDetailDialog({
       <DialogContent className={`${MODAL_SIZES.MD} flex flex-col`}>
         <DialogHeader>
           <div className="flex items-center gap-3">
-            <Sparkles className="h-6 w-6 text-amber-500 flex-shrink-0" />
+            <Sparkles className="h-6 w-6 text-amber-500 shrink-0" />
             <DialogTitle className="text-xl">{skill?.name}</DialogTitle>
             {skill && getLocationBadge(skill.location)}
           </div>
@@ -201,7 +201,7 @@ export function SkillDetailDialog({
                     {/* Context */}
                     {fm.context && (
                       <div className="flex items-center gap-2 text-sm">
-                        <GitFork className="h-4 w-4 text-purple-500 flex-shrink-0" />
+                        <GitFork className="h-4 w-4 text-purple-500 shrink-0" />
                         <span className="text-muted-foreground">Context:</span>
                         <Badge
                           variant="outline"
@@ -215,7 +215,7 @@ export function SkillDetailDialog({
                     {/* Agent */}
                     {fm.agent && (
                       <div className="flex items-center gap-2 text-sm">
-                        <Cpu className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        <Cpu className="h-4 w-4 text-blue-500 shrink-0" />
                         <span className="text-muted-foreground">Agent:</span>
                         <Badge variant="outline">{fm.agent}</Badge>
                       </div>
@@ -224,7 +224,7 @@ export function SkillDetailDialog({
                     {/* Model */}
                     {fm.model && (
                       <div className="flex items-center gap-2 text-sm">
-                        <Cpu className="h-4 w-4 text-indigo-500 flex-shrink-0" />
+                        <Cpu className="h-4 w-4 text-indigo-500 shrink-0" />
                         <span className="text-muted-foreground">Model:</span>
                         <Badge variant="outline">{fm.model}</Badge>
                       </div>
@@ -233,7 +233,7 @@ export function SkillDetailDialog({
                     {/* User Invocable */}
                     {fm.user_invocable === false && (
                       <div className="flex items-center gap-2 text-sm">
-                        <EyeOff className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                        <EyeOff className="h-4 w-4 text-gray-500 shrink-0" />
                         <span className="text-muted-foreground">
                           Hidden from / menu
                         </span>
@@ -243,7 +243,7 @@ export function SkillDetailDialog({
                     {/* Disable Model Invocation */}
                     {fm.disable_model_invocation && (
                       <div className="flex items-center gap-2 text-sm">
-                        <EyeOff className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                        <EyeOff className="h-4 w-4 text-gray-500 shrink-0" />
                         <span className="text-muted-foreground">
                           Auto-loading disabled
                         </span>
@@ -253,7 +253,7 @@ export function SkillDetailDialog({
                     {/* Argument Hint */}
                     {fm.argument_hint && (
                       <div className="flex items-center gap-2 text-sm">
-                        <Tag className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                        <Tag className="h-4 w-4 text-amber-500 shrink-0" />
                         <span className="text-muted-foreground">Hint:</span>
                         <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
                           {fm.argument_hint}
@@ -264,7 +264,7 @@ export function SkillDetailDialog({
                     {/* Version */}
                     {fm.version && (
                       <div className="flex items-center gap-2 text-sm">
-                        <Tag className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="text-muted-foreground">Version:</span>
                         <span>{fm.version}</span>
                       </div>
@@ -273,7 +273,7 @@ export function SkillDetailDialog({
                     {/* License */}
                     {fm.license && (
                       <div className="flex items-center gap-2 text-sm">
-                        <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="text-muted-foreground">License:</span>
                         <span>{fm.license}</span>
                       </div>
@@ -284,7 +284,7 @@ export function SkillDetailDialog({
                   {fm.allowed_tools && fm.allowed_tools.length > 0 && (
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-2 text-sm">
-                        <Shield className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        <Shield className="h-4 w-4 text-blue-500 shrink-0" />
                         <span className="text-muted-foreground">
                           Allowed tools:
                         </span>
@@ -307,7 +307,7 @@ export function SkillDetailDialog({
                   {fm.hooks && Object.keys(fm.hooks).length > 0 && (
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-2 text-sm">
-                        <Zap className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                        <Zap className="h-4 w-4 text-amber-500 shrink-0" />
                         <span className="text-muted-foreground">Hooks:</span>
                       </div>
                       <div className="flex flex-wrap gap-1.5 ml-6">
@@ -390,9 +390,9 @@ export function SkillDetailDialog({
                         className="flex items-center gap-3 text-sm"
                       >
                         {dep.installed ? (
-                          <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
+                          <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
                         ) : (
-                          <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                          <XCircle className="h-4 w-4 text-red-500 shrink-0" />
                         )}
                         <Badge variant="outline" className="text-xs font-mono">
                           {dep.kind}

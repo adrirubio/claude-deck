@@ -187,7 +187,7 @@ export function PlanDetailPage() {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                   {plan.git_branch && (
                     <Badge variant="outline" className="text-xs">
                       <GitBranch className="h-3 w-3 mr-1" />

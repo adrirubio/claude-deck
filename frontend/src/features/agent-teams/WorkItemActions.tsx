@@ -305,7 +305,7 @@ export function WorkItemActions({
   }
 
   return (
-    <div className="space-y-4 break-words [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]" aria-label="Item actions">
+    <div className="space-y-4 wrap-break-word [&_dd]:min-w-0 [&_dd]:wrap-anywhere" aria-label="Item actions">
               {attention && (
                 <section className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4" aria-label="Your action needed">
                   <h3 className="font-medium">{attention.label}</h3>

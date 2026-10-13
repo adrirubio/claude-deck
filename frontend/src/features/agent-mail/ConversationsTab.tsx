@@ -50,7 +50,7 @@ function ConversationRow({ row, members, onOpen }: {
       </Badge>
       <button
         type="button"
-        className="min-w-[10rem] flex-1 truncate rounded text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="min-w-40 flex-1 truncate rounded text-left font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         title={row.subject}
       >
         {row.subject}

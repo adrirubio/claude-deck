@@ -675,7 +675,7 @@ export function AuditMetricsPage() {
               <tbody>
                 {(metrics?.metrics ?? []).map((sample) => (
                   <tr key={sample.name} className="border-t align-top">
-                    <td className="p-2 break-words">
+                    <td className="p-2 wrap-break-word">
                       <span className="block font-medium">{metricLabel(sample.name)}</span>
                       <span className="block text-xs text-muted-foreground">{sample.name}</span>
                       <span className="block text-xs text-muted-foreground">{sample.counting_unit}</span>
@@ -685,7 +685,7 @@ export function AuditMetricsPage() {
                     <td className="p-2">{sample.sample_count}</td>
                     <td className="p-2">{sample.unknown_count}</td>
                     <td className="p-2">{sample.excluded_count}</td>
-                    <td className="p-2 break-words">{notes.coverage[sample.name]}</td>
+                    <td className="p-2 wrap-break-word">{notes.coverage[sample.name]}</td>
                     <td className="p-2">
                       {(notes.refs[sample.name] ?? []).map((ref) => (
                         <a key={ref} href={`#metric-note-${ref}`} className="mr-1 text-primary underline">{ref}</a>

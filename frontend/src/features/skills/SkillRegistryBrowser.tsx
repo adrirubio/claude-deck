@@ -181,7 +181,7 @@ export function SkillRegistryBrowser({
                       {skill.source}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 text-sm text-muted-foreground flex-shrink-0">
+                  <div className="flex items-center gap-1 text-sm text-muted-foreground shrink-0">
                     <Download className="h-3.5 w-3.5" />
                     <span>{formatInstalls(skill.installs)}</span>
                   </div>

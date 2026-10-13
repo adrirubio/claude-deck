@@ -71,25 +71,25 @@ function TechnicalDetail({ row, snapshotLabels }: { row: FeedRow; snapshotLabels
       <summary className="cursor-pointer font-medium">Technical detail</summary>
       {row.events.map((event) => (
         <dl key={event.id} className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
-          <div className="break-words"><span className="block font-medium">Event</span>{event.id}: {event.event_kind}</div>
-          <div className="break-words"><span className="block font-medium">Source</span>{event.source}</div>
-          <div className="break-words"><span className="block font-medium">Record kind</span>{event.record_kind}</div>
-          <div className="break-words"><span className="block font-medium">Occurred</span>{event.occurred_at}</div>
-          <div className="break-words"><span className="block font-medium">Fact source</span>{event.fact_source ?? "unavailable"}</div>
-          <div className="break-words"><span className="block font-medium">Fact time</span>{event.fact_time ?? "unavailable"}</div>
-          <div className="break-words"><span className="block font-medium">Actor reference</span>{event.actor_reference ?? "none"}</div>
-          <div className="break-words"><span className="block font-medium">Reason</span>{event.sanitized_reason ?? "none"}</div>
-          <div className="break-words sm:col-span-2">
+          <div className="wrap-break-word"><span className="block font-medium">Event</span>{event.id}: {event.event_kind}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Source</span>{event.source}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Record kind</span>{event.record_kind}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Occurred</span>{event.occurred_at}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Fact source</span>{event.fact_source ?? "unavailable"}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Fact time</span>{event.fact_time ?? "unavailable"}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Actor reference</span>{event.actor_reference ?? "none"}</div>
+          <div className="wrap-break-word"><span className="block font-medium">Reason</span>{event.sanitized_reason ?? "none"}</div>
+          <div className="wrap-break-word sm:col-span-2">
             <span className="block font-medium">Context keys</span>
             team {event.team_context_key ?? "none"}; scope {event.scope_context_key ?? "none"}; item {event.item_context_key ?? "none"}
           </div>
           <div className="sm:col-span-2">
             <span className="block font-medium">Stored snapshot labels</span>
             {snapshotLabels(event).length
-              ? snapshotLabels(event).map(({ name, text }) => <div key={name} className="break-words">{name}: {text}</div>)
+              ? snapshotLabels(event).map(({ name, text }) => <div key={name} className="wrap-break-word">{name}: {text}</div>)
               : "none named in this event"}
           </div>
-          <div className="break-words sm:col-span-2">
+          <div className="wrap-break-word sm:col-span-2">
             <span className="block font-medium">Before / after (allowlisted)</span>
             {JSON.stringify(event.before_values ?? {})} → {JSON.stringify(event.after_values ?? {})}
           </div>
@@ -109,7 +109,7 @@ function RowDetail({ row, snapshotLabels }: { row: FeedRow; snapshotLabels: Acti
         <div><span className="block text-xs font-medium">Outcome</span>{outcomeText(first)}</div>
         <div><span className="block text-xs font-medium">Team</span><TeamBadge team={row.team} /></div>
         {row.subject && (
-          <div className="break-words sm:col-span-2">
+          <div className="wrap-break-word sm:col-span-2">
             <span className="block text-xs font-medium">Subject</span>
             <FeedLink href={row.subject.href}>{row.subject.text}</FeedLink>
           </div>
@@ -143,7 +143,7 @@ function FeedRowView({ row, now, open, onToggle, snapshotLabels }: {
           {relative && <> · {relative}</>}
         </span>
         <TeamBadge team={row.team} />
-        <p className="min-w-0 break-words">
+        <p className="min-w-0 wrap-break-word">
           {row.refused && (
             <span className="mr-1 inline-flex items-center gap-1 font-medium text-amber-800 dark:text-amber-300">
               <AlertTriangle aria-hidden="true" className="h-4 w-4" />

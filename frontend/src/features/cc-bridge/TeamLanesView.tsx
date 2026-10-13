@@ -102,7 +102,7 @@ export function TeamLanesView({
                   type="button"
                   aria-pressed={shown}
                   className={cn(
-                    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                     shown ? 'border-primary bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted',
                   )}
                   onClick={() => onShowMember(session.tmux_target)}
@@ -121,7 +121,7 @@ export function TeamLanesView({
             {!zoomed && (
               <button
                 type="button"
-                className="flex w-7 shrink-0 items-center justify-center border-r text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                className="flex w-7 shrink-0 items-center justify-center border-r text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 aria-label="Show the previous member"
                 disabled={!canShiftLeft(first)}
                 onClick={() => onShift(-1)}
@@ -174,7 +174,7 @@ export function TeamLanesView({
             {!zoomed && (
               <button
                 type="button"
-                className="flex w-7 shrink-0 items-center justify-center border-l text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                className="flex w-7 shrink-0 items-center justify-center border-l text-muted-foreground transition-colors hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 aria-label="Show the next member"
                 disabled={!canShiftRight(first, sessions.length)}
                 onClick={() => onShift(1)}

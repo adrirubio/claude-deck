@@ -9,7 +9,7 @@ Claude Deck 3.0.0 includes the Overview, Work, Repositories and Harnesses pages.
 ### Prerequisites
 
 - **Python 3.11+**
-- **Node.js 18+**
+- **Node.js 22.12+**
 - At least one supported local agent CLI installed on the same host:
   - Claude Code
   - Codex CLI

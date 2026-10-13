@@ -119,11 +119,11 @@ export function RosterRow({ member, onEdit, onCompose, onQueueInboxCheck, nudgin
           aria-controls={detailId}
           aria-label={`${open ? 'Hide' : 'Show'} details of ${member.display_name}`}
           onClick={() => setOpen((value) => !value)}
-          className="rounded p-1 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded p-1 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           {open ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronRight aria-hidden="true" className="h-4 w-4" />}
         </button>
-        <div className="min-w-[10rem] flex-1 basis-40">
+        <div className="min-w-40 flex-1 basis-40">
           <span className="block truncate font-semibold">{member.display_name}</span>
           {member.role && <span className="block truncate text-xs leading-tight text-muted-foreground">{member.role}</span>}
         </div>

@@ -12,7 +12,7 @@ export function StatusTiles({ counts, params }: { counts: FactoryCounts; params:
       {ORDER.filter((id) => id !== "unknown" || counts.unknown > 0).map((id) => (
         <Link
           key={id}
-          className={`${panel} flex items-baseline justify-between space-y-0 p-3 hover:bg-accent focus-visible:outline focus-visible:outline-2 ${
+          className={`${panel} flex items-baseline justify-between space-y-0 p-3 hover:bg-accent focus-visible:outline-solid focus-visible:outline-2 ${
             id === "attention" && counts.attention > 0 ? "border-amber-500/60" : ""
           }`}
           to={workLink(params, id)}

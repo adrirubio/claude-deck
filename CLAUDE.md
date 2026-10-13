@@ -6,7 +6,7 @@ Web app for managing Claude Code configurations, MCP servers, commands, plugins,
 
 ```bash
 # Install
-./scripts/install.sh             # Setup venv, install deps, create dirs (requires Python 3.11+, Node 18+)
+./scripts/install.sh             # Setup venv, install deps, create dirs (requires Python 3.11+, Node 22.12+)
 
 # Development
 ./scripts/dev.sh                 # Start both backend + frontend servers
