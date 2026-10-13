@@ -260,3 +260,30 @@ def test_dispatch_brief_names_supervisor_without_changing_the_escalation_order()
     assert "Supervisor address: external_actor:9 (actor_id=9)" in brief
     assert "Escalate to the Leader first. Then contact the Supervisor." in brief
     assert "Retained operator decisions require the current operator-action record." in brief
+
+
+@pytest.mark.asyncio
+async def test_supervisor_message_refuses_membership_changed_before_insert(db, monkeypatch):
+    from sqlalchemy import select, update
+    from sqlalchemy.sql.dml import Insert
+    from app.models.database import MailMessage, MailTeamMember
+    from app.models.schemas import SupervisorMessageRequest
+    from app.services.agent_team_supervisor_service import bind_supervisor, send_supervisor_message
+    team, actor = await supervisor_team(db)
+    team_id, actor_id = team.id, actor.id
+    member, session = await supervisor_member(db, team)
+    member_id = member.id
+    await bind_supervisor(db, team_id, actor_id=actor_id, grace_seconds=None, set_grace=False)
+    execute = db.execute
+    changed = False
+    async def concurrent_membership(statement, *args, **kwargs):
+        nonlocal changed
+        if isinstance(statement, Insert) and statement.table.name == "mail_messages" and not changed:
+            changed = True
+            await execute(update(MailTeamMember).where(MailTeamMember.id == member_id).values(team_preset_id=None))
+            await db.commit()
+        return await execute(statement, *args, **kwargs)
+    monkeypatch.setattr(db, "execute", concurrent_membership)
+    with pytest.raises(PermissionError, match="supervisor_address_not_bound"):
+        await send_supervisor_message(db, session, SupervisorMessageRequest(actor_id=actor_id, body_markdown="Incident."))
+    assert (await db.scalars(select(MailMessage))).all() == []

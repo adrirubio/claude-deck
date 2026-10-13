@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import JSON, insert, literal, select, update
 
 from app.models.api_model import utc_datetime
-from app.models.database import (AgentTeamPreset, AgentTeamSlot, MailExternalActor,
+from app.models.database import (AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailExternalActor,
                                  MailMessage, MailReceipt, MailTeamMember)
 from app.services import factory_audit_service as audit
 from app.services.factory_audit_service import sanitize_text
@@ -196,7 +196,17 @@ async def send_supervisor_message(db, session, request):
                literal(request.subject), literal(request.body_markdown), literal(payload, type_=JSON),
                literal(current)).select_from(AgentTeamPreset).where(
                    AgentTeamPreset.id == slot.preset_id,
-                   AgentTeamPreset.supervisor_actor_id == request.actor_id)).returning(MailMessage.id)
+                   AgentTeamPreset.supervisor_actor_id == request.actor_id,
+                   select(MailTeamMember.id).where(MailTeamMember.id == member.id,
+                       MailTeamMember.team_preset_id == slot.preset_id,
+                       MailTeamMember.team_slot_id == slot.id).exists(),
+                   select(AgentTeamSlot.id).where(AgentTeamSlot.id == slot.id,
+                       AgentTeamSlot.preset_id == slot.preset_id).exists(),
+                   select(MailAgentSession.id).where(MailAgentSession.id == session.id,
+                       MailAgentSession.member_id == member.id, MailAgentSession.team_slot_id == slot.id,
+                       MailAgentSession.team_preset_id == slot.preset_id, MailAgentSession.closed_at.is_(None),
+                       MailAgentSession.capability_token_hash == session.capability_token_hash).exists()
+               )).returning(MailMessage.id)
     message_id = (await db.execute(statement)).scalar_one_or_none()
     if message_id is None:
         await db.rollback()
