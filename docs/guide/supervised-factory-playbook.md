@@ -31,7 +31,25 @@ Reading this playbook or loading its companion skill grants no execution authori
 
 The supervisor and Leader are separate roles. The supervisor can manage several campaigns. Each team has its own Leader, selected through `leader_slot_id`. A role name or pane title does not establish that authority.
 
-Give every member a supervisor address before activation. Until Deck has a supervisor identity, the supervisor can register as a local external Mail actor and start one "Supervisor channel" thread with each member. Members reply in that thread. Write the escalation order into each charter:
+Register the optional supervisor as a local external Mail actor.
+The Director binds the actor with `PUT /api/v1/agent-teams/presets/{preset_id}/supervisor`.
+Set `actor_id` to the actor ID. Set it to `null` to remove the binding.
+One actor can supervise several teams. Binding grants no new permission.
+
+Members find `supervisor_address` in `deck_whoami` and the dispatch brief.
+Use `deck_send_message(to_supervisor_actor_id=..., body=...)` to contact the current bound supervisor.
+The external actor reads direct messages with `GET /api/v1/external/agent-mail/supervisor-inbox`.
+Foreign actors and unbound teams cannot use this route.
+
+Deck recognizes supported question, trust and sign-in screens in the current authenticated pane.
+It reads visible screen text locally. It never exports that text or sends keys.
+One fixed notice goes to the bound Supervisor per continuous wait.
+The Leader receives the notice only when no Supervisor is bound.
+A new pane starts with an empty latch. A known idle screen clears it. An unknown screen preserves it.
+The latch survives Mail session registration. Screen formats outside the captured fixtures remain unknown.
+A sign-in screen before authenticated Mail registration remains unknown.
+
+Write the escalation order into each charter:
 
 1. The Leader decides assignment, plans and sequencing.
 2. The supervisor handles incidents, gates, harness and workspace problems, stalls and maintenance.
@@ -66,7 +84,10 @@ A known team effort total requires current numeric reports for every unfinished 
 An incomplete, stale, unknown, or changed-context read keeps the whole estimate Unknown.
 The read has an eight-second observation limit and a 64-item limit. Waiting time is excluded.
 Check observation expiry and next-actor coverage. Keep each separate approval, recovery, review, CI, and milestone gate.
-The supervisor field stays `none` until the separate #549 contract is available.
+The original `supervisor` field stays `none` for older clients.
+Read optional `supervisor_observation` for the bound actor, clock health and overdue attention.
+Read optional `waiting_input` for verified slot waits. Its reasons are `question`, `trust` and `sign_in`.
+An unknown or changed read supplies no current wait claim.
 
 Keep a short campaign record. Use the parent GitHub issue for public scope and current status. Keep the machine record and sensitive runtime details in protected local storage.
 
@@ -243,9 +264,31 @@ The periodic supervisor loop should:
 3. Check issue, PR, CI, owner, Mail, lease and current assessment state.
 4. Check holds, native session evidence and the last meaningful published progress.
 5. Resolve an authorized routine blocker, or record the required actor and decision.
-6. Publish a short checkpoint when the state changes. Schedule the next real check.
+6. Publish a short checkpoint when the state changes.
+7. Schedule the next real check.
+8. Call `deck_supervisor_checkin(preset_id, next_check_at, note)` with the next promised check time.
 
-About ten minutes is a useful ordinary interval. Check more often during startup, cutover and recovery. A local watcher can inspect holds and session failures more often. Record its last successful tick. If the monitoring process ends, state that supervision stopped.
+About ten minutes is a useful ordinary interval. Check more often during startup, cutover and recovery.
+A local watcher can inspect holds and session failures more often.
+The check-in records the last successful check and replaces manual tick reporting.
+If the monitoring process ends, state that supervision stopped.
+
+The check-in requires the bound external actor credential in the MCP process environment.
+It accepts no credential argument. Member credentials cannot call it.
+Use an ISO 8601 next check time. It must be future time within 24 hours.
+Keep the optional note short. Deck removes credential-shaped text.
+
+Read `supervisor_observation` in `deck_get_team_summary` for controller-derived health.
+`healthy` means the promised time has not passed.
+`late` means the promised time passed, within the grace period.
+`absent` means no check was received, or the grace period ended.
+`none` means the team has no supervisor. It is optional.
+
+The default grace is the larger of 30 minutes and twice the last promised interval.
+The Director can set `grace_seconds` on the binding route. Set it to `null` for the default.
+Late and absent states expose “Supervisor check-in overdue”.
+The original `supervisor` literal remains `none` for older clients.
+Check-ins and clock observations grant no approval, retry, lease, merge, or milestone authority.
 
 The goal is complete only when its stated outcome and records are complete. A ready PR or preview is an intermediate state.
 

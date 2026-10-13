@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, ConfigDict, Field
 from app.models.api_model import ApiModel as BaseModel
-from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal
+from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal, SupervisorObservation
 
 
 def _utc(value: datetime) -> datetime:
@@ -341,11 +341,19 @@ class TeamRequiredCIUnreadable(RequiredCIUnreadableSignal):
     issue_number: PositiveId
 
 
+class TeamWaitingInput(FactoryModel):
+    slot_id: PositiveId
+    reason: Literal["question", "trust", "sign_in"]
+    label: Literal["Waiting for input"] = "Waiting for input"
+
+
 class AgentTeamSummaryResponse(FactoryModel):
     preset_id: PositiveId
     description: str | None
     parent_issue_url: str | None
     supervisor: Literal["none"] = "none"
+    supervisor_observation: SupervisorObservation | None = None
+    waiting_input: list[TeamWaitingInput] | None = None
     checked_at: Timestamp
     valid_until: Timestamp
     coverage_complete: bool

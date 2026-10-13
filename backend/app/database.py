@@ -728,6 +728,15 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             )
         )
 
+    binding_columns = await _sqlite_columns(conn, "agent_pane_bindings")
+    for column, definition in (
+        ("waiting_input_reason", "VARCHAR"), ("waiting_input_started_at", "DATETIME"),
+        ("waiting_input_observed_at", "DATETIME"),
+        ("waiting_input_notice_id", "INTEGER REFERENCES mail_messages(id) ON DELETE SET NULL"),
+    ):
+        if binding_columns and column not in binding_columns:
+            await conn.execute(text(f"ALTER TABLE agent_pane_bindings ADD COLUMN {column} {definition}"))
+
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}
     if slot_columns and await _sqlite_agent_team_slots_has_unique_preset_repo_index(conn):
@@ -762,6 +771,14 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if preset_columns and "leader_slot_id" not in preset_columns:
         await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    for column, definition in (
+        ("supervisor_actor_id", "INTEGER REFERENCES mail_external_actors(id) ON DELETE SET NULL"),
+        ("supervisor_checked_at", "DATETIME"), ("supervisor_next_check_at", "DATETIME"),
+        ("supervisor_note", "VARCHAR"), ("supervisor_grace_seconds", "INTEGER"),
+        ("supervisor_observed_status", "VARCHAR"),
+    ):
+        if preset_columns and column not in preset_columns:
+            await conn.execute(text(f"ALTER TABLE agent_team_presets ADD COLUMN {column} {definition}"))
     if preset_columns:
         await conn.execute(text(
             "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("

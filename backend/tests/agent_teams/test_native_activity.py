@@ -140,7 +140,7 @@ def test_pi_native_boundaries(native, state, reason):
     result = native["observe"]()
     assert (result.state, result.reason) == (state, reason)
     assert result.observed_at is not None
-    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at"}
+    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at", "waiting_input"}
     assert str(native["cwd"]) not in result.model_dump_json()
 
 

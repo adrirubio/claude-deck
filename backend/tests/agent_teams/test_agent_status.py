@@ -220,3 +220,23 @@ async def test_factory_native_inputs_match_team_inputs_for_lifecycle(db, monkeyp
     await agent_status_service.for_snapshot(db, members, slots, sessions, bindings, lifecycles)
     assert seen == expected
     assert bool(seen[0][3]) is not retired
+
+
+@pytest.mark.asyncio
+async def test_input_wait_display_does_not_change_wake_or_owner_authority(db, monkeypatch):
+    from app.models.schemas import NativeInputWait
+    team, slot, member, pane, mcp, item, workspace, _ = await seed_agent(db, monkeypatch)
+    now = datetime.now(timezone.utc)
+    before = (item.dispatch_status, item.ack_received_at, workspace.lease_last_owner_contact_at)
+
+    def waiting(slot_id, *_args, **_kwargs):
+        return AgentActivityObservation(slot_id=slot_id, state="idle", reason="native_input_wait",
+            observed_at=now, waiting_input=NativeInputWait(reason="question", observed_at=now))
+
+    monkeypatch.setattr(activity, "_observe", waiting)
+    result = (await activity.observe_team(db, team.id)).slots[0]
+    assert result.waiting_input.reason == "question"
+    assert result.agent_status.waiting_input.reason == "question"
+    assert result.agent_status.wake_state == "cannot_wake"
+    await db.refresh(item); await db.refresh(workspace)
+    assert before == (item.dispatch_status, item.ack_received_at, workspace.lease_last_owner_contact_at)

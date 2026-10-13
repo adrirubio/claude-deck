@@ -192,7 +192,14 @@ def test_pane_binding_table_is_unique_on_pid_and_proc_start():
         "preset_id",
         "tmux_target",
         "created_at",
+        "waiting_input_reason",
+        "waiting_input_started_at",
+        "waiting_input_observed_at",
+        "waiting_input_notice_id",
     }
+    for name in ("waiting_input_reason", "waiting_input_started_at",
+                 "waiting_input_observed_at", "waiting_input_notice_id"):
+        assert AgentPaneBinding.__table__.columns[name].nullable is True
     unique = {
         tuple(sorted(column.name for column in constraint.columns))
         for constraint in AgentPaneBinding.__table__.constraints

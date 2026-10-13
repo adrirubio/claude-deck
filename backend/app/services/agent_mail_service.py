@@ -11,7 +11,7 @@ import subprocess
 import time
 from uuid import uuid4
 from datetime import datetime, timedelta
-from typing import Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -958,13 +958,20 @@ class AgentMailService:
                     await db.execute(select(AgentTeamPreset).where(AgentTeamPreset.id.in_(preset_ids)))
                 ).scalars().all()
             }
-        context: dict[int, dict[str, str | int | None]] = {}
+        from app.services.agent_team_supervisor_service import supervisor_address
+        supervisor_ids = {preset.supervisor_actor_id for preset in presets.values()
+                          if preset.supervisor_actor_id is not None}
+        supervisors = {actor.id: actor for actor in (await db.scalars(
+            select(MailExternalActor).where(MailExternalActor.id.in_(supervisor_ids)))).all()}
+        context: dict[int, dict[str, Any]] = {}
         for member in members:
             slot = slots.get(member.team_slot_id) if member.team_slot_id is not None else None
             preset_id = slot.preset_id if slot is not None else member.team_preset_id
             preset = presets.get(preset_id) if preset_id is not None else None
             context[member.id] = {
                 "team_preset_name": preset.name if preset is not None else None,
+                "supervisor_address": supervisor_address(supervisors.get(preset.supervisor_actor_id))
+                    if preset is not None else None,
                 "team_slot_name": slot.display_name if slot is not None else None,
                 "controlled_language_enabled": (slot.controlled_language_enabled is not False) if slot is not None else None,
                 "communication_instructions": team_communication_guidance(slot.controlled_language_enabled is not False) if slot is not None else None,
@@ -1026,6 +1033,7 @@ class AgentMailService:
                     participant_kind=member.participant_kind,
                     team_preset_id=member.team_preset_id,
                     team_preset_name=member_context.get("team_preset_name"),
+                    supervisor_address=member_context.get("supervisor_address"),
                     team_slot_id=member.team_slot_id,
                     team_slot_name=member_context.get("team_slot_name"),
                     controlled_language_enabled=member_context.get("controlled_language_enabled"),

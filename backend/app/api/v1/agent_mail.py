@@ -51,6 +51,7 @@ from app.models.schemas import (
     MailMemberUpdate,
     MailMessageCreate,
     MailMessageResponse,
+    SupervisorMessageRequest,
     MailThreadResponse,
     TeamListResponse,
 )
@@ -189,6 +190,18 @@ async def update_member(
     if found is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return found
+
+
+@router.post("/supervisor/messages", response_model=MailMessageResponse)
+async def send_current_supervisor_message(
+    request: SupervisorMessageRequest,
+    session: MailAgentSession = Depends(require_mail_session), db: AsyncSession = Depends(get_db),
+):
+    from app.services.agent_team_supervisor_service import send_supervisor_message
+    try:
+        return redact_lease_message(await send_supervisor_message(db, session, request))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="supervisor_address_not_bound") from exc
 
 
 @router.post("/messages", response_model=MailMessageResponse)
