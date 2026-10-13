@@ -2537,6 +2537,7 @@ class TeamGithubScopeCreate(BaseModel):
     dispatch_label: str = "claude-deck-ready"
     design_label: str = "claude-deck-design"
     merge_policy: Literal["human", "auto"] = "human"
+    review_hold_label: Optional[str] = None
     max_approval_rounds: int = Field(default=3, ge=1)
     max_concurrent_dispatched: int = Field(default=3, ge=1)
     max_verification_retries: int = Field(default=2, ge=0)
@@ -2557,6 +2558,7 @@ class TeamGithubScopeUpdate(BaseModel):
     dispatch_label: Optional[str] = None
     design_label: Optional[str] = None
     merge_policy: Optional[Literal["human", "auto"]] = None
+    review_hold_label: Optional[str] = None
     max_approval_rounds: Optional[int] = Field(default=None, ge=1)
     max_concurrent_dispatched: Optional[int] = Field(default=None, ge=1)
     max_verification_retries: Optional[int] = Field(default=None, ge=0)
@@ -2579,6 +2581,7 @@ class TeamGithubScopeResponse(BaseModel):
     dispatch_label: str
     design_label: str
     merge_policy: str
+    review_hold_label: Optional[str] = None
     delivery_policy: FactoryDeliveryPolicy = Field(default_factory=FactoryDeliveryPolicy)
     delivery_policy_revision: int = 1
     github_auth_mode: str

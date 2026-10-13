@@ -867,16 +867,16 @@ async def test_compat_migrations_add_pr2_github_auth_columns_idempotently():
             for _ in range(2):
                 await _run_sqlite_compat_migrations(conn)
                 columns = await _sqlite_columns(conn, "team_github_scopes")
-                assert {"github_auth_mode", "github_app_installation_id"} <= columns
+                assert {"github_auth_mode", "github_app_installation_id", "review_hold_label"} <= columns
             row = (
                 await conn.execute(
                     text(
-                        "SELECT github_auth_mode, github_app_installation_id "
+                        "SELECT github_auth_mode, github_app_installation_id, review_hold_label "
                         "FROM team_github_scopes"
                     )
                 )
             ).one()
-            assert row == ("unknown", None)
+            assert row == ("unknown", None, None)
     finally:
         await engine.dispose()
 
