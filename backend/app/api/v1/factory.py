@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -376,10 +377,15 @@ async def list_factory_audit_events(
     team_id: int | None = None,
     scope_id: int | None = None,
     item_id: int | None = None,
+    occurred_after: datetime | None = None,
+    occurred_before: datetime | None = None,
     _operator: None = Depends(require_operator),
     db=Depends(get_db),
 ):
     """A15/A16/A21/A38: operator-protected paginated audit reads.
+
+    ``occurred_after`` and ``occurred_before`` bound the event time (#516). A
+    time without a zone is UTC. Without them the read is unchanged.
 
     Historical context keys address retained history after deletion; current
     ID filters resolve the current resource context key. Agent tokens do not
@@ -420,6 +426,14 @@ async def list_factory_audit_events(
 
     stmt = select(FactoryAuditEvent)
     count_stmt = select(func.count()).select_from(FactoryAuditEvent)
+    if occurred_after is not None:
+        after = _naive_utc(occurred_after)
+        stmt = stmt.where(FactoryAuditEvent.occurred_at >= after)
+        count_stmt = count_stmt.where(FactoryAuditEvent.occurred_at >= after)
+    if occurred_before is not None:
+        before = _naive_utc(occurred_before)
+        stmt = stmt.where(FactoryAuditEvent.occurred_at <= before)
+        count_stmt = count_stmt.where(FactoryAuditEvent.occurred_at <= before)
     if event_kind:
         stmt = stmt.where(FactoryAuditEvent.event_kind == event_kind)
         count_stmt = count_stmt.where(FactoryAuditEvent.event_kind == event_kind)
@@ -463,6 +477,102 @@ async def list_factory_audit_events(
         items=items, total=total, page=page, page_size=page_size,
         team_context_key=team_context_key, scope_context_key=scope_context_key,
         event_kind=event_kind, snapshot_labels=sorted(labels))
+
+
+def _naive_utc(value: datetime) -> datetime:
+    """The ledger stores UTC without a zone. A time without a zone is UTC."""
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+class ContextKeyEntry(BaseModel):
+    """One team or repository that the ledger can filter by (#516)."""
+
+    # None: the live resource has no recorded event yet, so it has no key.
+    context_key: str | None
+    display_name: str
+    retired_at: datetime | None = None
+    event_count: int = 0
+    current: bool
+
+
+class ContextKeyList(BaseModel):
+    teams: list[ContextKeyEntry]
+    repositories: list[ContextKeyEntry]
+
+
+@router.get("/context-keys", response_model=ContextKeyList)
+async def list_factory_context_keys(
+    _operator: None = Depends(require_operator),
+    db=Depends(get_db),
+):
+    """#516: the teams and repositories that the Audit filters can choose.
+
+    One entry for each context key, current or retired, with the live name
+    for a current key and the last stored name for a retired one. A live team
+    or repository with no recorded event has no key yet; it is listed with
+    ``context_key`` null. The read allocates no key and writes nothing.
+    A renamed team keeps its key, so it is one entry under its current name.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.database import (
+        AgentTeamPreset, FactoryAuditEvent, FactoryContextKey, TeamGithubScope,
+    )
+
+    async def build(key_kind: str, key_column, label_of, live: dict[int, str], fallback: str):
+        keys = (await db.execute(
+            select(FactoryContextKey).where(FactoryContextKey.key_kind == key_kind)
+        )).scalars().all()
+        counts = dict((await db.execute(
+            select(key_column, func.count()).where(key_column.is_not(None)).group_by(key_column)
+        )).all())
+        entries: list[ContextKeyEntry] = []
+        keyed_ids: set[int] = set()
+        for key in keys:
+            if key.retired_at is None and key.numeric_id in live:
+                keyed_ids.add(key.numeric_id)
+                name, current = live[key.numeric_id], True
+            else:
+                newest = (await db.execute(
+                    select(FactoryAuditEvent.context_snapshot)
+                    .where(key_column == key.context_key)
+                    .order_by(FactoryAuditEvent.occurred_at.desc(), FactoryAuditEvent.id.desc())
+                    .limit(1)
+                )).scalar_one_or_none()
+                name, current = label_of(newest or {}) or fallback, False
+            entries.append(ContextKeyEntry(
+                context_key=key.context_key, display_name=name,
+                retired_at=None if current else (key.retired_at or key.created_at),
+                event_count=int(counts.get(key.context_key, 0)), current=current))
+        for numeric_id, name in live.items():
+            if numeric_id not in keyed_ids:
+                entries.append(ContextKeyEntry(
+                    context_key=None, display_name=name, event_count=0, current=True))
+        return entries
+
+    def team_label(snapshot: dict) -> str | None:
+        name = snapshot.get("team_display_name")
+        return name if isinstance(name, str) and name else None
+
+    def scope_label(snapshot: dict) -> str | None:
+        repo = snapshot.get("repo_name")
+        if not isinstance(repo, str) or not repo:
+            return None
+        owner = snapshot.get("repo_owner")
+        return f"{owner}/{repo}" if isinstance(owner, str) and owner else repo
+
+    teams = {row.id: row.name for row in (await db.execute(select(AgentTeamPreset))).scalars().all()}
+    scopes = {
+        row.id: f"{row.repo_owner}/{row.repo_name}"
+        for row in (await db.execute(select(TeamGithubScope))).scalars().all()
+    }
+    return ContextKeyList(
+        teams=await build("team", FactoryAuditEvent.team_context_key, team_label, teams, "Unnamed team"),
+        repositories=await build(
+            "scope", FactoryAuditEvent.scope_context_key, scope_label, scopes, "Unnamed repository"),
+    )
 
 
 @router.post("/review-acceptances", status_code=201)

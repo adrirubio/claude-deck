@@ -15,9 +15,22 @@ type Call = {
 
 const realFetch = globalThis.fetch;
 
-function stubFetch() {
+type KeyList = { teams: unknown[]; repositories: unknown[] };
+
+function stubFetch(keys?: KeyList) {
   const calls: Call[] = [];
   globalThis.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve) => {
+    const url = new URL(String(input), "http://fixture.test");
+    // #516: the Team and Repository options answer at once. They are not part of the races under test.
+    if (url.pathname.endsWith("/factory/context-keys")) {
+      resolve(new Response(JSON.stringify(keys ?? {
+        teams: ["a", "b", "c"].map((letter) => ({
+          context_key: `team:${letter}`, display_name: `Team ${letter.toUpperCase()}`, retired_at: null, event_count: 1, current: true,
+        })),
+        repositories: [],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      return;
+    }
     calls.push({
       url: new URL(String(input), "http://fixture.test"),
       headers: { ...(init?.headers as Record<string, string> | undefined) },
@@ -118,11 +131,11 @@ async function mountWith(stub: Stub, events: AuditEventPage = eventsBody("mount-
   await waitFor(() => expect(screen.getByText(/^Loaded \d+ of \d+ audit events\.$/)).toBeInTheDocument());
 }
 
-function apply(team: string) {
-  // A text query also finds the control while a modal dialog hides the page
-  // from role queries.
-  fireEvent.change(screen.getByLabelText("Team context key"), { target: { value: team } });
-  fireEvent.click(screen.getByText("Apply filters"));
+// #516: choose a team in the Team select. A selection applies at once.
+async function apply(team: string) {
+  const name = `Team ${team.slice(-1).toUpperCase()}`;
+  await screen.findByRole("option", { name }, { timeout: 3000 });
+  fireEvent.change(screen.getByLabelText("Team"), { target: { value: team } });
 }
 
 afterEach(() => {
@@ -189,11 +202,11 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       setOperatorToken("synthetic-operator");
       await mountWith(stub);
 
-      apply("team:a");
+      await apply("team:a");
       await waitFor(() => expect(stub.metrics()).toHaveLength(2));
-      apply("team:b");
+      await apply("team:b");
       await waitFor(() => expect(stub.metrics()).toHaveLength(3));
-      apply("team:a");
+      await apply("team:a");
       await waitFor(() => expect(stub.metrics()).toHaveLength(4));
       const [, a1, b, a2] = stub.metrics();
       for (const call of [a1, a2]) {
@@ -229,7 +242,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       expect(screen.queryByText("note A1")).not.toBeInTheDocument();
       expect(screen.queryByText(/synthetic metrics failure/)).not.toBeInTheDocument();
       expect(screen.queryByText(/Retained metrics/)).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing metrics for team team:a, scope all/)).toBeInTheDocument();
+      expect(screen.getByText(/Showing metrics for team Team A, scope all/)).toBeInTheDocument();
       expect(stub.audit()).toHaveLength(2);
     },
   );
@@ -274,7 +287,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       expect(screen.queryByText("A1-event")).not.toBeInTheDocument();
       expect(screen.queryByText("B-event")).not.toBeInTheDocument();
       expect(screen.getByText("Total audit events matching filters: 43")).toBeInTheDocument();
-      expect(screen.getByText(/Showing events for team team:a, scope all, page 1/)).toBeInTheDocument();
+      expect(screen.getByText(/Showing events for team Team A, scope all, page 1/)).toBeInTheDocument();
     },
   );
 
@@ -301,7 +314,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
 
     // While Apply-B is pending, the A rows stay on screen and paging waits:
     // it never requests B page 2 under A rows.
-    apply("team:b");
+    await apply("team:b");
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
@@ -318,7 +331,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.audit()[4].respond({ detail: "synthetic page failure" }, 500);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("synthetic page failure"));
     expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument();
-    expect(screen.getByText(/Showing events for team team:b, scope all, page 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing events for team Team B, scope all, page 1/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     await waitFor(() => expect(stub.audit()).toHaveLength(6));
@@ -337,7 +350,11 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(stub.audit()).toHaveLength(0);
 
-    apply("team:b");
+    // While locked the Team select offers only "All teams" (#516), so the choice is the Window.
+    // A text query also finds the control while the modal dialog hides the page from role queries.
+    expect(screen.getAllByText("All teams")).toHaveLength(1);
+    expect(screen.queryByText("Team B")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Window"), { target: { value: "last30" } });
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     fireEvent.change(screen.getByPlaceholderText("Enter secret value"),
       { target: { value: "synthetic-submitted" } });
@@ -349,7 +366,9 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.metrics()[1].respond(windowBody("B"));
     await waitFor(() => expect(stub.audit()).toHaveLength(1));
     expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-submitted");
-    expect(stub.audit()[0].url.searchParams.get("team_context_key")).toBe("team:b");
+    expect(stub.audit()[0].url.searchParams.has("team_context_key")).toBe(false);
+    const after = Date.parse(stub.audit()[0].url.searchParams.get("occurred_after") ?? "");
+    expect(Date.now() - after).toBeGreaterThan(29 * 24 * 3600 * 1000);
     stub.audit()[0].respond(eventsBody("B-event"));
     await waitFor(() => expect(screen.getByText(/B-event/)).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -370,7 +389,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(getOperatorToken()).toBeNull();
 
-    apply("team:a");
+    fireEvent.change(screen.getByLabelText("Window"), { target: { value: "last30" } });
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     stub.metrics()[1].respond(windowBody("A"));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
@@ -406,18 +425,91 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(detail).not.toBeNull();
     expect(within(detail).getByText("team_display_name: Deleted team")).toBeInTheDocument();
     expect(row.querySelector("table")).toBeNull();
-    for (const label of ["Team context key", "Scope context key"]) {
+    for (const label of ["Team", "Repository", "Window"]) {
       expect(screen.getByLabelText(label).className).toContain("w-full");
     }
   });
 
-  it.each(["Escape", "Cancel"])("restores focus to Apply filters after %s closes the token dialog (R11)",
+  it("filters with Team, Repository and Window selects, not typed keys (#516)", async () => {
+    const stub = stubFetch();
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+    expect(screen.queryByLabelText(/context key/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Apply filters")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reload safe metrics")).not.toBeInTheDocument();
+    for (const name of ["Team", "Repository", "Window"]) {
+      expect(screen.getByRole("combobox", { name })).toBeInTheDocument();
+    }
+    const windowOptions = within(screen.getByRole("combobox", { name: "Window" })).getAllByRole("option");
+    expect(windowOptions.map((option) => option.textContent)).toEqual(["Last 7 days", "Last 30 days", "Since recording started"]);
+  });
+
+  it("applies a Window choice at once to the metrics, the events and the refusal read", async () => {
+    const stub = stubFetch();
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+    const sevenDays = (call: Call) => Date.now() - Date.parse(call.url.searchParams.get("occurred_after") ?? "");
+    expect(sevenDays(stub.audit()[0])).toBeLessThan(8 * 24 * 3600 * 1000);
+
+    fireEvent.change(screen.getByLabelText("Window"), { target: { value: "last30" } });
+    await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+    const start = Date.parse(stub.metrics()[1].url.searchParams.get("window_start") ?? "");
+    expect(Date.now() - start).toBeGreaterThan(29 * 24 * 3600 * 1000);
+    stub.metrics()[1].respond(windowBody("30"));
+    await waitFor(() => expect(stub.audit()).toHaveLength(2));
+    expect(sevenDays(stub.audit()[1])).toBeGreaterThan(29 * 24 * 3600 * 1000);
+    expect(screen.getByLabelText("Window")).toHaveValue("last30");
+  });
+
+  it("lists deleted teams with their date and keeps two teams of one name apart", async () => {
+    const stub = stubFetch({
+      teams: [
+        { context_key: "team:new", display_name: "Retired crew", retired_at: null, event_count: 0, current: true },
+        { context_key: "team:old", display_name: "Retired crew", retired_at: "2026-10-12T09:00:00Z", event_count: 5, current: false },
+      ],
+      repositories: [
+        { context_key: "scope:old", display_name: "example-org/retired-site", retired_at: "2026-10-12T09:00:00Z", event_count: 2, current: false },
+      ],
+    });
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+    await screen.findByRole("option", { name: /Retired crew \(deleted/ });
+    const labels = within(screen.getByRole("combobox", { name: "Team" })).getAllByRole("option").map((option) => option.textContent);
+    expect(labels[0]).toBe("All teams");
+    expect(labels.filter((label) => label?.startsWith("Retired crew"))).toHaveLength(2);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.some((label) => /^Retired crew \(deleted .+\)$/.test(label ?? ""))).toBe(true);
+    expect(screen.getByRole("option", { name: /example-org\/retired-site \(deleted/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: "team:old" } });
+    await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+    expect(stub.metrics()[1].url.searchParams.get("team_context_key")).toBe("team:old");
+    expect(screen.queryByText(/team:old/)).not.toBeInTheDocument();
+  });
+
+  it("shows a plain empty state for a team that has no recorded event", async () => {
+    const stub = stubFetch({
+      teams: [{ context_key: null, display_name: "Fresh crew", retired_at: null, event_count: 0, current: true }],
+      repositories: [],
+    });
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+    await screen.findByRole("option", { name: "Fresh crew" });
+    const value = (screen.getByRole("option", { name: "Fresh crew" }) as HTMLOptionElement).value;
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value } });
+    await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+    // The request carries a choice that matches no event, never an empty filter that matches every team.
+    expect(stub.metrics()[1].url.searchParams.get("team_context_key")).toMatch(/^no-events:/);
+    expect(await screen.findByText("No recorded events for this team yet.")).toBeInTheDocument();
+  });
+
+  it.each(["Escape", "Cancel"])("restores focus to the Team select after %s closes the token dialog (R11)",
     async (dismissal) => {
       const stub = stubFetch();
       render(<AuditMetricsPage />);
       await waitFor(() => expect(stub.metrics()).toHaveLength(1));
       stub.metrics()[0].respond(windowBody("mount"));
-      // The mount read opens the dialog; nothing invoked it, so focus falls back to Apply.
+      // The mount read opens the dialog; nothing invoked it, so focus falls back to the Team select.
       await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
       if (dismissal === "Escape") {
         fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
@@ -425,18 +517,18 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
         fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       }
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await waitFor(() => expect(document.activeElement).toBe(screen.getByText("Apply filters")));
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Team")));
 
-      // Opened from Apply filters: focus returns to that invoking control.
-      const apply = screen.getByText("Apply filters");
-      apply.focus();
-      fireEvent.click(apply);
+      // Opened from the Window select: focus returns to that invoking control.
+      const windowSelect = screen.getByLabelText("Window");
+      windowSelect.focus();
+      fireEvent.change(windowSelect, { target: { value: "last30" } });
       await waitFor(() => expect(stub.metrics()).toHaveLength(2));
       stub.metrics()[1].respond(windowBody("B"));
       await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await waitFor(() => expect(document.activeElement).toBe(apply));
+      await waitFor(() => expect(document.activeElement).toBe(windowSelect));
     });
 
   it("labels each retained result with its own identity after cancellation or failure", async () => {
@@ -446,7 +538,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
 
     // Cancellation: the token prompt for Apply-B is cancelled.
     clearOperatorToken();
-    apply("team:b");
+    await apply("team:b");
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     stub.metrics()[1].respond(windowBody("B"));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
@@ -461,16 +553,16 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     // Failure at both reads of Apply-C: each section names its own last
     // successful identity, never C.
     setOperatorToken("synthetic-operator");
-    apply("team:c");
+    await apply("team:c");
     await waitFor(() => expect(stub.metrics()).toHaveLength(3));
     stub.metrics()[2].respond({ detail: "synthetic metrics failure" }, 500);
     await waitFor(() => expect(stub.audit()).toHaveLength(2));
     stub.audit()[1].respond({ detail: "synthetic audit failure" }, 500);
     await waitFor(() => expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument());
     expect(screen.getByText("Retained metrics: the latest read failed.")).toBeInTheDocument();
-    expect(screen.getByText(/Showing metrics for team team:b, scope all/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing metrics for team Team B, scope all/)).toBeInTheDocument();
     expect(screen.getByText(/Showing events for team all, scope all, page 1/)).toBeInTheDocument();
-    expect(screen.queryByText(/Showing .* team team:c/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing .* team Team C/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
       "synthetic metrics failure", "synthetic audit failure"]);
   });

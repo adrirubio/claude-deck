@@ -63,10 +63,33 @@ export interface MetricsWindow {
   metrics: MetricSample[];
 }
 
+/** One team or repository that the ledger can filter by (#516). */
+export interface ContextKeyEntry {
+  /** Null when the live resource has no recorded event yet. */
+  context_key: string | null;
+  display_name: string;
+  retired_at: string | null;
+  event_count: number;
+  current: boolean;
+}
+
+export interface ContextKeyList {
+  teams: ContextKeyEntry[];
+  repositories: ContextKeyEntry[];
+}
+
+export async function fetchContextKeys(operatorToken: string): Promise<ContextKeyList> {
+  return apiClient<ContextKeyList>("factory/context-keys", {
+    headers: operatorHeaders(operatorToken),
+  });
+}
+
 export async function fetchAuditEvents(params: {
   page?: number;
   pageSize?: number;
   eventKind?: string;
+  occurredAfter?: string;
+  occurredBefore?: string;
   teamContextKey?: string;
   scopeContextKey?: string;
   itemContextKey?: string;
@@ -76,6 +99,8 @@ export async function fetchAuditEvents(params: {
   if (params.page) query.set("page", String(params.page));
   if (params.pageSize) query.set("page_size", String(params.pageSize));
   if (params.eventKind) query.set("event_kind", params.eventKind);
+  if (params.occurredAfter) query.set("occurred_after", params.occurredAfter);
+  if (params.occurredBefore) query.set("occurred_before", params.occurredBefore);
   if (params.teamContextKey) query.set("team_context_key", params.teamContextKey);
   if (params.scopeContextKey) query.set("scope_context_key", params.scopeContextKey);
   if (params.itemContextKey) query.set("item_context_key", params.itemContextKey);
