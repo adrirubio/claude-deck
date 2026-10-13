@@ -6,9 +6,9 @@ import {
   TrendingUp,
   CheckCircle2,
   Loader2,
-  Github,
   RefreshCw,
 } from "lucide-react";
+import { GithubMark } from "@/components/shared/GithubMark";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -230,7 +230,7 @@ export function SkillRegistryBrowser({
                       }
                       title="View on GitHub"
                     >
-                      <Github className="h-3.5 w-3.5" />
+                      <GithubMark className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>
