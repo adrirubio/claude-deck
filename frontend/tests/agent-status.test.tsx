@@ -112,7 +112,7 @@ describe('AgentStatusBadges', () => {
 describe('one agent on three pages', () => {
   const member = {
     id: 5, identity_key: 'slot:5', repo_id: 'repo', repo_path: '/tmp/repo', repo_name: 'repo',
-    display_name: AGENT, participant_kind: 'team_slot', status: 'connected', unread_count: 0,
+    display_name: AGENT, participant_kind: 'team_slot', team_preset_name: 'Release crew', status: 'connected', unread_count: 0,
     pending_count: 0, unseen_pending_count: 0, stale_pending_count: 0, can_nudge: true,
     wake_methods: ['tmux'], wake_state: 'wakeable', sessions: [], agent_status: idleStatus(),
   } as MailMemberResponse

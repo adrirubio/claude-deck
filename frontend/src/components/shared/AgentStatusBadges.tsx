@@ -7,6 +7,8 @@ import type { AgentStatus } from '@/types/agentStatus'
 
 interface AgentStatusBadgesProps {
   status?: AgentStatus | null
+  /** Leave out the line that explains a refused wake. The reason stays in the tooltip. */
+  compact?: boolean
   /** Fixed clock for tests. */
   now?: number
   className?: string
@@ -28,7 +30,7 @@ function useStatusClock(status: AgentStatus | null | undefined, fixedNow?: numbe
 }
 
 /** The one display of an agent's status: session, activity and wake. */
-export function AgentStatusBadges({ status, now, className }: AgentStatusBadgesProps) {
+export function AgentStatusBadges({ status, compact, now, className }: AgentStatusBadgesProps) {
   const clock = useStatusClock(status, now)
   const view = agentStatusView(status, clock)
   const expired = Boolean(status) && !isAgentStatusCurrent(status, clock)
@@ -61,7 +63,7 @@ export function AgentStatusBadges({ status, now, className }: AgentStatusBadgesP
       {' '}
       <Badge
         variant="outline"
-        title={view.wake.reason ?? 'Whether Deck can wake the agent. This display grants no authority.'}
+        title={view.wake.reason ?? (view.wake.state === 'can_wake' ? 'Deck can wake it in its terminal.' : 'Whether Deck can wake the agent. This display grants no authority.')}
         className={cn(
           view.wake.state === 'can_wake' && 'border-emerald-300 text-emerald-700 dark:text-emerald-300',
           view.wake.state === 'cannot_wake' && 'border-amber-300 text-amber-700 dark:text-amber-300',
@@ -71,7 +73,7 @@ export function AgentStatusBadges({ status, now, className }: AgentStatusBadgesP
         {view.wake.label}
       </Badge>
       {' '}
-      {view.wake.reason && <span className="w-full text-xs text-muted-foreground">{view.wake.reason}</span>}
+      {view.wake.reason && !compact && <span className="w-full text-xs text-muted-foreground">{view.wake.reason}</span>}
     </div>
   )
 }
