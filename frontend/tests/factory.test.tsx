@@ -92,9 +92,12 @@ describe("delivery read authority and filters", () => {
     const { requests } = fixtureFetch((path) => standard(path));
     renderRoute(<OverviewPage />, "/?team_id=1", "/");
     await settle();
-    expect(
-      screen.getByText("132 matching work items across the complete set."),
-    ).toBeInTheDocument();
+    // The Overview no longer states the complete count in a sentence; the tiles carry it.
+    expect(screen.queryByText(/matching work items/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Finished/ })).toHaveAttribute(
+      "href",
+      "/work?team_id=1&category=finished",
+    );
     expect(
       screen.getAllByRole("link", { name: /Needs attention/ })[0],
     ).toHaveAttribute("href", "/work?team_id=1&category=attention");
@@ -804,7 +807,7 @@ describe("name filters", () => {
         renderRoute(<OverviewPage />, `/?${key}=${value}`, "/");
         await settle();
         expect(screen.getByRole("status")).toHaveTextContent("was not found");
-        expect(screen.getByText(/matching work items/)).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Needs attention/ })).toBeInTheDocument();
         expect(sent(overviewReads.requests, key)).toEqual([]);
       });
     }

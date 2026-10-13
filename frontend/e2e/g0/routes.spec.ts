@@ -11,7 +11,10 @@ const heading = (name: string | RegExp) => ({ name, exact: typeof name === 'stri
 test('@active Overview loads', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', heading('Overview'))).toBeVisible()
-  await expect(page.getByText(/5 matching work items/)).toBeVisible()
+  // #508: the status tiles replace the sentence "5 matching work items". The seed has one item in each state.
+  for (const name of ['Needs attention', 'In progress', 'Needs review', 'Queued', 'Finished']) {
+    await expect(page.getByRole('link', { name: new RegExp(`^${name}\\s*1$`) })).toBeVisible()
+  }
 })
 
 test('@active Work lists the seeded items', async ({ page }) => {
