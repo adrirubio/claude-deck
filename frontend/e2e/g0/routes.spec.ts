@@ -1,4 +1,4 @@
-import { enterDirectorKey, expectDirectorKeyDialog } from '../support/director-key'
+import { chooseUnlockEvents, enterDirectorKey, expectDirectorKeyDialog } from '../support/director-key'
 import { expect, test } from '../support/guard'
 
 // Gate G0: every Director route loads with no console error, no unexpected
@@ -87,6 +87,9 @@ test('@active Agent Mail shows unacknowledged messages', async ({ page }) => {
 test('@active Audit is locked, then opens with the Director key', async ({ page }) => {
   await page.goto('/audit')
   await expect(page.getByRole('heading', heading('Audit coverage and delivery metrics'))).toBeVisible()
+  // #515: the page opens locked with no dialog. The key is asked for only through Unlock events.
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await chooseUnlockEvents(page)
   await expectDirectorKeyDialog(page)
   await enterDirectorKey(page)
   await expect(page.getByText(/Delivery in this window/).first()).toBeVisible()
