@@ -8,12 +8,12 @@ import { expect, test } from '../support/guard'
 // Seed (scripts/e2e/scenarios.py, seed_lane_g): merged item #104 holds a
 // workspace lease; its owner "B1 Backend" has 4 unanswered release reminders.
 // LANE_G_REMINDERS matches the backend cap.
-// @pending: Overview and the team card do not show reminder_attention yet. This is the frontend part of #528, split to a frontend follow-up.
+// Active since #678 (the frontend part of #528).
 
 const AGENT = 'B1 Backend'
 const DURATION = /\b\d+\s?(min|minutes?|h|hours?)\b/i
 
-test('@pending Overview shows one attention item for the unanswered release reminders', async ({ page }) => {
+test('@active Overview shows one attention item for the unanswered release reminders', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   const items = page.locator('main').getByText(/release/i).filter({ hasText: '#104' })

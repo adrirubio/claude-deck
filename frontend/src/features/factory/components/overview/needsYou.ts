@@ -1,4 +1,5 @@
 import { ACTION_TEXT, ATTENTION_TEXT } from "@/features/agent-teams/summaryText";
+import { parseReminders, reminderAge, reminderSentence } from "@/features/agent-teams/reminderText";
 import { waitingText } from "@/features/agent-teams/supervisorText";
 import type { AgentTeamPreset, AgentTeamSummary } from "@/types/agentTeams";
 
@@ -70,6 +71,17 @@ export function needsYouRows(
         team: preset.name,
         href: `/teams/${preset.id}`,
         cta: "Open the team",
+      });
+    }
+    // One row for each unanswered-reminder signal. The wire is parsed defensively.
+    for (const row of parseReminders(summary.reminder_attention)) {
+      rows.push({
+        key: `${preset.id}-reminder-${row.kind}-${row.workItemId ?? row.issueNumbers.join("-")}`,
+        title: reminderSentence(row),
+        detail: `reminder ${Math.min(row.count, row.cap)} of ${row.cap}${row.elapsedSeconds !== null ? ` · waiting ${reminderAge(row.elapsedSeconds)}` : ""}`,
+        team: preset.name,
+        href: row.kind === "workspace_release" && row.workItemId ? `/work/${row.workItemId}` : `/teams/${preset.id}`,
+        cta: row.kind === "workspace_release" && row.issueNumber ? `Open #${row.issueNumber}` : "Open the team",
       });
     }
     for (const item of summary.required_ci_unreadable ?? []) {
