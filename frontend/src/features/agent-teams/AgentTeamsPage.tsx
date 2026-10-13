@@ -767,17 +767,21 @@ function LaunchPlanDialog({
   )
 }
 
+const DEFAULT_TOKEN_REASON = 'to change the team roster or launch the team'
+
 export function AgentTeamsPage() {
   const { teamId } = useParams()
   const [contextParams] = useSearchParams()
   const navigate = useNavigate()
   const requestedTeamId = teamId && /^\d+$/.test(teamId) ? Number(teamId) : null
+  // A team part that is not a number names no team. It must not fall back to another team.
+  const hasTeamParam = Boolean(teamId)
   const requestedSlotId = Number(contextParams.get('slot_id')) || null
   const requestedTab = contextParams.get('tab')
 
   const [presets, setPresets] = useState<AgentTeamPreset[]>([])
   const [selectedPresetIdState, setSelectedPresetId] = useState<number | null>(requestedTeamId)
-  const selectedPresetId = requestedTeamId ?? selectedPresetIdState
+  const selectedPresetId = requestedTeamId ?? (hasTeamParam ? null : selectedPresetIdState)
   const presetRequestIdRef = useRef(0)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -806,6 +810,7 @@ export function AgentTeamsPage() {
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
+  const [tokenReason, setTokenReason] = useState(DEFAULT_TOKEN_REASON)
   const tokenResolverRef = useRef<((token: string | null) => void) | null>(null)
   const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
   const teamContextGenerationRef = useRef(0)
@@ -828,11 +833,12 @@ export function AgentTeamsPage() {
     tokenPromiseRef.current = null
   }, [])
 
-  const requestOperatorToken = (error: string | null = null): Promise<string | null> => {
+  const requestOperatorToken = (error: string | null = null, reason = DEFAULT_TOKEN_REASON): Promise<string | null> => {
     const stored = getOperatorToken()
     if (stored) return Promise.resolve(stored)
     if (tokenPromiseRef.current) return tokenPromiseRef.current
     setTokenError(error)
+    setTokenReason(reason)
     setTokenDialogOpen(true)
     const pending = new Promise<string | null>((resolve) => { tokenResolverRef.current = resolve })
     tokenPromiseRef.current = pending
@@ -848,7 +854,7 @@ export function AgentTeamsPage() {
     setTokenError(null)
   }
 
-  const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>): Promise<Result> => {
+  const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>, reason = DEFAULT_TOKEN_REASON): Promise<Result> => {
     const generation = teamContextGenerationRef.current
     const targetId = currentTeamIdRef.current
     const assertCurrentContext = () => {
@@ -858,7 +864,7 @@ export function AgentTeamsPage() {
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       assertCurrentContext()
-      const token = await requestOperatorToken(attempt ? 'The Director key was rejected. Enter a valid key to retry.' : null)
+      const token = await requestOperatorToken(attempt ? 'The Director key was rejected. Enter a valid key to retry.' : null, reason)
       assertCurrentContext()
       if (!token) throw new Error('The Director key is required for this action.')
       try {
@@ -880,7 +886,9 @@ export function AgentTeamsPage() {
     [presets, selectedPresetId]
   )
   const { name, setName, description, setDescription } = usePresetForm(selectedPreset)
-  const agentActivity = useAgentActivity(selectedPresetId)
+  // Per-team reads start only for a team in the loaded list.
+  const knownPresetId = selectedPreset ? selectedPresetId : null
+  const agentActivity = useAgentActivity(knownPresetId)
 
   const loadPresets = useCallback(async () => {
     const requestId = ++presetRequestIdRef.current
@@ -890,12 +898,15 @@ export function AgentTeamsPage() {
       if (requestId !== presetRequestIdRef.current) return
       setPresets(response.presets)
       setSelectedPresetId((current) => {
-        if (requestedTeamId) return requestedTeamId
+        if (hasTeamParam) return requestedTeamId
         if (current && response.presets.some((preset) => preset.id === current)) return current
         return requestedTeamId ?? response.presets[0]?.id ?? null
       })
       if (!requestedTab && !contextParams.has('review_launch')) {
-        const initial = requestedTeamId ?? response.presets[0]?.id
+        // An unknown team id gets no per-team request.
+        const initial = hasTeamParam
+          ? (response.presets.some((preset) => preset.id === requestedTeamId) ? requestedTeamId : null)
+          : response.presets[0]?.id
         if (initial) {
           try {
             const scopes = await fetchTeamGithubScopes(initial)
@@ -909,7 +920,7 @@ export function AgentTeamsPage() {
     } finally {
       if (requestId === presetRequestIdRef.current) setLoading(false)
     }
-  }, [requestedTeamId, requestedTab, contextParams])
+  }, [hasTeamParam, requestedTeamId, requestedTab, contextParams])
 
   const loadProviderLaunchOptions = useCallback(async () => {
     try {
@@ -998,7 +1009,7 @@ export function AgentTeamsPage() {
   }, [loadPresets, loadProviderLaunchOptions])
 
   useEffect(() => {
-    if (!selectedPresetId) {
+    if (!knownPresetId) {
       autonomyRequestIdRef.current += 1
       autonomyDataPresetIdRef.current = null
       queueMicrotask(() => {
@@ -1014,9 +1025,9 @@ export function AgentTeamsPage() {
     }
     if (autonomyTab !== 'autonomy') return
     let cancelled = false
-    queueMicrotask(() => { if (!cancelled) void loadAutonomy(selectedPresetId, true) })
+    queueMicrotask(() => { if (!cancelled) void loadAutonomy(knownPresetId, true) })
     const interval = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void loadAutonomy(selectedPresetId)
+      if (document.visibilityState === 'visible') void loadAutonomy(knownPresetId)
     }, 5000)
     return () => {
       cancelled = true
@@ -1024,7 +1035,7 @@ export function AgentTeamsPage() {
       autonomyRequestIdRef.current += 1
       autonomyManualRequestIdRef.current = null
     }
-  }, [autonomyTab, loadAutonomy, selectedPresetId])
+  }, [autonomyTab, loadAutonomy, knownPresetId])
 
   const stats = useMemo(() => {
     const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
@@ -1221,7 +1232,7 @@ export function AgentTeamsPage() {
       const nextPlan = await withOperatorToken((token) => {
         if (requestId !== presetRequestIdRef.current) throw new Error('Team context changed. Review the current team again.')
         return planAgentTeamLaunch(selectedPreset.id, request, token)
-      })
+      }, 'to plan a launch')
       if (requestId === presetRequestIdRef.current) setPlan(nextPlan)
     } catch (error) {
       if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
@@ -1359,7 +1370,7 @@ export function AgentTeamsPage() {
         <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
             <div className="p-8 text-sm text-muted-foreground">
-              {teamId ? `Team ${teamId} not found. Select an available team.` : 'Select or create a team.'}
+              {teamId ? 'This team does not exist. Select a team from the list.' : 'Select or create a team.'}
             </div>
           ) : (
             <div className="space-y-6 p-5">
@@ -1490,15 +1501,20 @@ export function AgentTeamsPage() {
                           {(slot.area_labels?.length || slot.expertise) && (
                             <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
                               <p className="text-xs uppercase text-muted-foreground">GitHub dispatch routing</p>
-                              {slot.area_labels && slot.area_labels.length > 0 && (
+                              {slot.area_labels && slot.area_labels.length > 0 ? (
                                 <div className="mt-2 flex flex-wrap gap-2">
                                   {slot.area_labels.map((label) => (
                                     <Badge key={label} variant="secondary">{label}</Badge>
                                   ))}
                                 </div>
+                              ) : (
+                                <p className="mt-2">{isLeader ? 'None (the Leader routes this slot)' : 'None'}</p>
                               )}
                               {slot.expertise && (
-                                <p className="mt-2 text-muted-foreground">{slot.expertise}</p>
+                                <>
+                                  <p className="mt-3 text-xs uppercase text-muted-foreground">Expertise</p>
+                                  <p className="mt-1 text-muted-foreground">{slot.expertise}</p>
+                                </>
                               )}
                             </div>
                           )}
@@ -1581,7 +1597,7 @@ export function AgentTeamsPage() {
         open={tokenDialogOpen}
         value={tokenInput}
         error={tokenError}
-        reason="to change the team roster or launch the team"
+        reason={tokenReason}
         onValueChange={setTokenInput}
         onSubmit={() => {
           const token = tokenInput.trim()
