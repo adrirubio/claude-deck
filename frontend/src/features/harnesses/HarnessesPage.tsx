@@ -1,15 +1,18 @@
-import { Link, useParams } from "react-router-dom";
-import { ChevronLeft, Lock } from "lucide-react";
+import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ChevronLeft, Lock, Terminal } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { useProviderContext, NativeProviderScope } from "@/contexts/ProviderContext";
 import { DashboardProvider, useDashboard } from "@/contexts/DashboardContext";
 import { useProviderOperations } from "@/hooks/useProviders";
+import { fetchAgentTeamPresets } from "@/features/agent-teams/api";
 import { harnesses } from "@/features/factory/filterHelpers";
+import { CLICKABLE_CARD } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 import { surfaceRegistry, nativeAccess, type NativeSurface } from "@/features/native-settings/surfaceRegistry";
 import { SURFACE_GROUPS, surfaceInfo } from "@/features/harnesses/surfaceCatalog";
 import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus, type ProviderOperations } from "@/types/providers";
 
-const destination = buttonVariants({ variant: "outline", className: "h-auto min-h-11 max-w-full whitespace-normal break-words justify-start text-left focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background" });
 const focusRing = "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 // A card shows no "unknown" or "unavailable" while the registry or its own operating catalog still loads.
@@ -28,10 +31,30 @@ function HarnessCardSkeleton({ id }: { id: AgentProviderId }) {
   );
 }
 
-function readinessLabel(metadata: AgentProviderStatus | undefined, catalog: ProviderOperations | null) {
-  if (metadata && !metadata.installed) return "Not installed";
-  const state = catalog?.readiness.configuration.state;
-  return state === "ready" ? "Ready" : state === "blocked" ? "Needs attention" : null;
+type HarnessStatus = { kind: "ready" | "setup" | "missing" | "unchecked"; label: string; reason?: string };
+
+function harnessStatus(metadata: AgentProviderStatus | undefined, catalog: ProviderOperations | null): HarnessStatus | null {
+  if (metadata && !metadata.installed) return { kind: "missing", label: "Not installed" };
+  const configuration = catalog?.readiness.configuration;
+  if (configuration?.state === "ready") return { kind: "ready", label: "Ready" };
+  if (configuration?.state === "blocked") return { kind: "setup", label: "Needs setup", reason: configuration.checks.find(check => check.state !== "ready")?.reason };
+  return catalog ? { kind: "unchecked", label: "Not checked yet" } : null;
+}
+
+// Green for ready, amber only for needs setup, neutral grey for not installed. Each colour has a light and a dark value.
+const statusClass: Record<HarnessStatus["kind"], string> = {
+  ready: "border-emerald-600/40 text-emerald-700 dark:text-emerald-400",
+  setup: "border-amber-600/40 text-amber-700 dark:text-amber-400",
+  missing: "border-border text-muted-foreground",
+  unchecked: "border-border text-muted-foreground",
+};
+
+function StatusBadge({ status }: { status: HarnessStatus }) {
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", statusClass[status.kind])}>
+      <span aria-hidden="true">{status.kind === "missing" ? "○" : "●"}</span>{status.label}
+    </span>
+  );
 }
 
 // Code names, access codes, credentials, session binding and the raw observation live here only.
@@ -133,7 +156,7 @@ function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; m
   const { state, catalog } = useProviderOperations(id);
   const summaryAccess = catalog ? nativeAccess(id, "summary", metadata, catalog) : null;
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
-  const status = readinessLabel(metadata, catalog);
+  const status = harnessStatus(metadata, catalog);
   return (
     <NativeProviderScope providerId={id} onSelect={() => undefined}>
       <div className="space-y-6">
@@ -143,9 +166,10 @@ function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; m
         <header className="space-y-1">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-2xl font-semibold">{harnesses[id]}</h2>
-            {status && <span className="rounded-full border px-2 py-0.5 text-sm">{status}</span>}
+            {status && <StatusBadge status={status} />}
           </div>
           {metadata?.installed && metadata.version && <p className="text-sm text-muted-foreground">Version {metadata.version}</p>}
+          {metadata && !metadata.installed && <p className="text-sm text-muted-foreground">Install it on this machine to use it in a team.</p>}
         </header>
         {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
         {catalog && (
@@ -159,33 +183,74 @@ function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; m
   );
 }
 
-function HarnessCard({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
+function HarnessCard({ id, metadata, registryLoading, teamCount }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean; teamCount: number | null }) {
   const { state, catalog } = useProviderOperations(id);
+  const navigate = useNavigate();
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
-  const status = readinessLabel(metadata, catalog);
+  const status = harnessStatus(metadata, catalog);
+  const missing = status?.kind === "missing";
   const pageCount = catalog ? availablePages(id, metadata, catalog).length : 0;
+  const pages = pageCount > 0 ? `${pageCount} settings ${pageCount === 1 ? "page" : "pages"}` : "No settings pages in Deck";
+  const usedBy = teamCount ? ` · used by ${teamCount} ${teamCount === 1 ? "team" : "teams"}` : "";
+  const open = () => navigate(`/harnesses/${id}`);
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      open();
+    }
+  };
+  const stop = (event: MouseEvent) => event.stopPropagation();
   return (
-    <article className="min-w-0 space-y-3 rounded-lg border bg-card p-4 break-words">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="space-y-1">
+    <article
+      className={cn("flex min-w-0 items-start gap-3 rounded-lg bg-card p-4 break-words", CLICKABLE_CARD)}
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={onKeyDown}
+    >
+      <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted"><Terminal className="h-5 w-5" /></span>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
-            <Link className={`text-primary underline-offset-4 hover:underline ${focusRing}`} to={`/harnesses/${id}`}>{harnesses[id]}</Link>
-            {status && <span className="rounded-full border px-2 py-0.5 text-xs font-normal">{status}</span>}
+            {harnesses[id]}
+            {status && <StatusBadge status={status} />}
           </h3>
-          <p className="text-sm text-muted-foreground">{pageCount > 0 ? `${pageCount} settings ${pageCount === 1 ? "page" : "pages"}` : "No settings pages in Deck"}</p>
+          {!missing && metadata?.version && <span className="font-mono text-xs text-muted-foreground">v{metadata.version}</span>}
         </div>
-        <Link className={destination} to={`/harnesses/${id}`}>Open</Link>
+        <p className="text-sm text-muted-foreground">{missing ? "Install it to use it in a team." : `${pages}${usedBy}`}</p>
+        {status?.kind === "setup" && status.reason && <p className="line-clamp-2 text-sm text-amber-700 dark:text-amber-400">{status.reason}</p>}
+        {state === "error" && <p role="alert" className="text-sm">Operating catalog unavailable. Open the harness for details.</p>}
+        <Link className={cn("inline-block pt-1 text-sm font-medium text-primary hover:underline", focusRing)} to={`/harnesses/${id}`} onClick={stop}>{missing ? "How to install ›" : "Open ›"}</Link>
       </div>
-      {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
-      <TechnicalDetails id={id} metadata={metadata} />
     </article>
   );
+}
+
+// How many teams use each harness. It reads the public presets list. If the read fails, the cards show the page count only.
+function useTeamCounts() {
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchAgentTeamPresets()
+      .then(response => {
+        if (cancelled) return;
+        const next: Record<string, number> = {};
+        for (const preset of response.presets) {
+          for (const provider of new Set(preset.slots.map(slot => slot.provider))) next[provider] = (next[provider] ?? 0) + 1;
+        }
+        setCounts(next);
+      })
+      .catch(() => { if (!cancelled) setCounts(null); });
+    return () => { cancelled = true; };
+  }, []);
+  return counts;
 }
 
 export function HarnessesPage() {
   const { providerId } = useParams();
   const { providers, loading, error } = useProviderContext();
   const ids = Object.keys(harnesses).filter(id => !providerId || providerId === id) as AgentProviderId[];
+  const teamCounts = useTeamCounts();
   const single = providerId && ids.length === 1 ? ids[0] : null;
   return <section className="space-y-5">
     {!single && <h2 className="text-2xl font-semibold">Harnesses{providerId ? ` · ${harnesses[providerId as AgentProviderId] ?? providerId}` : ""}</h2>}
@@ -194,6 +259,6 @@ export function HarnessesPage() {
     {error && <p role="alert">{error}</p>}
     {!ids.length && <p>Unknown harness. <Link to="/harnesses">Show all harnesses</Link></p>}
     {!error && single && <HarnessPage id={single} metadata={providers.find(p => p.id === single)} registryLoading={loading} />}
-    {!error && !single && <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={providers.find(p => p.id === id)} registryLoading={loading} />)}</div>}
+    {!error && !single && <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={providers.find(p => p.id === id)} registryLoading={loading} teamCount={teamCounts?.[id] ?? null} />)}</div>}
   </section>;
 }
