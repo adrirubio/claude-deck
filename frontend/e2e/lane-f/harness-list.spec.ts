@@ -6,7 +6,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // #523: all 5 harnesses fit in one viewport at 1440 × 900, and no card shows
 // "unknown", "adapter", "binding" or an access code outside "Technical details".
 // Design reference: screen 18 (harness list).
-// @pending until #523 merges.
+// @active since #523 merged.
 
 const HARNESSES = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli']
 // Words and codes that belong only inside "Technical details".
@@ -31,7 +31,7 @@ function card(page: import('@playwright/test').Page, harness: string): Locator {
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-test('@pending all 5 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
+test('@active all 5 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
   await page.goto('/harnesses')
   await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()
   for (const harness of HARNESSES) {
@@ -41,7 +41,7 @@ test('@pending all 5 harness cards fit in one 1440 × 900 viewport', async ({ pa
   }
 })
 
-test('@pending no card shows technical words outside Technical details', async ({ page }) => {
+test('@active no card shows technical words outside Technical details', async ({ page }) => {
   await page.goto('/harnesses')
   await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()
   for (const harness of HARNESSES) {
@@ -50,7 +50,7 @@ test('@pending no card shows technical words outside Technical details', async (
   }
 })
 
-test('@pending a card opens its harness page by click and by keyboard', async ({ page }) => {
+test('@active a card opens its harness page by click and by keyboard', async ({ page }) => {
   await page.goto('/harnesses')
   await card(page, 'codex-cli').click()
   await expect(page).toHaveURL(/\/harnesses\/codex-cli$/)
@@ -62,7 +62,7 @@ test('@pending a card opens its harness page by click and by keyboard', async ({
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the harness list meets AA contrast in the ${theme} theme`, async ({ page }) => {
+  test(`@active the harness list meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/harnesses')
     await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()

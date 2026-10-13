@@ -53,21 +53,29 @@ describe('accepted provider operations', () => {
    else { expect(reported.adapter_id).toBe(`${id}:${surface}:${adapter.component}`); expect(access).toBe(reported.access==='read_only'?'read_only':'write_capable') }
   }
  })
- it('shows all five sourced operation sets with separate credential and generic session unknowns', async () => {
+ it('shows five compact harness cards without technical details', async () => {
   localStorage.setItem('claude-deck:selected-provider','pi-cli')
   const {requests}=fixtureFetch(answer)
   renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses','/harnesses'); await settle()
-  expect(screen.getAllByText('Configured for launch')).toHaveLength(5)
-  expect(screen.getAllByText(/Credentials not checked/)).toHaveLength(5)
-  expect(screen.getAllByText(/No team slot selected/)).toHaveLength(5)
-  expect(screen.getAllByText('Operations and conditions')).toHaveLength(5)
-  expect(screen.getByText('execution controls: unsupported')).toBeInTheDocument()
-  expect(screen.getAllByText('execution controls: unknown')).toHaveLength(2)
+  expect(screen.getAllByRole('article')).toHaveLength(5)
+  expect(screen.getAllByText('Ready')).toHaveLength(5)
   expect(screen.getAllByText('No settings pages in Deck')).toHaveLength(3)
-  expect(screen.queryByRole('navigation',{name:/native surfaces/})).toBeNull()
+  expect(screen.queryByText(/Credentials|Operations and conditions|No team slot selected/)).toBeNull()
+  expect(screen.queryByRole('button',{name:'Refresh observations'})).toBeNull()
   expect(requests.filter(r=>r.path.endsWith('/operations'))).toHaveLength(5)
   expect(requests.every(r=>r.method==='GET')).toBe(true)
   expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
+ })
+ it.each(ids)('shows the sourced operation set, credentials and generic session unknowns of %s on its harness page under Technical details', async id => {
+  window.history.replaceState({},'',`/harnesses/${id}`)
+  fixtureFetch(answer)
+  renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,`/harnesses/${id}`,'/harnesses/:providerId'); await settle()
+  expect(screen.getByText('Technical details').closest('details')).not.toHaveAttribute('open')
+  expect(screen.getByText('Configured for launch')).toBeInTheDocument()
+  expect(screen.getByText(/Credentials not checked/)).toBeInTheDocument()
+  expect(screen.getByText(/No team slot selected/)).toBeInTheDocument()
+  expect(screen.getByText('Operations and conditions')).toBeInTheDocument()
+  expect(screen.getByRole('button',{name:'Refresh observations'})).toBeInTheDocument()
  })
  it.each(['binary_missing','mail_not_positively_configured','pending','probe_failed'])('preserves %s configuration uncertainty without claiming credentials or session readiness', async name => {
   fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(scenarios[name]):answer(path))
