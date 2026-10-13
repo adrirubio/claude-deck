@@ -152,7 +152,7 @@ describe("Autonomy refresh and recurring polling", () => {
   const renderAutonomy = () => render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
   const panel = () => within(screen.getByRole("tabpanel"));
   const refresh = () => panel().getByRole("button", { name: "Refresh", exact: true });
-  const freshness = () => panel().getByText(/Table (updated|not refreshed yet)/).textContent;
+  const freshness = () => panel().getByText(/Summary (updated|not refreshed yet)/).textContent;
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-04T12:00:00Z"));
@@ -168,10 +168,10 @@ describe("Autonomy refresh and recurring polling", () => {
     let initial!: (value: { items: GithubWorkItem[] }) => void;
     vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { initial = resolve; }));
     renderAutonomy(); await flush();
-    expect(freshness()).toContain("Table not refreshed yet");
+    expect(freshness()).toContain("Summary not refreshed yet");
     await act(async () => initial({ items: [retained] }));
     const loaded = freshness();
-    expect(loaded).toContain("Table updated");
+    expect(loaded).toContain("Summary updated");
     let background!: (value: { items: GithubWorkItem[] }) => void;
     vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { background = resolve; }));
     await advance(5000);
@@ -185,7 +185,7 @@ describe("Autonomy refresh and recurring polling", () => {
     await advance(5000);
     expect(freshness()).toBe(updated);
     expect(panel().getByRole("alert")).toHaveTextContent("Synthetic failed refresh");
-    expect(panel().getByRole("row", { name: /Retained synthetic issue/ })).toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
   });
 
   it("spins only an explicit manual Refresh while its request is pending", async () => {
@@ -242,11 +242,11 @@ describe("Autonomy refresh and recurring polling", () => {
     render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Navigation /><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Open second autonomy team" })); await flush();
-    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
     const currentFreshness = freshness();
-    await act(async () => oldTeam({ items: [retained] }));
-    expect(panel().queryByRole("row", { name: /Retained synthetic issue/ })).not.toBeInTheDocument();
-    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    await act(async () => oldTeam({ items: [retained, { ...retained, id: 93, issue_number: 93 }] }));
+    expect(panel().queryByText(/^2 items ·/)).not.toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
     expect(freshness()).toBe(currentFreshness);
   });
 });

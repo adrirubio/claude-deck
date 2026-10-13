@@ -1,12 +1,12 @@
-import { StrictMode, useState } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
+import { MemoryRouter } from 'react-router-dom'
+import { fireEvent, render as renderUi, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AutonomyPanel, OperatorTokenDialog } from '../src/features/agent-teams/AutonomyPanel'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
-import { ApiHttpError } from '../src/lib/api'
 import { fetchGithubRecoveryGateActive } from '../src/features/agent-teams/api'
-import type { AgentTeamPreset, GithubScopeRevision, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
+import type { AgentTeamPreset, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
 
 vi.mock('../src/features/agent-teams/BacklogCoordination', () => ({ BacklogCoordination: () => null }))
 // The publication reader has its own request, expiry and error tests.
@@ -16,6 +16,9 @@ vi.mock('../src/features/agent-teams/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/features/agent-teams/api')>()
   return { ...actual, fetchGithubRecoveryGateActive: vi.fn().mockResolvedValue({ active: false }) }
 })
+
+// The panel links to Work, so it renders inside a router.
+const render = (ui: React.ReactElement) => renderUi(ui, { wrapper: MemoryRouter })
 
 // JSDOM lacks the browser methods used by Radix's real Select interaction.
 const browserMethods = ['hasPointerCapture', 'scrollIntoView'] as const
@@ -93,20 +96,6 @@ const workItem: GithubWorkItem = {
   updated_at: '2026-09-29T12:00:00Z',
 }
 
-const revision = {
-  id: 10,
-  revision: 1,
-  summary: 'Hosted-only diagnostic',
-  phase: 'diagnostic',
-  status: 'proposed',
-  failed_head_count: 0,
-  max_failed_heads: 1,
-  allowed_paths: [],
-  allowed_actions: [],
-  allowed_commands: [],
-  evidence: null,
-} as unknown as GithubScopeRevision
-
 function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}) {
   return {
     preset,
@@ -122,9 +111,6 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
     onUpdateScope: vi.fn().mockResolvedValue(undefined),
     onUpdateContinuationPolicy: vi.fn().mockResolvedValue(undefined),
     onDeleteScope: vi.fn().mockResolvedValue(undefined),
-    onRetryWorkItem: vi.fn().mockResolvedValue(undefined),
-    onFetchScopeRevisions: vi.fn().mockResolvedValue([revision]),
-    onCancelContinuationRequest: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
 }
@@ -137,57 +123,6 @@ describe('AutonomyPanel', () => {
     expect(screen.queryByText(/only needed for protected recovery|needed only for protected recovery/i)).not.toBeInTheDocument()
   })
 
-  it('intersects repo and status filters, shows no matches, and resets to all rows', async () => {
-    const user = userEvent.setup()
-    const otherScope = { ...scope, id: 3, repo_name: 'other' }
-    const items = [
-      { ...workItem, id: 1, issue_number: 101, dispatch_status: 'pending' as const },
-      { ...workItem, id: 2, issue_number: 102, dispatch_status: 'merged' as const },
-      { ...workItem, id: 3, issue_number: 103, scope_id: 3, repo_name: 'other', dispatch_status: 'merged' as const },
-    ]
-    render(<AutonomyPanel {...panelProps({ scopes: [scope, otherScope], workItems: items })} />)
-    const choose = async (label: string, option: string) => {
-      await user.click(screen.getByRole('combobox', { name: label }))
-      await user.click(screen.getByRole('option', { name: option, exact: true }))
-    }
-    await choose('Repo', 'example/project')
-    await choose('Status', 'Finished')
-    expect(screen.getAllByRole('row')).toHaveLength(2)
-    expect(screen.getByRole('row', { name: /#102/ })).toBeInTheDocument()
-    await choose('Repo', 'example/other')
-    await choose('Status', 'In progress')
-    expect(screen.getByText('No work items match these filters.')).toBeInTheDocument()
-    await choose('Repo', 'All repos')
-    await choose('Status', 'All statuses')
-    expect(screen.getAllByRole('row')).toHaveLength(4)
-  })
-
-  it('resets a removed repo filter and preserves readable attention and waiting distinctions', async () => {
-    const user = userEvent.setup()
-    const autoScope = { ...scope, id: 3, repo_name: 'auto', merge_policy: 'auto' as const }
-    const items = [
-      { ...workItem, id: 1, issue_number: 101, dispatch_status: 'ready_for_review' as const, pr_number: 201 },
-      { ...workItem, id: 2, issue_number: 102, dispatch_status: 'pending' as const, pending_approval_status: 'pending' as const },
-      { ...workItem, id: 3, issue_number: 103, scope_id: 3, repo_name: 'auto', dispatch_status: 'ready_for_review' as const, pr_number: 203 },
-      { ...workItem, id: 4, issue_number: 104, escalation_reason: 'approval_rounds_exhausted', retry_block_code: 'owner_still_active', retry_count: 2, diagnostic_retry_count: 1 },
-    ]
-    const props = panelProps({ scopes: [scope, autoScope], workItems: items })
-    const view = render(<AutonomyPanel {...props} />)
-    expect(within(screen.getByRole('row', { name: /#101/ })).getByText('Your review or merge is needed')).toBeInTheDocument()
-    expect(within(screen.getByRole('row', { name: /#102/ })).getByText('Waiting for Leader approval')).toBeInTheDocument()
-    expect(within(screen.getByRole('row', { name: /#103/ })).getByText('Waiting for automatic merge')).toBeInTheDocument()
-    const stopped = within(screen.getByRole('row', { name: /#104/ }))
-    expect(stopped.getByText('Approval rounds exhausted')).toBeInTheDocument()
-    expect(stopped.getByText('Retry blocked: owner still active')).toBeInTheDocument()
-    expect(stopped.getByText('Retries 2 · diagnostics 1')).toBeInTheDocument()
-    expect(stopped.queryByRole('link', { name: /pull request/ })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Show items needing your action' }))
-    expect(screen.getAllByRole('row')).toHaveLength(3)
-    await user.click(screen.getByRole('combobox', { name: 'Repo' }))
-    await user.click(screen.getByRole('option', { name: 'example/project', exact: true }))
-    view.rerender(<AutonomyPanel {...props} scopes={[autoScope]} workItems={[items[2]]} />)
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Repo' })).toHaveTextContent('All repos'))
-  })
   it('distinguishes a missing polling token from unresolved dispatch mode after a poll', () => {
     const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false }], workItems: [] })} />)
     expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))
@@ -238,34 +173,9 @@ describe('AutonomyPanel', () => {
     expect(props.onToggleAutonomy).not.toHaveBeenCalled()
   })
 
-  it('offers keyboard-accessible status, phase, and route explanations', async () => {
-    const user = userEvent.setup()
-    render(<AutonomyPanel {...panelProps()} />)
-    const helpButton = screen.getByRole('button', { name: 'What do statuses, phases, and routes mean?' })
-    helpButton.focus()
-    await user.keyboard('{Enter}')
-    expect(helpButton).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText(/Label match means an area label chose the owner/)).toBeVisible()
-  })
-
-  it('does not claim an escalated active revision is still running', async () => {
-    setOperatorToken('test-token')
-    const user = userEvent.setup()
-    const props = panelProps({ workItems: [{ ...workItem, active_scope_status: 'active', escalation_reason: 'dispatch_label_removed' }] })
-    const view = render(<AutonomyPanel {...props} />)
-    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    expect(screen.getByText('This issue is escalated. Review the reason above before continuing recovery.')).toBeInTheDocument()
-    expect(screen.queryByText(/No operator action is needed/)).not.toBeInTheDocument()
-    view.rerender(<AutonomyPanel {...props} workItems={[{ ...workItem, dispatch_status: 'dispatched', active_scope_status: 'active', continuation_block_code: 'continuation_disabled' }]} />)
-    expect(screen.getByText('Recovery policy is off for this repo. Existing work may still need attention.')).toBeInTheDocument()
-    expect(screen.queryByText(/No operator action is needed/)).not.toBeInTheDocument()
-  })
-
   it('defines recovery limits and phase and status badges', async () => {
     const user = userEvent.setup()
     render(<AutonomyPanel {...panelProps()} />)
-    const row = screen.getByRole('row', { name: /#821 — Fix playback/ })
-    expect(within(row).getByText('Your intervention is needed')).toHaveAttribute('title', expect.stringContaining('Deck stopped this attempt'))
     await user.click(screen.getByRole('button', { name: 'Recovery policy for example/project' }))
     expect(screen.getByText(/A failed head is a pushed PR commit whose checks fail/)).toBeInTheDocument()
     expect(screen.getByText('Scope revisions allowed across one attempt.')).toBeInTheDocument()
@@ -280,63 +190,6 @@ describe('AutonomyPanel', () => {
     expect(screen.getByText('Build instructions for the agent (optional)')).toBeInTheDocument()
     expect(screen.getByText(/Deck does not run a build/)).toBeInTheDocument()
     expect(screen.getByText(/may include \{issue_number\}/)).toBeInTheDocument()
-  })
-
-  it('asks for a token on the first history load, then shows the history', async () => {
-    clearOperatorToken()
-    const user = userEvent.setup()
-    const props = panelProps()
-    render(<AutonomyPanel {...props} />)
-
-    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    expect(screen.getByText('Enter the Director key to load recovery history.')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Retry loading history' }))
-    await user.type(screen.getByPlaceholderText('Enter secret value'), 'test-token')
-    await user.click(screen.getByRole('button', { name: 'Use key' }))
-
-    expect(await screen.findByText('Hosted-only diagnostic')).toBeInTheDocument()
-    expect(props.onFetchScopeRevisions).toHaveBeenCalledWith(23, 'test-token')
-  })
-
-  it('shows a rejected-token prompt and retries with the replacement token', async () => {
-    setOperatorToken('old-token')
-    const user = userEvent.setup()
-    const fetchRevisions = vi.fn()
-      .mockRejectedValueOnce(new ApiHttpError('The operator token was rejected.', 401))
-      .mockResolvedValue([revision])
-    render(<AutonomyPanel {...panelProps({ onFetchScopeRevisions: fetchRevisions })} />)
-
-    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    expect(await screen.findByText('The Director key was rejected. Enter a valid key to retry.')).toBeInTheDocument()
-    await user.type(screen.getByPlaceholderText('Enter secret value'), 'new-token')
-    await user.click(screen.getByRole('button', { name: 'Use key' }))
-
-    expect(await screen.findByText('Hosted-only diagnostic')).toBeInTheDocument()
-    expect(fetchRevisions).toHaveBeenLastCalledWith(23, 'new-token')
-  })
-
-  it('keeps a delayed history request alive across StrictMode and parent polling', async () => {
-    setOperatorToken('test-token')
-    const user = userEvent.setup()
-    let resolveHistory: (rows: GithubScopeRevision[]) => void = () => {}
-    const fetchRevisions = vi.fn(() => new Promise<GithubScopeRevision[]>((resolve) => { resolveHistory = resolve }))
-    const props = panelProps({ onFetchScopeRevisions: fetchRevisions })
-    const view = render(<StrictMode><AutonomyPanel {...props} /></StrictMode>)
-
-    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    await waitFor(() => expect(fetchRevisions).toHaveBeenCalled())
-    view.rerender(<StrictMode><AutonomyPanel {...props} workItems={[{ ...workItem }]} refreshing /></StrictMode>)
-    resolveHistory([revision])
-
-    expect(await screen.findByText('Hosted-only diagnostic')).toBeInTheDocument()
-    expect(screen.queryByText('Loading recovery history…')).not.toBeInTheDocument()
-  })
-
-  it('shows pending authentication failures in the activity row', () => {
-    render(<AutonomyPanel {...panelProps({ workItems: [{ ...workItem, dispatch_status: 'pending', pending_reason: 'queued_auth_mode_unresolved', status_note: 'Configure a GitHub App.' }] })} />)
-    const row = screen.getByRole('row', { name: /#821 — Fix playback/ })
-    expect(within(row).getByText('queued · GitHub authentication needs configuration')).toBeInTheDocument()
-    expect(within(row).getByText('Configure a GitHub App.')).toBeInTheDocument()
   })
 
   it('sends only changed scope fields and an explicit null when clearing the build hint', async () => {
@@ -407,22 +260,6 @@ describe('AutonomyPanel', () => {
     confirm.mockRestore()
   })
 
-  it('reports a prepared attempt as queued after the backend returns pending', async () => {
-    setOperatorToken('test-token')
-    const user = userEvent.setup()
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
-      JSON.stringify({ ...workItem, dispatch_status: 'pending' }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    ))
-    render(<AutonomyPanel {...panelProps({ workItems: [{ ...workItem, escalation_reason: 'prepared_owner_unavailable' }] })} />)
-
-    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
-    await user.click(screen.getByRole('button', { name: 'Resume prepared attempt' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm action' }))
-
-    expect(await screen.findByRole('status')).toHaveTextContent('Prepared attempt queued for resumption.')
-    fetchMock.mockRestore()
-  })
 })
 
 // Synthetic UI contracts mirror schemas.py minima; the server declares no absolute maxima.

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Eye, GitPullRequest, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Trash2, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { KeyRound, Pencil, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react'
 import { formatServerTime } from '@/lib/serverTime'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
@@ -23,8 +24,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { SecretField } from '@/components/shared/SecretField'
-import { ApiHttpError } from '@/lib/api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -33,37 +32,22 @@ import {
 import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type {
-  AgentActivityObservation,
   AgentTeamPreset,
-  AgentTeamSlot,
   GithubRecoveryGate,
-  GithubScopeRevision,
   GithubWorkItem,
-  GithubWorkspace,
   TeamGithubContinuationPolicyUpdate,
   TeamGithubMergePolicy,
   TeamGithubScope,
   TeamGithubScopeInput,
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
-import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
-import { AgentActivityBadge } from './AgentActivityBadge'
 import { BacklogCoordination } from './BacklogCoordination'
-import { WorkPublicationPanel } from './WorkPublicationPanel'
-import { workItemAttention, workItemStatusLabel } from './workItemAttention'
-import {
-  abandonGithubWorkItem, cancelGithubActiveRevision, fetchGithubRecoveryGate,
-  fetchGithubRecoveryGateActive,
-  fetchGithubWorkspaces, forceReleaseGithubWorkspace, releaseGithubRecoveryCheckpoint,
-  resumeGithubWorkItem,
-} from './api'
+import { workItemAttention } from './workItemAttention'
+import { useOperatorTokenFlow } from './useOperatorTokenFlow'
+import { fetchGithubRecoveryGate, fetchGithubRecoveryGateActive } from './api'
 
 type ScopeDialogState = { mode: 'add' | 'edit'; scope?: TeamGithubScope } | null
 type PolicyDialogState = { scope: TeamGithubScope } | null
-type ItemOperatorAction =
-  | { kind: 'abandon' | 'resume' }
-  | { kind: 'release_decision' | 'release_ack' | 'cancel_request' | 'cancel_revision'; revision: GithubScopeRevision }
-  | { kind: 'force_release'; workspace: GithubWorkspace }
 type ScopeNumberKey = 'max_approval_rounds' | 'max_concurrent_dispatched' | 'max_verification_retries' | 'max_auto_merges_per_day' | 'max_build_parallelism'
 type PolicyNumberKey = Exclude<keyof TeamGithubContinuationPolicyUpdate, 'continuation_enabled'>
 
@@ -175,132 +159,6 @@ function formatDateTime(value?: string | null) {
   return formatServerTime(value)
 }
 
-function routeMethodLabel(value?: string | null) {
-  if (!value) return 'not routed'
-  if (value === 'label') return 'label match'
-  if (value === 'leader_fallback') return 'leader fallback'
-  return value.replaceAll('_', ' ')
-}
-
-function routeMethodHelp(value?: string | null) {
-  if (value === 'label') return 'Routed to an owner whose area label matched this GitHub issue.'
-  if (value === 'leader_fallback') return 'No owner matched; the Leader took the issue.'
-  if (value === 'classified') return 'Chosen from slot expertise after no area label matched.'
-  return 'No routing method recorded yet.'
-}
-
-function statusHelp(status: string) {
-  const help: Record<string, string> = {
-    pending: 'In progress: queued; the reason appears below when Deck is waiting.',
-    dispatched: 'In progress: an owner session is planning or implementing.',
-    verifying: 'In progress: a PR is open; Deck is watching GitHub checks.',
-    ready_for_review: 'Needs review: checks passed; a human should review or merge.',
-    awaiting_human_review: 'Needs review: the design PR awaits human review.',
-    escalated: 'Needs attention: Deck stopped; see the reason and available remedies.',
-    merged: 'Finished: the PR was merged.',
-    completed: 'Finished: work completed without a merged PR.',
-    failed: 'Needs attention: the attempt failed.',
-  }
-  return help[status] ?? 'See issue details for the current state.'
-}
-
-function phaseHelp(phase?: string | null) {
-  if (phase === 'diagnostic') return 'Diagnostic: investigating failed checks within an approved recovery revision; it is not a product-ready PR.'
-  if (phase === 'implementation') return 'Implementation: working on the issue and its product PR.'
-  return 'The attempt has not started a phase.'
-}
-
-function pendingReasonLabel(item: GithubWorkItem, ownerName?: string) {
-  if (item.pending_reason === 'queued_slot_busy') {
-    return `queued · behind ${ownerName ?? 'assigned slot'}`
-  }
-  if (item.pending_reason === 'queued_repo_cap') return 'queued · repo cap reached'
-  if (item.pending_reason === 'queued_no_workspace') return 'queued · no free workspace'
-  if (item.pending_reason === 'queued_low_memory') return 'queued · low memory'
-  if (item.pending_reason === 'queued_ambiguous_sessions') {
-    return `queued · ${ownerName ?? 'owner'} has multiple sessions`
-  }
-  if (item.pending_reason === 'queued_auth_mode_unresolved') {
-    return 'queued · GitHub authentication needs configuration'
-  }
-  return null
-}
-
-const escalationReasonLabels: Record<string, string> = {
-  plan_blocked: 'Plan blocked',
-  launch_outcome_unknown: 'Session launch outcome unknown',
-  approval_rounds_exhausted: 'Approval rounds exhausted',
-  leader_offline: 'Leader offline',
-  owner_offline: 'Owner offline',
-  brief_unread: 'Owner has not read the brief',
-  leader_ack_timeout: 'Leader acknowledgement timed out',
-  owner_idle_timeout: 'Owner idle timeout',
-  owner_observation_unavailable: 'Owner observation unavailable',
-  integration_update_conflict: 'Integration update needs coordination',
-  retry_count_exhausted: 'Verification retries exhausted',
-  continuation_revision_exhausted: 'Continuation revision exhausted',
-  continuation_budget_exhausted: 'Continuation budget exhausted',
-  continuation_invalid_state: 'Continuation state invalid',
-  continuation_pr_identity_invalid: 'Continuation PR identity invalid',
-  dispatch_label_removed: 'Dispatch label removed',
-  abandoned_by_operator: 'Abandoned by operator',
-  prepared_owner_unavailable: 'Prepared owner unavailable',
-  pr_closed_unmerged: 'PR closed without merge',
-}
-
-function escalationReasonLabel(reason?: string | null) {
-  if (!reason) return 'Unknown reason'
-  return escalationReasonLabels[reason] ?? reason.replaceAll('_', ' ')
-}
-
-function approvalStatusLabel(status?: string | null) {
-  if (status === 'pending') return 'awaiting Leader decision'
-  if (status === 'approved') return 'approved by Leader'
-  if (status === 'rejected') return 'rejected by Leader'
-  return status?.replaceAll('_', ' ') ?? 'awaiting Leader decision'
-}
-
-function statusBadgeClass(status: string) {
-  if (status === 'escalated' || status === 'failed') return 'border-destructive text-destructive'
-  if (status === 'merged') return 'border-emerald-500/70 text-emerald-700 dark:text-emerald-400'
-  if (status === 'awaiting_human_review' || status === 'ready_for_review') {
-    return 'border-sky-500/70 text-sky-700 dark:text-sky-400'
-  }
-  if (status === 'verifying' || status === 'dispatched') return 'border-primary/70 text-primary'
-  return 'border-muted-foreground/50 text-muted-foreground'
-}
-
-function prUrl(item: GithubWorkItem) {
-  if (!item.pr_number) return null
-  return `https://github.com/${item.repo_owner}/${item.repo_name}/pull/${item.pr_number}`
-}
-
-function recoveryBlockLabel(code?: string | null) {
-  if (!code) return 'Recovery is available for this attempt. The owner proposes a bounded revision for the Leader to approve.'
-  return code.replaceAll('_', ' ')
-}
-
-function recoverySummary(item: GithubWorkItem) {
-  if (item.continuation_block_code === 'continuation_disabled') return 'Recovery policy is off for this repo. Existing work may still need attention.'
-  if (item.dispatch_status === 'escalated') {
-    return item.continuation_block_code
-      ? `Recovery blocked: ${recoveryBlockLabel(item.continuation_block_code)}.`
-      : 'This issue is escalated. Review the reason above before continuing recovery.'
-  }
-  if (item.pending_approval_kind === 'continuation' && item.pending_approval_status === 'pending') {
-    return 'Waiting for the Leader to approve the proposed recovery revision.'
-  }
-  if (item.dispatch_status === 'verifying' && item.active_scope_revision > 0) {
-    return `Recovery revision ${item.active_scope_revision} was submitted; Deck is checking the PR.`
-  }
-  if (item.dispatch_status === 'dispatched' && item.active_scope_status === 'active') {
-    return `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. No operator action is needed unless it stalls.`
-  }
-  if (item.continuation_block_code === 'continuation_not_escalated') return 'Recovery is not needed while this issue is progressing.'
-  if (item.continuation_block_code) return `Recovery blocked: ${recoveryBlockLabel(item.continuation_block_code)}.`
-  return recoveryBlockLabel()
-}
-
 function authStatus(scope: TeamGithubScope) {
   if (!scope.github_poll_token_configured) return {
     label: 'Polling token not set',
@@ -324,86 +182,7 @@ function authStatus(scope: TeamGithubScope) {
   }
 }
 
-function phaseLabel(phase?: string | null) {
-  if (phase === 'diagnostic') return 'Diagnostic'
-  if (phase === 'implementation') return 'Implementation'
-  return phase?.replaceAll('_', ' ') ?? 'Not started'
-}
-
-function readableCode(value?: string | null) {
-  if (!value) return 'Not set'
-  return value.replaceAll('_', ' ').replace(/^./, (first) => first.toUpperCase())
-}
-
-const INSTALLATION_GUIDE_URL = 'https://github.com/adrirubio/claude-deck/blob/master/docs/guide/installation.md'
-
-export function OperatorTokenDialog({
-  open,
-  value,
-  error,
-  reason,
-  onValueChange,
-  onSubmit,
-  onCancel,
-}: {
-  open: boolean
-  value: string
-  error: string | null
-  reason?: string
-  onValueChange: (value: string) => void
-  onSubmit: () => void
-  onCancel: () => void
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
-      <DialogContent className={MODAL_SIZES.SM}>
-        <DialogHeader>
-          <DialogTitle>Director key</DialogTitle>
-          <DialogDescription>
-            Paste the Director key for this Deck installation. It is the value of <code>OPERATOR_TOKEN</code> on the server. Deck keeps it in this browser tab only.
-          </DialogDescription>
-        </DialogHeader>
-        {reason && <p className="text-sm">Deck needs the key {reason}.</p>}
-        <details className="text-sm text-muted-foreground">
-          <summary className="cursor-pointer text-foreground">First time? Set up the key on the server</summary>
-          <p className="mt-2">On the machine running Deck, run <code>openssl rand -hex 32</code>. Add the result as <code>operator_token=&lt;value&gt;</code> in <code>backend/.env</code>, run <code>chmod 600 backend/.env</code>, then restart the backend. Do not export the key into the agent environment. See the <a className="underline" href={INSTALLATION_GUIDE_URL} target="_blank" rel="noreferrer">installation guide</a>.</p>
-        </details>
-        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-        <form onSubmit={(event) => { event.preventDefault(); onSubmit() }} className="space-y-4">
-          <SecretField
-            id="autonomy-operator-token"
-            label="Director key"
-            value={value}
-            onChange={onValueChange}
-            required
-            autoComplete="off"
-          />
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={!value.trim()}>Use key</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function safeEvidenceLinks(evidence?: Record<string, unknown> | null) {
-  if (!evidence) return []
-  const links: Array<{ label: string; url: string }> = []
-  for (const [label, value] of Object.entries(evidence)) {
-    if (typeof value !== 'string') continue
-    try {
-      const url = new URL(value)
-      if (url.protocol === 'https:' || url.protocol === 'http:') {
-        links.push({ label, url: url.toString() })
-      }
-    } catch {
-      continue
-    }
-  }
-  return links
-}
+export { OperatorTokenDialog } from './OperatorTokenDialog'
 
 function ScopeDialog({
   state,
@@ -815,453 +594,8 @@ function ContinuationPolicyDialog({
   )
 }
 
-function WorkItemDialog({
-  item,
-  scope,
-  ownerActivity,
-  ownerName,
-  handoffTargetName,
-  onOpenChange,
-  onRetry,
-  onFetchScopeRevisions,
-  onFetchWorkspaces,
-  operatorTokenStored,
-  onRequestOperatorToken,
-  slots,
-  onOperate,
-  onReturnFocus,
-}: {
-  item: GithubWorkItem | null
-  scope?: TeamGithubScope
-  ownerActivity?: AgentActivityObservation
-  ownerName?: string
-  handoffTargetName?: string
-  onOpenChange: (open: boolean) => void
-  onReturnFocus: () => void
-  onRetry: (item: GithubWorkItem) => void
-  onFetchScopeRevisions: (itemId: number) => Promise<GithubScopeRevision[]>
-  onFetchWorkspaces: (scopeId: number) => Promise<{ workspaces: GithubWorkspace[] }>
-  operatorTokenStored: boolean
-  onRequestOperatorToken: () => Promise<string | null>
-  slots: AgentTeamSlot[]
-  onOperate: (
-    item: GithubWorkItem,
-    action: ItemOperatorAction,
-    reason: string,
-    reassignToSlotId?: number
-  ) => Promise<string | undefined>
-}) {
-  const [loadingRevisions, setLoadingRevisions] = useState(false)
-  const [revisions, setRevisions] = useState<GithubScopeRevision[]>([])
-  const [revisionError, setRevisionError] = useState<string | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [actionResult, setActionResult] = useState<string | null>(null)
-  const [operatorAction, setOperatorAction] = useState<ItemOperatorAction | null>(null)
-  const [actionReason, setActionReason] = useState('')
-  const [reassignToSlotId, setReassignToSlotId] = useState('current')
-  const [actionSaving, setActionSaving] = useState(false)
-  const [workspaceLoading, setWorkspaceLoading] = useState(false)
-  const revisionRequestIdRef = useRef(0)
-  const itemId = item?.id ?? null
-  const revisionVersion = item
-    ? JSON.stringify([
-        item.active_scope_revision,
-        item.active_scope_status,
-        item.revision_delivered_at,
-        item.revision_acknowledged_at,
-        item.revision_failed_head_count,
-        item.pending_approval_request_id,
-        item.pending_approval_status,
-        item.continuation_block_code,
-        item.dispatch_status,
-        item.updated_at,
-      ])
-    : null
-  const open = item !== null
-  const attention = item ? workItemAttention(item, scope) : null
-
-  const loadRevisions = useCallback((targetItemId: number) => {
-    const requestId = ++revisionRequestIdRef.current
-    queueMicrotask(() => {
-      if (revisionRequestIdRef.current !== requestId) return
-      setLoadingRevisions(true)
-      setRevisionError(null)
-      void onFetchScopeRevisions(targetItemId)
-        .then((rows) => {
-          if (revisionRequestIdRef.current === requestId) setRevisions(rows)
-        })
-        .catch((error) => {
-          if (revisionRequestIdRef.current === requestId) {
-            setRevisionError(error instanceof Error ? error.message : 'Failed to load recovery history')
-          }
-        })
-        .finally(() => {
-          if (revisionRequestIdRef.current === requestId) setLoadingRevisions(false)
-        })
-    })
-  }, [onFetchScopeRevisions])
-
-  useEffect(() => {
-    if (itemId === null) return
-    const requestRef = revisionRequestIdRef
-    if (!operatorTokenStored) {
-      const requestId = ++revisionRequestIdRef.current
-      queueMicrotask(() => {
-        if (revisionRequestIdRef.current === requestId) {
-          setLoadingRevisions(false)
-          setRevisionError('Enter the Director key to load recovery history.')
-        }
-      })
-      return () => { requestRef.current++ }
-    }
-    loadRevisions(itemId)
-    return () => { requestRef.current++ }
-  }, [itemId, revisionVersion, operatorTokenStored, loadRevisions])
-
-  const retryLoadRevisions = () => {
-    if (itemId === null) return
-    if (!operatorTokenStored) {
-      void onRequestOperatorToken()
-      return
-    }
-    loadRevisions(itemId)
-  }
-
-  const inspectWorkspace = async () => {
-    if (!item) return
-    setWorkspaceLoading(true)
-    setErrorMessage(null)
-    try {
-      const response = await onFetchWorkspaces(item.scope_id)
-      const workspace = response.workspaces.find((candidate) => candidate.leased_item_id === item.id)
-      if (!workspace?.leased_at) throw new Error('No current lease was found for this work item.')
-      setOperatorAction({ kind: 'force_release', workspace })
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to inspect workspace')
-    } finally {
-      setWorkspaceLoading(false)
-    }
-  }
-
-  const submitOperatorAction = async () => {
-    if (!item || !operatorAction) return
-    if (['abandon', 'cancel_revision', 'force_release'].includes(operatorAction.kind) && !actionReason.trim()) {
-      setErrorMessage('Enter a reason before continuing.')
-      return
-    }
-    setActionSaving(true)
-    setErrorMessage(null)
-    setActionResult(null)
-    try {
-      const action = operatorAction
-      const result = await onOperate(item, action, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
-      const actionMessages: Record<ItemOperatorAction['kind'], string> = {
-        abandon: 'Work item abandoned.',
-        resume: 'Prepared attempt queued for resumption.',
-        release_decision: 'Decision hold released. The Leader can now decide.',
-        release_ack: 'Acknowledgement hold released. The owner can now acknowledge.',
-        cancel_request: 'Continuation request cancelled.',
-        cancel_revision: 'Active continuation cancelled.',
-        force_release: 'Workspace lease released.',
-      }
-      setActionResult(result ?? actionMessages[action.kind])
-      setOperatorAction(null)
-      setActionReason('')
-      loadRevisions(item.id)
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Operator action failed')
-    } finally {
-      setActionSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto break-words [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]')} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus() }}>
-        {item && (
-          <>
-            <DialogHeader>
-              <DialogTitle>#{item.issue_number} — {item.issue_title}</DialogTitle>
-              <DialogDescription>
-                {item.repo_owner}/{item.repo_name} · updated {formatDateTime(item.updated_at)}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              {attention && (
-                <section className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4" aria-label="Your action needed">
-                  <h3 className="font-medium">{attention.label}</h3>
-                  <p className="mt-2 text-sm">{attention.reason}</p>
-                  {item.last_verified_sha && (
-                    <p className="mt-2 text-xs text-muted-foreground">Last head verified by Deck: <code>{item.last_verified_sha.slice(0, 12)}</code>. Check the current PR head and review evidence before merging.</p>
-                  )}
-                  {prUrl(item) ? (
-                    <a href={prUrl(item)!} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 font-medium text-primary">
-                      <GitPullRequest className="h-4 w-4" />
-                      {attention.linkLabel} #{item.pr_number}
-                    </a>
-                  ) : <p className="mt-2 text-sm">No PR is linked. Inspect the issue and recovery details below.</p>}
-                </section>
-              )}
-              {item.dispatch_status === 'escalated' && (
-                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
-                  <div className="flex items-center gap-2 font-medium text-destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    Why this escalated
-                  </div>
-                  <p className="mt-2 text-sm">{escalationReasonLabel(item.escalation_reason)}</p>
-                  {item.status_note && (
-                    <p className="mt-2 text-sm text-muted-foreground">{item.status_note}</p>
-                  )}
-                </div>
-              )}
-              {errorMessage && (
-                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                  {errorMessage}
-                </div>
-              )}
-              {actionResult && <p role="status" className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">{actionResult}</p>}
-              {item.handoff_state && (
-                <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-4 text-sm">
-                  <span className="font-medium">{ownerName ?? 'Current owner'}</span>
-                  <span className="mx-2 text-muted-foreground">→ {readableCode(item.handoff_state)} handoff →</span>
-                  <span className="font-medium">{handoffTargetName ?? 'target slot'}</span>
-                </div>
-              )}
-              <div className="rounded-lg border">
-                <dl className="grid gap-0 text-sm">
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
-                    <dt className="text-muted-foreground">Status</dt>
-                    <dd>{workItemStatusLabel(item, scope)}</dd>
-                  </div>
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
-                    <dt className="text-muted-foreground">Owner</dt>
-                    <dd className="space-y-2">
-                      <p>{ownerName ?? 'Unassigned'} ({routeMethodLabel(item.routing_method)})</p>
-                      {item.owner_slot_id && <AgentActivityBadge activity={ownerActivity} />}
-                    </dd>
-                  </div>
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
-                    <dt className="text-muted-foreground">Retries</dt>
-                    <dd>implementation checks {item.retry_count} · diagnostic heads {item.diagnostic_retry_count}</dd>
-                  </div>
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
-                    <dt className="text-muted-foreground">Attempt</dt>
-                    <dd>{phaseLabel(item.attempt_phase)} · revision {item.active_scope_revision}</dd>
-                  </div>
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
-                    <dt className="text-muted-foreground">Workspace</dt>
-                    <dd className="truncate">{item.workspace_path ?? 'None leased'}</dd>
-                  </div>
-                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] p-3">
-                    <dt className="text-muted-foreground">PR</dt>
-                    <dd>{item.pr_number ? `#${item.pr_number}` : 'None yet'}</dd>
-                  </div>
-                </dl>
-              </div>
-              <WorkPublicationPanel item={item} ownerName={ownerName} ownerActivity={ownerActivity} />
-              <section className="space-y-3 rounded-lg border p-4" aria-labelledby="attempt-recovery-title">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 id="attempt-recovery-title" className="font-semibold">Attempt recovery</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {recoverySummary(item)}
-                    </p>
-                  </div>
-                </div>
-                {loadingRevisions && <p className="text-sm text-muted-foreground">Loading recovery history…</p>}
-                {!loadingRevisions && !revisionError && revisions.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No continuation revisions recorded.</p>
-                )}
-                {!loadingRevisions && revisionError && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-destructive" role="alert">
-                    <span>{revisionError}</span>
-                    <Button variant="outline" size="sm" onClick={retryLoadRevisions}>
-                      Retry loading history
-                    </Button>
-                  </div>
-                )}
-                {revisions.map((revision) => {
-                  const approval = revision.approval_request
-                  const links = safeEvidenceLinks(revision.evidence)
-                  const sameAttempt = item.dispatch_nonce === revision.dispatch_nonce
-                    && item.owner_slot_id === revision.owner_slot_id
-                  const holdEligible = sameAttempt && item.dispatch_status === 'escalated'
-                    && item.escalation_reason === revision.originating_escalation_reason
-                  const activeCancellationEligible = sameAttempt && item.dispatch_status === 'dispatched'
-                    && item.active_scope_revision === revision.revision && item.pr_number != null
-                    && !item.handoff_state
-                  const decisionReleaseEligible = holdEligible && revision.status === 'proposed'
-                    && approval?.status === 'pending'
-                  const acknowledgementReleaseEligible = holdEligible && revision.status === 'approved'
-                    && approval?.status === 'approved' && !!revision.delivered_at
-                  return (
-                    <article key={revision.id} className="space-y-3 rounded-md border bg-muted/20 p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">revision {revision.revision}</Badge>
-                        <Badge variant="secondary" title={phaseHelp(revision.phase)}>{phaseLabel(revision.phase)}</Badge>
-                        <span className="text-sm font-medium">{readableCode(revision.status)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          failed heads {revision.failed_head_count}/{revision.max_failed_heads}
-                        </span>
-                      </div>
-                      <p className="whitespace-pre-wrap text-sm">{revision.summary}</p>
-                      <dl className="grid gap-2 text-sm md:grid-cols-2">
-                        <div><dt className="text-muted-foreground">Origin</dt><dd>{escalationReasonLabel(revision.originating_escalation_reason)}</dd></div>
-                        <div><dt className="text-muted-foreground">Execution</dt><dd>{readableCode(revision.execution_target)}</dd></div>
-                        <div><dt className="text-muted-foreground">Owner</dt><dd title={`Member #${revision.owner_member_id}`}>{slots.find((slot) => slot.id === revision.owner_slot_id)?.display_name ?? `slot #${revision.owner_slot_id}`}</dd></div>
-                        <div><dt className="text-muted-foreground">Workspace</dt><dd title={`Workspace #${revision.expected_workspace_id}`}>{sameAttempt && item.active_scope_revision === revision.revision && item.workspace_path ? item.workspace_path : `#${revision.expected_workspace_id}`}</dd></div>
-                        {approval && (
-                          <>
-                            <div><dt className="text-muted-foreground">Approval</dt><dd title={`Request #${approval.id}`}>{approvalStatusLabel(approval.status)}</dd></div>
-                            <div><dt className="text-muted-foreground">Approver</dt><dd title={`Member #${approval.leader_member_id}`}>Leader agent</dd></div>
-                          </>
-                        )}
-                        <div><dt className="text-muted-foreground">Delivered</dt><dd>{formatDateTime(revision.delivered_at)}</dd></div>
-                        <div><dt className="text-muted-foreground">Acknowledged</dt><dd>{formatDateTime(revision.acknowledged_at)}</dd></div>
-                      </dl>
-                      <div className="grid gap-2 text-sm">
-                        <div><span className="text-muted-foreground">Paths:</span> <span className="break-all">{revision.allowed_paths.join(', ') || 'none'}</span></div>
-                        <div><span className="text-muted-foreground">Actions:</span> <span className="break-all">{revision.allowed_actions.join(', ') || 'none'}</span></div>
-                        <div><span className="text-muted-foreground">Commands:</span> <span className="whitespace-pre-wrap break-all">{revision.allowed_commands.join('\n') || 'none'}</span></div>
-                      </div>
-                      {revision.result_summary && <p className="text-sm">Result: {revision.result_summary}</p>}
-                      {links.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {links.map((link) => (
-                            <a
-                              key={`${revision.id}-${link.label}`}
-                              href={link.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-sm text-primary underline-offset-4 hover:underline"
-                            >
-                              {readableCode(link.label)}
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                      {approval?.status === 'pending' && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={!sameAttempt || item.dispatch_status !== 'escalated'}
-                          title={!sameAttempt || item.dispatch_status !== 'escalated' ? 'This request is no longer current.' : undefined}
-                          onClick={() => setOperatorAction({ kind: 'cancel_request', revision })}
-                        >
-                          <XCircle className="mr-2 h-4 w-4" />
-                          Cancel request #{approval.id}
-                        </Button>
-                      )}
-                      {revision.recovery_checkpoint_stage === 'decision_hold' && (
-                        <Button variant="outline" size="sm" disabled={!decisionReleaseEligible} title={decisionReleaseEligible ? 'Recovery is paused. Release opens a time-limited window for the Leader to decide.' : 'This decision hold is no longer releasable.'} onClick={() => setOperatorAction({ kind: 'release_decision', revision })}>
-                          Release decision hold
-                        </Button>
-                      )}
-                      {revision.recovery_checkpoint_stage === 'ack_hold' && (
-                        <Button variant="outline" size="sm" disabled={!acknowledgementReleaseEligible} title={acknowledgementReleaseEligible ? 'Recovery is paused. Release opens a time-limited window for the owner to acknowledge.' : 'This acknowledgement hold is no longer releasable.'} onClick={() => setOperatorAction({ kind: 'release_ack', revision })}>
-                          Release acknowledgement hold
-                        </Button>
-                      )}
-                      {revision.status === 'active' && (
-                        <Button variant="destructive" size="sm" disabled={!activeCancellationEligible} title={!activeCancellationEligible ? 'This revision is no longer the active dispatched attempt.' : undefined} onClick={() => setOperatorAction({ kind: 'cancel_revision', revision })}>
-                          Cancel active revision
-                        </Button>
-                      )}
-                    </article>
-                  )
-                })}
-              </section>
-              <section className="space-y-3 rounded-lg border p-4" aria-labelledby="operator-actions-title">
-                <div>
-                  <h3 id="operator-actions-title" className="font-semibold">Operator remedies</h3>
-                  <p className="text-sm text-muted-foreground">Only remedies valid for this state appear. Deck checks current authority before changing the issue.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {item.escalation_reason === 'prepared_owner_unavailable' && (
-                    <Button variant="outline" size="sm" onClick={() => setOperatorAction({ kind: 'resume' })}>
-                      Resume prepared attempt
-                    </Button>
-                  )}
-                  {['ready_for_review', 'awaiting_human_review', 'dispatched', 'verifying'].includes(item.dispatch_status) && (
-                    <Button variant="outline" size="sm" onClick={() => setOperatorAction({ kind: 'abandon' })}>
-                      Abandon work item
-                    </Button>
-                  )}
-                  {item.workspace_path && (
-                    <Button variant="destructive" size="sm" title="Reclaim the leased worktree if the owner is gone; this may discard unpushed work." disabled={workspaceLoading} onClick={() => void inspectWorkspace()}>
-                      {workspaceLoading ? 'Checking lease…' : 'Force-release workspace…'}
-                    </Button>
-                  )}
-                </div>
-              </section>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
-              {item.retry_allowed && (
-                <Button onClick={() => onRetry(item)}>
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  Retry
-                </Button>
-              )}
-            </DialogFooter>
-            <AlertDialog open={operatorAction !== null} onOpenChange={(next) => { if (!next) { setOperatorAction(null); setActionReason('') } }}>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>
-                    {operatorAction?.kind === 'force_release' ? 'Force-release leased workspace?' :
-                      operatorAction?.kind === 'resume' ? 'Resume prepared attempt?' :
-                      operatorAction?.kind === 'abandon' ? 'Abandon work item?' :
-                      operatorAction?.kind === 'cancel_revision' ? 'Cancel active revision?' :
-                      operatorAction?.kind === 'cancel_request' ? 'Cancel continuation request?' :
-                      'Release recovery checkpoint?'}
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {operatorAction?.kind === 'force_release'
-                      ? `This may discard dirty or unpushed work in ${operatorAction.workspace.path}. Lease acquired ${formatDateTime(operatorAction.workspace.leased_at)}. Verify the owner is finished before continuing.`
-                      : operatorAction?.kind === 'release_decision' || operatorAction?.kind === 'release_ack'
-                        ? 'This starts a time-limited decision or acknowledgement window. Confirm the responsible agent is available now.'
-                        : 'Deck will check current authority and reject stale or ineligible requests.'}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                {operatorAction?.kind === 'resume' && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="resume-slot">Assign owner slot</Label>
-                    <Select value={reassignToSlotId} onValueChange={setReassignToSlotId}>
-                      <SelectTrigger id="resume-slot"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="current">Keep current owner</SelectItem>
-                        {slots.filter((slot) => slot.enabled).map((slot) => (
-                          <SelectItem key={slot.id} value={String(slot.id)}>{slot.display_name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-                {operatorAction && ['abandon', 'cancel_revision', 'force_release'].includes(operatorAction.kind) && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="operator-action-reason">Reason for audit</Label>
-                    <Input id="operator-action-reason" value={actionReason} onChange={(event) => setActionReason(event.target.value)} />
-                  </div>
-                )}
-                {errorMessage && <p className="text-sm text-destructive" role="alert">{errorMessage}</p>}
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction disabled={actionSaving} onClick={(event) => { event.preventDefault(); void submitOperatorAction() }}>
-                    {actionSaving ? 'Applying…' : 'Confirm action'}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 export function AutonomyPanel({
   preset,
-  agentActivity,
   scopes,
   workItems,
   loading,
@@ -1274,12 +608,8 @@ export function AutonomyPanel({
   onUpdateScope,
   onUpdateContinuationPolicy,
   onDeleteScope,
-  onRetryWorkItem,
-  onFetchScopeRevisions,
-  onCancelContinuationRequest,
 }: {
   preset: AgentTeamPreset
-  agentActivity?: ReadonlyMap<number, AgentActivityObservation>
   scopes: TeamGithubScope[]
   workItems: GithubWorkItem[]
   loading: boolean
@@ -1296,27 +626,16 @@ export function AutonomyPanel({
     operatorToken: string
   ) => Promise<void>
   onDeleteScope: (scope: TeamGithubScope, operatorToken: string) => Promise<void>
-  onRetryWorkItem: (item: GithubWorkItem, operatorToken: string) => Promise<void>
-  onFetchScopeRevisions: (itemId: number, operatorToken: string) => Promise<GithubScopeRevision[]>
-  onCancelContinuationRequest: (
-    item: GithubWorkItem,
-    requestId: number,
-    operatorToken: string
-  ) => Promise<void>
 }) {
   const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
   const [scopeToRemove, setScopeToRemove] = useState<TeamGithubScope | null>(null)
   const [scopeRemovalPending, setScopeRemovalPending] = useState(false)
   const removeTriggerRef = useRef<HTMLButtonElement | null>(null)
   const scopeTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
   const enableTriggerRef = useRef<HTMLButtonElement | null>(null)
   const addRepoButtonRef = useRef<HTMLButtonElement | null>(null)
   const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
-  const [detailItemId, setDetailItemId] = useState<number | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
-  const [retryingWorkItemId, setRetryingWorkItemId] = useState<number | null>(null)
-  const [retryTarget, setRetryTarget] = useState<GithubWorkItem | null>(null)
   const [enableConfirmOpen, setEnableConfirmOpen] = useState(false)
   const [enableWarnings, setEnableWarnings] = useState<string[]>([])
   const [gateOpen, setGateOpen] = useState(false)
@@ -1327,9 +646,6 @@ export function AutonomyPanel({
   const [enableGateActive, setEnableGateActive] = useState(false)
   const [enableError, setEnableError] = useState<string | null>(null)
   const gateRequestIdRef = useRef(0)
-  const [repoFilter, setRepoFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [showActivityHelp, setShowActivityHelp] = useState(false)
 
   const checkGateStatus = useCallback(async (): Promise<boolean | null> => {
     const requestId = ++gateRequestIdRef.current
@@ -1348,108 +664,14 @@ export function AutonomyPanel({
     void checkGateStatus()
     return () => { gateRequestIdRef.current++ }
   }, [checkGateStatus, preset.id])
-  const [operatorTokenStored, setOperatorTokenStored] = useState(() => Boolean(getOperatorToken()))
-  const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
-  const [tokenInput, setTokenInput] = useState('')
-  const [tokenError, setTokenError] = useState<string | null>(null)
-  const tokenResolverRef = useRef<((token: string | null) => void) | null>(null)
-  const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
-  const slotById = useMemo(
-    () => new Map(preset.slots.map((slot) => [slot.id, slot])),
-    [preset.slots]
-  )
+  const { operatorTokenStored, requestToken, clearStoredToken, withOperatorToken, tokenDialog } = useOperatorTokenFlow('to change autonomy or recovery settings')
   const scopeCount = scopes.length
   const scopeById = useMemo(() => new Map(scopes.map((scope) => [scope.id, scope])), [scopes])
   const actionCount = useMemo(() => workItems.filter((item) => workItemAttention(item, scopeById.get(item.scope_id))).length, [scopeById, workItems])
-  const repoOptions = useMemo(
-    () => [...new Set([
-      ...scopes.map((scope) => `${scope.repo_owner}/${scope.repo_name}`),
-      ...workItems.map((item) => `${item.repo_owner}/${item.repo_name}`),
-    ])].sort(),
-    [scopes, workItems]
+  const activeCount = useMemo(
+    () => workItems.filter((item) => ['pending', 'dispatched', 'verifying'].includes(item.dispatch_status)).length,
+    [workItems]
   )
-  useEffect(() => {
-    if (repoFilter !== 'all' && !repoOptions.includes(repoFilter)) {
-      queueMicrotask(() => setRepoFilter('all'))
-    }
-  }, [repoFilter, repoOptions])
-  const visibleItems = useMemo(() => workItems.filter((item) => {
-    if (repoFilter !== 'all' && `${item.repo_owner}/${item.repo_name}` !== repoFilter) return false
-    if (statusFilter === 'attention') return workItemAttention(item, scopeById.get(item.scope_id)) !== null
-    if (statusFilter === 'active') return ['pending', 'dispatched', 'verifying'].includes(item.dispatch_status)
-    if (statusFilter === 'review') return ['awaiting_human_review', 'ready_for_review'].includes(item.dispatch_status)
-    if (statusFilter === 'finished') return ['merged', 'completed'].includes(item.dispatch_status)
-    return true
-  }), [repoFilter, scopeById, statusFilter, workItems])
-  const detailItem = useMemo(
-    () => workItems.find((item) => item.id === detailItemId) ?? null,
-    [detailItemId, workItems]
-  )
-
-  const requestToken = useCallback((message: string | null = null): Promise<string | null> => {
-    const stored = getOperatorToken()
-    if (stored) return Promise.resolve(stored)
-    if (tokenPromiseRef.current) return tokenPromiseRef.current
-    const pending = new Promise<string | null>((resolve) => {
-      tokenResolverRef.current = resolve
-    })
-    tokenPromiseRef.current = pending
-    setTokenError(message)
-    setTokenDialogOpen(true)
-    return pending
-  }, [])
-
-  useEffect(() => () => {
-    tokenResolverRef.current?.(null)
-    tokenResolverRef.current = null
-    tokenPromiseRef.current = null
-  }, [])
-
-  const settleTokenDialog = (token: string | null) => {
-    tokenResolverRef.current?.(token)
-    tokenResolverRef.current = null
-    tokenPromiseRef.current = null
-    setTokenDialogOpen(false)
-    setTokenInput('')
-    setTokenError(null)
-  }
-
-  const submitToken = () => {
-    const token = tokenInput.trim()
-    if (!token) return
-    setOperatorToken(token)
-    setOperatorTokenStored(true)
-    settleTokenDialog(token)
-  }
-
-  const clearStoredToken = () => {
-    clearOperatorToken()
-    setOperatorTokenStored(false)
-  }
-
-  const withOperatorToken = useCallback(async <Result,>(
-    action: (token: string) => Promise<Result>
-  ): Promise<Result> => {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const token = await requestToken(attempt > 0 ? 'The Director key was rejected. Enter a valid key to retry.' : null)
-      if (!token) throw new Error('The Director key is required for this action.')
-      try {
-        return await action(token)
-      } catch (error) {
-        if (!(error instanceof ApiHttpError) || error.status !== 401) throw error
-        clearOperatorToken()
-        setOperatorTokenStored(false)
-        if (attempt === 1) throw error
-      }
-    }
-    throw new Error('The Director key was rejected.')
-  }, [requestToken])
-
-  const fetchRevisions = useCallback(
-    (itemId: number) => withOperatorToken((token) => onFetchScopeRevisions(itemId, token)),
-    [onFetchScopeRevisions, withOperatorToken]
-  )
-
   const inspectGate = async () => {
     setGateOpen(false)
     setGateLoading(true)
@@ -1468,38 +690,6 @@ export function AutonomyPanel({
       setGateLoading(false)
       if (!cancelled) setGateOpen(true)
     }
-  }
-
-  const operateItem = async (
-    item: GithubWorkItem,
-    action: ItemOperatorAction,
-    reason: string,
-    reassignToSlotId?: number
-  ) => {
-    let resultMessage: string | undefined
-    await withOperatorToken(async (token) => {
-      if (action.kind === 'abandon') return abandonGithubWorkItem(item.id, reason, token)
-      if (action.kind === 'resume') return resumeGithubWorkItem(preset.id, item.id, token, reassignToSlotId)
-      if (action.kind === 'force_release') {
-        const released = await forceReleaseGithubWorkspace(item.scope_id, action.workspace, reason, token)
-        const discardedCount = released.discarded_paths?.split('\n').filter(Boolean).length
-        resultMessage = `Released workspace from item #${released.released_item_id}. Local paths flagged: ${discardedCount ?? 'unknown'}; unpushed commits: ${released.unpushed_commits ?? 'unknown'}.`
-        return
-      }
-      if (action.kind === 'cancel_request') {
-        const approvalId = action.revision.approval_request_id
-        if (!approvalId) throw new Error('This revision has no pending approval request.')
-        return onCancelContinuationRequest(item, approvalId, token)
-      }
-      if (action.kind === 'cancel_revision') return cancelGithubActiveRevision(item.id, action.revision, reason, token)
-      if (!('revision' in action)) throw new Error('Unsupported operator action.')
-      if (!action.revision.approval_request_id) throw new Error('This revision has no approval request to release.')
-      return releaseGithubRecoveryCheckpoint(
-        item.id, action.revision, action.kind === 'release_decision' ? 'decision' : 'ack', token
-      )
-    })
-    await onRefresh()
-    return resultMessage
   }
 
   const applyToggle = async (enabled: boolean) => {
@@ -1573,19 +763,6 @@ export function AutonomyPanel({
       // Parent handlers surface the error toast.
     } finally {
       setScopeRemovalPending(false)
-    }
-  }
-
-  const retryWorkItem = async (item: GithubWorkItem) => {
-    if (retryingWorkItemId !== null) return
-    setRetryingWorkItemId(item.id)
-    try {
-      await withOperatorToken((token) => onRetryWorkItem(item, token))
-      setDetailItemId(null)
-    } catch {
-      // Parent handlers surface the error toast.
-    } finally {
-      setRetryingWorkItemId(null)
     }
   }
 
@@ -1723,203 +900,16 @@ export function AutonomyPanel({
       </div>
 
       <Card className="min-w-0">
-        <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <CardTitle>Activity</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">Recent GitHub issues across this team&apos;s watched repos.</p>
-          </div>
-          <span className="min-w-0 text-xs text-muted-foreground">
-            {lastRefreshedAt ? `Table updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Table not refreshed yet'} · table every 5s · GitHub poll every 60s by default
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+          <p>
+            {loading ? 'Loading work items…'
+              : loadError && workItems.length === 0 ? 'Work items are unavailable. Use Refresh to try again.'
+              : `${workItems.length} ${workItems.length === 1 ? 'item' : 'items'} · ${activeCount} active${actionCount > 0 ? ` · ${actionCount} ${actionCount === 1 ? 'needs' : 'need'} your action` : ''}`}
+          </p>
+          <span className="text-xs text-muted-foreground">
+            {lastRefreshedAt ? `Summary updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Summary not refreshed yet'}
           </span>
-        </CardHeader>
-        <CardContent className="min-w-0">
-          {actionCount > 0 && !loading && (
-            <section className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm" aria-label="Operator actions">
-              <div>
-                <p className="font-medium">{actionCount} {actionCount === 1 ? 'item needs' : 'items need'} your action</p>
-                <p className="mt-1 text-muted-foreground">Open the highlighted item to see what the team is waiting for.</p>
-              </div>
-              <Button variant="outline" size="sm" className="h-auto max-w-full whitespace-normal text-left" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
-            </section>
-          )}
-          <section className="mb-3 rounded-lg border p-3 text-sm">
-            <Button variant="link" className="h-auto max-w-full whitespace-normal p-0 text-left font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
-            {showActivityHelp && <ul id="autonomy-activity-help" className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
-              <li>Queued: waiting for an owner or prerequisite. Dispatched: the owner is planning or implementing. Verifying: Deck is watching the PR&apos;s GitHub checks.</li>
-              <li>Your action needed: review or merge a PR under human policy, or inspect a stopped attempt. Leader approval and automatic merge waiting are shown separately. Merged or completed: finished.</li>
-              <li>A gentle pulse means the owner&apos;s current harness reports working. Idle means its turn ended; Stopped means the process stopped; Activity unknown means work cannot be confirmed. These labels stay steady. Owner activity is shared across that owner&apos;s issues, not proof of work on this specific item.</li>
-              <li>Implementation is the product change. Diagnostic investigates failed checks within an approved recovery revision; it cannot promote the product PR.</li>
-              <li>Label match means an area label chose the owner. Classified means slot expertise chose one. Leader fallback means no owner matched and the Leader took the issue.</li>
-            </ul>}
-          </section>
-          <div className="mb-3 flex flex-wrap gap-3">
-            <div className="w-full min-w-0 space-y-1 sm:w-64">
-              <Label htmlFor="activity-repo-filter">Repo</Label>
-              <Select value={repoFilter} onValueChange={setRepoFilter}>
-                <SelectTrigger id="activity-repo-filter"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All repos</SelectItem>
-                  {repoOptions.map((repo) => <SelectItem key={repo} value={repo}>{repo}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="min-w-40 space-y-1">
-              <Label htmlFor="activity-status-filter">Status</Label>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger id="activity-status-filter"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="attention">Needs your action</SelectItem>
-                  <SelectItem value="active">In progress</SelectItem>
-                  <SelectItem value="review">Needs review</SelectItem>
-                  <SelectItem value="finished">Finished</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          {loading ? (
-            <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading activity…</div>
-          ) : loadError && workItems.length === 0 ? (
-            <div className="rounded-lg border p-5 text-sm text-muted-foreground">Activity is unavailable. Use Refresh to try again.</div>
-          ) : workItems.length === 0 ? (
-            <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-              No GitHub work items yet.
-            </div>
-          ) : visibleItems.length === 0 ? (
-            <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-              No work items match these filters.
-            </div>
-          ) : (
-            <div className="max-w-full overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <th className="px-3 py-2 font-medium">Issue</th>
-                    <th className="px-3 py-2 font-medium">Type</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium">Owner</th>
-                    <th className="px-3 py-2 font-medium">PR</th>
-                    <th className="px-3 py-2 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleItems.map((item) => {
-                    const owner = item.owner_slot_id ? slotById.get(item.owner_slot_id) : undefined
-                    const handoffTarget = item.handoff_target_slot_id
-                      ? slotById.get(item.handoff_target_slot_id)
-                      : undefined
-                    const pendingLabel = pendingReasonLabel(item, owner?.display_name)
-                    const pullUrl = prUrl(item)
-                    const attention = workItemAttention(item, scopeById.get(item.scope_id))
-                    return (
-                      <tr key={item.id} className="border-b last:border-0">
-                        <td className="min-w-[280px] px-3 py-3">
-                          <a
-                            href={item.issue_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-medium text-foreground hover:text-primary"
-                          >
-                            #{item.issue_number} — {item.issue_title}
-                          </a>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {item.repo_owner}/{item.repo_name} · updated {formatDateTime(item.updated_at)}
-                          </p>
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex flex-wrap gap-1">
-                            <Badge variant={item.issue_type === 'design' ? 'default' : 'secondary'}>
-                              {item.issue_type}
-                            </Badge>
-                            <Badge variant="outline" title={phaseHelp(item.attempt_phase)}>{phaseLabel(item.attempt_phase)}</Badge>
-                          </div>
-                          {item.active_scope_revision > 0 && (
-                            <p className="mt-1 text-xs text-muted-foreground">revision {item.active_scope_revision}</p>
-                          )}
-                        </td>
-                        <td className="px-3 py-3">
-                          <Badge variant="outline" className={attention ? 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300' : statusBadgeClass(item.dispatch_status)} title={attention?.reason ?? statusHelp(item.dispatch_status)}>
-                            {workItemStatusLabel(item, scopeById.get(item.scope_id))}
-                          </Badge>
-                          {attention && <p className="mt-1 max-w-xs text-xs text-muted-foreground">{attention.reason}</p>}
-                          {pendingLabel && <p className="mt-1 text-xs text-muted-foreground">{pendingLabel}</p>}
-                          {item.handoff_state && (
-                            <p className="mt-1 text-xs text-sky-700 dark:text-sky-400">
-                              Handoff: {item.handoff_state.replaceAll('_', ' ')}
-                              {handoffTarget ? ` → ${handoffTarget.display_name}` : ''}
-                            </p>
-                          )}
-                          {item.escalation_reason && (
-                            <p className="mt-1 text-xs text-destructive">{escalationReasonLabel(item.escalation_reason)}</p>
-                          )}
-                          {item.status_note && (
-                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" title={item.status_note}>
-                              {item.status_note}
-                            </p>
-                          )}
-                          {item.pending_approval_request_id && (
-                            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                              {approvalStatusLabel(item.pending_approval_status)}
-                            </p>
-                          )}
-                        </td>
-                        <td className="px-3 py-3">
-                          <span>{owner?.display_name ?? 'Unassigned'}</span>
-                          {owner && <div className="mt-2"><AgentActivityBadge activity={agentActivity?.get(owner.id)} /></div>}
-                          <p className="mt-1 text-xs text-muted-foreground" title={routeMethodHelp(item.routing_method)}>{routeMethodLabel(item.routing_method)}</p>
-                        </td>
-                        <td className="px-3 py-3">
-                          {pullUrl ? (
-                            <a
-                              href={pullUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label={`Open pull request #${item.pr_number}`}
-                              className="inline-flex items-center gap-1 text-primary"
-                            >
-                              <GitPullRequest className="h-3.5 w-3.5" />
-                              {attention ? `${attention.linkLabel} #${item.pr_number}` : `#${item.pr_number}`}
-                            </a>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                          {(item.retry_count > 0 || item.diagnostic_retry_count > 0) && (
-                            <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground" title={`Product retries: ${item.retry_count}; diagnostic failed heads: ${item.diagnostic_retry_count}`}>
-                              Retries {item.retry_count} · diagnostics {item.diagnostic_retry_count}
-                            </p>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          <div className="flex justify-end gap-2">
-                            {item.retry_allowed && (
-                              <Button
-                                size="sm"
-                                aria-label={`Retry issue #${item.issue_number}`}
-                                disabled={retryingWorkItemId !== null}
-                                onClick={() => setRetryTarget(item)}
-                              >
-                                <RotateCcw className="mr-2 h-4 w-4" />
-                                {retryingWorkItemId === item.id ? 'Retrying' : 'Retry'}
-                              </Button>
-                            )}
-                            {item.dispatch_status === 'escalated' && !item.retry_allowed && (
-                              <span className="max-w-44 text-left text-xs text-muted-foreground">
-                                Retry blocked: {recoveryBlockLabel(item.retry_block_code)}
-                              </span>
-                            )}
-                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={(event) => { detailTriggerRef.current = event.currentTarget; setDetailItemId(item.id) }}>
-                              <Eye className="mr-2 h-4 w-4" />
-                              View
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <Link className="font-medium underline underline-offset-4" to={`/work?team_id=${preset.id}`}>View in Work ›</Link>
         </CardContent>
       </Card>
 
@@ -1951,53 +941,7 @@ export function AutonomyPanel({
         onOpenChange={setPolicyDialog}
         onSave={(scopeId, input) => withOperatorToken((token) => onUpdateContinuationPolicy(scopeId, input, token))}
       />
-      <WorkItemDialog
-        key={detailItem?.id ?? 'closed'}
-        item={detailItem}
-        scope={detailItem ? scopeById.get(detailItem.scope_id) : undefined}
-        ownerActivity={detailItem?.owner_slot_id ? agentActivity?.get(detailItem.owner_slot_id) : undefined}
-        ownerName={detailItem?.owner_slot_id ? slotById.get(detailItem.owner_slot_id)?.display_name : undefined}
-        handoffTargetName={
-          detailItem?.handoff_target_slot_id
-            ? slotById.get(detailItem.handoff_target_slot_id)?.display_name
-            : undefined
-        }
-        onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
-        onReturnFocus={() => (detailTriggerRef.current?.isConnected ? detailTriggerRef.current : addRepoButtonRef.current)?.focus()}
-        onRetry={setRetryTarget}
-        onFetchScopeRevisions={fetchRevisions}
-        onFetchWorkspaces={(scopeId) => withOperatorToken((token) => fetchGithubWorkspaces(scopeId, token))}
-        operatorTokenStored={operatorTokenStored}
-        onRequestOperatorToken={() => requestToken()}
-        slots={preset.slots}
-        onOperate={operateItem}
-      />
-      <OperatorTokenDialog
-        open={tokenDialogOpen}
-        value={tokenInput}
-        error={tokenError}
-        reason="to change autonomy or recovery settings"
-        onValueChange={setTokenInput}
-        onSubmit={submitToken}
-        onCancel={() => settleTokenDialog(null)}
-      />
-      <AlertDialog open={retryTarget !== null} onOpenChange={(open) => { if (!open) setRetryTarget(null) }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Retry issue #{retryTarget?.issue_number}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Retry can discard prior PR, handoff, and attempt markers. If the workspace is still leased,
-              Deck defers re-dispatch until the current owner releases it. Review the work item before continuing.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { if (retryTarget) void retryWorkItem(retryTarget) }}>
-              Retry issue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {tokenDialog}
       <AlertDialog open={enableConfirmOpen} onOpenChange={setEnableConfirmOpen}>
         <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); enableTriggerRef.current?.focus() }}>
           <AlertDialogHeader>

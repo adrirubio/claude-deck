@@ -403,7 +403,19 @@ describe("cursor browsing V26/V27", () => {
 
 describe("work details and protected controls", () => {
   it("does not prompt for safe detail, distinguishes completed and preserves offline actor slot links", async () => {
-    const { requests } = fixtureFetch((path) => standard(path));
+    const record = detail.completed.response.work_item.item;
+    const { requests } = fixtureFetch((path) =>
+      path === `agent-teams/presets/${detail.completed.response.work_item.team.id}/github-work-items`
+        ? jsonResponse({
+            items: [{
+              id: record.id, scope_id: record.scope_id, repo_owner: "fixture", repo_name: "shared",
+              issue_number: record.issue_number, issue_title: record.issue_title, issue_url: "https://github.com/fixture/shared/issues/1",
+              github_updated_at: record.updated_at, issue_type: "code", dispatch_status: "completed", approval_round_count: 0,
+              retry_count: 0, active_scope_revision: 0, attempt_phase: "implementation", diagnostic_retry_count: 0,
+              retry_allowed: false, created_at: record.created_at, updated_at: record.updated_at,
+            }],
+          })
+        : standard(path));
     renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
     await settle();
     expect(
@@ -413,15 +425,22 @@ describe("work details and protected controls", () => {
       screen.getByRole("link", { name: "Review launch for Leader" }),
     ).toHaveAttribute("href", "/teams/1?slot_id=1&review_launch=1");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(requests).toHaveLength(1);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Inspect protected revision history",
-      }),
-    );
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET factory/work-items/9",
+      "GET agent-teams/github-work-items/9/progress",
+    ]);
+    // Recovery history is on the same page now. It asks for the Director key
+    // only when the person asks to load it.
+    expect(
+      await screen.findByText("Enter the Director key to load recovery history."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading history" }));
     await settle();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(requests).toHaveLength(1);
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET factory/work-items/9",
+      "GET agent-teams/github-work-items/9/progress",
+    ]);
   });
   it("uses the existing operator header, preserves denial and refreshes detail without browser agent approval", async () => {
     const eligible = structuredClone(detail.escalated.response);

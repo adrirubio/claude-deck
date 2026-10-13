@@ -1,9 +1,9 @@
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import type { RepositoryDetailResponse } from "@/types/factory";
 import { ReadStatus } from "../components/ReadStatus";
 import { RepositoryCard } from "../components/RepositoryCard";
 import { Time } from "../components/Time";
-import { WorkResults } from "../components/WorkResults";
+import { anchor } from "../components/styles";
 import { useObservation } from "../reads";
 
 export function RepositoryPage() {
@@ -25,11 +25,14 @@ export function RepositoryPage() {
         <>
           <RepositoryCard repository={state.data.repository} />
           <Time value={state.data.generated_at} />
-          <h3 className="text-lg font-semibold">Scope work</h3>
-          <WorkResults
-            key={scopeId}
-            query={`scope_id=${encodeURIComponent(scopeId ?? "")}`}
-          />
+          <p>
+            <Link
+              className={anchor}
+              to={`/work?scope_id=${encodeURIComponent(scopeId ?? "")}`}
+            >
+              View work in Work ›
+            </Link>
+          </p>
         </>
       )}
     </section>

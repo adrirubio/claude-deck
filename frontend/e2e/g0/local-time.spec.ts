@@ -3,7 +3,8 @@ import { enterDirectorKey } from '../support/director-key'
 import { expect, test } from '../support/guard'
 import { localClockPattern, localTimeText, seedAgo } from '../support/time'
 
-// #521: one seeded moment shows the same local time on Teams, Work and Audit.
+// #521: one seeded moment shows the same local time on Work and Audit.
+// Teams no longer lists work items (#533): its Activity table moved to Work.
 // The moment is SHARED_MOMENT in scripts/e2e/scenarios.py: item #103
 // "Document the import format" was dispatched at seed time minus 3 h 17 min,
 // and its work_lifecycle audit event has the same time.
@@ -23,18 +24,14 @@ async function timeText(page: Page, near: string): Promise<string> {
   return text as string
 }
 
-test('@active one seeded moment shows the same local time on Teams, Work and Audit', async ({ page }) => {
+test('@active one seeded moment shows the same local time on Work and Audit', async ({ page }) => {
   await page.goto('/work/3')
   await expect(page.getByText('Document the import format').first()).toBeVisible()
   const work = await timeText(page, 'Document the import format')
-
-  await page.goto('/teams/1?tab=autonomy')
-  await expect(page.getByText('Document the import format').first()).toBeVisible()
-  const teams = await timeText(page, 'Document the import format')
 
   await page.goto('/audit')
   await enterDirectorKey(page)
   const audit = await timeText(page, 'dispatched')
 
-  expect(new Set([work, teams, audit]).size, `time texts differ: ${JSON.stringify({ work, teams, audit })}`).toBe(1)
+  expect(new Set([work, audit]).size, `time texts differ: ${JSON.stringify({ work, audit })}`).toBe(1)
 })
