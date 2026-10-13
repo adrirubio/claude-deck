@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef, type KeyboardEvent } from 'react'
+import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Dialog,
   DialogContent,
@@ -19,15 +20,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { MODAL_SIZES } from '@/lib/constants'
-import { ApiHttpError } from '@/lib/api'
-import { clearOperatorToken, getOperatorToken, setOperatorToken } from '@/features/agent-teams/operatorAuth'
+import { useOperatorTokenFlow } from '@/features/agent-teams/useOperatorTokenFlow'
 import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
-import type { ProjectResponse } from '@/types/projects'
 import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
 import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
-import { useProjectContext } from '@/contexts/ProjectContext'
+import { useProjectContext, type KnownFolder } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import type { SlotLaunchOptions } from '@/types/agentTeams'
@@ -47,26 +46,28 @@ interface NewSessionDialogProps {
 }
 
 const MODE_OPTIONS: { value: Mode; label: string }[] = [
-  { value: 'plain', label: 'Plain' },
-  { value: 'worktree', label: 'Worktree' },
-  { value: 'resume', label: 'Resume' },
+  { value: 'plain', label: 'New session' },
+  { value: 'worktree', label: 'New session in a separate copy (worktree)' },
+  { value: 'resume', label: 'Resume a previous session' },
 ]
 
 const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
-  { value: 'plain', label: 'New' },
-  { value: 'resume', label: 'Resume' },
-  { value: 'fork', label: 'Fork' },
+  { value: 'plain', label: 'New session' },
+  { value: 'resume', label: 'Resume a previous session' },
+  { value: 'fork', label: 'Fork a previous session' },
 ]
 
 const COPILOT_MODE_OPTIONS: { value: Mode; label: string }[] = [
-  { value: 'plain', label: 'New' },
-  { value: 'resume', label: 'Resume' },
+  { value: 'plain', label: 'New session' },
+  { value: 'resume', label: 'Resume a previous session' },
 ]
 
 const OPENCODE_MODE_OPTIONS: { value: Mode; label: string }[] = [
-  { value: 'plain', label: 'New' },
-  { value: 'resume', label: 'Resume' },
+  { value: 'plain', label: 'New session' },
+  { value: 'resume', label: 'Resume a previous session' },
 ]
+
+const OTHER_FOLDER = '__other_folder__'
 
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
 const DEFAULT_LAUNCH_OPTIONS: SlotLaunchOptions = { no_alt_screen: true }
@@ -97,17 +98,8 @@ function loadRememberedPlatform(): RememberedPlatform {
   }
 }
 
-function matchesProjectSearch(project: ProjectResponse, query: string) {
-  const terms = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-
-  if (terms.length === 0) return true
-
-  const searchable = `${project.name} ${project.path}`.toLowerCase()
-  return terms.every((term) => searchable.includes(term))
+function folderLabel(folder: KnownFolder) {
+  return folder.source === 'team' ? `${folder.path} (team checkout)` : folder.path
 }
 
 function stringOption(options: SlotLaunchOptions, key: keyof SlotLaunchOptions) {
@@ -128,7 +120,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const defaultProvider = initialProvider ?? selectedProviderId
   const [provider, setProvider] = useState<AgentProviderId>(defaultProvider)
   const [directory, setDirectory] = useState('')
-  const [projectSearch, setProjectSearch] = useState('')
+  const [otherFolder, setOtherFolder] = useState(false)
   const [mode, setMode] = useState<Mode>('plain')
   const [worktreeName, setWorktreeName] = useState('')
   const [skipPermissions, setSkipPermissions] = useState(false)
@@ -138,18 +130,16 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [useLast, setUseLast] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [operatorTokenInput, setOperatorTokenInput] = useState('')
 
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([])
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(false)
   const [launchDescriptor, setLaunchDescriptor] = useState<ProviderLaunchOptionsResponse | null>(null)
   const [launchDescriptorError, setLaunchDescriptorError] = useState<string | null>(null)
-  const projectSearchRef = useRef<HTMLInputElement>(null)
-  const projectOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   const { listSessions } = useSessionsApi()
-  const { projects, activeProject } = useProjectContext()
+  const { knownFolders } = useProjectContext()
+  const { withOperatorToken, tokenDialog } = useOperatorTokenFlow('to start a session')
   const isClaude = provider === 'claude-code'
   const isCodex = provider === 'codex-cli'
   const isCopilot = provider === 'copilot-cli'
@@ -164,60 +154,27 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       : isCodex
         ? CODEX_MODE_OPTIONS
         : MODE_OPTIONS
-  const filteredProjects = useMemo(
-    () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
-    [projects, projectSearch],
-  )
+  const teamFolders = knownFolders.filter((folder) => folder.source === 'team')
+  const otherFolders = knownFolders.filter((folder) => folder.source !== 'team')
+  const knownPaths = new Set(knownFolders.map((folder) => folder.path))
+  const showPathField = otherFolder || knownFolders.length === 0
+  const folderChoice = showPathField ? OTHER_FOLDER : knownPaths.has(directory.trim()) ? directory.trim() : ''
   const resumeProjectPath = directory.trim()
   const resumeProjectFolder = resumeProjectPath
     ? claudeProjectFolderFromPath(resumeProjectPath)
     : undefined
 
-  function selectProject(project: ProjectResponse) {
-    setDirectory(project.path)
+  function chooseFolder(value: string) {
     setSelectedSession(null)
     setError(null)
-  }
-
-  function focusProjectOption(index: number) {
-    projectOptionRefs.current[index]?.focus()
-  }
-
-  function handleProjectSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'ArrowDown' && filteredProjects.length > 0) {
-      event.preventDefault()
-      focusProjectOption(0)
+    if (value === OTHER_FOLDER) {
+      setOtherFolder(true)
+      setDirectory('')
       return
     }
-
-    if (event.key === 'Enter' && filteredProjects.length === 1) {
-      event.preventDefault()
-      selectProject(filteredProjects[0])
-    }
+    setOtherFolder(false)
+    setDirectory(value)
   }
-
-  function handleProjectOptionKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      focusProjectOption(Math.min(index + 1, filteredProjects.length - 1))
-      return
-    }
-
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      if (index === 0) {
-        projectSearchRef.current?.focus()
-      } else {
-        focusProjectOption(index - 1)
-      }
-    }
-  }
-
-  useEffect(() => {
-    if (open && !directory.trim() && activeProject?.path) {
-      setDirectory(activeProject.path)
-    }
-  }, [open, activeProject?.path, directory])
 
   // Prefill the remembered platform selection when the dialog opens.
   useEffect(() => {
@@ -286,7 +243,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (!open) {
       setDirectory('')
       setProvider(defaultProvider)
-      setProjectSearch('')
+      setOtherFolder(false)
       setMode('plain')
       setWorktreeName('')
       setSkipPermissions(false)
@@ -319,11 +276,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   })()
 
   async function handleLaunch() {
-    const operatorToken = getOperatorToken() ?? operatorTokenInput.trim()
-    if (!operatorToken) {
-      setError('Enter the Deck operator token to launch a session.')
-      return
-    }
     setError(null)
     setSubmitting(true)
 
@@ -405,19 +357,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         ...(isBedrock && (isClaude || isCodex) && optionBedrockModel && { bedrock_model: optionBedrockModel }),
       }
 
-      const response = await spawnSession(request, operatorToken)
-      setOperatorToken(operatorToken)
-      setOperatorTokenInput('')
+      const response = await withOperatorToken((token) => spawnSession(request, token))
       onSpawned(response.tmux_target)
       onOpenChange(false)
     } catch (err) {
-      if (err instanceof ApiHttpError && err.status === 401) {
-        clearOperatorToken()
-        setOperatorTokenInput('')
-        setError('The Deck operator token was rejected. Enter a valid token and retry.')
-      } else {
-        setError(err instanceof Error ? err.message : 'Failed to spawn session')
-      }
+      setError(err instanceof Error ? err.message : 'Failed to start the session')
     } finally {
       setSubmitting(false)
     }
@@ -427,15 +371,15 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(MODAL_SIZES.MD, 'overflow-y-auto')}>
         <DialogHeader>
-          <DialogTitle>New Agent Session</DialogTitle>
+          <DialogTitle>New session</DialogTitle>
           <DialogDescription>
-            Launch a new agent CLI instance in a tmux session.
+            Starts a one-off session that is not part of a team. To add a team member, use <Link className="underline" to="/teams">Teams</Link>.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 min-w-0">
           <div className="space-y-1.5">
-            <Label>Provider</Label>
+            <Label>Harness</Label>
             <Select
               value={provider}
               onValueChange={(value) => {
@@ -459,100 +403,63 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </Select>
           </div>
 
-          {/* Mode selector */}
+          {/* Start selector */}
           <div className="space-y-1.5">
-            <Label>Mode</Label>
-            <div className="flex gap-1 rounded-md bg-muted p-1">
-              {modeOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={cn(
-                    'flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors',
-                    mode === opt.value
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  onClick={() => {
-                    setMode(opt.value)
-                    setSelectedSession(null)
-                    setError(null)
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Directory input */}
-          <div className="space-y-2">
-            {projects.length > 0 && (
-              <div className="space-y-1.5">
-                <Label htmlFor="session-project-search">Project</Label>
-                <Input
-                  ref={projectSearchRef}
-                  id="session-project-search"
-                  type="search"
-                  value={projectSearch}
-                  onChange={(event) => setProjectSearch(event.target.value)}
-                  onKeyDown={handleProjectSearchKeyDown}
-                  placeholder="Search projects by name or path"
-                  autoComplete="off"
-                  aria-controls="session-project-results"
-                />
-                <div
-                  id="session-project-results"
-                  aria-label="Projects"
-                  className="max-h-48 overflow-y-auto rounded-md border border-border bg-background"
-                >
-                  {filteredProjects.length === 0 ? (
-                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                      No projects match.
-                    </div>
-                  ) : (
-                    filteredProjects.map((project, index) => {
-                      const selected = project.path === directory.trim()
-                      return (
-                        <button
-                          key={project.id}
-                          ref={(element) => {
-                            projectOptionRefs.current[index] = element
-                          }}
-                          type="button"
-                          aria-pressed={selected}
-                          className={cn(
-                            'block w-full min-w-0 border-b px-3 py-2 text-left transition-colors last:border-b-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                            selected ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50',
-                          )}
-                          onClick={() => selectProject(project)}
-                          onKeyDown={(event) => handleProjectOptionKeyDown(event, index)}
-                        >
-                          <span className="block truncate text-sm font-medium">
-                            {project.name}
-                          </span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {project.path}
-                          </span>
-                        </button>
-                      )
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-            <Label htmlFor="session-directory">Project Directory</Label>
-            <Input
-              id="session-directory"
-              value={directory}
-              onChange={(e) => {
-                setDirectory(e.target.value)
+            <Label>Start</Label>
+            <Select
+              value={mode}
+              onValueChange={(value) => {
+                setMode(value as Mode)
                 setSelectedSession(null)
                 setError(null)
               }}
-              placeholder="/home/user/project"
-              autoComplete="off"
-            />
+            >
+              <SelectTrigger aria-label="Start">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {modeOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Folder choice */}
+          <div className="space-y-1.5">
+            <Label>Folder</Label>
+            {knownFolders.length > 0 && (
+              <Select value={folderChoice} onValueChange={chooseFolder}>
+                <SelectTrigger aria-label="Folder">
+                  <SelectValue placeholder="Choose a folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  {teamFolders.map((folder) => (
+                    <SelectItem key={folder.path} value={folder.path}>{folderLabel(folder)}</SelectItem>
+                  ))}
+                  {otherFolders.map((folder) => (
+                    <SelectItem key={folder.path} value={folder.path}>{folderLabel(folder)}</SelectItem>
+                  ))}
+                  <SelectItem value={OTHER_FOLDER}>Other folder…</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            {showPathField && (
+              <div className="space-y-1">
+                <Label htmlFor="session-directory" className="sr-only">Folder path</Label>
+                <Input
+                  id="session-directory"
+                  value={directory}
+                  onChange={(e) => {
+                    setDirectory(e.target.value)
+                    setSelectedSession(null)
+                    setError(null)
+                  }}
+                  placeholder="Path of the folder"
+                  autoComplete="off"
+                />
+              </div>
+            )}
           </div>
 
           {/* Worktree name (only in worktree mode) */}
@@ -683,22 +590,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   Skip permission prompts
                 </Label>
               </div>
-              <p className="text-xs text-destructive/80 ml-6">
-                Allows Claude to run tools without asking for confirmation
+              <p className="text-xs text-destructive ml-6">
+                Runs tools without asking
               </p>
-            </div>
-          )}
-
-          {!getOperatorToken() && (
-            <div className="space-y-1.5">
-              <Label htmlFor="new-session-operator-token">Operator token</Label>
-              <Input
-                id="new-session-operator-token"
-                type="password"
-                autoComplete="off"
-                value={operatorTokenInput}
-                onChange={(event) => setOperatorTokenInput(event.target.value)}
-              />
             </div>
           )}
 
@@ -715,9 +609,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             Cancel
           </Button>
           <Button onClick={handleLaunch} disabled={!canLaunch}>
-            {submitting ? 'Launching...' : 'Launch'}
+            {submitting ? 'Starting...' : 'Start session'}
           </Button>
         </DialogFooter>
+        {tokenDialog}
       </DialogContent>
     </Dialog>
   )

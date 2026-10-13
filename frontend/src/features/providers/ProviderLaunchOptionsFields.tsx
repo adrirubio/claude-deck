@@ -130,6 +130,7 @@ export function ProviderLaunchOptionsFields({
               <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
             </SelectContent>
           </Select>
+          <p className="text-xs text-muted-foreground">Where the model runs. The default uses the harness's own sign-in.</p>
         </div>
       )}
 
