@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { ProjectProvider } from './contexts/ProjectContext'
 import { ProviderProvider } from './contexts/ProviderContext'
@@ -17,6 +17,7 @@ import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
 import { RepositorySetupPage } from './features/factory/RepositorySetupPage'
 import { AuditMetricsPage } from './features/factory/AuditMetricsPanel'
 
+function HarnessSummaryAlias() { const { providerId } = useParams(); const { search, hash } = useLocation(); return <Navigate replace to={`/harnesses/${encodeURIComponent(providerId ?? '')}${search}${hash}`} /> }
 function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate replace to={`/teams${search}${hash}`} /> }
 
 function App() {
@@ -37,6 +38,7 @@ function App() {
                 <Route path="repositories/:scopeId" element={<RepositoryPage />} />
                 <Route path="harnesses" element={<HarnessesPage />} />
                 <Route path="harnesses/:providerId" element={<HarnessesPage />} />
+                <Route path="harnesses/:providerId/summary" element={<HarnessSummaryAlias />} />
                 <Route path="harnesses/:providerId/:surface" element={<NativeRoute />} />
                 <Route path="harnesses/:providerId/plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
                 <Route path="harnesses/:providerId/sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />

@@ -97,7 +97,7 @@ test('@active Harnesses lists the providers', async ({ page }) => {
 
 test('@active a harness loads', async ({ page }) => {
   await page.goto('/harnesses/claude-code')
-  await expect(page.getByRole('heading', heading(/Harnesses · Claude Code/))).toBeVisible()
+  await expect(page.getByRole('heading', heading('Claude Code'))).toBeVisible()
 })
 
 test('@active a harness settings page loads', async ({ page }) => {

@@ -29,18 +29,16 @@ beforeEach(() => { resetFactoryReads(); resetProviderOperations(); updateNativeM
 afterEach(() => { cleanup(); resetFactoryReads(); resetProviderOperations(); clearNativeCatalogs(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('navigation hierarchy preserves destinations and actions', () => {
-  it('keeps harness destinations as links, unavailable adapters absent, refresh as a button and navigation GET-only', async () => {
+  it('keeps harness cards as links to the harness page, no code names outside Technical details, refresh as a button and navigation GET-only', async () => {
     localStorage.setItem('claude-deck:selected-provider', 'pi-cli')
     const { requests } = fixtureFetch(standard)
     renderRoute(<ProviderProvider><Location/><HarnessesPage/></ProviderProvider>, '/harnesses', '*'); await settle()
-    const surfaces = screen.getByRole('navigation', { name: 'Claude Code native surfaces' })
-    expect(within(surfaces).getByRole('link', { name: /config \(write capable\)/ })).toHaveAttribute('href', '/harnesses/claude-code/config')
-    expect(within(screen.getByRole('navigation', { name: 'OpenCode native surfaces' })).queryByRole('link')).toBeNull()
+    expect(screen.getAllByRole('link', { name: 'Open' })[0]).toHaveAttribute('href', '/harnesses/claude-code')
+    expect(screen.queryByRole('navigation', { name: /native surfaces/ })).toBeNull()
     expect(screen.getAllByRole('button', { name: 'Refresh observations' })).toHaveLength(5)
-    expect(screen.queryByRole('button', { name: 'Teams and launch planning' })).toBeNull()
     const before = requests.length
-    fireEvent.click(screen.getAllByRole('link', { name: 'Teams and launch planning' })[0]); await settle()
-    expect(screen.getByLabelText('Current route')).toHaveTextContent('/teams')
+    fireEvent.click(screen.getAllByRole('link', { name: 'Open' })[0]); await settle()
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses/claude-code')
     expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
     expect(requests).toHaveLength(before); expect(requests.every(r => r.method === 'GET')).toBe(true)
   })

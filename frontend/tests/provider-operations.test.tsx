@@ -18,7 +18,6 @@ vi.mock('../src/features/config/ConfigViewerPage', () => ({ ConfigViewerPage: fu
   useEffect(() => { void apiClient(selectedProviderId === 'codex-cli' ? 'codex-config' : 'config').catch(() => undefined) }, [selectedProviderId])
   return <><p>Mounted {selectedProviderId} editor</p><input aria-label="Unsaved setting" value={setting} onChange={e=>setSetting(e.target.value)}/></>
 } }))
-vi.mock('../src/features/dashboard/DashboardPage', () => ({ DashboardPage: () => <p>Mounted summary</p> }))
 vi.mock('../src/features/plans/PlanDetailPage', () => ({ PlanDetailPage: () => <p>Mounted plan</p> }))
 vi.mock('../src/features/sessions/SessionViewPage', () => ({ SessionViewPage: () => <p>Mounted transcript</p> }))
 vi.mock('../src/contexts/DashboardContext', () => ({
@@ -64,7 +63,8 @@ describe('accepted provider operations', () => {
   expect(screen.getAllByText('Operations and conditions')).toHaveLength(5)
   expect(screen.getByText('execution controls: unsupported')).toBeInTheDocument()
   expect(screen.getAllByText('execution controls: unknown')).toHaveLength(2)
-  for(const id of ['copilot-cli','opencode-cli','pi-cli']) expect(within(screen.getByRole('navigation',{name:new RegExp(id==='pi-cli'?'Pi':id==='opencode-cli'?'OpenCode':'Copilot')})).queryByRole('link')).toBeNull()
+  expect(screen.getAllByText('No settings pages in Deck')).toHaveLength(3)
+  expect(screen.queryByRole('navigation',{name:/native surfaces/})).toBeNull()
   expect(requests.filter(r=>r.path.endsWith('/operations'))).toHaveLength(5)
   expect(requests.every(r=>r.method==='GET')).toBe(true)
   expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
@@ -135,8 +135,10 @@ describe('required catalog native guards', () => {
  })
  it('guards unavailable summary data sources despite a valid summary adapter', async()=>{
   const c=structuredClone(catalogs['codex-cli']); c.native_surfaces.config={...c.native_surfaces.config,state:'unavailable',adapter_id:null,access:'none'}
-  const {requests}=fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(c):answer(path));native('/harnesses/codex-cli/summary');await settle()
-  expect(screen.getByText('Mounted summary')).toBeInTheDocument()
+  const {requests}=fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(c):answer(path))
+  window.history.replaceState({},'','/harnesses/codex-cli')
+  renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses/codex-cli','/harnesses/:providerId');await settle()
+  expect(screen.getByRole('heading',{name:'Codex CLI'})).toBeInTheDocument()
   const before=requests.length;await expect(apiClient('codex-config')).rejects.toThrow(/unavailable/);await expect(apiClient('providers/codex-cli/features')).rejects.toThrow(/unavailable/);expect(requests).toHaveLength(before)
  })
  it('permits only the known exact operations GET bootstrap and no catalog POST/subpaths', async()=>{
@@ -263,13 +265,11 @@ describe('shared catalog observation identity',()=>{
   expect(screen.getByText('Mounted claude-code editor')).toBeInTheDocument();expect(requests.map(r=>r.path)).not.toContain('codex-config')
  })
  it('narrows dashboard native destinations with the same catalog intersection',async()=>{
-  const {DashboardPage}=await vi.importActual<typeof import('../src/features/dashboard/DashboardPage')>('../src/features/dashboard/DashboardPage')
-  localStorage.setItem('claude-deck:selected-provider','codex-cli')
   fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(scenarios.read_only_config):answer(path))
-  renderRoute(<ProviderProvider><DashboardPage/></ProviderProvider>);await settle()
-  expect(screen.getByRole('button',{name:/View Codex config/})).toBeDisabled()
-  expect(screen.getByRole('button',{name:/Manage feature flags/})).toBeDisabled()
-  expect(screen.getByRole('button',{name:/View all plans/})).toBeEnabled()
-  expect(screen.getByText(/Configured for launch.*Credentials: unknown.*Session: unknown/)).toBeInTheDocument()
+  renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses/codex-cli','/harnesses/:providerId');await settle()
+  const tile=(name:string)=>screen.getByRole('link',{name}).closest('li') as HTMLElement
+  expect(within(tile('Configuration')).getByText('View only')).toBeInTheDocument()
+  expect(within(tile('Plans')).getByText('View only')).toBeInTheDocument()
+  expect(screen.getByRole('link',{name:'Configuration'})).toHaveAttribute('href','/harnesses/codex-cli/config')
  })
 })

@@ -1,7 +1,7 @@
 // Native pages whose data depends on a project folder. Each one reads the
 // project from its own URL (?project=<path>), not from a server-wide setting.
 const PROJECT_SCOPED_SURFACES = new Set([
-  'summary', 'config', 'mcp', 'plugins', 'commands', 'hooks', 'permissions', 'agents',
+  'config', 'mcp', 'plugins', 'commands', 'hooks', 'permissions', 'agents',
   'skills', 'memory', 'backup', 'output-styles', 'plans',
 ])
 

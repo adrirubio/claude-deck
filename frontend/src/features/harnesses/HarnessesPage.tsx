@@ -1,12 +1,16 @@
 import { Link, useParams } from "react-router-dom";
+import { ChevronLeft, Lock } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
-import { useProviderContext } from "@/contexts/ProviderContext";
+import { useProviderContext, NativeProviderScope } from "@/contexts/ProviderContext";
+import { DashboardProvider, useDashboard } from "@/contexts/DashboardContext";
 import { useProviderOperations } from "@/hooks/useProviders";
 import { harnesses } from "@/features/factory/filterHelpers";
-import { surfaceRegistry, nativeAccess } from "@/features/native-settings/surfaceRegistry";
-import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus } from "@/types/providers";
+import { surfaceRegistry, nativeAccess, type NativeSurface } from "@/features/native-settings/surfaceRegistry";
+import { SURFACE_GROUPS, surfaceInfo } from "@/features/harnesses/surfaceCatalog";
+import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus, type ProviderOperations } from "@/types/providers";
 
 const destination = buttonVariants({ variant: "outline", className: "h-auto min-h-11 max-w-full whitespace-normal break-words justify-start text-left focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background" });
+const focusRing = "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 // A card shows no "unknown" or "unavailable" while the registry or its own operating catalog still loads.
 function HarnessCardSkeleton({ id }: { id: AgentProviderId }) {
@@ -24,49 +28,156 @@ function HarnessCardSkeleton({ id }: { id: AgentProviderId }) {
   );
 }
 
-function HarnessCard({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
-  const { state, catalog, refresh, refreshing } = useProviderOperations(id);
+function readinessLabel(metadata: AgentProviderStatus | undefined, catalog: ProviderOperations | null) {
+  if (metadata && !metadata.installed) return "Not installed";
+  const state = catalog?.readiness.configuration.state;
+  return state === "ready" ? "Ready" : state === "blocked" ? "Needs attention" : null;
+}
+
+// Code names, access codes, credentials, session binding and the raw observation live here only.
+function TechnicalDetails({ id, metadata }: { id: AgentProviderId; metadata?: AgentProviderStatus }) {
+  const { catalog, refresh, refreshing } = useProviderOperations(id);
   const readiness = catalog?.readiness;
+  return (
+    <details className="rounded-lg border bg-card p-3">
+      <summary className="cursor-pointer font-medium">Technical details</summary>
+      <div className="space-y-3 pt-3">
+        <p>Binary: {metadata ? metadata.installed ? `installed ${metadata.version ?? ""}${metadata.binary_path ? ` · ${metadata.binary_path}` : ""}` : "missing" : "not reported"}</p>
+        <dl className="space-y-2 text-sm" aria-label={`${harnesses[id]} readiness`}>
+          <div>
+            <dt className="font-medium">Configuration</dt>
+            <dd>{readiness?.configuration.state === "ready" ? "Configured for launch" : readiness?.configuration.state === "blocked" ? "Configuration blocked" : "Configuration unknown"}</dd>
+            {readiness?.configuration.checks.map(check => <dd key={check.code}>{check.reason}</dd>)}
+          </div>
+          <div><dt className="font-medium">Credentials</dt><dd>{readiness?.credentials.state ?? "unknown"} · {readiness?.credentials.reason ?? "Credentials not checked; configuration does not prove model access."}</dd></div>
+          <div><dt className="font-medium">Session</dt><dd>{readiness?.session.state ?? "unknown"} · {readiness?.session.reason ?? "No team slot selected; a generic provider card cannot establish a worker binding."}</dd></div>
+        </dl>
+        {readiness && <p className="text-xs text-muted-foreground">Observation: {readiness.probe_state} · {new Date(readiness.observed_at).toLocaleString()}. {readiness.probe_state === "pending" ? "Local checks are still pending." : readiness.probe_state === "failed" ? "Local checks could not complete; uncertain results remain unknown." : "Local configuration checks do not contact a model."}</p>}
+        <button type="button" className={buttonVariants({ variant: "secondary", className: "h-auto min-h-11 whitespace-normal text-left focus-visible:ring-2" })} onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
+        {catalog && <details>
+          <summary className="cursor-pointer">Operations and conditions</summary>
+          <ul className="space-y-3 pt-2 text-sm">
+            {providerOperationKeys.map(key => {
+              const op = catalog.operations[key];
+              return <li key={key}><p className="font-medium">{key.replaceAll("_", " ")}: {op.state}</p><p>{op.reason}</p>{op.conditions.length > 0 && <p>Requires: {op.conditions.join("; ")}.</p>}</li>;
+            })}
+          </ul>
+        </details>}
+        {catalog && <p>Native pages: {Object.keys(surfaceRegistry[id]).length ? "matching implemented adapters listed below" : "no dedicated settings adapters; CLI and Mail integration support are separate"}</p>}
+        {catalog && <ul className="space-y-1 text-sm" aria-label={`${harnesses[id]} native page access`}>
+          {Object.keys(surfaceRegistry[id]).map(surface => {
+            const access = nativeAccess(id, surface, metadata, catalog);
+            return <li key={surface}>{surface}: {access ? access.replaceAll("_", " ") : "unavailable"}</li>;
+          })}
+        </ul>}
+        {catalog && <details><summary className="cursor-pointer">Reported native capabilities</summary><ul className="text-sm">{Object.entries(catalog.native_capabilities).map(([name, value]) => <li key={name}>{name}: {value.state} · {value.reason}</li>)}</ul></details>}
+      </div>
+    </details>
+  );
+}
+
+/** The pages that this harness has, with the access that the loaded catalog grants. */
+function availablePages(id: AgentProviderId, metadata: AgentProviderStatus | undefined, catalog: ProviderOperations) {
+  return (Object.keys(surfaceInfo) as NativeSurface[])
+    .filter(surface => surfaceRegistry[id][surface])
+    .map(surface => ({ surface, info: surfaceInfo[surface]!, access: nativeAccess(id, surface, metadata, catalog) }))
+    .filter((page): page is typeof page & { access: NonNullable<typeof page.access> } => page.access !== null);
+}
+
+function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; metadata?: AgentProviderStatus; catalog: ProviderOperations; withCounts: boolean }) {
+  const { stats } = useDashboard({ autoFetch: withCounts });
+  const providerStats = withCounts && stats?.providerId === id ? stats : null;
+  const pages = availablePages(id, metadata, catalog);
+  if (!pages.length) {
+    return (
+      <p>
+        {harnesses[id]} has no settings pages in Deck. <Link className="text-primary underline" to="/teams">Open Teams</Link> or <Link className="text-primary underline" to={`/agent-bridge?provider=${id}`}>Live sessions</Link> to work with it.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {SURFACE_GROUPS.map(group => {
+        const inGroup = pages.filter(page => page.info.group === group);
+        if (!inGroup.length) return null;
+        return (
+          <section key={group} aria-labelledby={`group-${group}`} className="space-y-2">
+            <h3 id={`group-${group}`} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h3>
+            <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {inGroup.map(({ surface, info, access }) => {
+                const Icon = info.icon;
+                const count = providerStats ? info.count?.(providerStats) : null;
+                return (
+                  <li key={surface} className="flex min-w-0 gap-3 rounded-lg border-2 bg-card p-3">
+                    <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted"><Icon className="h-4 w-4" /></span>
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link data-plain="name" className={`font-semibold text-foreground hover:underline ${focusRing}`} to={`/harnesses/${id}/${surface}`}>{info.name}</Link>
+                        {access === "read_only" && <span className="inline-flex items-center gap-1 rounded border px-1.5 text-xs text-muted-foreground"><Lock className="h-3 w-3" aria-hidden="true" />View only</span>}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{info.purpose}</p>
+                      {count && <p data-plain="count" className="text-xs text-muted-foreground">{count}</p>}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
+  const { state, catalog } = useProviderOperations(id);
+  const summaryAccess = catalog ? nativeAccess(id, "summary", metadata, catalog) : null;
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
+  const status = readinessLabel(metadata, catalog);
+  return (
+    <NativeProviderScope providerId={id} onSelect={() => undefined}>
+      <div className="space-y-6">
+        <nav aria-label="Breadcrumb" className="text-sm">
+          <Link className={`inline-flex items-center gap-1 text-muted-foreground hover:underline ${focusRing}`} to="/harnesses"><ChevronLeft className="h-3 w-3" aria-hidden="true" />All harnesses</Link>
+        </nav>
+        <header className="space-y-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-2xl font-semibold">{harnesses[id]}</h2>
+            {status && <span className="rounded-full border px-2 py-0.5 text-sm">{status}</span>}
+          </div>
+          {metadata?.installed && metadata.version && <p className="text-sm text-muted-foreground">Version {metadata.version}</p>}
+        </header>
+        {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
+        {catalog && (
+          <DashboardProvider>
+            <Tiles id={id} metadata={metadata} catalog={catalog} withCounts={summaryAccess !== null} />
+          </DashboardProvider>
+        )}
+        <TechnicalDetails id={id} metadata={metadata} />
+      </div>
+    </NativeProviderScope>
+  );
+}
+
+function HarnessCard({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
+  const { state, catalog } = useProviderOperations(id);
+  if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
+  const status = readinessLabel(metadata, catalog);
+  const pageCount = catalog ? availablePages(id, metadata, catalog).length : 0;
   return (
     <article className="min-w-0 space-y-3 rounded-lg border bg-card p-4 break-words">
-      <h3 className="text-lg font-semibold">
-        <Link className="rounded-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" to={`/harnesses/${id}`}>{harnesses[id]}</Link>
-      </h3>
-      <p>Binary: {metadata ? metadata.installed ? `installed ${metadata.version ?? ""}` : "missing" : "not reported"}</p>
-      {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
-      <dl className="space-y-2 text-sm" aria-label={`${harnesses[id]} readiness`}>
-        <div>
-          <dt className="font-medium">Configuration</dt>
-          <dd>{readiness?.configuration.state === "ready" ? "Configured for launch" : readiness?.configuration.state === "blocked" ? "Configuration blocked" : "Configuration unknown"}</dd>
-          {readiness?.configuration.checks.map(check => <dd key={check.code}>{check.reason}</dd>)}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="space-y-1">
+          <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+            <Link className={`text-primary underline-offset-4 hover:underline ${focusRing}`} to={`/harnesses/${id}`}>{harnesses[id]}</Link>
+            {status && <span className="rounded-full border px-2 py-0.5 text-xs font-normal">{status}</span>}
+          </h3>
+          <p className="text-sm text-muted-foreground">{pageCount > 0 ? `${pageCount} settings ${pageCount === 1 ? "page" : "pages"}` : "No settings pages in Deck"}</p>
         </div>
-        <div><dt className="font-medium">Credentials</dt><dd>{readiness?.credentials.state ?? "unknown"} · {readiness?.credentials.reason ?? "Credentials not checked; configuration does not prove model access."}</dd></div>
-        <div><dt className="font-medium">Session</dt><dd>{readiness?.session.state ?? "unknown"} · {readiness?.session.reason ?? "No team slot selected; a generic provider card cannot establish a worker binding."}</dd></div>
-      </dl>
-      {readiness && <p className="text-xs text-muted-foreground">Observation: {readiness.probe_state} · {new Date(readiness.observed_at).toLocaleString()}. {readiness.probe_state === "pending" ? "Local checks are still pending." : readiness.probe_state === "failed" ? "Local checks could not complete; uncertain results remain unknown." : "Local configuration checks do not contact a model."}</p>}
-      <button type="button" className={buttonVariants({ variant: "secondary", className: "h-auto min-h-11 whitespace-normal text-left focus-visible:ring-2" })} onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
-      {catalog && <details>
-        <summary className="cursor-pointer">Operations and conditions</summary>
-        <ul className="space-y-3 pt-2 text-sm">
-          {providerOperationKeys.map(key => {
-            const op = catalog.operations[key];
-            return <li key={key}><p className="font-medium">{key.replaceAll("_", " ")}: {op.state}</p><p>{op.reason}</p>{op.conditions.length > 0 && <p>Requires: {op.conditions.join("; ")}.</p>}</li>;
-          })}
-        </ul>
-      </details>}
-      {catalog && <p>Native pages: {Object.keys(surfaceRegistry[id]).length ? "matching implemented adapters listed below" : "no dedicated settings adapters; CLI and Mail integration support are separate"}</p>}
-      {catalog && <nav className="flex flex-wrap items-start gap-2 text-sm" aria-label={`${harnesses[id]} native surfaces`}>
-        {Object.keys(surfaceRegistry[id]).map(surface => {
-          const access = nativeAccess(id, surface, metadata, catalog);
-          return access ? <Link className={destination} key={surface} to={`/harnesses/${id}/${surface}`}>{surface === "summary" ? "Configuration summary" : surface.replaceAll("-", " ")} ({access.replaceAll("_", " ")})</Link> : <span key={surface}>{surface}: unavailable</span>;
-        })}
-      </nav>}
-      {catalog && <details><summary className="cursor-pointer">Reported native capabilities</summary><ul className="text-sm">{Object.entries(catalog.native_capabilities).map(([name, value]) => <li key={name}>{name}: {value.state} · {value.reason}</li>)}</ul></details>}
-      <div className="flex flex-wrap items-start gap-2 text-sm">
-        <Link className={destination} to="/teams">Teams and launch planning</Link>
-        <Link className={destination} to={`/agent-bridge?provider=${id}`}>Live sessions</Link>
+        <Link className={destination} to={`/harnesses/${id}`}>Open</Link>
       </div>
+      {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
+      <TechnicalDetails id={id} metadata={metadata} />
     </article>
   );
 }
@@ -75,12 +186,14 @@ export function HarnessesPage() {
   const { providerId } = useParams();
   const { providers, loading, error } = useProviderContext();
   const ids = Object.keys(harnesses).filter(id => !providerId || providerId === id) as AgentProviderId[];
+  const single = providerId && ids.length === 1 ? ids[0] : null;
   return <section className="space-y-5">
-    <h2 className="text-2xl font-semibold">Harnesses{providerId ? ` · ${harnesses[providerId as AgentProviderId] ?? providerId}` : ""}</h2>
-    <p>Operations, local launch configuration and native pages for every harness. Credential access and a verified worker binding are separate observations.</p>
+    {!single && <h2 className="text-2xl font-semibold">Harnesses{providerId ? ` · ${harnesses[providerId as AgentProviderId] ?? providerId}` : ""}</h2>}
+    {!single && <p>The agent tools on this machine. Open one to see its settings pages.</p>}
     {loading && <p role="status">Loading harness registry…</p>}
     {error && <p role="alert">{error}</p>}
     {!ids.length && <p>Unknown harness. <Link to="/harnesses">Show all harnesses</Link></p>}
-    {!error && <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={providers.find(p => p.id === id)} registryLoading={loading} />)}</div>}
+    {!error && single && <HarnessPage id={single} metadata={providers.find(p => p.id === single)} registryLoading={loading} />}
+    {!error && !single && <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={providers.find(p => p.id === id)} registryLoading={loading} />)}</div>}
   </section>;
 }
