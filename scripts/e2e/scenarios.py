@@ -14,6 +14,7 @@ by their seeded names where they can.
 | Deleted team with history | Retired crew: audit events kept after the team is deleted. |
 | Mail with unacknowledged messages | Director and member messages without an ack. |
 | Locked Audit | Audit events exist; the browser has no Director key. |
+| Lane C (#604) | #516 a live team named like the deleted one; #520 a second group of refused requests. |
 | Lane G (#606) | #527 mail senders, #528 lease and reminders, #535 active revision, #549 supervisor. |
 | One agent, one state (#540) | F2 Frontend: a live fake pane, a live MCP session and an observation 3 h old. |
 """
@@ -293,6 +294,7 @@ def seed_core(s: Seeder, root: Path) -> None:
         last_assessed_at=None, error_code=None,
     )
     seed_lane_g(s, root, sample)
+    seed_lane_c(s)
 
 
 # Lane G (#606): states for the backend journeys in frontend/e2e/lane-g/.
@@ -369,6 +371,18 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
     # state for item #102 here, in the PR that activates its journey.
 
 
+# Lane C (#604): states for the Audit journeys in frontend/e2e/lane-c/.
+# A live team with the deleted team's name, so Audit must list two distinct
+# "Retired crew" entries (#516). It has no slots, scope or work items, so the
+# Overview count and the team filters on Overview and Work do not change.
+DUPLICATE_NAME_TEAM = 4
+
+
+def seed_lane_c(s: Seeder) -> None:
+    preset(s, DUPLICATE_NAME_TEAM, "Retired crew", "A new team that reuses an old team name.",
+           autonomy=False, leader_slot=None)
+
+
 async def seed_history() -> None:
     """Audit events through the real ledger service, so shapes stay valid."""
     from app.database import AsyncSessionLocal
@@ -391,6 +405,19 @@ async def seed_history() -> None:
                 occurred_at=SEED_NOW - ago, actor=member_actor, scope_id=RELEASE_SCOPE,
                 item_id=ITEM_ATTENTION, action_outcome="rejected", sanitized_reason=code,
                 correlation_id=f"continuation_request:rejected:seed:{index}",
+            )
+        # Lane C (#520): a second group, B2 Backend on #102. The last code is
+        # unknown to the controller, so the panel needs its fallback sentence.
+        second_actor = audit.derive_actor(actor_kind="member", member_id=3)
+        for index, (code, ago) in enumerate([
+            ("continuation_budget_exhausted", timedelta(hours=7)),
+            ("e2e_unknown_reason_code", timedelta(hours=6, minutes=30)),
+        ]):
+            await audit.record_observation(
+                db, event_kind="continuation_request", source="e2e_seed",
+                occurred_at=SEED_NOW - ago, actor=second_actor, scope_id=RELEASE_SCOPE,
+                item_id=ITEM_REVIEW, action_outcome="rejected", sanitized_reason=code,
+                correlation_id=f"continuation_request:rejected:seed:second:{index}",
             )
         await audit.record_observation(
             db, event_kind="work_lifecycle", source="e2e_seed", occurred_at=SHARED_MOMENT,
