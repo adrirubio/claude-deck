@@ -1,0 +1,228 @@
+#!/usr/bin/python3
+"""Supervise one configured team. Preserve work and never change its roster."""
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import re
+import signal
+import sqlite3
+import tempfile
+import urllib.request
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def process(pid):
+    path = pathlib.Path('/proc') / str(pid)
+    raw = (path / 'stat').read_text()
+    fields = raw[raw.rindex(')') + 2:].split()
+    return int(fields[1]), fields[19], path.stat().st_uid
+
+def save(path, data):
+    path = pathlib.Path(path)
+    fd, staging = tempfile.mkstemp(prefix='.team-supervisor-', dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(data, indent=2) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(staging, path)
+    finally:
+        try:
+            os.unlink(staging)
+        except FileNotFoundError:
+            pass
+
+NOTICES = {
+    'cybersecurity_notice': re.compile(r'this content was flagged for possible cybersecurity risk', re.I),
+    'cyber_authorization_notice': re.compile(r'to get authorized for security work.{0,100}trusted access for cyber', re.I | re.S),
+}
+ERROR_CODES = {'content_policy_violation', 'safety_check_failed', 'cybersecurity_block', 'cybersecurity_blocked'}
+
+def notice(record):
+    # A quoted instruction or a tool result must not create a safety hold.
+    kind = record.get('type')
+    if kind == 'assistant':
+        message = record.get('message') or {}
+        content = message.get('content', [])
+        if isinstance(content, list):
+            text = '\n'.join(b.get('text', '') for b in content if isinstance(b, dict) and b.get('type') == 'text')
+        else:
+            text = str(content)
+        for rule, pattern in NOTICES.items():
+            if pattern.search(text):
+                return rule
+        if record.get('isApiErrorMessage'):
+            for code in ERROR_CODES:
+                if code in text.lower():
+                    return code
+    if kind == 'system' and record.get('subtype') == 'api_error':
+        error = record.get('error') or {}
+        if isinstance(error, dict):
+            for field in ['code', 'type']:
+                if error.get(field) in ERROR_CODES:
+                    return error[field]
+    if kind == 'event_msg':
+        payload = record.get('payload') or {}
+        if payload.get('type') in {'error', 'warning', 'agent_message'}:
+            text = str(payload.get('message', ''))
+            for rule, pattern in NOTICES.items():
+                if pattern.search(text):
+                    return rule
+    return None
+
+class Supervisor:
+    def __init__(self, config):
+        self.config = config
+        self.state_path = pathlib.Path(config['state_path'])
+        self.hold_path = pathlib.Path(config['hold_path'])
+        self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {'offsets': {}, 'autonomy_enabled': False}
+
+    def api(self, method, path, body=None):
+        cfg = dict(line.split('=', 1) for line in pathlib.Path(self.config['operator_env']).read_text().splitlines() if '=' in line)
+        request = urllib.request.Request(self.config['api'] + path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Content-Type': 'application/json', 'X-Deck-Operator-Token': cfg['OPERATOR_TOKEN']})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.load(response)
+
+    def bindings(self):
+        with sqlite3.connect('file:' + self.config['database'] + '?mode=ro', uri=True, timeout=2) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute('SELECT b.*, s.launch_options, s.repo_path FROM agent_pane_bindings b JOIN agent_team_slots s ON s.id=b.slot_id WHERE b.preset_id=?', (self.config['preset_id'],)).fetchall()
+        live = []
+        for row in rows:
+            if row['slot_id'] not in self.config['slot_ids']:
+                continue
+            try:
+                _, start, uid = process(row['pane_pid'])
+            except (OSError, ValueError, IndexError):
+                continue
+            if start == row['pane_proc_start'] and uid == self.config['agent_uid']:
+                live.append(dict(row))
+        return live
+
+    def freeze(self):
+        roots = self.bindings()
+        processes = {}
+        for path in pathlib.Path('/proc').iterdir():
+            if not path.name.isdigit():
+                continue
+            try:
+                processes[int(path.name)] = process(int(path.name))
+            except (OSError, ValueError, IndexError):
+                continue
+        selected = {row['pane_pid'] for row in roots}
+        while True:
+            added = {pid for pid, (parent, _, uid) in processes.items() if parent in selected and uid == self.config['agent_uid']}
+            if added <= selected:
+                break
+            selected |= added
+        frozen = []
+        for pid in sorted(selected):
+            try:
+                if process(pid) != processes[pid]:
+                    continue
+                os.kill(pid, signal.SIGSTOP)
+                frozen.append({'pid': pid, 'proc_start': processes[pid][1]})
+            except (OSError, KeyError):
+                pass
+        return frozen
+
+    def stop(self, reason, *, security=False, rule=None):
+        event = {'time_utc': now(), 'preset_id': self.config['preset_id'], 'reason': reason, 'rule': rule, 'security_hold': security}
+        if security:
+            save(self.hold_path, event)
+        try:
+            self.api('PATCH', '/agent-teams/presets/' + str(self.config['preset_id']), {'autonomy_enabled': False})
+            for scope in self.config['scope_ids']:
+                self.api('PATCH', '/agent-teams/github-scopes/' + str(scope), {'enabled': False})
+            event['autonomy_off_verified'] = not self.api('GET', '/agent-teams/presets/' + str(self.config['preset_id']))['autonomy_enabled']
+        except Exception as exc:
+            event['controller_error'] = type(exc).__name__
+        try:
+            event['frozen_processes'] = self.freeze()
+        except Exception as exc:
+            event['freeze_error'] = type(exc).__name__
+        if security:
+            save(self.hold_path, event)
+        self.state.update(last_tick=now(), mode='WAITING_FOR_USER' if security else 'RECOVERY_REQUIRED', autonomy_enabled=False, incident=event)
+        save(self.state_path, self.state)
+
+    def scan(self, bindings):
+        paths = set()
+        for binding in bindings:
+            options = json.loads(binding['launch_options'] or '{}')
+            native_id = options.get('session_id')
+            if not native_id or not re.fullmatch(r'[0-9a-f-]{36}', native_id):
+                raise ValueError('native_session_identity_missing')
+            folder = '-' + binding['repo_path'].strip('/').replace('/', '-')
+            path = pathlib.Path(self.config['native_project_root']) / folder / (native_id + '.jsonl')
+            if not path.exists():
+                raise FileNotFoundError('native_transcript_missing')
+            paths.add(path)
+        for path in paths:
+            key = str(path)
+            offset = int(self.state['offsets'].get(key, 0))
+            if path.stat().st_size < offset:
+                raise ValueError('native_transcript_shrank')
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                inspected = 0
+                while inspected < 16 * 1024 * 1024:
+                    start = stream.tell()
+                    line = stream.readline(8 * 1024 * 1024)
+                    if not line:
+                        break
+                    if not line.endswith(b'\n'):
+                        stream.seek(start)
+                        if len(line) == 8 * 1024 * 1024:
+                            raise ValueError('native_record_too_large')
+                        break
+                    inspected += len(line)
+                    record = json.loads(line)
+                    found = notice(record)
+                    if found:
+                        self.stop('security_notice', security=True, rule=found)
+                        return False
+                self.state['offsets'][key] = stream.tell()
+        return True
+
+    def tick(self):
+        if self.hold_path.exists():
+            self.api('PATCH', '/agent-teams/presets/' + str(self.config['preset_id']), {'autonomy_enabled': False})
+            for scope in self.config['scope_ids']:
+                self.api('PATCH', '/agent-teams/github-scopes/' + str(scope), {'enabled': False})
+            self.state.update(last_tick=now(), mode='WAITING_FOR_USER', autonomy_enabled=False)
+            save(self.state_path, self.state)
+            return
+        preset = self.api('GET', '/agent-teams/presets/' + str(self.config['preset_id']))
+        if {slot['id'] for slot in preset['slots'] if slot['enabled']} != set(self.config['slot_ids']):
+            raise ValueError('configured_roster_changed')
+        bindings = self.bindings()
+        if not self.scan(bindings):
+            return
+        members = self.api('GET', '/agent-mail/team?sync=true')['members']
+        connected = {m.get('team_slot_id') for m in members if m.get('team_preset_id') == self.config['preset_id'] and m.get('status') == 'connected' and m.get('wake_state') == 'wakeable'}
+        missing = set(self.config['slot_ids']) - connected
+        self.state['binding_failures'] = self.state.get('binding_failures', 0) + 1 if missing else 0
+        if preset['autonomy_enabled'] and self.state['binding_failures'] >= 3:
+            self.stop('authenticated_member_missing')
+            return
+        self.state.update(last_tick=now(), mode='SUPERVISING' if preset['autonomy_enabled'] else 'PREPARED_DISARMED', autonomy_enabled=preset['autonomy_enabled'], connected_slots=sorted(connected), missing_slots=sorted(missing), live_panes=len(bindings))
+        save(self.state_path, self.state)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', required=True)
+    args = parser.parse_args()
+    supervisor = Supervisor(json.loads(pathlib.Path(args.config).read_text()))
+    try:
+        supervisor.tick()
+    except Exception as exc:
+        if supervisor.state.get('autonomy_enabled') or pathlib.Path(supervisor.config['armed_path']).exists():
+            supervisor.stop('supervision_' + type(exc).__name__)
+        else:
+            supervisor.state.update(last_tick=now(), mode='STARTUP_GAP', error_type=type(exc).__name__)
+            save(supervisor.state_path, supervisor.state)
