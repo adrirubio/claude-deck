@@ -3,8 +3,6 @@ import {
   useProviderContext,
   NativeProviderScope,
 } from "@/contexts/ProviderContext";
-import { DashboardProvider } from "@/contexts/DashboardContext";
-import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { ConfigViewerPage } from "@/features/config/ConfigViewerPage";
 import { MCPServersPage } from "@/features/mcp/MCPServersPage";
 import { PluginsPage } from "@/features/plugins/PluginsPage";
@@ -29,7 +27,6 @@ import { nativeAdapter, nativeAccess } from "./surfaceRegistry";
 import { ProjectSelector } from "@/features/projects/ProjectSelector";
 import { projectScopedSurface } from "./projectScope";
 const pages = {
-  summary: DashboardPage,
   config: ConfigViewerPage,
   mcp: MCPServersPage,
   plugins: PluginsPage,
@@ -113,11 +110,7 @@ export function NativeRoute({
           {access.replaceAll("_", " ")} · independent of delivery filters
         </p>
         {!detail && projectScopedSurface(`/harnesses/${provider}/${surface}`) && <ProjectSelector />}
-        {surface === "summary" ? (
-          <DashboardProvider>
-            <DashboardPage />
-          </DashboardProvider>
-        ) : detail === "session" ? (
+        {detail === "session" ? (
           <SessionViewPage />
         ) : detail === "plan" ? (
           <PlanDetailPage />

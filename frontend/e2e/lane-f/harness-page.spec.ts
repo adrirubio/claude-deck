@@ -7,7 +7,8 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // harness page; no code name or access code is visible outside "Technical
 // details"; the summary URL no longer shows a second harness picker.
 // Design reference: screen 19 (harness page).
-// @pending until #524 merges.
+// @active since #524 merged. The code-name check ignores the plain names and the count
+// phrases of the tiles (elements with data-plain): "Slash commands" and "3 hooks" are plain words.
 
 // Code names of the native surfaces, and access codes. A plain name such as
 // "MCP servers" or "Settings" is fine; the lowercase code name is not.
@@ -20,12 +21,13 @@ async function plainText(region: Locator): Promise<string> {
     clone.querySelectorAll('details').forEach(details => {
       if (/technical details/i.test(details.querySelector('summary')?.textContent ?? '')) details.remove()
     })
+    clone.querySelectorAll('[data-plain]').forEach(element => element.remove())
     return (clone.textContent ?? '').replace(/\s+/g, ' ')
   })
 }
 
 for (const harness of ['claude-code', 'codex-cli']) {
-  test(`@pending ${harness}: each native page has a plain name and a one-line purpose`, async ({ page }) => {
+  test(`@active ${harness}: each native page has a plain name and a one-line purpose`, async ({ page }) => {
     await page.goto(`/harnesses/${harness}`)
     const links = page.locator(`main a[href^="/harnesses/${harness}/"]`)
     await expect(links.first()).toBeVisible()
@@ -39,7 +41,7 @@ for (const harness of ['claude-code', 'codex-cli']) {
     }
   })
 
-  test(`@pending ${harness}: no code name or access code outside Technical details`, async ({ page }) => {
+  test(`@active ${harness}: no code name or access code outside Technical details`, async ({ page }) => {
     await page.goto(`/harnesses/${harness}`)
     await expect(page.locator('main')).toBeVisible()
     const text = await plainText(page.locator('main'))
@@ -48,7 +50,7 @@ for (const harness of ['claude-code', 'codex-cli']) {
   })
 }
 
-test('@pending the summary URL shows no second harness picker', async ({ page }) => {
+test('@active the summary URL shows no second harness picker', async ({ page }) => {
   await page.goto('/harnesses/claude-code/summary')
   await expect(page.locator('main')).toBeVisible()
   // Today the summary repeats an "Agent Providers" picker: one button for each
@@ -60,7 +62,7 @@ test('@pending the summary URL shows no second harness picker', async ({ page })
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the harness page meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the harness page meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/harnesses/claude-code')
     await expect(page.locator('main a[href^="/harnesses/claude-code/"]').first()).toBeVisible()
