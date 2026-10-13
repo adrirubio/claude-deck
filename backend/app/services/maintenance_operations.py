@@ -435,31 +435,61 @@ class Maintenance:
         if fields[0] in {"T","t","Z","X","x"} or fields[19] != str(expected):
             raise ValueError("native_process_changed")
 
-    def authority(self, item_id=None):
+    def authority(self, item_id=None, *, columns=None, capture_columns=False, allow_nullable_additions=False):
+        """Read authority rows and schema in one transaction.
+
+        Use baseline columns when a manifest is supplied.
+        Allow new nullable columns only with NULL values after controller start.
+        """
         result = {}
+        manifest = {}
         # One read transaction prevents a mixed snapshot across related tables.
         with sqlite3.connect(Path(self.profile.database).resolve().as_uri()+'?mode=ro',uri=True) as db:
             db.row_factory=sqlite3.Row;db.execute('BEGIN')
-            for table in _TABLES + (_GLOBAL_TABLES if item_id is None else ()):
+            quote = lambda name: '"'+name.replace('"','""')+'"'
+            def retained_rows(table, where='', values=()):
                 if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
-                    if table == 'github_accepted_source_imports': result[table] = []
-                    continue
+                    if columns is not None and table in columns:
+                        raise ValueError('maintenance_authority_schema_changed')
+                    return None
+                info = list(db.execute('PRAGMA table_info('+quote(table)+')'))
+                current = {row['name']:[row['type'],row['notnull'],row['dflt_value'],row['pk']] for row in info}
+                manifest[table] = current
+                primary = [row['name'] for row in info if row['pk']]
+                if not primary:
+                    raise ValueError('maintenance_identity_unavailable')
+                baseline = columns.get(table) if columns is not None else None
+                added = set(current)-set(baseline) if baseline is not None else set()
+                if baseline is not None and any(current.get(name) != definition for name,definition in baseline.items()):
+                    raise ValueError('maintenance_authority_schema_changed')
+                if added and (not allow_nullable_additions or any(current[name][1] or current[name][3] for name in added)):
+                    raise ValueError('maintenance_authority_schema_changed')
+                order = ','.join(quote(name) for name in primary)
+                rows = db.execute('SELECT * FROM '+quote(table)+where+' ORDER BY '+order,values).fetchmany(4097)
+                if len(rows)>4096:
+                    raise ValueError('maintenance_read_limit')
+                if any(row[name] is not None for row in rows for name in added):
+                    raise ValueError('maintenance_authority_schema_changed')
+                omitted = _VOLATILE|({'autonomy_enabled'} if table=='agent_team_presets' else set())
+                if table in {'team_github_scopes','github_backlog_coordination'}:
+                    omitted = omitted|{'last_polled_at','last_poll_error','auth_state'}
+                selected = baseline if baseline is not None else current
+                return [{name:row[name] for name in selected if name not in omitted} for row in rows]
+            for table in _TABLES + (_GLOBAL_TABLES if item_id is None else ()):
                 field='id' if table=='github_work_items' else ('leased_item_id' if table=='github_workspaces' else 'work_item_id')
                 where=' WHERE '+field+'=?' if item_id is not None else ''
-                primary=[row['name'] for row in db.execute('PRAGMA table_info("'+table+'")') if row['pk']]
-                if not primary: raise ValueError('maintenance_identity_unavailable')
-                order=','.join('"'+name+'"' for name in primary)
-                rows=db.execute('SELECT * FROM "'+table+'"'+where+' ORDER BY '+order,() if item_id is None else (item_id,)).fetchmany(4097)
-                if len(rows)>4096: raise ValueError('maintenance_read_limit')
-                omitted=_VOLATILE|({'autonomy_enabled'} if table=='agent_team_presets' else set())
-                if table in {'team_github_scopes','github_backlog_coordination'}:
-                    omitted=omitted|{'last_polled_at','last_poll_error','auth_state'}
-                result[table]=[{k:v for k,v in dict(row).items() if k not in omitted} for row in rows]
+                rows = retained_rows(table, where, () if item_id is None else (item_id,))
+                if rows is None:
+                    if table == 'github_accepted_source_imports': result[table] = []
+                    continue
+                result[table] = rows
             if item_id is not None:
-                row=db.execute('SELECT * FROM team_github_scopes WHERE id=(SELECT scope_id FROM github_work_items WHERE id=?)',(item_id,)).fetchone()
-                omitted=_VOLATILE|{'last_polled_at','last_poll_error','auth_state'}
-                result['scope']={k:v for k,v in dict(row).items() if k not in omitted} if row else None
-        return digest(result)
+                rows = retained_rows('team_github_scopes', ' WHERE id=(SELECT scope_id FROM github_work_items WHERE id=?)', (item_id,))
+                if rows is None:
+                    raise ValueError('maintenance_identity_unavailable')
+                result['scope'] = rows[0] if rows else None
+        fingerprint = digest(result)
+        return (fingerprint, manifest) if capture_columns else fingerprint
 
     def database_identity(self):
         metadata=Path(self.profile.database).stat()
@@ -767,7 +797,8 @@ class Maintenance:
             owner_contexts.append((item,workspace,source,owner,message))
             sources[workspace['path']]=source
         bindings=self.bindings();generations=self.generations()
-        baseline=self.authority();database_identity=self.database_identity()
+        baseline,authority_columns=self.authority(capture_columns=True)
+        database_identity=self.database_identity()
         record={'operation':'controller_upgrade','status':'prepared','started_at':now(),'old_head':old['head'],
             'target_head':new['head'],'review_sha256':request.review_sha256,'accepted_merges':accepted,
             'checkpoints':checkpoints,'original_autonomy':presets,'sources':sources,'cutover_started':False}
@@ -787,7 +818,7 @@ class Maintenance:
             for preset in presets:
                 if self.api('GET',f"/agent-teams/presets/{preset['id']}")['autonomy_enabled']:
                     raise ValueError('autonomy_pause_unconfirmed')
-            authority=self.authority()
+            authority=self.authority(columns=authority_columns)
             if authority!=baseline or self.database_identity()!=database_identity:
                 raise ValueError('pause_context_changed')
             if self.bindings()!=bindings or self.generations()!=generations: raise ValueError('native_generation_changed')
@@ -800,7 +831,7 @@ class Maintenance:
             if [self.accepted(pull) for pull in request.accepted_pulls]!=accepted:
                 raise ValueError('accepted_tip_changed')
             with self.reservation():
-                if self.authority()!=authority or self.database_identity()!=database_identity:
+                if self.authority(columns=authority_columns)!=authority or self.database_identity()!=database_identity:
                     raise ValueError('reserved_upgrade_context_changed')
                 for item,workspace,source,owner,message in owner_contexts:
                     if self.source(workspace['path'],user=self.profile.workspace_user)!=source or self.approved_owner(item,workspace)!=owner:
@@ -811,7 +842,7 @@ class Maintenance:
                 record['cutover_started']=True
                 self.stop_controller()
                 self.safety()
-                if self.authority()!=authority or self.bindings()!=bindings or self.generations()!=generations: raise ValueError('stopped_context_changed')
+                if self.authority(columns=authority_columns)!=authority or self.bindings()!=bindings or self.generations()!=generations: raise ValueError('stopped_context_changed')
                 self.git(controller,'checkout','--detach',request.target_head)
                 if self.source(controller)['head']!=request.target_head: raise ValueError('controller_checkout_unconfirmed')
             for relative, key in self.profile.version_records.items():
@@ -835,7 +866,7 @@ class Maintenance:
                     if time.monotonic()>=deadline: raise ValueError('controller_health_unknown')
                     time.sleep(.5)
             self.safety()
-            if self.authority()!=authority or self.database_identity()!=database_identity or self.bindings()!=bindings or self.generations()!=generations: raise ValueError('deployed_context_changed')
+            if self.authority(columns=authority_columns,allow_nullable_additions=True)!=authority or self.database_identity()!=database_identity or self.bindings()!=bindings or self.generations()!=generations: raise ValueError('deployed_context_changed')
             for path, source in sources.items():
                 if self.source(path,user=self.profile.workspace_user)!=source: raise ValueError('owner_source_changed')
             for name, expected in protected.items():
