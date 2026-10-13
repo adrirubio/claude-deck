@@ -164,3 +164,49 @@ def test_a_stopped_on_demand_slot_is_not_a_missing_member(tmp_path, monkeypatch)
 def test_a_missing_required_member_still_stops_the_team(tmp_path, monkeypatch):
     _, stopped = _tick(tmp_path, monkeypatch)
     assert stopped == ["authenticated_member_missing"]
+
+
+def _scan_file(tmp_path, monkeypatch, lines, **extra):
+    path = tmp_path / "claude-projects" / "-w-leader" / f"{SESSION}.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"".join(lines))
+    sup = _supervisor(tmp_path, **extra)
+    stopped = []
+    monkeypatch.setattr(sup, "stop", lambda reason, **kw: stopped.append(kw.get("rule")))
+    binding = {"provider": "claude-code", "repo_path": "/w/leader", "launch_options": json.dumps({"session_id": SESSION})}
+    return sup, sup.scan([binding]), stopped
+
+
+CRASH = b"\x00" * 600
+SNAPSHOT = json.dumps({"type": "file-history-snapshot", "messageId": "m"}).encode()
+NOTICE_LINE = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": NOTICE}]}}).encode()
+
+
+def test_crash_padding_before_a_valid_record_is_inspected(tmp_path, monkeypatch):
+    sup, ok, stopped = _scan_file(tmp_path, monkeypatch, [SNAPSHOT + b"\n", CRASH + NOTICE_LINE + b"\n"])
+    assert ok is False and stopped == ["cybersecurity_notice"]
+    assert sup.state["damaged_records_seen"] == 1
+
+
+def test_a_line_of_only_crash_padding_is_skipped(tmp_path, monkeypatch):
+    sup, ok, stopped = _scan_file(tmp_path, monkeypatch, [CRASH + b"\n", SNAPSHOT + b"\n"])
+    assert ok is True and stopped == []
+
+
+def test_a_damaged_fragment_fails_closed(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="native_record_damaged"):
+        _scan_file(tmp_path, monkeypatch, [CRASH + b'"messageId": "frag"}' + b"\n"])
+
+
+def test_an_acknowledged_damaged_fragment_is_skipped(tmp_path, monkeypatch):
+    import hashlib
+    line = CRASH + b'"messageId": "frag"}' + b"\n"
+    sup, ok, stopped = _scan_file(tmp_path, monkeypatch, [line, SNAPSHOT + b"\n"],
+                                  acknowledged_damaged_records=[hashlib.sha256(line).hexdigest()])
+    assert ok is True and stopped == []
+
+
+@pytest.mark.parametrize("line", [b"null\n", CRASH + b"null\n", b"[1]\n"], ids=["null", "padded_null", "list"])
+def test_a_record_that_is_not_an_object_fails_closed(tmp_path, monkeypatch, line):
+    with pytest.raises(ValueError, match="native_record_not_object"):
+        _scan_file(tmp_path, monkeypatch, [line])

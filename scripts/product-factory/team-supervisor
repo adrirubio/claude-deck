@@ -2,6 +2,7 @@
 """Supervise one configured team. Preserve work and never change its roster."""
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -106,6 +107,10 @@ def _match(text):
             return rule
     return None
 
+# Supervisor.record returns this for a line it skips. No JSON value can equal it.
+SKIP = object()
+
+
 class Supervisor:
     def __init__(self, config):
         self.config = config
@@ -209,13 +214,44 @@ class Supervisor:
                             raise ValueError('native_record_too_large')
                         break
                     inspected += len(line)
-                    record = json.loads(line)
+                    record = self.record(line)
+                    if record is SKIP:
+                        continue
                     found = notice(record)
                     if found:
                         self.stop('security_notice', security=True, rule=found)
                         return False
                 self.state['offsets'][key] = stream.tell()
         return True
+
+    def record(self, line):
+        """Parse one transcript line. A crash can leave NUL bytes where it lost data.
+
+        The NULs carry no content. The record after them is inspected as usual.
+        A line that holds only NULs returns SKIP, which no parsed value can equal.
+        A damaged fragment fails closed, unless the operator acknowledged that
+        exact line by its SHA-256. A record that is not a JSON object fails closed.
+        """
+        if b'\x00' not in line:
+            return self.object(json.loads(line))
+        self.state['damaged_records_seen'] = self.state.get('damaged_records_seen', 0) + 1
+        remainder = line.replace(b'\x00', b'').strip()
+        if not remainder:
+            return SKIP
+        try:
+            parsed = json.loads(remainder)
+        except ValueError:
+            if hashlib.sha256(line).hexdigest() in set(self.config.get('acknowledged_damaged_records', [])):
+                return SKIP
+            raise ValueError('native_record_damaged')
+        return self.object(parsed)
+
+    @staticmethod
+    def object(parsed):
+        # Every native record is a JSON object. Any other value fails closed.
+        if not isinstance(parsed, dict):
+            raise ValueError('native_record_not_object')
+        return parsed
 
     def transcript(self, provider, repo_path, native_id):
         """Return the native transcript of one bound session, or fail closed."""
