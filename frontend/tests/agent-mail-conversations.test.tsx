@@ -189,12 +189,12 @@ describe('WaitingPanel', () => {
 
   it('puts a warning item in the first row even when it is the last member', () => {
     const members = [
-      member(20, 'Q1', { unread_count: 1 }), member(21, 'Q2', { unread_count: 2 }),
+      member(20, 'Q1', { unread_count: 1 }), member(21, 'Q2', { unread_count: 2 }), member(23, 'Q4', { unread_count: 3 }),
       member(22, 'Q3', { status: 'offline', pending_count: 1, stale_pending_count: 1 }),
     ]
     render(<WaitingPanel members={members} loading={false} recipientMemberId={null} onShowRecipient={vi.fn()} />)
     const rows = screen.getAllByRole('listitem')
-    expect(rows).toHaveLength(2)
+    expect(rows).toHaveLength(3)
     expect(rows[0]).toHaveTextContent('1 message to Q3 is not acknowledged')
     expect(within(rows[0]).getByRole('img', { name: 'Needs attention' })).toBeInTheDocument()
   })
@@ -205,11 +205,11 @@ describe('WaitingPanel', () => {
     expect(screen.getByText('Nobody is waiting on anyone.')).toBeInTheDocument()
   })
 
-  it('shows two items, warnings first, with the full count in the heading, and the rest on request', () => {
+  it('shows three items, warnings first, with the full count in the heading, and the rest on request', () => {
     const many = Array.from({ length: 6 }, (_, index) => member(10 + index, `M${index}`, { unread_count: 1 }))
     render(<WaitingPanel members={many} loading={false} recipientMemberId={null} onShowRecipient={vi.fn()} />)
     expect(screen.getByRole('heading', { name: 'Waiting on someone (6)' })).toBeInTheDocument()
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getAllByRole('listitem')).toHaveLength(3)
     fireEvent.click(screen.getByRole('button', { name: 'Show all 6' }))
     expect(screen.getAllByRole('listitem')).toHaveLength(6)
   })

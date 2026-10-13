@@ -363,7 +363,7 @@ export function AgentMailPage() {
             Conversations
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="team" className="mt-4">
+        <TabsContent value="team" className="mt-3">
           <TeamTab
             members={teamMembers}
             loading={loading}
@@ -377,7 +377,7 @@ export function AgentMailPage() {
             nudgingMemberId={nudgingMemberId}
           />
         </TabsContent>
-        <TabsContent value="conversations" className="mt-4">
+        <TabsContent value="conversations" className="mt-3">
           <ConversationsTab
             conversations={conversations}
             members={members}

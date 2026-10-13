@@ -6,7 +6,7 @@ import { buildWaiting, waitingDetail } from './conversations'
 import type { MailMemberResponse } from '@/types/agentMail'
 
 export const WAITING_PANEL_ID = 'waiting-on-someone'
-const VISIBLE_ITEMS = 2
+const VISIBLE_ITEMS = 3
 
 interface WaitingPanelProps {
   members: MailMemberResponse[]
@@ -34,7 +34,7 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
       id={WAITING_PANEL_ID}
       tabIndex={-1}
       aria-labelledby="waiting-on-someone-title"
-      className="rounded-lg border px-4 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="rounded-lg border px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 id="waiting-on-someone-title" className="text-sm font-semibold">
@@ -53,7 +53,7 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
       ) : (
         <ul className="mt-1 divide-y">
           {shown.map((item) => (
-            <li key={item.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-0.5 text-sm">
+            <li key={item.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-0 text-sm">
               {item.warn ? (
                 <AlertTriangle role="img" aria-label="Needs attention" className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
               ) : (

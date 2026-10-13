@@ -28,7 +28,7 @@ function row(page: Page, member: string) {
 // above the tabs now, so the last Quiet team row ends at 910 px, 10 px below
 // the viewport. #530 passed before #529 merged. Reported to L1 (#669); a
 // gate-fix issue for F2 activates this journey.
-test('@pending at 1440 × 900 all members of two teams are visible without scrolling', async ({ page }) => {
+test('@active at 1440 × 900 all members of two teams are visible without scrolling', async ({ page }) => {
   await showMailSetUp(page)
   await openAgentMail(page, 'Team')
   await expect(page.getByText('Agent setup required')).toHaveCount(0)
