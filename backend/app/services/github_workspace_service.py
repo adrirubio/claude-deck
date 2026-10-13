@@ -212,6 +212,8 @@ class GithubWorkspaceService:
         workspace.leased_owner_proc_start = None
         workspace.lease_last_owner_contact_at = None
         workspace.lease_release_reminded_at = None
+        workspace.lease_release_reminder_count = 0
+        workspace.lease_release_reminder_started_at = None
         workspace.updated_at = now
         await db.commit()
 
@@ -589,6 +591,8 @@ class GithubWorkspaceService:
             "leased_owner_proc_start": None,
             "lease_last_owner_contact_at": None,
             "lease_release_reminded_at": None,
+            "lease_release_reminder_count": 0,
+            "lease_release_reminder_started_at": None,
             "updated_at": now,
         }
 

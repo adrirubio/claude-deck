@@ -564,6 +564,7 @@ class GithubCoordinationService:
                 kind="message", recipient_member_id=leader.member_id,
                 subject="Reconcile assigned backlog and independent work",
                 body_markdown=(
+                    f"Backlog notice {requests + 1} of {_MAX_SNAPSHOT_REQUESTS} for this snapshot.\n\n"
                     f"Assess the assigned backlog for scope {scope_id}. Call "
                     f"deck_get_backlog_coordination(scope_id={scope_id}) for the current request, "
                     "then inspect the assigned GitHub issues and reviewed dependency/milestone packet. "

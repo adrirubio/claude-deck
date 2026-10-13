@@ -36,6 +36,8 @@
         "team_id": null
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   },
@@ -76,6 +78,8 @@
         "team_id": null
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   },
@@ -116,6 +120,8 @@
         "team_id": null
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   },
@@ -156,6 +162,8 @@
         "team_id": null
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   },
@@ -198,6 +206,8 @@
         "team_id": 1
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   },
@@ -238,6 +248,8 @@
         "team_id": null
       },
       "generated_at": "2026-09-30T12:00:00Z",
+      "reminder_attention": [],
+      "reminder_attention_complete": true,
       "schema_version": 1
     }
   }

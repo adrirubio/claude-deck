@@ -124,6 +124,141 @@
           "title": "CampaignUnderWayItem",
           "type": "object"
         },
+        "ReminderAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "elapsed_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Elapsed Seconds"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "issue_numbers": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Issue Numbers",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "workspace_release",
+                "backlog_reconcile"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "notification_budget_resets_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notification Budget Resets At"
+            },
+            "owner_name": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Name"
+            },
+            "owner_slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Slot Id"
+            },
+            "reminder_cap": {
+              "exclusiveMinimum": 0,
+              "title": "Reminder Cap",
+              "type": "integer"
+            },
+            "reminder_count": {
+              "minimum": 0,
+              "title": "Reminder Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "waiting_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Waiting Since"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "kind",
+            "scope_id",
+            "reminder_count",
+            "reminder_cap"
+          ],
+          "title": "ReminderAttention",
+          "type": "object"
+        },
         "SupervisorAddress": {
           "additionalProperties": false,
           "properties": {
@@ -802,6 +937,18 @@
         "remaining_work": {
           "$ref": "#/$defs/TeamRemainingWork"
         },
+        "reminder_attention": {
+          "items": {
+            "$ref": "#/$defs/ReminderAttention"
+          },
+          "title": "Reminder Attention",
+          "type": "array"
+        },
+        "reminder_attention_complete": {
+          "default": true,
+          "title": "Reminder Attention Complete",
+          "type": "boolean"
+        },
         "required_ci_unreadable": {
           "items": {
             "$ref": "#/$defs/TeamRequiredCIUnreadable"
@@ -1047,6 +1194,141 @@
           "title": "FactoryFilters",
           "type": "object"
         },
+        "ReminderAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "elapsed_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Elapsed Seconds"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "issue_numbers": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Issue Numbers",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "workspace_release",
+                "backlog_reconcile"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "notification_budget_resets_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notification Budget Resets At"
+            },
+            "owner_name": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Name"
+            },
+            "owner_slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Slot Id"
+            },
+            "reminder_cap": {
+              "exclusiveMinimum": 0,
+              "title": "Reminder Cap",
+              "type": "integer"
+            },
+            "reminder_count": {
+              "minimum": 0,
+              "title": "Reminder Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "waiting_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Waiting Since"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "kind",
+            "scope_id",
+            "reminder_count",
+            "reminder_cap"
+          ],
+          "title": "ReminderAttention",
+          "type": "object"
+        },
         "RuntimeObservation": {
           "additionalProperties": false,
           "properties": {
@@ -1117,6 +1399,18 @@
           "format": "date-time",
           "title": "Generated At",
           "type": "string"
+        },
+        "reminder_attention": {
+          "items": {
+            "$ref": "#/$defs/ReminderAttention"
+          },
+          "title": "Reminder Attention",
+          "type": "array"
+        },
+        "reminder_attention_complete": {
+          "default": true,
+          "title": "Reminder Attention Complete",
+          "type": "boolean"
         },
         "schema_version": {
           "const": 1,

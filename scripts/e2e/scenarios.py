@@ -301,7 +301,7 @@ def seed_core(s: Seeder, root: Path) -> None:
 # Lane G (#606): states for the backend journeys in frontend/e2e/lane-g/.
 # They attach to the existing items, so the Overview count stays "5 matching".
 LANE_G_LEASE_TOKEN = "e2e-seed-lease-token-0001"
-LANE_G_REMINDERS = 8          # unanswered workspace-release reminders (#528)
+LANE_G_REMINDERS = 4          # capped workspace-release reminders (#528)
 LANE_G_SUPERVISOR_ACTOR = 1   # external actor bound to Release crew (#549)
 
 
@@ -322,14 +322,17 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
         released_at=None, lease_token=LANE_G_LEASE_TOKEN, push_token_expires_at=None,
         leased_owner_pid=None, leased_owner_proc_start=None,
         lease_last_owner_contact_at=at(hours=6), lease_release_reminded_at=at(minutes=4),
+        lease_release_reminder_count=LANE_G_REMINDERS,
+        lease_release_reminder_started_at=at(hours=6),
         provision_error=None, enabled=1, created_at=at(days=3), updated_at=at(minutes=4),
     )
     for index in range(LANE_G_REMINDERS):
         message(s, 100 + index, sender=None, recipient=2, subject="Release needed: issue #104",
-                body="Issue #104 is merged but still holds a workspace. Release it.",
+                body=f"Reminder {index + 1} of {LANE_G_REMINDERS}. Issue #104 still holds its workspace. Release it.",
                 sent=at(minutes=4 * (LANE_G_REMINDERS - index)),
                 payload={"kind": "github_lease_release_reminder", "work_item_id": ITEM_MERGED,
-                         "issue_number": 104})
+                         "issue_number": 104, "reminder_count": index + 1,
+                         "reminder_cap": LANE_G_REMINDERS})
 
     # #535: merged item #104 still has a continuation revision in an active state.
     s.insert(
