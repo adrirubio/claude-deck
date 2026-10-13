@@ -44,7 +44,8 @@ test('@active other screens link to Work with a filter instead of listing work i
 
 async function statusAndTime(page: Page, route: string): Promise<{ status: string; time: string | null }> {
   await page.goto(route)
-  const title = page.locator('main').getByText('Fix the settings page layout').first()
+  const scope = page.locator(route.startsWith('/work/') ? 'main' : 'main [data-work-table]')
+  const title = scope.getByText('Fix the settings page layout').first()
   await expect(title).toBeVisible()
   const block = title.locator('xpath=ancestor::*[self::tr or self::li or self::article or self::main or contains(@class,"border")][1]')
   const text = (await block.innerText()).replace(/\s+/g, ' ')

@@ -2659,6 +2659,8 @@ class GithubWorkspaceResponse(BaseModel):
     released_at: Optional[datetime] = None
     lease_last_owner_contact_at: Optional[datetime] = None
     lease_release_reminded_at: Optional[datetime] = None
+    lease_release_reminder_count: int = 0
+    lease_release_reminder_started_at: Optional[datetime] = None
     lease_age_seconds: Optional[int] = None
     provision_error: Optional[str] = None
     enabled: bool

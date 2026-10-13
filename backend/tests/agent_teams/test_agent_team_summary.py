@@ -418,3 +418,40 @@ async def test_team_summary_exports_fixed_current_input_wait_only(db, monkeypatc
         {"slot_id": slot_id, "reason": "sign_in", "label": "Waiting for input"}]
     assert "synthetic/project" not in result.model_dump_json()
     assert "private-launch" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_capped_release_reminder_is_one_safe_current_attention(db, monkeypatch):
+    import json
+    from app.models.database import GithubWorkspace
+    from app.services.factory_projection_service import overview
+    from app.models.factory_schemas import FactoryFilters
+    team, scope, items = await seed(db, ("merged",))
+    started = datetime.utcnow() - timedelta(hours=11)
+    workspace = GithubWorkspace(scope_id=scope.id, path="/private/workspace", leased_item_id=items[0].id,
+        lease_token="private-lease-token", leased_at=started,
+        lease_release_reminder_started_at=started, lease_release_reminded_at=started,
+        lease_release_reminder_count=4)
+    db.add(workspace); await db.commit()
+    team_id, item_id, slot_id = team.id, items[0].id, items[0].owner_slot_id
+    summary, _ = service(monkeypatch)
+    for _ in range(2):
+        result = await summary.summary(db, team_id)
+        rows = result.reminder_attention
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.kind == "workspace_release"
+        assert row.work_item_id == item_id and row.issue_number == 1
+        assert row.owner_slot_id == slot_id and row.owner_name == "Owner"
+        assert row.reminder_count == row.reminder_cap == 4
+        assert row.elapsed_seconds >= 11 * 3600
+        serialized = json.dumps(result.model_dump(mode="json"))
+        assert "private-lease-token" not in serialized and "/private/workspace" not in serialized
+        assert result.human_actions == []
+    view = await overview(db, FactoryFilters(team_id=team_id))
+    assert len(view.reminder_attention) == 1
+    await db.refresh(workspace)
+    workspace.leased_item_id = None; workspace.lease_token = None
+    await db.commit()
+    assert (await summary.summary(db, team_id)).reminder_attention == []
+    assert (await overview(db, FactoryFilters(team_id=team_id))).reminder_attention == []

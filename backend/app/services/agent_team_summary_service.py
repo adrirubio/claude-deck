@@ -223,10 +223,13 @@ class AgentTeamSummaryService:
             if signal is not None:
                 unreadable.append(TeamRequiredCIUnreadable(**signal.model_dump(),
                     work_item_id=item.id, scope_id=item.scope_id, issue_number=item.issue_number))
+        reminders = await github_operator_attention_service.reminder_snapshot(
+            db, [SimpleNamespace(**row._mapping) for row in final[1]], now=now)
         return AgentTeamSummaryResponse(preset_id=preset_id, description=final_team.description,
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
-            required_ci_unreadable=unreadable,
+            required_ci_unreadable=unreadable, reminder_attention=reminders["rows"],
+            reminder_attention_complete=reminders["complete"],
             supervisor_observation=supervisor, waiting_input=waiting_input if not changed else None,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
             next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)

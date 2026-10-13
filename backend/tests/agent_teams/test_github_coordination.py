@@ -234,6 +234,15 @@ async def test_budget_survives_config_edit_restart_and_fallback_is_bounded(db, t
     row = await service.state(db, team.scope_id)
     assert row.daily_requests == 3
     assert await db.scalar(select(func.count()).select_from(MailMessage)) == 3
+    from app.services.github_operator_attention_service import github_operator_attention_service
+    attention = await github_operator_attention_service.reminder_snapshot(db, [team.scope])
+    assert len(attention["rows"]) == 1
+    assert attention["rows"][0].kind == "backlog_reconcile"
+    assert attention["rows"][0].reminder_count == attention["rows"][0].reminder_cap == 3
+    assert attention["rows"][0].issue_numbers == [7, 8]
+    messages = (await db.scalars(select(MailMessage).order_by(MailMessage.id))).all()
+    assert [f"Backlog notice {n} of 3" in message.body_markdown
+            for n, message in enumerate(messages, 1)] == [True, True, True]
 
 
 @pytest.mark.asyncio

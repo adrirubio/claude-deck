@@ -1652,3 +1652,29 @@ async def test_input_wait_latch_migrates_without_changing_pane_identity():
                 assert tuple(row) == (41000, "27", None, None, None, None)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for column in ("lease_release_reminder_count", "lease_release_reminder_started_at"):
+                await conn.execute(text(f"ALTER TABLE github_workspaces DROP COLUMN {column}"))
+            await conn.execute(text("INSERT INTO github_workspaces "
+                "(scope_id, path, kind, dispatchable, enabled, lease_token, lease_release_reminded_at, created_at, updated_at) "
+                "VALUES (1, '/private/lease', 'worktree', 1, 1, 'synthetic-lease', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = (await conn.execute(text("SELECT * FROM github_workspaces"))).mappings().one()
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            after = (await conn.execute(text("SELECT * FROM github_workspaces"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["lease_release_reminder_count"] == 0
+            assert after["lease_release_reminder_started_at"] is None
+            await conn.execute(text("UPDATE github_workspaces SET lease_release_reminder_count=4"))
+            await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text("SELECT lease_release_reminder_count FROM github_workspaces")) == 4
+    finally:
+        await engine.dispose()

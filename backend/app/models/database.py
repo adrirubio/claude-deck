@@ -523,6 +523,8 @@ class GithubWorkspace(Base):
     leased_owner_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
     lease_last_owner_contact_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_release_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_release_reminder_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    lease_release_reminder_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     provision_error: Mapped[str | None] = mapped_column(String, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

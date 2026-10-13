@@ -223,10 +223,27 @@ class FactoryEnvelope(FactoryModel):
     generated_at: Timestamp
 
 
+class ReminderAttention(FactoryModel):
+    kind: Literal["workspace_release", "backlog_reconcile"]
+    scope_id: PositiveId
+    work_item_id: PositiveId | None = None
+    issue_number: PositiveId | None = None
+    issue_numbers: list[PositiveId] = Field(default_factory=list)
+    owner_slot_id: PositiveId | None = None
+    owner_name: str | None = Field(default=None, max_length=160)
+    reminder_count: int = Field(ge=0)
+    reminder_cap: int = Field(gt=0)
+    waiting_since: Timestamp | None = None
+    elapsed_seconds: int | None = Field(default=None, ge=0)
+    notification_budget_resets_at: Timestamp | None = None
+
+
 class OverviewResponse(FactoryEnvelope):
     filters: FactoryFilters
     counts: FactoryCounts
     automation: AutomationSummary
+    reminder_attention: list[ReminderAttention] = Field(default_factory=list)
+    reminder_attention_complete: bool = True
 
 
 class WorkListResponse(FactoryEnvelope):
@@ -360,6 +377,8 @@ class AgentTeamSummaryResponse(FactoryModel):
     hold_code: Literal["hold", "recovery_only", "hold_unavailable"] | None
     attention: list[TeamSummaryAttention]
     required_ci_unreadable: list[TeamRequiredCIUnreadable] = Field(default_factory=list)
+    reminder_attention: list[ReminderAttention] = Field(default_factory=list)
+    reminder_attention_complete: bool = True
     human_actions: list[TeamSummaryHumanAction]
     remaining_work: TeamRemainingWork
     next_actors: list[Literal["owner", "leader", "operator", "controller"]]

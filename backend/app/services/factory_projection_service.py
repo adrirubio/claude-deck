@@ -456,8 +456,12 @@ async def overview(db, filters):
         freshness = poll(scope, effective, now).freshness
         automation["never_polled_scopes"] += freshness == "never_polled"
         automation["stale_scopes"] += freshness == "stale"
+    from app.services.github_operator_attention_service import github_operator_attention_service
+    reminders = await github_operator_attention_service.reminder_snapshot(
+        db, [scope for scope, team in scopes], provider=filters.provider, now=now)
     return wire.OverviewResponse(generated_at=now, filters=filters, counts=selected_counts,
-                                 automation=wire.AutomationSummary(runtime=runtime.public, **automation))
+        automation=wire.AutomationSummary(runtime=runtime.public, **automation),
+        reminder_attention=reminders["rows"], reminder_attention_complete=reminders["complete"])
 
 
 async def work_list(db, filters, limit, cursor):
