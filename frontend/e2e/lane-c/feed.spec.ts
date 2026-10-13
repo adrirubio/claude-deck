@@ -8,13 +8,12 @@ import { openUnlockedAudit, plainText } from './support'
 // show "(deleted)" with no broken links; no row shows `null`, a code name or a
 // raw ISO timestamp outside "Technical detail"; a notification never has its
 // own row; opening a detail does not move it away from its row.
-// Design reference: screen 16 (activity feed).
-// @pending until #519 merges.
+// Design reference: screens 16 and 17 (Audit).
 
 const CODE_NAMES = /\b(work_lifecycle|continuation_request|scope_policy_change|team_delete|approval_decision|revision_outcome)\b/
 const FEED_ROW = 'main [role="feed"] article, main [data-testid="audit-feed-row"], main ol li'
 
-test('@pending every row names its team, its subject and its actor in plain words', async ({ page }) => {
+test('@active every row names its team, its subject and its actor in plain words', async ({ page }) => {
   await openUnlockedAudit(page)
   const rows = page.locator(FEED_ROW)
   await expect(rows.first()).toBeVisible()
@@ -27,7 +26,7 @@ test('@pending every row names its team, its subject and its actor in plain word
   }
 })
 
-test('@pending events of the deleted team show "(deleted)" with no broken links', async ({ page }) => {
+test('@active events of the deleted team show "(deleted)" with no broken links', async ({ page }) => {
   await openUnlockedAudit(page)
   const deletedRows = page.locator(FEED_ROW).filter({ hasText: /Retired crew/ }).filter({ hasText: /\(deleted\)/ })
   await expect(deletedRows.first()).toBeVisible()
@@ -36,9 +35,11 @@ test('@pending events of the deleted team show "(deleted)" with no broken links'
   }
 })
 
-test('@pending opening a detail keeps it at its row', async ({ page }) => {
+test('@active opening a detail keeps it at its row', async ({ page }) => {
   await openUnlockedAudit(page)
   const row = page.locator(FEED_ROW).first()
+  // Scroll first: the box is relative to the viewport, and the click would scroll it.
+  await row.scrollIntoViewIfNeeded()
   const before = await row.boundingBox()
   await row.getByRole('button', { name: /detail/i }).first().click()
   const after = await row.boundingBox()
@@ -48,7 +49,7 @@ test('@pending opening a detail keeps it at its row', async ({ page }) => {
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the activity feed meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the activity feed meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await openUnlockedAudit(page)
     await expect(page.locator(FEED_ROW).first()).toBeVisible()

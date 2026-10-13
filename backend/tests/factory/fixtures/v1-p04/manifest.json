@@ -2,11 +2,11 @@
   "artifact_sha256": {
     "errors.json": "e43899ff499409803e28ba4b005d408602aeb231a708d0b4d5f9dfbbb58c3a52",
     "mapping.json": "580765070548e2f6c119099a50badaba103e4f98b88b59ba21b0bdd98cf03ca3",
-    "overview.json": "a5d86cdcd60af362b6a2cf65caae16554e741df0a940dc215df7e7b6e3794da5",
+    "overview.json": "57c35b3bb89b0019745810df5325e4269d7056c573c962237f0f8b9d5a3056e1",
     "protected-errors.json": "dd54587e32b53c33ddde27b43bcd8be413662cc2153bf4dfba5a9e93be518151",
     "repositories.json": "1749e1b194b71859891d28adf7d1c2e8683ef0c6ac0ab7000b27fce00e6d9559",
     "repository.json": "0bb10513a04713b1ffefb5897bd765c1b5bea8596e50f3f968913bf02cde61d1",
-    "schema.json": "b1b5e370bac8c6fd2695f46dbe2a51d6afd02ff2c669adf2be5332661be0f865",
+    "schema.json": "6b91d10599cdf82115965c2e2a4c261f17fd08932e17aadd3040a2a89f40bb71",
     "work-item.json": "9394c106fa524ae424f5d4e4afb44fb0b8a8651e1dee617bf0bca64f008ad0e0",
     "work-items.json": "e8d1bc632be02cfab10545fb2dc4bb006a435844765db942ed1729a5a4aabb61"
   },
@@ -14,6 +14,7 @@
   "based_on_p01_manifest_sha256": "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
   "change_summary": "P04 explicit Leader authority: approval source is explicit_assignment in work-item and work-items responses.",
   "changed_from_p01": [
+    "overview.json",
     "schema.json",
     "work-item.json",
     "work-items.json"

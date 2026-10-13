@@ -53,6 +53,8 @@ from app.services.github_workspace_service import (
     github_workspace_service,
 )
 
+LEASE_RELEASE_REMINDER_CAP = 4
+
 _BUSY_STATUSES = ("dispatched", "verifying")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
@@ -3392,85 +3394,151 @@ class GithubDispatchService:
         ).scalar_one_or_none()
         return receipt is not None and receipt.read_at is not None
 
+    @staticmethod
+    def release_reminder_needed(scope, item) -> bool:
+        """A reminder never changes attempt or lease authority."""
+        return item.dispatch_status in _RELEASABLE_STATUSES and not (
+            scope.continuation_enabled
+            and item.dispatch_status == "escalated"
+            and item.escalation_reason in CONTINUABLE_ESCALATIONS
+            and item.pr_number is not None
+            and item.owner_slot_id is not None
+            and item.dispatch_nonce is not None
+            and item.retry_requested_at is None
+        )
+
     async def remind_held_leases(
         self, db: AsyncSession, scope: TeamGithubScope
     ) -> int:
-        """Remind owners of terminal items that still hold a workspace lease.
+        """Send at most four release reminders per lease, with growing delays."""
+        from app.services.github_coordination_service import hold_code
+        from app.services import factory_audit_service as audit
 
-        This never escalates: the work is already terminal for the owner, and
-        the reminder exists only to bound a forgotten release. Its clock lives
-        on the workspace so it cannot interfere with acknowledgment timers.
-        """
-        grace = timedelta(seconds=settings.github_nudge_grace_seconds)
+        if hold_code():
+            return 0
         now = datetime.utcnow()
-        held = (
-            await db.execute(
-                select(GithubWorkspace, GithubWorkItem)
-                .join(
-                    GithubWorkItem,
-                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
-                )
-                .where(
-                    GithubWorkspace.scope_id == scope.id,
-                    GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
-                )
-                .order_by(GithubWorkspace.id)
-            )
-        ).all()
+        scope_id = scope.id
+        scope_enabled = scope.enabled
+        autonomy = await db.scalar(select(AgentTeamPreset.autonomy_enabled).where(
+            AgentTeamPreset.id == scope.preset_id))
+        held = (await db.scalars(select(GithubWorkspace.id).join(
+            GithubWorkItem, GithubWorkspace.leased_item_id == GithubWorkItem.id,
+        ).where(GithubWorkspace.scope_id == scope_id,
+            GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+        ).order_by(GithubWorkspace.id))).all()
         reminded = 0
-        for workspace, item in held:
-            if (
-                scope.continuation_enabled
-                and item.dispatch_status == "escalated"
-                and item.escalation_reason in CONTINUABLE_ESCALATIONS
-                and item.pr_number is not None
-                and item.owner_slot_id is not None
-                and item.dispatch_nonce is not None
-                and item.retry_requested_at is None
-            ):
+        for workspace_id in held:
+            # Rollback can expire earlier rows. Read each candidate afresh.
+            scope = await db.get(TeamGithubScope, scope_id, populate_existing=True)
+            if scope is None or scope.enabled != scope_enabled:
                 continue
-            if (
-                workspace.lease_release_reminded_at is not None
-                and now - workspace.lease_release_reminded_at < grace
-            ):
+            pair = (await db.execute(select(GithubWorkspace, GithubWorkItem).join(
+                GithubWorkItem, GithubWorkspace.leased_item_id == GithubWorkItem.id,
+            ).where(GithubWorkspace.id == workspace_id, GithubWorkspace.scope_id == scope_id,
+                GithubWorkItem.scope_id == scope_id,
+            ).execution_options(populate_existing=True))).one_or_none()
+            if pair is None:
                 continue
-            if item.retry_requested_at is not None:
-                urgency = (
-                    "\n\n**A re-dispatch of this issue is queued behind this "
-                    "release.** It cannot start until you release the workspace."
-                )
-            else:
-                urgency = ""
-            await self.notify_owner(
-                db,
-                item,
-                subject=f"Release needed: issue #{item.issue_number}",
-                body_markdown=(
-                    f"Issue #{item.issue_number} ({item.issue_title}) is "
-                    f"`{item.dispatch_status}` but still holds workspace "
-                    f"`{workspace.path}`. Commit and push anything you want to "
-                    "keep, then release it:\n\n"
-                    "```\n"
-                    "deck_report_dispatch_status(\n"
-                    f"    work_item_id={item.id},\n"
-                    '    status="workspace_released",\n'
-                    f'    lease_token="{workspace.lease_token}",\n'
-                    ")\n"
-                    "```"
-                    f"{urgency}"
-                ),
-                payload={
-                    "kind": "github_lease_release_reminder",
-                    "work_item_id": item.id,
-                    "issue_number": item.issue_number,
-                    "workspace_path": workspace.path,
-                },
+            workspace, item = pair
+            count = workspace.lease_release_reminder_count
+            if count < 0 or count >= LEASE_RELEASE_REMINDER_CAP or not self.release_reminder_needed(scope, item):
+                continue
+            delay = max(settings.github_nudge_grace_seconds * (1, 1, 4, 15)[count],
+                        (0, 240, 900, 3600)[count])
+            if (workspace.lease_release_reminded_at is not None
+                and now - workspace.lease_release_reminded_at < timedelta(seconds=delay)):
+                continue
+            member = await self._owner_member(db, item)
+            if member is None:
+                continue
+            recipient_id = member.id
+            number, item_id = item.issue_number, item.id
+            first_at = workspace.lease_release_reminder_started_at or now
+            held_since = workspace.leased_at or first_at
+            held_seconds = max(0, int((now - held_since).total_seconds()))
+            previous_at = workspace.lease_release_reminded_at
+            # Bind the reservation to the observed lease and owner. A concurrent
+            # release, handoff or reminder must defeat this conditional write.
+            identity = [
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == workspace.lease_token,
+                _identity_value_clause(GithubWorkspace.leased_at, workspace.leased_at),
+                GithubWorkspace.lease_release_reminder_count == count,
+                _identity_value_clause(GithubWorkspace.lease_release_reminded_at, previous_at),
+                exists(select(GithubWorkItem.id).where(
+                    GithubWorkItem.id == item.id, GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == item.dispatch_status,
+                    GithubWorkItem.owner_slot_id == item.owner_slot_id,
+                    GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+                    GithubWorkItem.pr_number == item.pr_number,
+                    GithubWorkItem.active_scope_revision == item.active_scope_revision,
+                    GithubWorkItem.attempt_phase == item.attempt_phase,
+                    _identity_value_clause(GithubWorkItem.created_at, item.created_at),
+                    GithubWorkItem.escalation_reason == item.escalation_reason,
+                    _identity_value_clause(GithubWorkItem.retry_requested_at, item.retry_requested_at),
+                )),
+                exists(select(TeamGithubScope.id).where(
+                    TeamGithubScope.id == scope.id,
+                    TeamGithubScope.enabled == scope.enabled,
+                    TeamGithubScope.continuation_enabled == scope.continuation_enabled,
+                    exists(select(AgentTeamPreset.id).where(
+                        AgentTeamPreset.id == TeamGithubScope.preset_id,
+                        AgentTeamPreset.autonomy_enabled == autonomy,
+                    )),
+                )),
+            ]
+            urgency = ("\n\nA re-dispatch of this issue is queued behind this release.\n"
+                       "It cannot start until you release the workspace."
+                       if item.retry_requested_at is not None else "")
+            body = (
+                f"Reminder {count + 1} of {LEASE_RELEASE_REMINDER_CAP}.\n\n"
+                f"Issue #{number} is `{item.dispatch_status}` and still holds its workspace.\n"
+                "Commit and push the work you need to keep.\n"
+                f"Call `deck_get_work_item_context(work_item_id={item_id})` for the current lease context.\n"
+                "Use its lease token with `deck_report_dispatch_status` and status `workspace_released`.\n"
+                "Keep the lease token private."
+                + urgency
             )
-            workspace.lease_release_reminded_at = now
-            workspace.updated_at = now
-            reminded += 1
-        if reminded:
+            # End the read snapshot before acquiring SQLite's writer. The
+            # conditional reservation, Mail and cap event commit together.
             await db.commit()
+            if hold_code():
+                continue
+            try:
+                reserved = await db.execute(update(GithubWorkspace).where(*identity).values(
+                    lease_release_reminder_count=count + 1,
+                    lease_release_reminder_started_at=first_at,
+                    lease_release_reminded_at=now, updated_at=now,
+                ).execution_options(synchronize_session=False))
+                if reserved.rowcount != 1:
+                    await db.rollback()
+                    continue
+                await agent_mail_service.send_message(db, MailMessageCreate(
+                    kind="message", recipient_member_id=recipient_id,
+                    subject=f"Release needed: issue #{number}", body_markdown=body,
+                    payload={"kind": "github_lease_release_reminder", "work_item_id": item_id,
+                             "issue_number": number, "reminder_count": count + 1,
+                             "reminder_cap": LEASE_RELEASE_REMINDER_CAP},
+                ), auto_nudge=False, commit=False)
+                if count + 1 == LEASE_RELEASE_REMINDER_CAP:
+                    await audit.record_event(db, event_kind="lease_reminder_capped",
+                        source="github_dispatch_service.remind_held_leases", occurred_at=now,
+                        actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+                        scope_id=scope.id, item_id=item_id, team_slot_id=item.owner_slot_id,
+                        action_outcome="notification_stopped",
+                        after_values={"reminder_count": count + 1,
+                                      "reminder_cap": LEASE_RELEASE_REMINDER_CAP,
+                                      "lease_held_seconds": held_seconds},
+                        sanitized_reason="Four release reminders sent. Further reminders stopped. Lease authority is unchanged.")
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+            await db.refresh(workspace)
+            reminded += 1
+            await agent_mail_service.auto_nudge_members(db, [recipient_id])
         return reminded
 
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
