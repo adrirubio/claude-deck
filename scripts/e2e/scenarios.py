@@ -403,9 +403,9 @@ async def seed_history() -> None:
     async with AsyncSessionLocal() as db:
         # Refused agent requests: one owner asks to continue #101 three times.
         reasons = [
-            ("continuation_paths_invalid", timedelta(hours=9)),
-            ("continuation_paths_invalid", timedelta(hours=8, minutes=30)),
-            ("continuation_actions_not_allowed", timedelta(hours=8)),
+            ("allowed_paths_invalid", timedelta(hours=9)),
+            ("allowed_paths_invalid", timedelta(hours=8, minutes=30)),
+            ("allowed_actions_invalid", timedelta(hours=8)),
         ]
         for index, (code, ago) in enumerate(reasons):
             await audit.record_observation(

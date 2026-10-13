@@ -4,6 +4,9 @@ import { formatServerTime } from "@/lib/serverTime";
 import { ApiHttpError } from "@/lib/api";
 import type { AuditEventPage, AuditEventRead, MetricsWindow } from "./auditApi";
 import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
+import { groupRefusals, type RefusalGroup } from "./auditRefusals";
+import { NeedsALookPanel, type RefusalReadState } from "./NeedsALookPanel";
+import { fetchAgentMailTeam } from "@/features/agent-mail/api";
 import { OperatorTokenDialog } from "@/features/agent-teams/AutonomyPanel";
 import {
   clearOperatorToken,
@@ -13,6 +16,10 @@ import {
 
 const labelClass = "block text-sm font-medium";
 const PAGE_SIZE = 25;
+// #520: the refusal read takes at most this many pages of REFUSAL_PAGE_SIZE
+// request events, newest first. The panel says so when the cap stops it.
+const REFUSAL_PAGE_SIZE = 100;
+const REFUSAL_MAX_PAGES = 5;
 // C10/C13: the client renders only these named primitive snapshot fields.
 // They match the server's typed safe snapshot fields. The response
 // snapshot_labels list is only observed keys, never a client allowlist.
@@ -60,6 +67,9 @@ type EventsResult = {
   observedAt: string;
 };
 type ReadState = "idle" | "pending" | "failed" | "cancelled";
+type RefusalResult = { groups: RefusalGroup[]; truncated: boolean };
+// #520: "Show events" narrows the events table to the refused requests of one item.
+type EventFocus = { itemContextKey: string; label: string };
 
 const NO_FILTERS: AppliedFilters = { teamKey: "", scopeKey: "" };
 
@@ -102,6 +112,10 @@ export function AuditMetricsPage() {
   const [metricsError, setMetricsError] = useState("");
   const [eventsError, setEventsError] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [refusalResult, setRefusalResult] = useState<RefusalResult | null>(null);
+  const [refusalState, setRefusalState] = useState<RefusalReadState>("loading");
+  const [memberNames, setMemberNames] = useState<Record<number, string>>({});
+  const [focus, setFocus] = useState<EventFocus | null>(null);
   const [teamKey, setTeamKey] = useState("");
   const [scopeKey, setScopeKey] = useState("");
   const [applied, setApplied] = useState<AppliedFilters>(NO_FILTERS);
@@ -117,6 +131,8 @@ export function AuditMetricsPage() {
   // insufficient after an A-to-B-to-A sequence.
   const metricsEpochRef = useRef(0);
   const auditEpochRef = useRef(0);
+  const refusalEpochRef = useRef(0);
+  const focusRef = useRef<EventFocus | null>(null);
   const applyEpochRef = useRef(0);
 
   // R11: focus returns to the invoking control, or to Apply filters, after
@@ -206,41 +222,113 @@ export function AuditMetricsPage() {
     filters: AppliedFilters,
     requestedPage: number,
     applyId: number = applyEpochRef.current,
-  ) {
+  ): Promise<string | null> {
     const epoch = ++auditEpochRef.current;
     const current = () => epoch === auditEpochRef.current && applyId === applyEpochRef.current;
     setEventsState("pending");
     const token = await requestToken();
-    if (!current()) return;
+    if (!current()) return null;
     if (!token) {
       setEventsState("cancelled");
       setStatus("Audit read cancelled. Safe metrics remain available.");
-      return;
+      return null;
     }
     try {
       const data = await fetchAuditEvents({
         page: requestedPage,
         pageSize: PAGE_SIZE,
+        eventKind: focusRef.current ? "continuation_request" : undefined,
+        itemContextKey: focusRef.current?.itemContextKey,
         teamContextKey: filters.teamKey || undefined,
         scopeContextKey: filters.scopeKey || undefined,
         operatorToken: token,
       });
-      if (!current()) return;
+      if (!current()) return token;
       setEventsResult({ data, filters, page: requestedPage, observedAt: new Date().toISOString() });
       setEventsState("idle");
       setEventsError("");
       setStatus(`Loaded ${data.items.length} of ${data.total} audit events.`);
+      return token;
     } catch (cause) {
       // C13: a refused token is never sent again; the next read asks for a
       // replacement. A newer stored token is kept.
-      if (cause instanceof ApiHttpError && cause.status === 401 && getOperatorToken() === token) {
+      const refused = cause instanceof ApiHttpError && cause.status === 401;
+      if (refused && getOperatorToken() === token) {
         clearOperatorToken();
       }
-      if (!current()) return;
+      if (!current()) return null;
       setEventsState("failed");
       setEventsError(cause instanceof Error ? cause.message : "Audit read refused.");
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
+      return refused ? null : token;
     }
+  }
+
+  // #520: the refused agent requests of the 7-day window. The read uses the
+  // Director key that the events read already holds. It never asks again.
+  async function loadRefusals(filters: AppliedFilters, token: string, applyId: number) {
+    const epoch = ++refusalEpochRef.current;
+    const current = () => epoch === refusalEpochRef.current && applyId === applyEpochRef.current;
+    const windowStartMs = Date.parse(windowBounds().windowStart);
+    setRefusalState("loading");
+    try {
+      const collected: AuditEventRead[] = [];
+      let truncated = false;
+      for (let pageNumber = 1; pageNumber <= REFUSAL_MAX_PAGES; pageNumber += 1) {
+        const data = await fetchAuditEvents({
+          page: pageNumber,
+          pageSize: REFUSAL_PAGE_SIZE,
+          eventKind: "continuation_request",
+          teamContextKey: filters.teamKey || undefined,
+          scopeContextKey: filters.scopeKey || undefined,
+          operatorToken: token,
+        });
+        if (!current()) return;
+        collected.push(...data.items);
+        const oldest = data.items[data.items.length - 1];
+        const done = data.items.length === 0 || pageNumber * REFUSAL_PAGE_SIZE >= data.total;
+        if (done || (oldest && Date.parse(oldest.occurred_at) < windowStartMs)) break;
+        if (pageNumber === REFUSAL_MAX_PAGES) truncated = true;
+      }
+      const groups = groupRefusals(collected, windowStartMs);
+      setRefusalResult({ groups, truncated });
+      setRefusalState("ready");
+      if (groups.some((group) => group.memberId != null)) void loadMemberNames(current);
+    } catch (cause) {
+      if (!current()) return;
+      if (cause instanceof ApiHttpError && cause.status === 401) {
+        if (getOperatorToken() === token) clearOperatorToken();
+        setRefusalState("locked");
+      } else {
+        setRefusalState("failed");
+      }
+    }
+  }
+
+  // Names are a courtesy. Without them the panel shows "member N".
+  async function loadMemberNames(current: () => boolean) {
+    try {
+      const team = await fetchAgentMailTeam(false);
+      if (!current()) return;
+      setMemberNames(Object.fromEntries(team.members.map((member) => [member.id, member.display_name])));
+    } catch {
+      // keep the fallback labels
+    }
+  }
+
+  function showRefusalEvents(group: RefusalGroup) {
+    if (!group.itemContextKey) return;
+    const next = { itemContextKey: group.itemContextKey, label: group.itemLabel };
+    focusRef.current = next;
+    setFocus(next);
+    void loadAudit(applied, 1);
+    document.getElementById("events")?.scrollIntoView?.({ block: "start" });
+  }
+
+  function clearEventFocus() {
+    focusRef.current = null;
+    setFocus(null);
+    void loadAudit(applied, 1);
   }
 
   // One applied identity drives both reads so the filters always match.
@@ -249,10 +337,15 @@ export function AuditMetricsPage() {
     await Promise.resolve();
     if (applyId !== applyEpochRef.current) return;
     setApplied(filters);
+    focusRef.current = null;
+    setFocus(null);
     await loadMetrics(filters, applyId);
     // A delayed old metrics completion must never start an old audit epoch.
     if (applyId !== applyEpochRef.current) return;
-    await loadAudit(filters, requestedPage, applyId);
+    const token = await loadAudit(filters, requestedPage, applyId);
+    if (applyId !== applyEpochRef.current) return;
+    if (token) await loadRefusals(filters, token, applyId);
+    else setRefusalState("locked");
   }
 
   useEffect(() => {
@@ -267,6 +360,7 @@ export function AuditMetricsPage() {
     applyEpochRef.current += 1;
     metricsEpochRef.current += 1;
     auditEpochRef.current += 1;
+    refusalEpochRef.current += 1;
     tokenResolverRef.current?.(null);
     tokenResolverRef.current = null;
     tokenPromiseRef.current = null;
@@ -312,6 +406,15 @@ export function AuditMetricsPage() {
           These aggregates never fetch fresh external facts and never change any record.
         </p>
       </header>
+
+      <NeedsALookPanel
+        state={refusalState}
+        groups={refusalResult?.groups ?? []}
+        names={memberNames}
+        truncated={refusalResult?.truncated ?? false}
+        onShowEvents={showRefusalEvents}
+        onUnlock={() => void applyReads(applied, 1)}
+      />
 
       <section aria-labelledby="explanations" className="space-y-2 rounded border p-3">
         <h3 id="explanations" className="font-semibold">How to read these numbers</h3>
@@ -435,6 +538,12 @@ export function AuditMetricsPage() {
 
       <section aria-labelledby="events" className="space-y-2 rounded border p-3">
         <h3 id="events" className="font-semibold">Audit events</h3>
+        {focus && (
+          <p className="flex flex-wrap items-center gap-2 text-sm">
+            Showing refused requests for {focus.label} only.
+            <Button variant="outline" size="sm" onClick={clearEventFocus}>Show all events</Button>
+          </p>
+        )}
         {eventsResult && (
           <p className="text-sm text-muted-foreground">
             Showing events for {describeFilters(eventsResult.filters)}, page {eventsResult.page}, observed
