@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '@/lib/constants'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
+import { ApiHttpError } from '@/lib/api'
 
 const KEY_STORAGE_KEY = 'deck-agent-mail-actor-key'
 const TOKEN_STORAGE_KEY = 'deck-agent-mail-actor-token'
@@ -28,9 +30,12 @@ function actorKey(): string {
 }
 
 async function provision(): Promise<string> {
+  const directorKey = getOperatorToken()
   const response = await fetch(`${API_BASE_URL}external/agent-mail/actors`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json',
+      ...(directorKey ? { 'X-Deck-Operator-Token': directorKey } : {}),
+    },
     body: JSON.stringify({
       actor_key: actorKey(),
       display_name: 'Deck UI',
@@ -39,7 +44,7 @@ async function provision(): Promise<string> {
     }),
   })
   if (!response.ok) {
-    throw new Error(`Could not provision an Agent Mail credential (HTTP ${response.status})`)
+    throw new ApiHttpError(`Could not provision an Agent Mail credential (HTTP ${response.status})`, response.status)
   }
   const token = (await response.json()).token as string
   sessionStorage.setItem(TOKEN_STORAGE_KEY, token)

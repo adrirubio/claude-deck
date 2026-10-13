@@ -1,8 +1,7 @@
-"""Spec 3.6b -- an external actor may participate in a thread it did not create.
+"""External actor credentials keep member identity and thread access separate.
 
-Every test here uses an AGENT-created root, because an actor-created root
-satisfies the existing ownership check by construction and would pass without
-the relaxation these tests exist to verify (spec 3.7's caveat on 6b/6d).
+Eligible actor acknowledgements change request state without member receipt evidence.
+Generic UI reads use the Director key. Member reads use their own session.
 """
 import httpx
 import pytest
@@ -10,16 +9,18 @@ import pytest_asyncio
 from fastapi.routing import APIRoute
 from sqlalchemy import text
 
+from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.models.database import MailTeamMember
-from app.models.schemas import MailMessageCreate
+from app.models.schemas import MailMessageCreate, MailMessageResponse
 from app.services.agent_mail_service import agent_mail_service
 from app.services.external_agent_mail_service import external_agent_mail_service
 
 
 @pytest_asyncio.fixture
-async def client(db):
+async def client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "test-director-key")
     async def _override():
         yield db
 
@@ -53,6 +54,7 @@ async def _member(db, repo_id, name):
 async def _actor(client, key="deck-ui-aaaa1111"):
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
+        headers={"X-Deck-Operator-Token": "test-director-key"},
         json={"actor_key": key, "display_name": "Deck UI", "kind": "supervisor"},
     )
     assert resp.status_code == 200
@@ -87,6 +89,19 @@ async def _agent_context_request(db, asker, asked, *, answered=True):
     return root, answer
 
 
+async def _actor_context_request(client, db, recipient):
+    """An actor can acknowledge its own request without member evidence."""
+    auth = await _actor(client)
+    response = await client.post("/api/v1/external/agent-mail/context-requests", headers=auth,
+                                 json={"recipient_member_id": recipient.id, "body_markdown": "Actor request"})
+    assert response.status_code == 200
+    root = MailMessageResponse.model_validate(response.json()["message"])
+    answer = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=recipient.id, thread_root_id=root.id, body_markdown="Answer"),
+        auto_nudge=False)
+    return root, answer, auth
+
+
 async def _receipts(db, message_id):
     rows = await db.execute(
         text(
@@ -106,28 +121,19 @@ async def _status(db, message_id):
 
 
 @pytest.mark.asyncio
-async def test_6b_actor_reply_into_agent_thread_is_actor_authored_and_fans_out(client, db):
-    """6b -- the row is actor-authored AND both participants get a receipt."""
+async def test_6b_actor_reply_requires_owned_or_addressed_thread(client, db):
+    """An actor refusal leaves member receipts and thread replies unchanged."""
     asker = await _member(db, "repo-alpha", "alpha")
     asked = await _member(db, "repo-beta", "beta")
     root, _ = await _agent_context_request(db, asker, asked)
     auth = await _actor(client)
-
-    resp = await client.post(
-        f"/api/v1/external/agent-mail/threads/{root.id}/replies",
-        json={"body_markdown": "operator: use the newer helper"},
-        headers=auth,
-    )
-    assert resp.status_code == 200, resp.text
-    message = resp.json()["message"]
-    assert message["sender_member_id"] is None
-    assert message["sender_actor_id"] is not None
-    assert message["sender_type"] == "external_actor"
-
-    # The discriminating half: routing. recipient_member_id=root.recipient_member_id
-    # would notify only the member who was ASKED, never the member who ASKED.
-    receipts = await _receipts(db, message["id"])
-    assert sorted(r[0] for r in receipts) == sorted([asker.id, asked.id])
+    before = await _receipts(db, root.id)
+    response = await client.post(f"/api/v1/external/agent-mail/threads/{root.id}/replies",
+                                 json={"body_markdown": "Reply"}, headers=auth)
+    assert response.status_code == 403
+    assert await _receipts(db, root.id) == before
+    count = await db.execute(text("SELECT COUNT(*) FROM mail_messages WHERE thread_root_id = :r"), {"r": root.id})
+    assert count.scalar_one() == 1
 
 
 @pytest.mark.asyncio
@@ -135,8 +141,7 @@ async def test_6d_actor_ack_moves_state_and_touches_no_member_evidence(client, d
     """6d -- request_status moves; read_at/acked_at do not."""
     asker = await _member(db, "repo-alpha", "alpha")
     asked = await _member(db, "repo-beta", "beta")
-    root, answer = await _agent_context_request(db, asker, asked)
-    auth = await _actor(client)
+    root, answer, auth = await _actor_context_request(client, db, asked)
 
     assert await _status(db, root.id) == "answered"
     root_before = await _receipts(db, root.id)
@@ -158,12 +163,10 @@ async def test_6d_actor_ack_moves_state_and_touches_no_member_evidence(client, d
 
 @pytest.mark.asyncio
 async def test_6j_actor_ack_returns_200_not_500(client, db):
-    """6j -- the code, not the state. request_status()'s tail re-enters the
-    ownership gate and raises PermissionError AFTER the commit."""
+    """An eligible actor acknowledgement returns its authorized thread."""
     asker = await _member(db, "repo-alpha", "alpha")
     asked = await _member(db, "repo-beta", "beta")
-    root, _ = await _agent_context_request(db, asker, asked)
-    auth = await _actor(client)
+    root, _, auth = await _actor_context_request(client, db, asked)
 
     resp = await client.post(
         f"/api/v1/external/agent-mail/requests/{root.id}/actor-ack", headers=auth
@@ -181,18 +184,11 @@ async def test_6k_actor_ack_moves_a_pending_handoff(client, db):
     """6k -- the transition acknowledge_external_request does NOT make."""
     sender = await _member(db, "repo-alpha", "alpha")
     recipient = await _member(db, "repo-beta", "beta")
-    handoff = await agent_mail_service.send_message(
-        db,
-        MailMessageCreate(
-            kind="handoff",
-            sender_member_id=sender.id,
-            recipient_member_id=recipient.id,
-            subject="take the retry work",
-            body_markdown="over to you",
-        ),
-        auto_nudge=False,
-    )
     auth = await _actor(client)
+    response = await client.post("/api/v1/external/agent-mail/handoffs", headers=auth,
+                                 json={"recipient_member_id": recipient.id, "body_markdown": "Take the work"})
+    assert response.status_code == 200
+    handoff = MailMessageResponse.model_validate(response.json()["message"])
     assert await _status(db, handoff.id) == "pending"
     before = await _receipts(db, handoff.id)
 
@@ -215,15 +211,13 @@ async def test_6l_actor_ack_refuses_an_answer_id(client, db):
     resp = await client.post(
         f"/api/v1/external/agent-mail/requests/{answer.id}/actor-ack", headers=auth
     )
-    assert resp.status_code == 400
-    assert "not a request" in resp.json()["detail"]
+    assert resp.status_code == 403
     assert await _status(db, root.id) == "answered"
 
 
 @pytest.mark.asyncio
 async def test_6m_actor_reply_into_an_anonymous_root(client, db):
-    """6m -- 105 such roots exist in the live DB. The narrow predicate
-    `sender_member_id IS NOT NULL` would refuse all 59 message threads."""
+    """An unaddressed actor cannot reply to an anonymous root."""
     recipient = await _member(db, "repo-beta", "beta")
     anon = await agent_mail_service.send_message(
         db,
@@ -243,8 +237,7 @@ async def test_6m_actor_reply_into_an_anonymous_root(client, db):
         json={"body_markdown": "operator follow-up"},
         headers=auth,
     )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["message"]["sender_actor_id"] is not None
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -275,14 +268,13 @@ async def test_6i_a_second_actor_is_refused_both_writes(client, db):
         json={"body_markdown": "intruding from another actor"},
         headers=tab_b,
     )
-    assert reply.status_code == 400
-    assert "threads they created" in reply.json()["detail"]
+    assert reply.status_code == 403
 
     ack = await client.post(
         f"/api/v1/external/agent-mail/requests/{root_id}/actor-ack", headers=tab_b
     )
-    assert ack.status_code == 400
-    assert "requests they created" in ack.json()["detail"]
+    assert ack.status_code == 403
+    assert "threads they created" in ack.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -389,6 +381,7 @@ async def test_6f_a_self_minted_actor_token_grants_nothing_more(client, db):
 
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
+        headers={"X-Deck-Operator-Token": "test-director-key"},
         json={"actor_key": "deck-ui-selfmint", "display_name": "Deck UI", "kind": "supervisor"},
     )
     assert resp.status_code == 200, resp.text
@@ -461,7 +454,7 @@ async def test_6h_only_a_pruned_token_is_401(client, db):
         json={"body_markdown": "not mine"},
         headers=other,
     )
-    assert intruder.status_code == 400
+    assert intruder.status_code == 403
 
     # Only a pruned actor row is 401 -- the one case that may re-provision.
     await db.execute(
@@ -541,8 +534,7 @@ async def test_6h_recovery_reuses_the_tab_key_and_keeps_its_own_threads(client, 
     refused = await client.post(
         f"/api/v1/external/agent-mail/threads/{root_id}/replies",
         json={"body_markdown": "reply"}, headers=fresh)
-    assert refused.status_code == 400
-    assert "threads they created" in refused.json()["detail"]
+    assert refused.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -556,6 +548,7 @@ async def test_actor_read_scope_is_unchanged(client, db):
     # The actor read stays owner-scoped...
     resp = await client.get(f"/api/v1/external/agent-mail/threads/{root.id}", headers=auth)
     assert resp.status_code == 403
-    # ...and the UI reads through the member route, which needs no credential.
-    resp = await client.get(f"/api/v1/agent-mail/messages/{root.id}/thread")
+    # The UI uses its Director credential for a generic read.
+    resp = await client.get(f"/api/v1/agent-mail/messages/{root.id}/thread",
+                            headers={"X-Deck-Operator-Token": "test-director-key"})
     assert resp.status_code == 200

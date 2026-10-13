@@ -24,12 +24,21 @@ async def client(db):
     app.dependency_overrides.clear()
 
 
+async def _authenticated_headers(client, cwd):
+    response = await client.post("/api/v1/agent-mail/agent/register", json={
+        "source": "mcp", "provider": "claude-code", "session_key": "mcp:s1", "cwd": str(cwd)})
+    assert response.status_code == 200
+    return {"X-Deck-Session-Token": response.json()["capability_token"]}
+
+
 @pytest.mark.asyncio
-async def test_session_start_registers_and_injects(client, db, tmp_path):
+async def test_session_start_uses_authenticated_member_and_injects(client, db, tmp_path):
     cwd = tmp_path / "myrepo"
     cwd.mkdir()
+    headers = await _authenticated_headers(client, cwd)
     resp = await client.post(
         "/api/v1/agent-mail/hooks/session-start",
+        headers=headers,
         json={"session_id": "s1", "cwd": str(cwd), "source": "startup"},
     )
     assert resp.status_code == 200
@@ -47,7 +56,7 @@ async def test_codex_hook_registers_with_codex_session_key(client, db, tmp_path)
     cwd.mkdir()
 
     resp = await client.post(
-        "/api/v1/agent-mail/hooks/session-start",
+        "/api/v1/agent-mail/hooks/post-tool-use",
         json={
             "provider": "codex-cli",
             "session_id": "codex-session",
@@ -68,7 +77,7 @@ async def test_copilot_hook_registers_with_copilot_session_key(client, db, tmp_p
     cwd.mkdir()
 
     resp = await client.post(
-        "/api/v1/agent-mail/hooks/session-start",
+        "/api/v1/agent-mail/hooks/post-tool-use",
         json={
             "provider": "copilot-cli",
             "session_id": "copilot-session",
@@ -89,7 +98,7 @@ async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp
     cwd.mkdir()
 
     resp = await client.post(
-        "/api/v1/agent-mail/hooks/session-start",
+        "/api/v1/agent-mail/hooks/post-tool-use",
         json={
             "provider": "opencode-cli",
             "session_id": "opencode-session",
@@ -138,7 +147,7 @@ async def test_codex_hook_session_key_is_team_slot_qualified(client, db, tmp_pat
 
     for slot in (planner, implementer):
         resp = await client.post(
-            "/api/v1/agent-mail/hooks/session-start",
+            "/api/v1/agent-mail/hooks/post-tool-use",
             json={
                 "provider": "codex-cli",
                 "session_id": "shared-resumed-session",
@@ -166,7 +175,7 @@ async def test_codex_hook_session_key_is_team_slot_qualified(client, db, tmp_pat
 async def test_session_start_without_session_id_fails_soft(client):
     resp = await client.post("/api/v1/agent-mail/hooks/session-start", json={"cwd": "/tmp"})
     assert resp.status_code == 200
-    assert resp.json() == {}
+    assert resp.json()["hookSpecificOutput"]["additionalContext"] == "Check your Deck inbox."
 
 
 @pytest.mark.asyncio
@@ -174,12 +183,15 @@ async def test_user_prompt_submit_injects_only_when_inbox_nonempty(client, db, t
     cwd_path = tmp_path / "myrepo"
     cwd_path.mkdir()
     cwd = str(cwd_path)
+    headers = await _authenticated_headers(client, cwd)
     await client.post(
         "/api/v1/agent-mail/hooks/session-start",
+        headers=headers,
         json={"session_id": "s1", "cwd": cwd},
     )
     resp = await client.post(
         "/api/v1/agent-mail/hooks/user-prompt-submit",
+        headers=headers,
         json={"session_id": "s1", "cwd": cwd, "prompt": "hi"},
     )
     assert resp.json() == {}
@@ -203,6 +215,7 @@ async def test_user_prompt_submit_injects_only_when_inbox_nonempty(client, db, t
 
     resp = await client.post(
         "/api/v1/agent-mail/hooks/user-prompt-submit",
+        headers=headers,
         json={"session_id": "s1", "cwd": cwd, "prompt": "hi"},
     )
     out = resp.json()["hookSpecificOutput"]
@@ -216,7 +229,7 @@ async def test_session_end_marks_offline(client, db, tmp_path):
     cwd_path.mkdir()
     cwd = str(cwd_path)
     await client.post(
-        "/api/v1/agent-mail/hooks/session-start",
+        "/api/v1/agent-mail/hooks/post-tool-use",
         json={"session_id": "s1", "cwd": cwd},
     )
     resp = await client.post(
@@ -234,7 +247,7 @@ async def test_post_tool_use_updates_activity(client, db, tmp_path):
     cwd_path.mkdir()
     cwd = str(cwd_path)
     await client.post(
-        "/api/v1/agent-mail/hooks/session-start",
+        "/api/v1/agent-mail/hooks/post-tool-use",
         json={"session_id": "s1", "cwd": cwd},
     )
     resp = await client.post(

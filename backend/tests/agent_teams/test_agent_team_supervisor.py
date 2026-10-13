@@ -173,11 +173,16 @@ async def supervisor_member(db, team):
 
 
 @pytest.mark.asyncio
-async def test_team_member_can_address_only_the_current_supervisor(db, supervisor_client):
+async def test_team_member_can_address_only_the_current_supervisor(db, supervisor_client, monkeypatch):
     from app.services.agent_team_supervisor_service import bind_supervisor
     team, actor = await supervisor_team(db)
     team_id, actor_id = team.id, actor.id
-    await supervisor_member(db, team)
+    _, session = await supervisor_member(db, team)
+    session.bound_pane_pid = 321
+    session.bound_pane_proc_start = "test-start"
+    session.mailbox_status = "connected"
+    await db.commit()
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive", lambda *_: True)
     path = "/api/v1/agent-mail/supervisor/messages"
     auth = {"X-Deck-Session-Token": "synthetic-member-token"}
     message = {"actor_id": actor_id, "body_markdown": "Please inspect the incident."}

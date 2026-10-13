@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional
 from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from app.models.api_model import ApiModel as BaseModel, naive_utc_confirmation
+from app.config import settings
 
 
 class TerminalRevisionReconcileRequest(BaseModel):
@@ -2228,6 +2229,7 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    mail_capability_tokens_required: bool = Field(default_factory=lambda: settings.mail_capability_tokens_required)
     pi_cli_available: bool = False
     pi_mail_ready: bool = False
     pi_mail_reason: Optional[str] = None

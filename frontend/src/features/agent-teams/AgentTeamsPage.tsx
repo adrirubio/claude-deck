@@ -1320,7 +1320,10 @@ export function AgentTeamsPage() {
             <BookOpen className="mr-2 h-4 w-4" />
             How it works
           </Button>
-          <Button variant="outline" onClick={() => setPresetDialog('from-mail')}>
+          <Button variant="outline" onClick={async () => {
+            const token = await requestOperatorToken()
+            if (token) setPresetDialog('from-mail')
+          }}>
             <GitBranch className="mr-2 h-4 w-4" />
             From Mail
           </Button>

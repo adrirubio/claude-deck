@@ -109,6 +109,7 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  mail_capability_tokens_required: boolean
   pi_cli_available?: boolean
   pi_mail_ready?: boolean
   pi_mail_reason?: string | null

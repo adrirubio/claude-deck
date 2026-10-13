@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect, test } from '../support/guard'
+import { enterDirectorKey } from '../support/director-key'
 
 // #540: one agent shows the same online and wake state on every screen.
 // The seeded agent is "F2 Frontend" (IDLE_AGENT_SLOT in scripts/e2e/scenarios.py):
@@ -34,6 +35,7 @@ test('@active one agent shows the same online and wake state on Agent Mail, Live
   test.skip(process.env.E2E_NO_TMUX === '1', 'E2E_NO_TMUX=1: the agent has no live pane')
 
   await page.goto('/agent-mail')
+  await enterDirectorKey(page)
   await expect(page.getByRole('heading', { name: 'Agent Mail', exact: true })).toBeVisible()
   const mail = await stateOf(page)
 

@@ -82,6 +82,7 @@ test('@active Team lanes shows the release crew', async ({ page }) => {
 
 test('@active Agent Mail shows unacknowledged messages', async ({ page }) => {
   await page.goto('/agent-mail')
+  await enterDirectorKey(page)
   await expect(page.getByRole('heading', heading('Agent Mail'))).toBeVisible()
   await expect(page.getByText(/\d+ unread/).first()).toBeVisible()
 })

@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import require_operator
 from app.database import get_db
 from app.models.database import MailExternalActor
 from app.models.schemas import (
@@ -71,7 +72,8 @@ def _rate_limit_response(exc: ExternalAgentMailRateLimitError) -> HTTPException:
     )
 
 
-@router.post("/actors", response_model=MailExternalActorCreateResponse)
+@router.post("/actors", response_model=MailExternalActorCreateResponse,
+             dependencies=[Depends(require_operator)])
 async def create_external_actor(
     request: Request,
     actor_request: MailExternalActorCreate,
@@ -279,7 +281,7 @@ async def actor_ack_external_agent_mail_request(
     actor: MailExternalActor = Depends(external_actor),
     db: AsyncSession = Depends(get_db),
 ):
-    """Acknowledge a request the actor did not create."""
+    """Acknowledge an actor-owned or addressed request."""
     try:
         return redact_lease_thread(await external_agent_mail_service.acknowledge_actor_request(
             db, actor, message_id

@@ -3,6 +3,7 @@ import { contrastFailures, useTheme, type Theme } from '../support/contrast'
 import { expect, test, type Guard } from '../support/guard'
 import { expectKeyboardReachable } from '../support/keyboard'
 import { INSTALL_WRITE } from './mail-page'
+import { enterDirectorKey } from '../support/director-key'
 
 // #531 (merged, PR #664): Agent Mail setup lives on each harness page. Agent
 // Mail has no setup tab; each harness page shows its Agent Mail state in one
@@ -29,6 +30,11 @@ async function failWrites(page: Page, guard: Guard): Promise<string[]> {
 }
 
 async function openHarness(page: Page, harness: string) {
+  if (page.url() === 'about:blank'
+    || !await page.evaluate(() => sessionStorage.getItem('claude-deck.agent-teams.operator-token'))) {
+    await page.goto('/agent-mail')
+    await enterDirectorKey(page)
+  }
   await page.goto(`/harnesses/${harness}`)
   const line = page.getByRole('region', { name: 'Agent Mail', exact: true })
   await expect(line).toContainText(/Agent Mail: \S/)
@@ -39,6 +45,7 @@ async function openHarness(page: Page, harness: string) {
 test('@active Agent Mail has no setup tab and links to Harnesses', async ({ page }) => {
   // The real instance state, with no rewrite: Agent Mail is not set up.
   await page.goto('/agent-mail')
+  await enterDirectorKey(page)
   await expect(page.getByRole('heading', { name: 'Agent Mail', exact: true })).toBeVisible()
   await expect(page.getByRole('tab')).toHaveText(['Team', 'Conversations'])
   await expect(page.getByText('Agent setup required')).toBeVisible()

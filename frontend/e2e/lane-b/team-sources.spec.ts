@@ -37,6 +37,7 @@ async function interceptCreates(page: Page, guard: Guard): Promise<{ bodies: unk
 async function openDialog(page: Page, source: 'From Bridge' | 'From Mail') {
   await page.goto('/teams')
   await page.getByRole('button', { name: source, exact: true }).click()
+  if (source === 'From Mail') await enterDirectorKey(page)
   const dialog = page.getByRole('dialog')
   await expect(dialog).toBeVisible()
   return dialog
@@ -85,7 +86,6 @@ test('@active From Mail hides offline and temporary members until asked, then cr
   await memberBoxes[0].check()
   await dialog.locator('#team-name').fill('E2E mail team')
   await dialog.getByRole('button', { name: 'Create team with 1 member' }).click()
-  await enterDirectorKey(page)
   await expect.poll(() => seen.bodies.length, 'one create request').toBe(1)
   const body = seen.bodies[0] as { member_ids?: unknown[]; slots?: unknown[] }
   const chosen = body.member_ids ?? body.slots

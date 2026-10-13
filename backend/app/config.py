@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     github_coordination_hold_paths: list[str] = Field(default_factory=list, repr=False)
 
     # Agent Mail identity settings
-    mail_capability_tokens_required: bool = False
+    mail_capability_tokens_required: bool = True
     operator_token: str = Field(default="", repr=False)
 
     # Server settings

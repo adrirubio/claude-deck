@@ -14,7 +14,7 @@ def test_global_settings_use_disposable_defaults():
     assert settings.github_token == ""
     assert settings.github_app_id == ""
     assert settings.github_coordination_hold_paths == []
-    assert settings.mail_capability_tokens_required is False
+    assert settings.mail_capability_tokens_required is True
 
 
 def test_settings_ignore_dotenv_and_process_values(tmp_path, monkeypatch):

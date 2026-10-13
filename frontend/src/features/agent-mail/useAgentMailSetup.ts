@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { ApiHttpError } from '@/lib/api'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import type { AgentMailInstallStatus, AgentMailSnippets } from '@/types/agentMail'
 import {
   applyClaudeCodeAgentMailInstall,
@@ -37,16 +39,24 @@ const ACTIONS: Record<MailActionHarness, Record<MailActionMode, { run: () => Pro
 
 /** The Agent Mail install status, the fallback snippets on demand, and the Set up and Remove actions. */
 export function useAgentMailSetup() {
+  const protectedReadsBlocked = useRef(false)
   const [status, setStatus] = useState<AgentMailInstallStatus | null>(null)
   const [snippets, setSnippets] = useState<AgentMailSnippets | null>(null)
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
+    if (!getOperatorToken() || protectedReadsBlocked.current) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const next = await fetchAgentMailInstallStatus()
       setStatus(isCompleteInstallStatus(next) ? next : null)
     } catch (error) {
+      if (error instanceof ApiHttpError && (error.status === 401 || error.status === 403 || error.status === 503)) {
+        protectedReadsBlocked.current = true
+      }
       toast.error(error instanceof Error ? error.message : 'Failed to load install status')
     } finally {
       setLoading(false)
@@ -64,10 +74,13 @@ export function useAgentMailSetup() {
   }, [load])
 
   const loadSnippets = useCallback(async () => {
-    if (snippets) return
+    if (snippets || !getOperatorToken() || protectedReadsBlocked.current) return
     try {
       setSnippets(await fetchAgentMailSnippets())
     } catch (error) {
+      if (error instanceof ApiHttpError && (error.status === 401 || error.status === 403 || error.status === 503)) {
+        protectedReadsBlocked.current = true
+      }
       toast.error(error instanceof Error ? error.message : 'Failed to load the fallback snippets')
     }
   }, [snippets])

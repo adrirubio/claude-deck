@@ -13,8 +13,13 @@ import type {
   TeamListResponse,
 } from '@/types/agentMail'
 
+function directorReadHeaders(): Record<string, string> {
+  const token = getOperatorToken()
+  return token ? { 'X-Deck-Operator-Token': token } : {}
+}
+
 export function fetchAgentMailTeam(sync = true): Promise<TeamListResponse> {
-  return apiClient<TeamListResponse>(buildEndpoint('agent-mail/team', { sync }))
+  return apiClient<TeamListResponse>(buildEndpoint('agent-mail/team', { sync }), { headers: directorReadHeaders() })
 }
 
 export function updateAgentMailMember(
@@ -76,7 +81,7 @@ export async function sendAgentMailMessage(
 }
 
 export function fetchAgentMailMessages(): Promise<MailMessageResponse[]> {
-  return apiClient<MailMessageResponse[]>('agent-mail/messages')
+  return apiClient<MailMessageResponse[]>('agent-mail/messages', { headers: directorReadHeaders() })
 }
 
 export function fetchAgentMailThread(
@@ -84,7 +89,8 @@ export function fetchAgentMailThread(
   memberId?: number
 ): Promise<MailThreadResponse> {
   return apiClient<MailThreadResponse>(
-    buildEndpoint(`agent-mail/messages/${messageId}/thread`, { member_id: memberId })
+    buildEndpoint(`agent-mail/messages/${messageId}/thread`, { member_id: memberId }),
+    { headers: directorReadHeaders() }
   )
 }
 
@@ -108,7 +114,7 @@ export function queueAgentMailInboxCheck(
   memberId: number
 ): Promise<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }> {
   const operatorToken = getOperatorToken()
-  if (!operatorToken) return Promise.reject(new Error('Set an operator token in Agent Teams before requesting a wake.'))
+  if (!operatorToken) return Promise.reject(new Error('Set the Director key in Teams before requesting a wake.'))
   return apiClient<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }>(
     `agent-mail/members/${memberId}/queue-inbox-check`,
     { method: 'POST', headers: { 'X-Deck-Operator-Token': operatorToken } }
@@ -136,7 +142,7 @@ export async function ackAgentMailRequest(
 }
 
 export function fetchAgentMailInstallStatus(): Promise<AgentMailInstallStatus> {
-  return apiClient<AgentMailInstallStatus>('agent-mail/install/status')
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/status', { headers: directorReadHeaders() })
 }
 
 export function applyClaudeCodeAgentMailInstall(): Promise<AgentMailInstallStatus> {
@@ -196,5 +202,5 @@ export function uninstallOpenCodeAgentMail(): Promise<AgentMailInstallStatus> {
 }
 
 export function fetchAgentMailSnippets(): Promise<AgentMailSnippets> {
-  return apiClient<AgentMailSnippets>('agent-mail/install/snippets')
+  return apiClient<AgentMailSnippets>('agent-mail/install/snippets', { headers: directorReadHeaders() })
 }

@@ -123,10 +123,11 @@ async def _agent_session_token(maker) -> str:
     return token
 
 
-async def _external_actor_token(client: httpx.AsyncClient) -> str:
+async def _external_actor_token(client: httpx.AsyncClient, director_key: str) -> str:
     """Mint a real external-actor token rather than testing a fabricated string."""
     response = await client.post(
         "/api/v1/external/agent-mail/actors",
+        headers={"X-Deck-Operator-Token": director_key},
         json={
             "actor_key": "operator-auth-test",
             "display_name": "Operator Auth Test",
@@ -617,7 +618,7 @@ async def test_a_self_minted_external_actor_token_does_not_admit_an_operator_rou
     """The cheapest local actor credential must not act as an operator token."""
     client, maker = client_and_db
     scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
-    actor_token = await _external_actor_token(client)
+    actor_token = await _external_actor_token(client, operator_token_configured)
 
     for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         as_bearer = await _call(
