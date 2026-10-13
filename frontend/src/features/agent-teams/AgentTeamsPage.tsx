@@ -58,9 +58,7 @@ import type {
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
-  TeamGithubContinuationPolicyUpdate,
   TeamGithubScopeInput,
-  TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
@@ -71,7 +69,6 @@ import {
   createAgentTeamPreset,
   deleteAgentTeamPreset,
   deleteAgentTeamSlot,
-  deleteTeamGithubScope,
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
   fetchGithubWorkItems,
@@ -82,8 +79,6 @@ import {
   updateAgentTeamPreset,
   updateAgentTeamLeader,
   updateAgentTeamSlot,
-  updateTeamGithubContinuationPolicy,
-  updateTeamGithubScope,
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
 import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
@@ -1171,46 +1166,6 @@ export function AgentTeamsPage() {
     }
   }
 
-  const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await updateTeamGithubScope(scopeId, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo saved')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save watched repo')
-      throw error
-    }
-  }
-
-  const updateGithubContinuationPolicy = async (
-    scopeId: number,
-    input: TeamGithubContinuationPolicyUpdate,
-    operatorToken: string
-  ) => {
-    if (!selectedPreset) return
-    try {
-      await updateTeamGithubContinuationPolicy(scopeId, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Attempt recovery policy saved')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save recovery policy')
-      throw error
-    }
-  }
-
-  const removeGithubScope = async (scope: TeamGithubScope, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await deleteTeamGithubScope(scope.id, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo removed')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to remove watched repo')
-      throw error
-    }
-  }
-
   const removeSlot = async (slot: AgentTeamSlot) => {
     try {
       const updated = await withOperatorToken((token) => deleteAgentTeamSlot(slot.id, token))
@@ -1617,9 +1572,6 @@ export function AgentTeamsPage() {
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
                     onCreateScope={createGithubScope}
-                    onUpdateScope={updateGithubScope}
-                    onUpdateContinuationPolicy={updateGithubContinuationPolicy}
-                    onDeleteScope={removeGithubScope}
                   />
                 </TabsContent>
               </Tabs>

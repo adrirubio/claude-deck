@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { TeamSummaries } from "@/features/agent-teams/TeamSummaryCard";
 import type { OverviewResponse } from "@/types/factory";
 import { ReadStatus } from "../components/ReadStatus";
-import { RepositoryResults } from "../components/RepositoryResults";
 import { anchor, destination, panel } from "../components/styles";
 import { Time } from "../components/Time";
 import { WorkResults } from "../components/WorkResults";
@@ -113,8 +112,8 @@ export function OverviewPage() {
                     Clear filters
                   </Link>
                 ) : (
-                  <Link className={destination} to="/teams?tab=autonomy">
-                    Configure a repository
+                  <Link className={destination} to="/repositories/new">
+                    Add a repository
                   </Link>
                 )}
                 <Link className={destination} to="/agent-bridge">
@@ -150,9 +149,16 @@ export function OverviewPage() {
               />
             </section>
           ))}
-          <section className="space-y-3">
-            <h3 className="text-lg font-semibold">Repository automation</h3>
-            <RepositoryResults query={query} />
+          <section className="flex flex-wrap items-baseline justify-between gap-3">
+            <h3 className="text-lg font-semibold">Repositories</h3>
+            <p>
+              {state.data.automation.configured_scopes} watched ·{" "}
+              {state.data.automation.enabled_scopes} on ·{" "}
+              {state.data.automation.intake_blocked_scopes} need attention
+            </p>
+            <Link className={anchor} to="/repositories">
+              View all ›
+            </Link>
           </section>
         </>
       )}
