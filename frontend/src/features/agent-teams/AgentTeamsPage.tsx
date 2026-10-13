@@ -47,6 +47,10 @@ import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTea
 import { cn } from '@/lib/utils'
 import { ApiHttpError } from '@/lib/api'
 import { autonomousLeaderSlotId } from './leaderSlot'
+import { fetchCCSessions } from '@/features/cc-bridge/api'
+import type { AgentSession } from '@/features/cc-bridge/types'
+import { TeamMemberPicker } from './TeamMemberPicker'
+import { PROVIDER_IDS, isHiddenByDefault, memberItems, sessionItems, sessionKey, sessionsToSlots, usableSessions } from './teamSources'
 import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchPlanItem,
@@ -62,7 +66,6 @@ import type {
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
-  createAgentTeamFromBridge,
   createAgentTeamFromMail,
   createAgentTeamPreset,
   deleteAgentTeamPreset,
@@ -94,7 +97,6 @@ type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
 type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
 
-const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli']
 const DEFAULT_SLOT_COLOR_VALUE = 'default'
 
 const emptySlot: AgentTeamSlotInput = {
@@ -215,13 +217,17 @@ function NewPresetDialog({
     description: string
     includeOffline?: boolean
     memberIds?: number[]
+    sessions?: AgentSession[]
   }) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [includeOffline, setIncludeOffline] = useState(true)
+  // Offline and temporary members stay hidden until the person asks for them.
+  const [showHidden, setShowHidden] = useState(false)
   const [mailMembers, setMailMembers] = useState<MailMemberResponse[]>([])
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([])
+  const [bridgeSessions, setBridgeSessions] = useState<AgentSession[]>([])
+  const [selectedSessionKeys, setSelectedSessionKeys] = useState<string[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
   const [saving, setSaving] = useState(false)
   const open = mode !== null
@@ -237,9 +243,11 @@ function NewPresetDialog({
               : ''
         )
         setDescription('')
-        setIncludeOffline(true)
+        setShowHidden(false)
         setMailMembers([])
         setSelectedMemberIds([])
+        setBridgeSessions([])
+        setSelectedSessionKeys([])
       })
     }
   }, [mode, open])
@@ -254,9 +262,11 @@ function NewPresetDialog({
       .then((response) => {
         if (cancelled) return
         const members = response.members
-        const preferred = members.filter((member) => member.status !== 'offline')
         setMailMembers(members)
-        setSelectedMemberIds((preferred.length ? preferred : members).map((member) => member.id))
+        // Preselect only members that are shown and not in a team.
+        setSelectedMemberIds(
+          members.filter((member) => member.team_preset_id == null && !isHiddenByDefault(member)).map((member) => member.id),
+        )
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : 'Failed to load Agent Mail members')
@@ -268,6 +278,35 @@ function NewPresetDialog({
       cancelled = true
     }
   }, [mode, open])
+
+  useEffect(() => {
+    if (!open || mode !== 'from-bridge') return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setLoadingMembers(true)
+    })
+    fetchCCSessions()
+      .then((response) => {
+        if (cancelled) return
+        const usable = usableSessions(response.sessions)
+        setBridgeSessions(usable)
+        // Preselect only live sessions that are not in a team.
+        setSelectedSessionKeys(usable.filter((session) => !session.team_preset_name).map(sessionKey))
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : 'Failed to load live sessions')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMembers(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, open])
+
+  const visibleMembers = mailMembers.filter((member) => showHidden || !isHiddenByDefault(member))
+  const selectedCount = mode === 'from-bridge' ? selectedSessionKeys.length : selectedMemberIds.length
+  const countLabel = `Create team with ${selectedCount} ${selectedCount === 1 ? 'member' : 'members'}`
 
   const title = mode === 'from-mail'
     ? 'Create From Agent Mail'
@@ -281,10 +320,16 @@ function NewPresetDialog({
       await onCreate({
         name,
         description,
-        includeOffline,
+        // The person saw and selected each member, offline ones included.
+        includeOffline: true,
         memberIds: mode === 'from-mail' ? selectedMemberIds : undefined,
+        sessions: mode === 'from-bridge'
+          ? bridgeSessions.filter((session) => selectedSessionKeys.includes(sessionKey(session)))
+          : undefined,
       })
       onOpenChange(null)
+    } catch {
+      // createPreset already showed the error. The dialog stays open so the person can fix it.
     } finally {
       setSaving(false)
     }
@@ -313,69 +358,50 @@ function NewPresetDialog({
             <div className="grid gap-3">
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox
-                  checked={includeOffline}
+                  checked={showHidden}
                   onCheckedChange={(checked) => {
                     const next = checked === true
-                    setIncludeOffline(next)
+                    setShowHidden(next)
                     if (!next) {
-                      setSelectedMemberIds((current) =>
-                        current.filter((memberId) =>
-                          mailMembers.some((member) => member.id === memberId && member.status !== 'offline')
-                        )
-                      )
+                      const shown = new Set(mailMembers.filter((member) => !isHiddenByDefault(member)).map((member) => member.id))
+                      setSelectedMemberIds((current) => current.filter((memberId) => shown.has(memberId)))
                     }
                   }}
                 />
-                Include offline members
+                Show offline and temporary
               </label>
-              <div className="max-h-56 overflow-y-auto rounded-md border p-2">
-                {loadingMembers && (
-                  <div className="p-3 text-sm text-muted-foreground">Loading members...</div>
-                )}
-                {!loadingMembers && mailMembers.length === 0 && (
-                  <div className="p-3 text-sm text-muted-foreground">No Agent Mail members found.</div>
-                )}
-                {!loadingMembers && mailMembers.map((member) => {
-                  const disabled = !includeOffline && member.status === 'offline'
-                  return (
-                    <label
-                      key={member.id}
-                      className={cn(
-                        'flex items-center gap-3 rounded-md px-2 py-2 text-sm',
-                        disabled && 'text-muted-foreground'
-                      )}
-                    >
-                      <Checkbox
-                        checked={selectedMemberIds.includes(member.id)}
-                        disabled={disabled}
-                        onCheckedChange={(checked) => {
-                          setSelectedMemberIds((current) => {
-                            if (checked === true) return [...new Set([...current, member.id])]
-                            return current.filter((memberId) => memberId !== member.id)
-                          })
-                        }}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{member.display_name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{member.repo_path}</span>
-                      </span>
-                      <Badge variant={member.status === 'offline' ? 'secondary' : 'outline'}>
-                        {member.status}
-                      </Badge>
-                    </label>
-                  )
-                })}
-              </div>
+              <TeamMemberPicker
+                items={memberItems(visibleMembers)}
+                selected={selectedMemberIds.map(String)}
+                loading={loadingMembers}
+                emptyText="No Agent Mail members to show."
+                onToggle={(id, checked) => {
+                  const memberId = Number(id)
+                  setSelectedMemberIds((current) =>
+                    checked ? [...new Set([...current, memberId])] : current.filter((value) => value !== memberId))
+                }}
+              />
             </div>
+          )}
+          {mode === 'from-bridge' && (
+            <TeamMemberPicker
+              items={sessionItems(bridgeSessions)}
+              selected={selectedSessionKeys}
+              loading={loadingMembers}
+              emptyText="No live sessions found."
+              onToggle={(id, checked) =>
+                setSelectedSessionKeys((current) =>
+                  checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))}
+            />
           )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(null)}>Cancel</Button>
           <Button
             onClick={submit}
-            disabled={saving || !name.trim() || (mode === 'from-mail' && selectedMemberIds.length === 0)}
+            disabled={saving || !name.trim() || (mode !== 'new' && mode !== null && selectedCount === 0)}
           >
-            {saving ? 'Creating' : 'Create'}
+            {saving ? 'Creating' : mode === 'from-mail' || mode === 'from-bridge' ? countLabel : 'Create'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1073,6 +1099,7 @@ export function AgentTeamsPage() {
     description: string
     includeOffline?: boolean
     memberIds?: number[]
+    sessions?: AgentSession[]
   }) => {
     try {
       const created = await withOperatorToken((token) => presetDialog === 'from-mail'
@@ -1083,9 +1110,12 @@ export function AgentTeamsPage() {
           include_offline: input.includeOffline,
         }, token)
         : presetDialog === 'from-bridge'
-          ? createAgentTeamFromBridge({
+          // The backend route would take every live session. This creates exactly the selected ones.
+          ? createAgentTeamPreset({
             name: input.name,
             description: input.description,
+            created_by: 'deck-ui',
+            slots: sessionsToSlots(input.sessions ?? []),
           }, token)
           : createAgentTeamPreset({
             name: input.name,
