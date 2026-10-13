@@ -296,6 +296,8 @@ The goal is complete only when its stated outcome and records are complete. A re
 
 The Leader uses authenticated Agent Mail for plans, approvals, handoffs, blocked work and decisions. GitHub holds durable work and review evidence. Do not require routine heartbeat messages when current supported native evidence supplies owner contact.
 
+An accepted reply is not a delivered message. A reply to a nested reply can be stored without reaching the member's inbox, and a member may have no tool to read a thread. Send anything a member must act on as a direct message to that member, and check that delivery reports a wake. Keep private findings in Mail, never in GitHub text. Watch every thread where you asked a member a question, not only the channel roots.
+
 Push a useful checkpoint after a coherent substep and before a handoff or long wait. Open draft PRs early. Mark an incomplete checkpoint as work in progress; it is not a request for final acceptance. Avoid empty commits or placeholder reviews to satisfy a timer.
 
 Keep one current summary near the start of the main issue and PR. Use one responsible publisher. Refresh the marked summary sections and preserve requirements, other scopes' records and historical evidence. Do not append competing current-status paragraphs.
@@ -325,6 +327,16 @@ Final hosted gates must still cover the actual PR head and current workflow exec
 Complete one bounded correction batch before final review. Keep one finding register with stable IDs, requirements, locations, decisive checks and state. Repair in-scope findings under valid existing authority. Use a new approved scope when the existing continuation no longer authorizes the change.
 
 The effective delivery policy belongs to each repository and attempt. New scope defaults do not silently update an active attempt. See the [Factory API](../api/factory.md) and the [delivery practices source](https://github.com/adrirubio/claude-deck/blob/master/docs/deploy/factory-delivery-practices.md).
+
+### Lane gates
+
+File the journey item for a lane when you admit the lane, so the journeys exist before its gate. A lane with merged issues and no journeys cannot pass its gate. When an item's journeys are written pending, its implementer activates them in the PR that makes them pass; check at the gate that none was left pending.
+
+Record each gate result in Mail with the exact candidate SHA, the journeys, the hosted checks and the reviewer's acceptance. Do not report a gate as passed without that record; audit the gate list against the records before a summary.
+
+A required job that runs only on pull requests never appears on an integration push. For a gate on the integration head, accept that job from each merged PR's exact head, and require the other jobs on the gate candidate itself.
+
+When two Done-when conditions conflict after both merge, such as a new panel that pushes a list below the fold, file one gate fix that keeps both. Do not drop either condition to pass.
 
 ## 7. Use external reviewers where they add evidence
 
@@ -360,6 +372,8 @@ The supervisor converts accepted recommendations into generic fixes or configura
 A review does not grant retry, budget, roster, merge or deployment authority. The supervisor applies recommendations within the operator's delegation.
 
 ## 8. Detect and classify stalls
+
+A member that is compacting its context is working, even when it sends no report for a long time. Read its pane before you escalate silence. After compaction, check that the next push still carries the agreed decisions.
 
 Read evidence before taking a remedy. Native liveness, activity, progress and authorization are different facts.
 
@@ -411,6 +425,14 @@ Use `deck_prepare_operator_action_contexts` and the Leader's current assessment 
 4. Obtain independent source and runtime review. Check the exact target and backport heads. Reuse valid check evidence.
 5. Prepare a machine-specific maintenance profile and request. Bind the old and target versions, accepted PRs, reviewed files and proof receipts.
 6. Obtain a current maintenance checkpoint from each affected active owner. The owner confirms that no source operation is in flight and holds work until the outcome.
+
+Before you write the request, run a preflight on the target:
+
+- **Startup migrations.** Read the target's compatibility migrations. A column added at startup changes the retained-authority snapshot. Controllers before #654 then fail after cutover. For those, add nullable columns to the live database after a backup and before the operation, and measure the snapshot on a database copy.
+- **Owner checkpoints.** Controllers before #654 refuse a checkpoint from an owner whose session runs outside the dispatch workspace. For those, run the upgrade when no item is dispatched or verifying. Hold a pending item by removing its dispatch label; Deck resets it when the label returns.
+- **Accepted pulls.** Each accepted pull must be merged, with all of its head's checks complete and successful.
+- **Proof receipts.** Run the proof in a clean checkout that the checking user owns. A test may write into the tree. The receipt binds the commit and tree, not the path.
+- **Refusal codes.** Older CLIs print only the exception type. Call the operation's function directly to read the reason code.
 
 Turning off team autonomy or a watched scope stops intake. It does not stop an already executing owner. Prove the safe handoff before changing the controller or an owner's source.
 
