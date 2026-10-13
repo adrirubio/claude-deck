@@ -28,7 +28,11 @@ function stubFetch() {
   })) as unknown as typeof fetch;
   return {
     metrics: () => calls.filter((call) => call.url.pathname.endsWith("/factory/metrics")),
-    audit: () => calls.filter((call) => call.url.pathname.endsWith("/factory/audit-events")),
+    // The page table reads. The "Needs a look" refusal reads (#520) carry event_kind.
+    audit: () => calls.filter((call) => call.url.pathname.endsWith("/factory/audit-events")
+      && !call.url.searchParams.has("event_kind")),
+    refusals: () => calls.filter((call) => call.url.pathname.endsWith("/factory/audit-events")
+      && call.url.searchParams.get("event_kind") === "continuation_request"),
   };
 }
 
