@@ -7,9 +7,9 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // repository; no repository page shows a copy of the Work table or an internal
 // scope number in its title.
 // Design reference: screens 07 (list), 08 (repository page), 09 (add).
-// @pending until #536 merges.
+// Active since #536.
 
-test('@pending repository settings are viewed and edited only on the repository page', async ({ page }) => {
+test('@active repository settings are viewed and edited only on the repository page', async ({ page }) => {
   await page.goto('/repositories/1')
   await expect(page.locator('main').getByRole('heading', { name: /example-org\/sample-app/ }).first()).toBeVisible()
   await expect(page.locator('main').getByRole('button', { name: /edit|save/i }).first()).toBeVisible()
@@ -20,7 +20,7 @@ test('@pending repository settings are viewed and edited only on the repository 
   await expect(page.locator('main a[href="/repositories/1"]').first()).toBeVisible()
 })
 
-test('@pending there is one flow to add a repository', async ({ page }) => {
+test('@active there is one flow to add a repository', async ({ page }) => {
   await page.goto('/repositories')
   await expect(page.locator('main a[href="/repositories/new"]').first()).toBeVisible()
   await page.goto('/teams/1?tab=autonomy')
@@ -28,7 +28,7 @@ test('@pending there is one flow to add a repository', async ({ page }) => {
   await expect(page.locator('main').getByRole('button', { name: /add (a )?(repository|scope|watched repo)/i })).toHaveCount(0)
 })
 
-test('@pending a repository page shows no Work table copy and no scope number in its title', async ({ page }) => {
+test('@active a repository page shows no Work table copy and no scope number in its title', async ({ page }) => {
   await page.goto('/repositories/1')
   const title = page.locator('main').getByRole('heading').first()
   await expect(title).toBeVisible()
@@ -39,7 +39,7 @@ test('@pending a repository page shows no Work table copy and no scope number in
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending Repositories meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active Repositories meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     for (const route of ['/repositories', '/repositories/1']) {
       await page.goto(route)

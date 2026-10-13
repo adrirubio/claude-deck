@@ -1235,6 +1235,10 @@ class GithubDispatchService:
                 leader_member = (
                     await self._slot_member(db, leader.id) if leader is not None else None
                 )
+                from app.models.database import MailExternalActor
+                from app.services.agent_team_supervisor_service import supervisor_address
+                supervisor = await db.get(MailExternalActor, preset.supervisor_actor_id) \
+                    if preset is not None and preset.supervisor_actor_id is not None else None
                 brief = self._dispatch_brief(
                     item,
                     scope,
@@ -1243,6 +1247,7 @@ class GithubDispatchService:
                     preset_slots=preset_slots,
                     leader_slot_id=preset.leader_slot_id if preset else None,
                     leader_member=leader_member,
+                    supervisor=supervisor_address(supervisor),
                     issue_details=issue_details_by_number.get(item.issue_number),
                 )
                 await self._send_dispatch_brief_to_slot(
@@ -1354,6 +1359,7 @@ class GithubDispatchService:
         preset_slots: list[AgentTeamSlot],
         leader_slot_id: int | None = None,
         leader_member: MailTeamMember | None = None,
+        supervisor: dict | None = None,
         issue_details: dict | None = None,
     ) -> str:
         leader = self._leader_slot(preset_slots, leader_slot_id)
@@ -1417,6 +1423,14 @@ class GithubDispatchService:
                     "request route derives the current designated Leader server-side; "
                     "do not guess or supply a member id."
                 )
+        if supervisor is not None:
+            lines.extend([
+                f"- Supervisor address: {supervisor['address']} (actor_id={supervisor['actor_id']}).",
+                "- Use deck_send_message with to_supervisor_actor_id for the current bound Supervisor.",
+                "- Escalate to the Leader first. Then contact the Supervisor.",
+                "- Retained operator decisions require the current operator-action record.",
+                "- Supervisor binding and check-ins grant no approval, retry, lease or merge authority.",
+            ])
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
         lines.extend(["", "Issue body:", body, "", "Required status reporting:"])

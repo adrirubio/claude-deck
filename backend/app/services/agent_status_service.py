@@ -102,6 +102,7 @@ class AgentStatusService:
             if observed is not None:
                 status.activity_state = observed.state
                 status.activity_reason = observed.reason
+                status.waiting_input = observed.waiting_input
                 if observed.state == "idle" and observed.observed_at is not None:
                     stamp = observed.observed_at
                     stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp

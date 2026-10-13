@@ -7,7 +7,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // cancelled key dialog leaves a clear way to enter the key later.
 // The seed's team folders (sample-app, quiet-lib) are the choices for step 1.
 // Design reference: screen 09 (add a repository).
-// @active until #537 merges.
+// Active since #537.
 
 test('@active opening the wizard shows no dialog', async ({ page }) => {
   await page.goto('/repositories/new')

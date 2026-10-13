@@ -1134,14 +1134,23 @@ export const manifest = [
   },
   {
     "name": "deck_send_message",
-    "description": "Send a plain message to another team member. For answerable questions use\n    deck_request_context; for handing work over use deck_create_handoff.",
+    "description": "Send a plain message to a team member or the current bound Supervisor.\n    Set exactly one target. For context requests use deck_request_context.\n    For handoffs use deck_create_handoff. Supervisor messages grant no authority.",
     "inputSchema": {
       "properties": {
         "to_member_id": {
-          "title": "To Member Id",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Member Id"
         },
         "body": {
+          "default": "",
           "title": "Body",
           "type": "string"
         },
@@ -1149,13 +1158,55 @@ export const manifest = [
           "default": "",
           "title": "Subject",
           "type": "string"
+        },
+        "to_supervisor_actor_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Supervisor Actor Id"
+        }
+      },
+      "title": "deck_send_messageArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_supervisor_checkin",
+    "description": "Promise the next supervisor check with an ISO 8601 UTC time.\n    Only the bound external actor can call this tool. The promise grants no authority.\n    The controller derives health. The next check must be within 24 hours.",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "next_check_at": {
+          "title": "Next Check At",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
         }
       },
       "required": [
-        "to_member_id",
-        "body"
+        "preset_id",
+        "next_check_at"
       ],
-      "title": "deck_send_messageArguments",
+      "title": "deck_supervisor_checkinArguments",
       "type": "object"
     }
   },

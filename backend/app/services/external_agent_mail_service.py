@@ -261,6 +261,9 @@ class ExternalAgentMailService:
         root = await db.get(MailMessage, root_id)
         if root is None:
             raise ValueError("Thread root not found")
+        from app.services.agent_team_supervisor_service import is_supervisor_message, require_supervisor_thread
+        if is_supervisor_message(root):
+            await require_supervisor_thread(db, actor, root)
         if root.sender_actor_id is not None and root.sender_actor_id != actor.id:
             raise ValueError("External actors can only reply in threads they created")
         return await self.send_message(
@@ -282,7 +285,11 @@ class ExternalAgentMailService:
         message_id: int,
     ) -> MailThreadResponse:
         thread = await agent_mail_service.get_thread(db, message_id)
-        self._require_actor_owns_thread(thread, actor)
+        from app.services.agent_team_supervisor_service import is_supervisor_message, require_supervisor_thread
+        if is_supervisor_message(thread.root):
+            await require_supervisor_thread(db, actor, thread.root)
+        else:
+            self._require_actor_owns_thread(thread, actor)
         return thread
 
     async def request_status(

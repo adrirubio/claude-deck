@@ -3,7 +3,7 @@ import type { RepositoryProjection } from "@/types/factory";
 import { useCursorList } from "../reads";
 import { Pagination } from "./Pagination";
 import { ReadStatus } from "./ReadStatus";
-import { RepositoryCard } from "./RepositoryCard";
+import { RepositoryTable } from "./RepositoryTable";
 import { anchor } from "./styles";
 
 export function RepositoryResults({ query = "" }: { query?: string }) {
@@ -19,17 +19,13 @@ export function RepositoryResults({ query = "" }: { query?: string }) {
         <>
           {!state.data.rows.length && (
             <p>
-              No watched repository scopes match.{" "}
-              <Link className={anchor} to="/teams">
-                Configure a repository
+              No watched repositories match.{" "}
+              <Link className={anchor} to="/repositories/new">
+                Add a repository
               </Link>
             </p>
           )}
-          <div className="grid gap-4 lg:grid-cols-2">
-            {state.data.rows.map((r) => (
-              <RepositoryCard key={r.scope_id} repository={r} />
-            ))}
-          </div>
+          {state.data.rows.length > 0 && <RepositoryTable rows={state.data.rows} />}
           <Pagination state={state} />
         </>
       )}

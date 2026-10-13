@@ -21,7 +21,33 @@ A later successful read clears the signal, including pending or failed checks.
 Check expiry and coverage. Incomplete, stale, unknown, or changed-context reports keep the whole estimate Unknown.
 The read limits observations to eight seconds and 64 unfinished items. Its effort total excludes waiting time.
 The summary grants no approval, owner contact, resume, retry, lease, merge, or milestone authority.
-The supervisor field stays `none` until #549 supplies its separate contract.
+Read optional `supervisor_observation` for supervisor health and the bound actor address.
+The original `supervisor` literal remains `none` for older clients.
+The Director binds the optional external actor. One actor can supervise several teams.
+Binding grants no new permission.
+
+After a successful check, call `deck_supervisor_checkin(preset_id, next_check_at, note)`.
+Promise a future ISO 8601 check time within 24 hours.
+The tool uses the bound external actor credential. It accepts no credential argument.
+Deck records the check time and derives `healthy`, `late`, or `absent` from its clock.
+This replaces manual tick reporting. `none` means supervision is optional and unbound.
+Late and absent states expose “Supervisor check-in overdue”.
+The default grace is the larger of 30 minutes and twice the last promised interval.
+Only the Director changes the grace period.
+Check-ins grant no approval, retry, lease, merge, or milestone authority.
+
+Members use the `supervisor_address` from `deck_whoami` or their dispatch brief.
+They send messages with `deck_send_message(to_supervisor_actor_id=..., body=...)`.
+The actor reads `GET /api/v1/external/agent-mail/supervisor-inbox`.
+Foreign actors and unbound teams get a refusal.
+
+Read optional `waiting_input` for verified question, trust and sign-in waits.
+Deck stores one fixed notice per continuous wait for the bound Supervisor.
+The Leader receives the notice only when no Supervisor is bound.
+Known idle clears the pane latch. Unknown screens preserve it. A new pane starts with an empty latch.
+The observer reads only the current authenticated pane. It exports no screen text and sends no keys.
+Unsupported screens and sign-in screens before Mail registration remain unknown.
+Keep Leader, Supervisor, and retained operator decisions in their existing escalation order.
 
 Locate the Deck source checkout supplied by the operator or recorded campaign. Read `docs/guide/supervised-factory-playbook.md` there. When this skill is used directly from its repository, that file is at `../../docs/guide/supervised-factory-playbook.md` relative to this directory.
 

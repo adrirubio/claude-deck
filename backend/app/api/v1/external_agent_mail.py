@@ -16,7 +16,10 @@ from app.models.schemas import (
     MailExternalActorCreateResponse,
     MailExternalActorResponse,
     MailThreadResponse,
+    MailMessageResponse,
     TeamListResponse,
+    SupervisorCheckinRequest,
+    SupervisorObservation,
 )
 from app.services.external_agent_mail_service import (
     ExternalAgentMailAuthError,
@@ -88,6 +91,20 @@ async def get_external_actor_me(actor: MailExternalActor = Depends(external_acto
     return external_agent_mail_service.actor_response(actor)
 
 
+@router.post("/supervisor-checkin", response_model=SupervisorObservation)
+async def checkin_supervisor(request: SupervisorCheckinRequest,
+    actor: MailExternalActor = Depends(external_actor), db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import supervisor_checkin
+    try:
+        return await supervisor_checkin(db, actor, request.preset_id, request.next_check_at, request.note)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="supervisor_actor_not_bound") from exc
+    except ValueError as exc:
+        code = str(exc)
+        raise HTTPException(status_code=409 if code == "supervisor_binding_changed" else 400,
+                            detail=code) from exc
+
+
 @router.get("/members", response_model=TeamListResponse)
 async def list_external_agent_mail_members(
     actor: MailExternalActor = Depends(external_actor),
@@ -109,6 +126,17 @@ async def send_external_agent_mail_message(
         raise _rate_limit_response(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/supervisor-inbox", response_model=list[MailMessageResponse])
+async def read_supervisor_inbox(limit: int = 50, actor: MailExternalActor = Depends(external_actor),
+                                db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import supervisor_inbox
+    from app.services.mail_redaction import redact_lease_message
+    try:
+        return [redact_lease_message(message) for message in await supervisor_inbox(db, actor, limit=limit)]
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="supervisor_actor_not_bound") from exc
 
 
 @router.post("/broadcasts", response_model=ExternalAgentMailSendResponse)
@@ -170,6 +198,8 @@ async def reply_external_agent_mail_thread(
 ):
     try:
         return await external_agent_mail_service.reply_in_thread(db, actor, message_id, request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="supervisor_actor_not_bound") from exc
     except ExternalAgentMailRateLimitError as exc:
         raise _rate_limit_response(exc) from exc
     except ValueError as exc:

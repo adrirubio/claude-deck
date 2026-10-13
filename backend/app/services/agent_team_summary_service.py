@@ -10,17 +10,18 @@ from mcp_shim.work_remaining_protocol import MAX_AGE
 
 from app.models.database import (
     AgentTeamPreset, GithubApprovalRequest, GithubOwnerObservationPause,
-    GithubWorkItem, GithubWorkspace, TeamGithubScope,
+    GithubWorkItem, GithubWorkspace, MailExternalActor, TeamGithubScope,
 )
 from app.models.factory_schemas import (
     AgentTeamSummaryResponse, TeamRemainingWork, TeamSummaryAttention, TeamSummaryHumanAction,
-    TeamRequiredCIUnreadable,
+    TeamRequiredCIUnreadable, TeamWaitingInput,
 )
 from app.services.github_coordination_service import hold_code
 from app.services.github_operator_attention_service import github_operator_attention_service
 from app.services.github_work_progress_service import github_work_progress_service
 from app.services.agent_team_campaign_service import agent_team_campaign_service
 from app.services import required_ci_attention
+from app.services.agent_team_supervisor_service import observe_supervisor, supervisor_observation
 
 _ACTORS = ("owner", "leader", "operator", "controller")
 _KINDS = {"review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
@@ -44,7 +45,12 @@ class AgentTeamSummaryService:
     async def _snapshot(self, db, preset_id):
         team = (await db.execute(select(AgentTeamPreset.id, AgentTeamPreset.description,
             AgentTeamPreset.parent_issue_url, AgentTeamPreset.autonomy_enabled, AgentTeamPreset.updated_at,
-            AgentTeamPreset.backlog_milestone, AgentTeamPreset.planned_decisions)
+            AgentTeamPreset.backlog_milestone, AgentTeamPreset.planned_decisions,
+            AgentTeamPreset.supervisor_actor_id, AgentTeamPreset.supervisor_checked_at,
+            AgentTeamPreset.supervisor_next_check_at, AgentTeamPreset.supervisor_grace_seconds,
+            AgentTeamPreset.supervisor_note, AgentTeamPreset.supervisor_observed_status,
+            MailExternalActor.display_name.label("supervisor_display_name"))
+            .outerjoin(MailExternalActor, MailExternalActor.id == AgentTeamPreset.supervisor_actor_id)
             .where(AgentTeamPreset.id == preset_id))).one_or_none()
         if team is None:
             return None
@@ -89,6 +95,7 @@ class AgentTeamSummaryService:
     async def summary(self, db, preset_id):
         started = datetime.now(timezone.utc)
         deadline = asyncio.get_running_loop().time() + self.observation_seconds
+        await observe_supervisor(db, preset_id, now=started)
         initial = await self._snapshot(db, preset_id)
         if initial is None:
             return None
@@ -97,6 +104,7 @@ class AgentTeamSummaryService:
                     and len(scope_rows) <= 32 and len(approvals) <= 64)
         scopes = [SimpleNamespace(**row._mapping) for row in scope_rows[:32]]
         attention, human_actions, actors, observations = [], [], set(), []
+        waiting_input, native_fence = None, {}
         expires = [started + timedelta(seconds=15)]
         hold = hold_code()
         if hold:
@@ -110,6 +118,12 @@ class AgentTeamSummaryService:
             return await asyncio.wait_for(read(), timeout=remaining)
 
         try:
+            from app.services.agent_activity_service import observe_team, _team_inputs
+            native = await bounded(lambda: observe_team(db, preset_id, include_agent_status=False,
+                persist_identities=False, max_input_rows=256, input_fence=native_fence))
+            waiting_input = [TeamWaitingInput(slot_id=entry.slot_id, reason=entry.waiting_input.reason)
+                for entry in native.slots if entry.waiting_input is not None]
+            expires.append(_utc(native.valid_until))
             dispatch = await bounded(lambda: self.attention.dispatch_snapshot(db, scopes))
             complete = complete and dispatch["complete"]
             for action in dispatch["actions"]:
@@ -159,7 +173,11 @@ class AgentTeamSummaryService:
                     expires.append(_utc(value.remaining_work.reported_at) + MAX_AGE)
                 if value.next_actor in _ACTORS:
                     actors.add(value.next_actor)
-        except (TimeoutError, OSError):
+            native_current = {entry[0]: entry for entry in await bounded(lambda: _team_inputs(db, preset_id, 256))}
+            if native_current != native_fence:
+                waiting_input = None
+        except (TimeoutError, OSError, ValueError):
+            waiting_input = None
             complete = False
             if db.in_transaction():
                 await db.rollback()
@@ -189,6 +207,15 @@ class AgentTeamSummaryService:
             confidence=confidence, reason="complete" if known else "context_changed" if changed
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]
+        supervisor = supervisor_observation(final_team, now=now, actor=SimpleNamespace(
+            id=final_team.supervisor_actor_id, display_name=final_team.supervisor_display_name)
+            if final_team.supervisor_actor_id is not None else None)
+        if supervisor["next_check_at"] is not None:
+            boundary = supervisor["next_check_at"]
+            if supervisor["status"] == "late":
+                boundary += timedelta(seconds=supervisor["grace_seconds"])
+            if boundary > now:
+                expires.append(boundary)
         campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
         unreadable = []
         for item in final[2][:self.item_limit]:
@@ -200,6 +227,7 @@ class AgentTeamSummaryService:
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
             required_ci_unreadable=unreadable,
+            supervisor_observation=supervisor, waiting_input=waiting_input if not changed else None,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
             next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)
 

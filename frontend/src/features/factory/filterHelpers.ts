@@ -41,3 +41,16 @@ export function workLink(params: URLSearchParams, category: string) {
   next.set("category", category);
   return `/work?${next}`;
 }
+
+// The plain state of a watched repository: On, Off or Needs attention. The
+// reason is the one line that Deck gives for the intake state.
+export function repositoryState(r: {
+  configured_enabled: boolean;
+  team_automation_enabled: boolean;
+  intake: { state: string; summary: string };
+}): { label: "On" | "Off" | "Needs attention"; reason: string } {
+  if (!r.configured_enabled || !r.team_automation_enabled)
+    return { label: "Off", reason: r.intake.summary };
+  if (r.intake.state === "eligible") return { label: "On", reason: r.intake.summary };
+  return { label: "Needs attention", reason: r.intake.summary };
+}
