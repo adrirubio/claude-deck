@@ -660,7 +660,10 @@ async def record_merged_delivery(
 
 
 async def record_revision_outcome(
-    db: AsyncSession, *, item_id: int, revision_id: int, status: str, source: str
+    db: AsyncSession, *, item_id: int, revision_id: int, status: str, source: str,
+    actor: dict | None = None, operation_id: str | None = None,
+    correlation_id: str | None = None, before_values: dict | None = None,
+    sanitized_reason: str | None = None,
 ) -> FactoryAuditEvent:
     """R08: one preserved revision result fact, in the result's transaction.
 
@@ -677,13 +680,13 @@ async def record_revision_outcome(
     snapshot = {"revision_created_at": created} if created else None
     # The identity names the revision lifetime, so a recreated revision with
     # the same numeric ID records its own result instead of conflicting.
-    operation_id = f"revision_outcome:{revision_id}:{created or 'unknown'}:{status}:{source}"
+    operation_id = operation_id or f"revision_outcome:{revision_id}:{created or 'unknown'}:{status}:{source}"
     return await record_event(
         db, event_kind="revision_outcome", source=source, occurred_at=datetime.utcnow(),
-        actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
-        item_id=item_id, revision_id=revision_id, after_values={"status": status},
-        action_outcome="applied", sanitized_reason=f"revision {status}",
-        operation_id=operation_id, correlation_id=operation_id, context_snapshot=snapshot)
+        actor=actor or derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=item_id, revision_id=revision_id, before_values=before_values, after_values={"status": status},
+        action_outcome="applied", sanitized_reason=sanitized_reason or f"revision {status}",
+        operation_id=operation_id, correlation_id=correlation_id or operation_id, context_snapshot=snapshot)
 
 
 def replay_key_for(

@@ -38,6 +38,9 @@ from app.services.github_client import (
 )
 from app.services.github_check_observation import GithubCheckObservationError
 from app.services import required_ci_attention
+from app.services.github_terminal_revision_service import (
+    TerminalRevisionContextChanged, complete_current_revision, lock_terminal_transition,
+)
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_recovery_gate import (
     GithubRecoveryOnlyAttempt,
@@ -986,9 +989,9 @@ class GithubVerificationService:
         await self._repair_exhausted_diagnostic_notifications(
             db, scope, recovery_only_attempt=recovery_only_attempt
         )
-        items = (
+        item_ids = (
             await db.execute(
-                select(GithubWorkItem).where(
+                select(GithubWorkItem.id).where(
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.pr_number.is_not(None),
                     GithubWorkItem.dispatch_status.in_(
@@ -1004,7 +1007,13 @@ class GithubVerificationService:
             )
         ).scalars().all()
 
-        for item in items:
+        for item_id in item_ids:
+            # A rejected terminal claim rolls back and expires ORM objects.
+            # Read each next item explicitly, with its current state.
+            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+            if item is None or item.dispatch_status not in (
+                    "dispatched", "verifying", "ready_for_review", "awaiting_human_review"):
+                continue
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
                     revision = await self._active_scope_revision(db, item)
@@ -1052,6 +1061,10 @@ class GithubVerificationService:
                     "checks_unavailable_since", "checks_unavailable_reason"
                 )):
                     await db.commit()
+            except TerminalRevisionContextChanged:
+                await db.rollback()
+                await db.refresh(scope)
+                logger.info("Terminal attempt changed; no merge transition recorded")
             except GithubCheckObservationError as exc:
                 # Missing or ambiguous CI evidence must not consume a retry or
                 # diagnostic budget. Continue polling the other work items.
@@ -2453,8 +2466,10 @@ class GithubVerificationService:
         # R02: the sourced merge outcome is recorded in the merge transaction,
         # bound to the attempt, revision and PR artifact.
         from app.services import factory_audit_service as _audit
+        await lock_terminal_transition(db, item)
         await _audit.record_merged_delivery(db, item, pull, source=source)
         self._mark_merged(item)
+        await complete_current_revision(db, item, source=source, terminal_status="merged")
 
     async def _record_revision_outcome(
         self,

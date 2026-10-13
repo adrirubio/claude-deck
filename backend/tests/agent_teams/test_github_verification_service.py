@@ -1665,6 +1665,77 @@ async def test_human_merge_fires_blocker_merged_notification(db):
 
 
 @pytest.mark.asyncio
+async def test_human_merge_completes_active_revision_in_merge_transaction(db):
+    scope = await _scope(db, merge_policy="human")
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db, scope, dispatch_status="ready_for_review", pr_number=5,
+        owner_slot_id=slot.id, dispatch_nonce="attempt-1", active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, workspace = await _implementation_revision(
+        db, scope, item, slot, member, status="active", failed_head_count=1,
+    )
+    client = _Client(pull={
+        "number": 5, "node_id": "node", "draft": False, "merged": True,
+        "mergeable_state": "clean", "head": {"sha": "sha"},
+    })
+
+    await github_verification_service._process_review_item(db, scope, item, client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "merged"
+    assert revision.status == "completed"
+    assert revision.completed_at is not None
+    assert revision.failed_head_count == 1
+    assert workspace.leased_item_id == item.id
+    from app.models.database import FactoryAuditEvent
+    facts = (await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.item_id == item.id,
+        FactoryAuditEvent.event_kind == "revision_outcome",
+    ))).all()
+    assert len(facts) == 1
+    assert facts[0].revision_id == revision.id
+    assert facts[0].after_values == {"status": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_stale_merge_claim_does_not_stop_other_items(db):
+    scope = await _scope(db, merge_policy="human")
+    slot, member = await _owner(db, scope)
+    first = await _item(db, scope, dispatch_status="ready_for_review", pr_number=5,
+                        owner_slot_id=slot.id, dispatch_nonce="attempt-first", active_scope_revision=1)
+    first_revision, _ = await _implementation_revision(db, scope, first, slot, member, status="active")
+    second = await _item(db, scope, issue_number=2, dispatch_status="ready_for_review", pr_number=6,
+                         owner_slot_id=slot.id, dispatch_nonce="attempt-second", active_scope_revision=1)
+    second_revision, _ = await _implementation_revision(db, scope, second, slot, member, status="active")
+    first_id, second_id = first.id, second.id
+    first_revision_id, second_revision_id = first_revision.id, second_revision.id
+
+    class RaceClient(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            if pr_number == 5:
+                await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == first_id)
+                    .values(dispatch_nonce="changed-attempt").execution_options(synchronize_session=False))
+                await db.commit()
+            return {**self.pull, "number":pr_number}
+    client = RaceClient(pull={"number":5, "draft":False, "merged":True, "head":{"sha":"sha"}})
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    first = await db.get(GithubWorkItem,first_id,populate_existing=True)
+    second = await db.get(GithubWorkItem,second_id,populate_existing=True)
+    first_revision = await db.get(GithubAttemptScopeRevision,first_revision_id,populate_existing=True)
+    second_revision = await db.get(GithubAttemptScopeRevision,second_revision_id,populate_existing=True)
+    assert first.dispatch_status == "ready_for_review"
+    assert first_revision.status == "active"
+    assert second.dispatch_status == "merged"
+    assert second_revision.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_report_pr_opened_routes_code_and_design(db):
     code_scope = await _scope(db)
     design_scope = await _scope(db, repo_name="design")

@@ -11,6 +11,8 @@ from app.api.v1.deps import require_operator
 from app.database import get_db
 from app.models.api_model import format_utc_time
 from app.models.database import GithubAcceptedSourceImport, GithubMaintenanceEvent, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
+from app.models.schemas import TerminalRevisionReconcileRequest
+from app.services.github_terminal_revision_service import terminal_revision_report, reconcile_terminal_revision
 from app.services.accepted_source_imports import SourceImportRequest, register_source_import
 from app.services.github_client import GithubClientResponseError
 from app.services.github_check_observation import GithubCheckObservationError
@@ -42,6 +44,30 @@ async def context(db, preset_id, item_id):
     if scope is None or scope.preset_id != preset_id:
         raise HTTPException(status_code=404, detail="Work item not found")
     return item, scope
+
+
+@router.get("/presets/{preset_id}/terminal-revisions")
+async def terminal_revisions(preset_id: int, response: Response,
+                             _operator=Depends(require_operator), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    return await terminal_revision_report(db, preset_id)
+
+
+@router.post("/presets/{preset_id}/work-items/{item_id}/terminal-revisions/{revision_id}/reconcile")
+async def terminal_revision_reconcile(preset_id: int, item_id: int, revision_id: int,
+                                      request: TerminalRevisionReconcileRequest, response: Response,
+                                      _operator=Depends(require_operator), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item, _scope = await context(db, preset_id, item_id)
+    try:
+        return await reconcile_terminal_revision(db, item, revision_id, request.expected_context_sha256,
+                                                 request.operation_id, request.reason)
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="terminal_revision_context_changed") from None
 
 
 @router.post("/presets/{preset_id}/work-items/{item_id}/accepted-source-imports")
