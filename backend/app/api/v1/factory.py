@@ -319,7 +319,7 @@ def filters(
 
 def work_filters(
     selected: wire.FactoryFilters = Depends(filters),
-    category: str = Query("all", pattern="^(all|queued|active|review|attention|finished|unknown)$"),
+    category: str = Query("all", pattern="^(all|open|queued|active|review|attention|finished|unknown)$"),
 ):
     return wire.WorkFilters(**selected.model_dump(), category=category)
 

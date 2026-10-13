@@ -171,6 +171,9 @@ def work_query(filters: wire.FactoryFilters):
     category = getattr(filters, "category", "all")
     if category == "unknown":
         query = query.where(GithubWorkItem.dispatch_status.not_in(tuple(STATUS_CATEGORY)))
+    elif category == "open":
+        # Every item that is not finished. Unknown future statuses stay in.
+        query = query.where(GithubWorkItem.dispatch_status.not_in(CATEGORY_STATUSES["finished"]))
     elif category != "all":
         query = query.where(GithubWorkItem.dispatch_status.in_(CATEGORY_STATUSES[category]))
     return query

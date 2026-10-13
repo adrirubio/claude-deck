@@ -1,5 +1,5 @@
 import { Link, useParams } from "react-router-dom";
-import type { WorkDetailResponse, WorkProjection } from "@/types/factory";
+import type { WorkDetailResponse } from "@/types/factory";
 import { WorkItemPanel } from "@/features/agent-teams/WorkItemPanel";
 import { ContextLinks } from "../components/ContextLinks";
 import { GithubLink } from "../components/GithubLink";
@@ -7,13 +7,8 @@ import { ProtectedRemedies } from "../components/ProtectedRemedies";
 import { ReadStatus } from "../components/ReadStatus";
 import { anchor, panel } from "../components/styles";
 import { Time } from "../components/Time";
-import { categories } from "../filterHelpers";
+import { stateLabel } from "../filterHelpers";
 import { useObservation } from "../reads";
-
-// Merged work is delivered: nothing can be recovered on it.
-function statusWord(w: WorkProjection) {
-  return w.item.dispatch_status === "merged" ? "Merged" : categories[w.category];
-}
 
 export function WorkDetailPage() {
   const { workItemId } = useParams();
@@ -45,7 +40,7 @@ export function WorkDetailPage() {
         <>
           <article className={panel}>
             <p>
-              <strong>{statusWord(w)}</strong>
+              <strong>{stateLabel(w)}</strong>
               {w.item.pr_number ? ` · PR #${w.item.pr_number}` : ""} ·{" "}
               {w.repository.display_name} · {w.team.name} ·{" "}
               {w.owner

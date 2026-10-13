@@ -37,6 +37,44 @@ function NameSelect({
   );
 }
 
+// Active is every item that is not finished. A link can also name one category.
+const CHIPS: [string, string][] = [
+  ["open", "Active"],
+  ["finished", "Finished"],
+  ["all", "All"],
+];
+
+function CategoryChips({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const chips = CHIPS.some(([id]) => id === value)
+    ? CHIPS
+    : [...CHIPS, [value, categories[value as keyof typeof categories] ?? value]];
+  return (
+    <div role="group" aria-label="Category" className="flex items-end gap-2">
+      {chips.map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={id === value}
+          onClick={() => onChange(id)}
+          className={`h-9 rounded-full border px-3 text-sm ${
+            id === value
+              ? "border-primary bg-accent font-medium"
+              : "text-muted-foreground hover:bg-accent"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function FactoryFilters({
   work = false,
   repository = false,
@@ -57,7 +95,7 @@ export function FactoryFilters({
   };
   const active = ["team_id", "scope_id", "provider"].some((key) =>
     raw.has(key),
-  ) || (raw.has("category") && raw.get("category") !== "all");
+  ) || (raw.has("category") && raw.get("category") !== "open");
   const names = unknown.map((key) => (key === "team_id" ? "team" : "repository"));
   return (
     <form
@@ -99,20 +137,10 @@ export function FactoryFilters({
         </select>
       </label>
       {work && (
-        <label className="grid gap-1 text-sm">
-          Category
-          <select
-            className={select}
-            value={params.get("category") ?? "all"}
-            onChange={(event) => update("category", event.target.value)}
-          >
-            {Object.entries(categories).map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <CategoryChips
+          value={params.get("category") ?? "open"}
+          onChange={(value) => update("category", value === "open" ? "" : value)}
+        />
       )}
       {active && (
         <Link

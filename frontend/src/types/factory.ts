@@ -244,6 +244,7 @@ export type WorkDetailResponse = {
 export type WorkFilters = {
   category:
     | "all"
+    | "open"
     | "queued"
     | "active"
     | "review"

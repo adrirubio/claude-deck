@@ -7,6 +7,15 @@ export const categories = {
   finished: "Finished",
   unknown: "Unknown",
 };
+// The plain word for the state of one work item. Merged work reads "Merged".
+export function stateLabel(work: {
+  category: keyof typeof categories;
+  item: { dispatch_status: string };
+}) {
+  return work.item.dispatch_status === "merged"
+    ? "Merged"
+    : categories[work.category];
+}
 export const harnesses = {
   "claude-code": "Claude Code",
   "codex-cli": "Codex CLI",
