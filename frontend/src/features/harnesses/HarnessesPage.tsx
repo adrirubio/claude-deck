@@ -6,6 +6,8 @@ import { useProviderContext, NativeProviderScope } from "@/contexts/ProviderCont
 import { DashboardProvider, useDashboard } from "@/contexts/DashboardContext";
 import { useProviderOperations } from "@/hooks/useProviders";
 import { fetchAgentTeamPresets } from "@/features/agent-teams/api";
+import { HarnessMailDetails, HarnessMailSetup } from "@/features/agent-mail/HarnessMailSetup";
+import { useAgentMailSetup, type AgentMailSetup } from "@/features/agent-mail/useAgentMailSetup";
 import { harnesses } from "@/features/factory/filterHelpers";
 import { CLICKABLE_CARD } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -59,7 +61,7 @@ function StatusBadge({ status }: { status: HarnessStatus }) {
 }
 
 // Code names, access codes, credentials, session binding and the raw observation live here only.
-function TechnicalDetails({ id, metadata }: { id: AgentProviderId; metadata?: AgentProviderStatus }) {
+function TechnicalDetails({ id, metadata, mail }: { id: AgentProviderId; metadata?: AgentProviderStatus; mail: AgentMailSetup }) {
   const { catalog, refresh, refreshing } = useProviderOperations(id);
   const readiness = catalog?.readiness;
   return (
@@ -77,6 +79,7 @@ function TechnicalDetails({ id, metadata }: { id: AgentProviderId; metadata?: Ag
           <div><dt className="font-medium">Session</dt><dd>{readiness?.session.state ?? "unknown"} · {readiness?.session.reason ?? "No team slot selected; a generic provider card cannot establish a worker binding."}</dd></div>
         </dl>
         {readiness && <p className="text-xs text-muted-foreground">Observation: {readiness.probe_state} · {new Date(readiness.observed_at).toLocaleString()}. {readiness.probe_state === "pending" ? "Local checks are still pending." : readiness.probe_state === "failed" ? "Local checks could not complete; uncertain results remain unknown." : "Local configuration checks do not contact a model."}</p>}
+        {metadata?.installed !== false && <HarnessMailDetails providerId={id} setup={mail} />}
         <button type="button" className={buttonVariants({ variant: "secondary", className: "h-auto min-h-11 whitespace-normal text-left focus-visible:ring-2" })} onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
         {catalog && <details>
           <summary className="cursor-pointer">Operations and conditions</summary>
@@ -147,6 +150,7 @@ function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; met
 
 function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
   const { state, catalog } = useProviderOperations(id);
+  const mail = useAgentMailSetup();
   useDocumentTitle(`${harnesses[id]} · Claude Deck`);
   const summaryAccess = catalog ? nativeAccess(id, "summary", metadata, catalog) : null;
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
@@ -164,12 +168,13 @@ function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; m
           {metadata && !metadata.installed && <p className="text-sm text-muted-foreground">Install it on this machine to use it in a team.</p>}
         </header>
         {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
+        <HarnessMailSetup providerId={id} harnessInstalled={metadata?.installed !== false} setup={mail} />
         {catalog && (
           <DashboardProvider>
             <Tiles id={id} metadata={metadata} catalog={catalog} withCounts={summaryAccess !== null} />
           </DashboardProvider>
         )}
-        <TechnicalDetails id={id} metadata={metadata} />
+        <TechnicalDetails id={id} metadata={metadata} mail={mail} />
       </div>
     </NativeProviderScope>
   );

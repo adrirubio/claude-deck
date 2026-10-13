@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, RefreshCw, Terminal, Users } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, Terminal, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type {
   AgentMailInstallStatus,
-  AgentMailSnippets,
   MailMemberResponse,
   MailMemberUpdate,
   MailMessageCreate,
@@ -17,25 +17,16 @@ import type {
   MailMessageResponse,
 } from '@/types/agentMail'
 import {
-  applyClaudeCodeAgentMailInstall,
-  applyCodexAgentMailInstall,
-  applyCopilotAgentMailInstall,
-  applyOpenCodeAgentMailInstall,
   fetchAgentMailInstallStatus,
   fetchAgentMailMessages,
-  fetchAgentMailSnippets,
   fetchAgentMailTeam,
   queueAgentMailInboxCheck,
   sendAgentMailMessage,
-  uninstallClaudeCodeAgentMail,
-  uninstallCodexAgentMail,
-  uninstallCopilotAgentMail,
-  uninstallOpenCodeAgentMail,
   updateAgentMailMember,
 } from './api'
 import { AgentMailHelpDialog } from './AgentMailHelpDialog'
 import { ComposeDialog, type ComposePreset } from './ComposeDialog'
-import { InstallTab } from './InstallTab'
+import { connectedHarnessNames, joinNames } from './mailSetup'
 import { MemberEditDialog } from './MemberEditDialog'
 import { RequestsTab, type RequestKindFilter, type RequestStatusFilter } from './RequestsTab'
 import { TeamTab, type TeamStatusFilter } from './TeamTab'
@@ -47,7 +38,6 @@ export function AgentMailPage() {
   const [members, setMembers] = useState<MailMemberResponse[]>([])
   const [messages, setMessages] = useState<MailMessageResponse[]>([])
   const [installStatus, setInstallStatus] = useState<AgentMailInstallStatus | null>(null)
-  const [snippets, setSnippets] = useState<AgentMailSnippets | null>(null)
   const [loading, setLoading] = useState(true)
   const [installLoading, setInstallLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('team')
@@ -86,12 +76,7 @@ export function AgentMailPage() {
   const loadInstallData = useCallback(async () => {
     setInstallLoading(true)
     try {
-      const [status, snippetData] = await Promise.all([
-        fetchAgentMailInstallStatus(),
-        fetchAgentMailSnippets(),
-      ])
-      setInstallStatus(status)
-      setSnippets(snippetData)
+      setInstallStatus(await fetchAgentMailInstallStatus())
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to load install status')
     } finally {
@@ -143,6 +128,7 @@ export function AgentMailPage() {
     installStatus?.opencode_mcp_installed && installStatus.opencode_plugin_events_missing.length === 0
   )
   const hasConfiguredIntegration = claudeReady || codexReady || copilotReady || opencodeReady
+  const setUpNames = connectedHarnessNames(installStatus)
   const showSetupNotice = !installLoading && (!hasConfiguredIntegration || members.length === 0)
   const showCodexRegistrationNotice = !installLoading && codexReady && stats.connected === 0 && stats.observed > 0
 
@@ -194,19 +180,6 @@ export function AgentMailPage() {
     }
   }
 
-  const runInstallAction = async (action: () => Promise<AgentMailInstallStatus>, label: string) => {
-    try {
-      const status = await action()
-      setInstallStatus(status)
-      await loadInstallData()
-      await loadOperationalData(false)
-      toast.success(label)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Install action failed')
-      throw error
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -251,10 +224,10 @@ export function AgentMailPage() {
                   Setup notes
                 </Button>
                 {!hasConfiguredIntegration && (
-                  <Button size="sm" onClick={() => setActiveTab('install')}>
+                  <Link to="/harnesses" className={buttonVariants({ size: 'sm' })}>
                     <Plug className="mr-2 h-4 w-4" />
-                    Open Install
-                  </Button>
+                    Set up in Harnesses
+                  </Link>
                 )}
               </div>
             </div>
@@ -318,7 +291,7 @@ export function AgentMailPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid h-auto w-full grid-cols-3 md:w-[520px]">
+        <TabsList className="grid h-auto w-full grid-cols-2 md:w-[360px]">
           <TabsTrigger value="team" className="gap-2">
             <Users className="h-4 w-4" />
             Team
@@ -326,10 +299,6 @@ export function AgentMailPage() {
           <TabsTrigger value="requests" className="gap-2">
             <Inbox className="h-4 w-4" />
             Requests
-          </TabsTrigger>
-          <TabsTrigger value="install" className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Install
           </TabsTrigger>
         </TabsList>
         <TabsContent value="team" className="mt-4">
@@ -361,23 +330,14 @@ export function AgentMailPage() {
             onCompose={openCompose}
           />
         </TabsContent>
-        <TabsContent value="install" className="mt-4">
-          <InstallTab
-            status={installStatus}
-            snippets={snippets}
-            loading={installLoading}
-            onRefresh={loadInstallData}
-            onApplyClaudeCode={() => runInstallAction(applyClaudeCodeAgentMailInstall, 'Claude Code install updated')}
-            onUninstallClaudeCode={() => runInstallAction(uninstallClaudeCodeAgentMail, 'Claude Code install removed')}
-            onApplyCodex={() => runInstallAction(applyCodexAgentMailInstall, 'Codex MCP install updated')}
-            onUninstallCodex={() => runInstallAction(uninstallCodexAgentMail, 'Codex MCP install removed')}
-            onApplyCopilot={() => runInstallAction(applyCopilotAgentMailInstall, 'GitHub Copilot CLI install updated')}
-            onUninstallCopilot={() => runInstallAction(uninstallCopilotAgentMail, 'GitHub Copilot CLI install removed')}
-            onApplyOpenCode={() => runInstallAction(applyOpenCodeAgentMailInstall, 'OpenCode CLI install updated')}
-            onUninstallOpenCode={() => runInstallAction(uninstallOpenCodeAgentMail, 'OpenCode CLI install removed')}
-          />
-        </TabsContent>
       </Tabs>
+
+      {setUpNames.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Mail is set up for {joinNames(setUpNames)} ·{' '}
+          <Link to="/harnesses" className="text-primary underline">Manage in Harnesses</Link>
+        </p>
+      )}
 
       <MemberEditDialog
         member={editingMember}
