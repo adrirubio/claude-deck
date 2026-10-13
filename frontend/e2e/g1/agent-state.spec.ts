@@ -38,7 +38,7 @@ test('@active one agent shows the same online and wake state on Agent Mail, Live
   const mail = await stateOf(page)
 
   await page.goto('/agent-bridge')
-  await expect(page.getByRole('heading', { name: 'Agent Bridge', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Live sessions', exact: true })).toBeVisible()
   const live = await stateOf(page)
 
   await page.goto('/teams/1?tab=roster')

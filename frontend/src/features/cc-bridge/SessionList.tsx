@@ -8,6 +8,8 @@ import type { InstanceIdentity } from '@/types/status'
 
 type ProviderFilter = 'all' | AgentProviderId
 
+const NO_TEAM = 'Not in a team'
+
 interface SessionListProps {
   sessions: CCSession[]
   loading: boolean
@@ -22,6 +24,19 @@ interface SessionListProps {
   canCreateSession: boolean
   createDisabledReason: string | null
   instance?: InstanceIdentity | null
+}
+
+/** Sessions grouped under their team name, in list order. Sessions with no team come last. */
+function groupByTeam(sessions: CCSession[]) {
+  const groups = new Map<string, { key: string; name: string; sessions: CCSession[] }>()
+  for (const session of sessions) {
+    const name = session.team_preset_name?.trim() || NO_TEAM
+    const group = groups.get(name) ?? { key: name, name, sessions: [] }
+    group.sessions.push(session)
+    groups.set(name, group)
+  }
+  const all = [...groups.values()]
+  return [...all.filter(group => group.name !== NO_TEAM), ...all.filter(group => group.name === NO_TEAM)]
 }
 
 export function SessionList({
@@ -55,10 +70,10 @@ export function SessionList({
     : `No ${emptyName} sessions found`
   const emptyHint = createDisabledReason
     ?? (teamLabel
-      ? `Use Agent Teams to launch more sessions for ${teamLabel}. New Agent Bridge sessions are standalone and stay hidden while this team filter is active.`
+      ? `Use Agent Teams to launch more sessions for ${teamLabel}. New sessions from Live sessions are standalone and stay hidden while this team filter is active.`
       : providerFilter === 'all'
       ? 'Launch or start a supported CLI in tmux.'
-      : `Launch ${emptyName} from Agent Bridge or start it in tmux.`)
+      : `Launch ${emptyName} from Live sessions or start it in tmux.`)
   const newSessionTitle = createDisabledReason
     ?? (teamLabel ? `New standalone session (hidden until All teams is selected)` : 'New session')
 
@@ -85,7 +100,7 @@ export function SessionList({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      <div className="flex-1 overflow-y-auto">
         {loading && sessions.length === 0 && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -104,20 +119,25 @@ export function SessionList({
           </div>
         )}
 
-        {sessions.map((session) => {
-          const pos = activeTargets.indexOf(session.tmux_target)
-          return (
-            <SessionCard
-              key={session.pane_id}
-              session={session}
-              gridPosition={pos === -1 ? null : pos}
-              onClick={() => onToggleTarget(session.tmux_target)}
-              onRefresh={onRefresh}
-              onKill={onKillSession}
-              instance={instance}
-            />
-          )
-        })}
+        {groupByTeam(sessions).map((group) => (
+          <section key={group.key} aria-label={group.name}>
+            <h3 className="border-b bg-muted/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.name}</h3>
+            {group.sessions.map((session) => {
+              const pos = activeTargets.indexOf(session.tmux_target)
+              return (
+                <SessionCard
+                  key={session.pane_id}
+                  session={session}
+                  gridPosition={pos === -1 ? null : pos}
+                  onClick={() => onToggleTarget(session.tmux_target)}
+                  onRefresh={onRefresh}
+                  onKill={onKillSession}
+                  instance={instance}
+                />
+              )
+            })}
+          </section>
+        ))}
       </div>
     </div>
   )

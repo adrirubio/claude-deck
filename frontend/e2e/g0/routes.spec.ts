@@ -64,9 +64,11 @@ test('@active a team shows its eight members', async ({ page }) => {
 test('@active Live sessions shows the fake team panes', async ({ page }) => {
   test.skip(process.env.E2E_NO_TMUX === '1', 'E2E_NO_TMUX=1: the instance has no tmux server')
   await page.goto('/agent-bridge')
-  await expect(page.getByRole('heading', heading('Agent Bridge'))).toBeVisible()
+  await expect(page.getByRole('heading', heading('Live sessions'))).toBeVisible()
   await expect(page.getByRole('button', { name: /^Release crew \(4\)$/ })).toBeVisible()
-  await expect(page.getByText('tmux: deck-e2e-1:0.0')).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Watch / }).first()).toBeVisible()
+  // The tmux target is under "Technical details" of its row (#539), so it is in the page but folded away.
+  await expect(page.getByText('tmux: deck-e2e-1:0.0')).toBeAttached()
 })
 
 test('@active Team lanes shows the release crew', async ({ page }) => {

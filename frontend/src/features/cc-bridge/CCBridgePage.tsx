@@ -63,6 +63,7 @@ function compareTeamLaneSessions(a: CCSession, b: CCSession): number {
 export function CCBridgePage() {
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>(() => { const provider = new URLSearchParams(window.location.search).get('provider'); return PROVIDER_FILTERS.some(p => p.value === provider) ? provider as ProviderFilter : 'all' })
   const [teamFilter, setTeamFilter] = useState<TeamFilter>('all')
+  const [lanesMenuOpen, setLanesMenuOpen] = useState(false)
   const { providers, selectedProviderId } = useProviderContext()
   const status = useSystemStatus()
   const instance = status?.instance ?? null
@@ -193,11 +194,13 @@ export function CCBridgePage() {
     setFocusedTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
   }, [sessionsByTarget])
 
-  const openTeamLanes = useCallback(() => {
-    if (effectiveTeamFilter === 'all') return
-    setLayoutMode({ kind: 'lanes', teamId: effectiveTeamFilter })
+  const openTeamLanes = useCallback((teamId?: number) => {
+    const target = teamId ?? effectiveTeamFilter
+    if (target === 'all') return
+    if (teamId !== undefined) applyTeamFilter(teamId)
+    setLayoutMode({ kind: 'lanes', teamId: target })
     setFocusedTarget(null)
-  }, [effectiveTeamFilter])
+  }, [effectiveTeamFilter, applyTeamFilter])
 
   const exitFullscreen = useCallback(() => {
     setLayoutMode({ kind: 'grid' })
@@ -291,9 +294,9 @@ export function CCBridgePage() {
           <div className="flex items-center gap-3 px-4 py-3">
             <MonitorPlay className="h-5 w-5 shrink-0" />
             <div className="flex items-baseline gap-2 flex-wrap min-w-0">
-              <h1 className="text-base font-semibold">Agent Bridge</h1>
+              <h1 className="text-base font-semibold">Live sessions</h1>
               <span className="text-xs text-muted-foreground">
-                Discover and observe agent CLI sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
+                Watch your agents work. Up to 4 at a time.
               </span>
             </div>
             <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
@@ -347,20 +350,34 @@ export function CCBridgePage() {
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className={cn(
-                    'px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap shrink-0',
-                    effectiveTeamFilter === 'all'
-                      ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-60'
-                      : 'bg-background text-foreground hover:bg-muted'
+                <div className="relative shrink-0">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 text-xs rounded-md border bg-background text-foreground hover:bg-muted transition-colors whitespace-nowrap"
+                    aria-haspopup={effectiveTeamFilter === 'all' ? 'menu' : undefined}
+                    aria-expanded={effectiveTeamFilter === 'all' ? lanesMenuOpen : undefined}
+                    onClick={() => (effectiveTeamFilter === 'all' ? setLanesMenuOpen((open) => !open) : openTeamLanes())}
+                    title={selectedTeamLabel ? `Show ${selectedTeamLabel} in fullscreen lanes` : undefined}
+                  >
+                    Team lanes
+                  </button>
+                  {effectiveTeamFilter === 'all' && lanesMenuOpen && (
+                    <div role="menu" aria-label="Choose a team for team lanes" className="absolute left-0 z-20 mt-1 min-w-48 rounded-md border bg-popover p-1 shadow-md">
+                      <p className="px-2 py-1 text-xs text-muted-foreground">Choose a team</p>
+                      {teamOptions.map((team) => (
+                        <button
+                          key={team.id}
+                          type="button"
+                          role="menuitem"
+                          className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => { setLanesMenuOpen(false); openTeamLanes(team.id) }}
+                        >
+                          {team.name} <span className="text-muted-foreground">({team.count})</span>
+                        </button>
+                      ))}
+                    </div>
                   )}
-                  disabled={effectiveTeamFilter === 'all'}
-                  onClick={openTeamLanes}
-                  title={selectedTeamLabel ? `Show ${selectedTeamLabel} in fullscreen lanes` : 'Select a team to open team lanes'}
-                >
-                  Team lanes
-                </button>
+                </div>
               </div>
             </div>
           )}
@@ -380,7 +397,7 @@ export function CCBridgePage() {
 
       <div className="flex flex-1 min-h-0">
         {!isFullscreen && (
-          <div className="w-52 border-r shrink-0">
+          <div className="w-72 border-r shrink-0">
             <SessionList
               sessions={visibleSessions}
               loading={loading}
