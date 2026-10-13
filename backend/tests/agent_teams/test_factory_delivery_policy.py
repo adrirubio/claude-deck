@@ -665,7 +665,7 @@ async def test_initial_resume_uses_only_grace_with_no_new_owner_progress(db,monk
     assert item.retry_count==3 and item.active_scope_revision==0
 
 
-@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','competing_stopped','competing_denied','unchanged'])
+@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','competing_stopped','competing_denied','slot_cwd','unchanged'])
 @pytest.mark.asyncio
 async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkeypatch,tmp_path,change):
     from pathlib import Path
@@ -684,6 +684,7 @@ async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkey
             elif change=='missing_ack': item.ack_received_at=None
             elif change=='handoff': item.handoff_state='pending'
             elif change=='revision': revision.status='superseded'
+            elif change=='slot_cwd': session.cwd=str(tmp_path/'slot')
             elif change in {'competing_generation','competing_stopped','competing_denied'}:
                 if change != 'competing_generation':
                     from app.services import agent_activity_service as activity
@@ -707,13 +708,67 @@ async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkey
                 protected_files=['private.env'])
             service=Maintenance(profile)
             call=lambda: service.approved_owner({'id':item.id},{'id':workspace.id})
-            if change=='unchanged':
+            if change in {'unchanged','slot_cwd'}:
                 result=await asyncio.to_thread(call)
                 assert result['workspace_id']==workspace.id and result['generation']==session.id
             else:
                 with pytest.raises(ValueError): await asyncio.to_thread(call)
             assert not Path(profile.controller).exists()
     finally: await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_slot_cwd_owner_gets_template_and_upgrade_accepts_checkpoint(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from app.database import Base
+    from app.models.database import MailMessage
+    from app.services.maintenance_operations import Maintenance
+    from tests.agent_teams.test_maintenance_operations import configured_upgrade, read_json
+    service, request = configured_upgrade(tmp_path)
+    engine = create_async_engine('sqlite+aiosqlite:///'+service.profile.database)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            scope, item, workspace, _revision, slot, member, session, *_ = await observation_fixture(db, monkeypatch, tmp_path)
+            pid = os.getpid()
+            start = Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[19]
+            session.cwd = str(tmp_path/'slot')
+            session.pid = session.bound_pane_pid = workspace.leased_owner_pid = pid
+            session.bound_pane_proc_start = workspace.leased_owner_proc_start = start
+            workspace.path = str(tmp_path/'dispatch')
+            binding = (await db.scalars(select(AgentPaneBinding))).one()
+            binding.pane_pid, binding.pane_proc_start = pid, start
+            await db.commit()
+            old_rows = service.rows
+            def rows(query, values=()):
+                if any(name in query for name in ('github_work_items','github_workspaces','mail_','agent_pane_bindings','agent_team_slots')):
+                    return Maintenance.rows(service, query, values)
+                return old_rows(query, values)
+            monkeypatch.setattr(service, 'rows', rows)
+            monkeypatch.setattr(service, 'approved_owner', lambda *args: Maintenance.approved_owner(service, *args))
+            monkeypatch.setattr(service, 'bindings', lambda slot_id=None: Maintenance.bindings(service, slot_id))
+            monkeypatch.setattr(service, 'generations', lambda slot_id=None: Maintenance.generations(service, slot_id))
+            monkeypatch.setattr(service, 'authority', lambda **kwargs: Maintenance.authority(service, **kwargs))
+            template = await asyncio.to_thread(service.checkpoint_templates, request)
+            assert template['status'] == 'template_requires_owner_confirmation'
+            assert len(template['payloads']) == 1
+            payload = template['payloads'][0]
+            assert payload['work_item_id'] == item.id and payload['hold_until_release']
+            message = MailMessage(sender_member_id=member.id, body_markdown=json.dumps(payload))
+            db.add(message)
+            await db.commit()
+            request = request.model_copy(update={'checkpoint_messages':{str(item.id):message.id}})
+            await asyncio.to_thread(service.upgrade, request)
+            record = read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')
+            assert record['status'] == 'deployed_paused' and record['authority_preserved']
+            assert record['checkpoints'] == [{'message':message.id,'member':member.id,'generation':session.id}]
+            await db.refresh(workspace)
+            assert workspace.leased_item_id == item.id and workspace.lease_token == 'fixture-lease'
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize("change", ["commands", "budget", "nonce", "generation", "lease", "expired", "unrelated_reason"])
