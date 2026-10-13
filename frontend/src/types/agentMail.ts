@@ -80,7 +80,7 @@ export interface MailMessageResponse {
   kind: MailMessageKind
   sender_member_id?: number | null
   sender_actor_id?: number | null
-  sender_type?: 'director' | 'member' | 'external_actor' | string
+  sender_type?: 'system' | 'director' | 'member' | 'external_actor' | 'legacy' | string
   sender_actor_kind?: string | null
   sender_name: string
   recipient_member_id?: number | null

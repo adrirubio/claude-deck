@@ -184,6 +184,7 @@ def message(s: Seeder, message_id: int, *, sender: int | None, recipient: int | 
     s.insert(
         "mail_messages", id=message_id, thread_root_id=thread, kind=kind,
         sender_member_id=sender, sender_actor_id=None, approval_round=None, decision=None,
+        sender_type="member" if sender is not None else "director" if sender_type_director else "system",
         audience_type="member" if recipient else "team",
         audience_id=str(recipient) if recipient else str(RELEASE_TEAM),
         recipient_member_id=recipient, subject=subject, body_markdown=body,
@@ -309,7 +310,7 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
     # scheduler (their payload kinds), so they must not show "Director".
     message(s, 6, sender=None, recipient=2, subject="Director note: keep #101 small",
             body="Please keep the CSV export change small.", sent=at(hours=1),
-            payload={})
+            payload={}, sender_type_director=True)
 
     # #528: merged item #104 still holds a workspace; its owner (B1 Backend)
     # has not answered the release reminders.

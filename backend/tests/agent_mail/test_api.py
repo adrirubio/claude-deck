@@ -219,6 +219,9 @@ async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
         "operator_global_audience_required",
     )
     assert sent.status_code == 200
+    assert (sent.json()["sender_name"], sent.json()["sender_type"]) == ("Director", "director")
+    stored = await db.get(MailMessage, sent.json()["id"])
+    assert stored.sender_type == "director"
     assert sent.json()["audience_type"] == "operator_global"
     receipts = await agent_mail_service.recipient_ids_for_message(
         db, sent.json()["id"]
@@ -2854,9 +2857,11 @@ async def test_send_and_thread_roundtrip(client, db):
             "recipient_member_id": b.id,
             "subject": "q",
             "body_markdown": "?",
+            "sender_type": "director",
         },
     )
     assert resp.status_code == 200
+    assert (resp.json()["sender_type"], resp.json()["sender_name"]) == ("member", "alpha")
     root_id = resp.json()["id"]
 
     resp = await client.post(

@@ -263,6 +263,7 @@ async def send_operator_global_broadcast(
             db,
             operator_request,
             operator_authorized=True,
+            sender_type="director",
         )
     except MailAuthorityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
