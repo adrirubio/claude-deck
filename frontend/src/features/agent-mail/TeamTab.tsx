@@ -198,17 +198,17 @@ export function TeamTab({
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
                       {member.pending_count > 0 && (
-                        <Badge variant="outline" className="border-amber-300 text-amber-700">
+                        <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                           {member.pending_count} pending
                         </Badge>
                       )}
                       {member.unseen_pending_count > 0 && (
-                        <Badge variant="outline" className="border-blue-300 text-blue-700">
+                        <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
                           {member.unseen_pending_count} unseen
                         </Badge>
                       )}
                       {member.stale_pending_count > 0 && (
-                        <Badge variant="outline" className="border-amber-300 text-amber-700">
+                        <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                           {member.stale_pending_count} stale
                         </Badge>
                       )}

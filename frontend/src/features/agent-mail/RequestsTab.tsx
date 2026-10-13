@@ -148,7 +148,7 @@ export function RequestsTab({
                       </Badge>
                     )}
                     {message.is_stale && (
-                      <Badge variant="outline" className="border-amber-300 text-amber-700">
+                      <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                         stale
                       </Badge>
                     )}

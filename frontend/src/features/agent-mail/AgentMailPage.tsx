@@ -299,16 +299,16 @@ export function AgentMailPage() {
             <CardDescription>Inbox load</CardDescription>
             <CardTitle className="flex flex-wrap items-center gap-2 text-base">
               <Badge variant="secondary">{stats.unread} unread</Badge>
-              <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700' : ''}>
+              <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
                 {stats.pending} pending
               </Badge>
               {stats.unseenPending > 0 && (
-                <Badge variant="outline" className="border-blue-300 text-blue-700">
+                <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
                   {stats.unseenPending} unseen
                 </Badge>
               )}
               {stats.stalePending > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
                   {stats.stalePending} stale
                 </Badge>
               )}

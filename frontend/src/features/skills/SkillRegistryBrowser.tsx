@@ -192,7 +192,7 @@ export function SkillRegistryBrowser({
                   {skill.installed ? (
                     <Badge
                       variant="outline"
-                      className="text-green-600 border-green-200 bg-green-50 flex items-center gap-1"
+                      className="text-green-600 dark:text-green-300 border-green-200 bg-green-50 flex items-center gap-1"
                     >
                       <CheckCircle2 className="h-3 w-3" />
                       Installed

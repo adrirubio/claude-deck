@@ -187,7 +187,7 @@ export function SkillsPage() {
             {fm?.context === "fork" && (
               <Badge
                 variant="outline"
-                className="text-purple-600 border-purple-200 bg-purple-50 flex items-center gap-1"
+                className="text-purple-600 dark:text-purple-300 border-purple-200 bg-purple-50 flex items-center gap-1"
               >
                 <GitFork className="h-3 w-3" />
                 Fork
@@ -196,7 +196,7 @@ export function SkillsPage() {
             {fm?.allowed_tools && fm.allowed_tools.length > 0 && (
               <Badge
                 variant="outline"
-                className="text-blue-600 border-blue-200 bg-blue-50 flex items-center gap-1"
+                className="text-blue-600 dark:text-blue-300 border-blue-200 bg-blue-50 flex items-center gap-1"
               >
                 <Shield className="h-3 w-3" />
                 {fm.allowed_tools.length} tools
@@ -205,7 +205,7 @@ export function SkillsPage() {
             {fm?.user_invocable === false && (
               <Badge
                 variant="outline"
-                className="text-gray-500 border-gray-200 bg-gray-50 flex items-center gap-1"
+                className="text-gray-500 dark:text-gray-300 border-gray-200 bg-gray-50 flex items-center gap-1"
               >
                 <EyeOff className="h-3 w-3" />
                 Hidden
@@ -214,7 +214,7 @@ export function SkillsPage() {
             {hasDeps && !hasMissing && (
               <Badge
                 variant="outline"
-                className="text-green-600 border-green-200 bg-green-50 flex items-center gap-1"
+                className="text-green-600 dark:text-green-300 border-green-200 bg-green-50 flex items-center gap-1"
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Deps OK
@@ -223,7 +223,7 @@ export function SkillsPage() {
             {hasMissing && (
               <Badge
                 variant="outline"
-                className="text-amber-600 border-amber-200 bg-amber-50 flex items-center gap-1"
+                className="text-amber-600 dark:text-amber-300 border-amber-200 bg-amber-50 flex items-center gap-1"
               >
                 <AlertTriangle className="h-3 w-3" />
                 {missingCount} missing
