@@ -3,6 +3,7 @@ import type { AgentTeamPreset, AgentTeamSummary, CampaignUnderWayItem } from "@/
 import { RelativeTime } from "../RelativeTime";
 import { anchor } from "../styles";
 import { campaignHasContent } from "./campaign";
+import { CampaignBar } from "./CampaignBar";
 
 function parentLabel(url: string | null) {
   const match = url ? /\/issues\/(\d+)\/?$/.exec(url) : null;
@@ -38,7 +39,7 @@ function CampaignCard({ preset, summary }: { preset: AgentTeamPreset; summary: A
   const c = summary.campaign!;
   const notStarted = c.not_started_count ?? 0;
   const total = c.done_count + c.under_way_count + c.queued_count + notStarted;
-  const part = (n: number) => (total > 0 ? `${(n / total) * 100}%` : "0%");
+  const knownTotal = c.done_count + c.under_way_count + c.queued_count;
   const parent = summary.parent_issue_url;
   const work = `/work?team_id=${preset.id}`;
   const decisions = c.decisions_ahead.filter((d) => d.state !== "done");
@@ -55,20 +56,16 @@ function CampaignCard({ preset, summary }: { preset: AgentTeamPreset; summary: A
         </h4>
         <p className="text-sm text-muted-foreground">
           <strong className="text-base text-foreground">{c.done_count}</strong>
-          {c.backlog_state === "available" ? ` of ${total} done` : " done"}
+          {c.backlog_state === "available"
+            ? ` of ${total} done`
+            : knownTotal > 0 ? ` of ${knownTotal} known ${knownTotal === 1 ? "item" : "items"} done` : " done"}
+          {c.backlog_state !== "available" && (
+            <span className="ml-2 rounded border px-2 text-xs font-medium">backlog unknown</span>
+          )}
         </p>
       </div>
-      {c.backlog_state === "available" ? (
-        <div
-          role="img"
-          aria-label={`${c.done_count} done, ${c.under_way_count} under way, ${c.queued_count + notStarted} still to do`}
-          className="flex h-2 overflow-hidden rounded bg-muted"
-        >
-          <span className="bg-primary" style={{ width: part(c.done_count) }} />
-          <span className="bg-violet-500" style={{ width: part(c.under_way_count) }} />
-          <span className="bg-muted-foreground/50" style={{ width: part(c.queued_count + notStarted) }} />
-        </div>
-      ) : (
+      <CampaignBar campaign={c} />
+      {c.backlog_state !== "available" && (
         <p role="note" className="text-sm text-muted-foreground">
           The backlog cannot be read, so Deck shows only the work it has seen.
         </p>

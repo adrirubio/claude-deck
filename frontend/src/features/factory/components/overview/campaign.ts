@@ -7,3 +7,9 @@ export function campaignHasContent(campaign: TeamCampaignSummary | undefined) {
         campaign.decisions_ahead.length > 0),
   );
 }
+
+export function campaignBarLabel(c: TeamCampaignSummary) {
+  const known = c.backlog_state === "available";
+  const todo = c.queued_count + (c.not_started_count ?? 0);
+  return `${c.done_count} done, ${c.under_way_count} under way, ${todo} still to do, backlog ${known ? "known" : "unknown"}`;
+}
