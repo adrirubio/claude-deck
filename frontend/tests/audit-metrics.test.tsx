@@ -147,16 +147,27 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(auditUrl.searchParams.get("page_size")).toBe("25");
     expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-operator");
 
-    expect(screen.getByText(/Terminal tracking is not delivery/)).toBeInTheDocument();
+    // #517: the plain summary comes first. The definitions sit behind the "?" buttons.
+    const summary = screen.getByRole("region", { name: "Delivery in this window" });
+    expect(within(summary).getByText(/Recording started .*2026\. The whole window has data\./)).toBeInTheDocument();
+    expect(within(summary).getByText("3 code PRs merged, 4 design")).toBeInTheDocument();
+    expect(within(summary).getByText("not measured")).toBeInTheDocument();
+    expect(screen.queryByText(/Terminal tracking is not delivery/)).not.toBeInTheDocument();
+    fireEvent.click(within(summary).getByRole("button", { name: "About: Delivered" }));
+    expect(within(summary).getByText(/a merged pull request, or a trusted acceptance/)).toBeInTheDocument();
+    expect(within(summary).getByRole("link", { name: "audit and metrics guide" }))
+      .toHaveAttribute("href", expect.stringContaining("docs/guide/factory-audit-and-metrics.md"));
+
     expect(screen.getByText("note mount")).toBeInTheDocument();
-    expect(screen.getByText("reason mount")).toBeInTheDocument();
+    expect(screen.getByText(/reason mount/)).toBeInTheDocument();
     expect(screen.getByText("terminal_tracking_in_window")).toBeInTheDocument();
     // T09: separate code and design delivery rows, apart from total delivery.
     const codeRow = screen.getByText("merged_code_in_window").closest("tr")!;
+    expect(within(codeRow).getByText("Code pull requests merged")).toBeInTheDocument();
     expect(within(codeRow).getByText("code_attempts")).toBeInTheDocument();
     expect(within(codeRow).getAllByText("3", { selector: "td" })).toHaveLength(2);
-    const designRow = screen.getByText("delivered_design_in_window").closest("tr")!;
-    expect(within(designRow).getByText(/review is separate/)).toBeInTheDocument();
+    // The notes sit once below the table, not in each row.
+    expect(screen.getByText(/merged design or exact accepted design version; review is separate/)).toBeInTheDocument();
     expect(screen.getByText(/Showing metrics for team all, scope all/)).toBeInTheDocument();
     // The first event has no team link left, so its team shows "(deleted)" (#519).
     expect(screen.getByText("(deleted)")).toBeInTheDocument();

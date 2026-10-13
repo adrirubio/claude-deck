@@ -89,7 +89,7 @@ test('@active Audit is locked, then opens with the Director key', async ({ page 
   await expect(page.getByRole('heading', heading('Audit coverage and delivery metrics'))).toBeVisible()
   await expectDirectorKeyDialog(page)
   await enterDirectorKey(page)
-  await expect(page.getByText(/Window and coverage/).first()).toBeVisible()
+  await expect(page.getByText(/Delivery in this window/).first()).toBeVisible()
 })
 
 test('@active Harnesses lists the providers', async ({ page }) => {
