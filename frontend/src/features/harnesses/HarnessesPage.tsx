@@ -8,16 +8,32 @@ import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus }
 
 const destination = buttonVariants({ variant: "outline", className: "h-auto min-h-11 max-w-full whitespace-normal break-words justify-start text-left focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background" });
 
-function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentProviderStatus }) {
+// A card shows no "unknown" or "unavailable" while the registry or its own operating catalog still loads.
+function HarnessCardSkeleton({ id }: { id: AgentProviderId }) {
+  return (
+    <article aria-busy="true" className="min-w-0 space-y-3 rounded-lg border bg-card p-4">
+      <h3 className="text-lg font-semibold">{harnesses[id]}</h3>
+      <p role="status">Loading {harnesses[id]}…</p>
+      <div className="space-y-2" aria-hidden="true">
+        <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+        <div className="h-11 w-44 animate-pulse rounded bg-muted" />
+      </div>
+    </article>
+  );
+}
+
+function HarnessCard({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
   const { state, catalog, refresh, refreshing } = useProviderOperations(id);
   const readiness = catalog?.readiness;
+  if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
   return (
     <article className="min-w-0 space-y-3 rounded-lg border bg-card p-4 break-words">
       <h3 className="text-lg font-semibold">
         <Link className="rounded-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" to={`/harnesses/${id}`}>{harnesses[id]}</Link>
       </h3>
-      <p>Binary: {metadata ? metadata.installed ? `installed ${metadata.version ?? ""}` : "missing" : "unknown"}</p>
-      {(state === "idle" || state === "loading") && <p role="status">Loading operating catalog…</p>}
+      <p>Binary: {metadata ? metadata.installed ? `installed ${metadata.version ?? ""}` : "missing" : "not reported"}</p>
       {state === "error" && <p role="alert">Operating catalog unavailable. Readiness is unknown and native pages are unavailable.</p>}
       <dl className="space-y-2 text-sm" aria-label={`${harnesses[id]} readiness`}>
         <div>
@@ -39,13 +55,13 @@ function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentPr
           })}
         </ul>
       </details>}
-      <p>Native pages: {Object.keys(surfaceRegistry[id]).length ? "matching implemented adapters listed below" : "no dedicated settings adapters; CLI and Mail integration support are separate"}</p>
-      <nav className="flex flex-wrap items-start gap-2 text-sm" aria-label={`${harnesses[id]} native surfaces`}>
+      {catalog && <p>Native pages: {Object.keys(surfaceRegistry[id]).length ? "matching implemented adapters listed below" : "no dedicated settings adapters; CLI and Mail integration support are separate"}</p>}
+      {catalog && <nav className="flex flex-wrap items-start gap-2 text-sm" aria-label={`${harnesses[id]} native surfaces`}>
         {Object.keys(surfaceRegistry[id]).map(surface => {
-          const access = catalog && nativeAccess(id, surface, metadata, catalog);
+          const access = nativeAccess(id, surface, metadata, catalog);
           return access ? <Link className={destination} key={surface} to={`/harnesses/${id}/${surface}`}>{surface === "summary" ? "Configuration summary" : surface.replaceAll("-", " ")} ({access.replaceAll("_", " ")})</Link> : <span key={surface}>{surface}: unavailable</span>;
         })}
-      </nav>
+      </nav>}
       {catalog && <details><summary className="cursor-pointer">Reported native capabilities</summary><ul className="text-sm">{Object.entries(catalog.native_capabilities).map(([name, value]) => <li key={name}>{name}: {value.state} · {value.reason}</li>)}</ul></details>}
       <div className="flex flex-wrap items-start gap-2 text-sm">
         <Link className={destination} to="/teams">Teams and launch planning</Link>
@@ -65,6 +81,6 @@ export function HarnessesPage() {
     {loading && <p role="status">Loading harness registry…</p>}
     {error && <p role="alert">{error}</p>}
     {!ids.length && <p>Unknown harness. <Link to="/harnesses">Show all harnesses</Link></p>}
-    <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={error ? undefined : providers.find(p => p.id === id)} />)}</div>
+    {!error && <div className="grid gap-4 lg:grid-cols-2">{ids.map(id => <HarnessCard key={id} id={id} metadata={providers.find(p => p.id === id)} registryLoading={loading} />)}</div>}
   </section>;
 }
