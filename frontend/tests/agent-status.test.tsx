@@ -177,6 +177,8 @@ describe('one agent on three pages', () => {
       const name = await screen.findByText(AGENT, { selector: 'p' })
       const card = name.closest('div.rounded-lg') as HTMLElement
       await within(card).findByText('Can be woken')
+      // The activity read starts once the team list has loaded (#544), so the badge clock catches up a tick later.
+      await within(card).findByText('Idle for 3 h')
       expectSameState(card)
     })
   })

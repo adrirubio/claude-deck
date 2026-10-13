@@ -220,7 +220,7 @@ describe('Leader backlog coordination', () => {
     render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     await act(async () => { await vi.advanceTimersByTimeAsync(240000) })
-    expect(screen.getByText(/\(4 minutes ago\)/)).toBeTruthy()
+    expect(screen.getByText(/\(4 min ago\)/)).toBeTruthy()
     expect(screen.getByText('Coordination status is unavailable')).toBeTruthy()
   })
 })

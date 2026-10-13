@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { apiClient } from '@/lib/api'
+import { relativeAge } from '@/lib/relativeAge'
 import { formatServerTime, parseServerTime } from '@/lib/serverTime'
 
 type Entry = {
@@ -236,7 +237,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     {data && <>
       <p className="mt-2 text-muted-foreground">
         Last observed: {date(data.last_polled_at)} · Last Leader assessment: {date(data.last_assessed_at)}
-        {assessmentAge !== null && ` (${assessmentAge < 1 ? 'less than a minute' : `${assessmentAge} minutes`} ago)`}
+        {assessmentAge !== null && data.last_assessed_at && ` (${relativeAge(data.last_assessed_at, clock)})`}
       </p>
       <p className="mt-1 text-muted-foreground">
         Last observed execution: {data.active_implementations ?? 'unknown'}/{data.execution_limit} · Available workspaces: {data.available_workspaces ?? 'unknown'} · Leased: {data.leased_workspaces ?? 'unknown'}
