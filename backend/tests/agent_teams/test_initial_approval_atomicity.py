@@ -124,8 +124,46 @@ async def test_file_transaction_failure_leaves_no_partial_delivery(review_db, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("summaries", [("bounded", "bounded"), ("bounded", "different")])
-async def test_file_concurrent_replays_converge(review_db, summaries):
-    outcomes = await asyncio.gather(*(submit(review_db, s) for s in summaries), return_exceptions=True)
+async def test_file_concurrent_replays_converge(review_db, monkeypatch, summaries):
+    writer_started = asyncio.Event()
+    release_writer = asyncio.Event()
+    backoffs = []
+    original_send = agent_mail_service.send_message
+
+    async def hold_writer(db, request, **kwargs):
+        message = await original_send(db, request, **kwargs)
+        writer_started.set()
+        await release_writer.wait()
+        return message
+
+    async def retry_after_writer_commit(delay):
+        backoffs.append(delay)
+        release_writer.set()
+        await first
+
+    monkeypatch.setattr(agent_mail_service, "send_message", hold_writer)
+    # Keep the real lock conflict. Let the writer commit before the single retry.
+    # Patch only this route's sleep; keep asyncio unchanged for the database.
+    monkeypatch.setattr(agent_mail, "asyncio", SimpleNamespace(sleep=retry_after_writer_commit))
+    first = asyncio.create_task(submit(review_db, summaries[0]))
+
+    async def replay():
+        try:
+            return await submit(review_db, summaries[1])
+        finally:
+            release_writer.set()
+
+    try:
+        await asyncio.wait_for(writer_started.wait(), timeout=10)
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(first, replay(), return_exceptions=True), timeout=10
+        )
+    finally:
+        release_writer.set()
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+    assert backoffs == [0.1]
     successes = [o for o in outcomes if not isinstance(o, Exception)]
     assert len(successes) == (2 if summaries[0] == summaries[1] else 1), outcomes
     if len(successes) == 2:
@@ -133,6 +171,7 @@ async def test_file_concurrent_replays_converge(review_db, summaries):
     else:
         failures = [o for o in outcomes if isinstance(o, Exception)]
         assert isinstance(failures[0], HTTPException) and failures[0].status_code == 409
+        assert failures[0].detail == "approval_request_already_pending"
     assert await counts(review_db) == (1, 1, 1)
 
 
@@ -163,6 +202,7 @@ async def test_retry_and_wake_boundaries(review_db, monkeypatch, failure):
         with pytest.raises(HTTPException) as error:
             await submit(review_db)
         assert error.value.status_code == 503
+        assert error.value.detail == "approval_database_busy"
         assert error.value.headers == {"Retry-After": "1"}
         assert await counts(review_db) == (0, 0, 0)
     else:
