@@ -99,6 +99,32 @@ def test_codex_rollout_missing_or_ambiguous_fails_closed(tmp_path):
         sup.transcript("codex-cli", "/w/backend", SESSION)
 
 
+def test_a_second_rollout_after_caching_is_still_ambiguous(tmp_path):
+    first = tmp_path / "codex-sessions" / "2026" / "10" / "12" / f"rollout-a-{SESSION}.jsonl"
+    first.parent.mkdir(parents=True)
+    first.write_text("")
+    sup = _supervisor(tmp_path)
+    assert sup.transcript("codex-cli", "/w/backend", SESSION) == first
+
+    second = tmp_path / "codex-sessions" / "2026" / "10" / "13" / f"rollout-b-{SESSION}.jsonl"
+    second.parent.mkdir(parents=True)
+    second.write_text(json.dumps(_codex_agent_message(NOTICE)) + "\n")
+    with pytest.raises(FileNotFoundError, match="native_transcript_ambiguous"):
+        sup.transcript("codex-cli", "/w/backend", SESSION)
+
+
+@pytest.mark.parametrize("seed", ["0", "1", "2", "3", "4", "5"])
+def test_error_code_matching_does_not_depend_on_hash_order(seed):
+    import subprocess, sys
+    code = (
+        "import importlib.machinery as m, importlib.util as u;"
+        f"l=m.SourceFileLoader('t', {str(SCRIPT)!r}); s=u.spec_from_loader('t', l); t=u.module_from_spec(s); l.exec_module(t);"
+        "print(t.notice({'type':'event_msg','payload':{'type':'error','message':'request failed: cybersecurity_blocked'}}))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], env={"PYTHONHASHSEED": seed}, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "cybersecurity_blocked"
+
+
 def test_claude_transcript_path_is_unchanged(tmp_path):
     path = tmp_path / "claude-projects" / "-w-leader" / f"{SESSION}.jsonl"
     path.parent.mkdir(parents=True)

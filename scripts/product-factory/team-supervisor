@@ -56,9 +56,9 @@ def notice(record):
             if pattern.search(text):
                 return rule
         if record.get('isApiErrorMessage'):
-            for code in ERROR_CODES:
-                if code in text.lower():
-                    return code
+            code = _error_code(text)
+            if code:
+                return code
     if kind == 'system' and record.get('subtype') == 'api_error':
         error = record.get('error') or {}
         if isinstance(error, dict):
@@ -73,9 +73,9 @@ def notice(record):
             if found:
                 return found
             if payload.get('type') in {'error', 'stream_error'}:
-                for code in ERROR_CODES:
-                    if code in text.lower() or code in str(payload.get('codex_error_info', '')).lower():
-                        return code
+                code = _error_code(text + '\n' + str(payload.get('codex_error_info', '')))
+                if code:
+                    return code
         # Codex 0.159: the agent's own text arrives as a completed AgentMessage item.
         item = payload.get('item') if payload.get('type') == 'item_completed' else None
         if isinstance(item, dict) and item.get('type') == 'AgentMessage':
@@ -91,6 +91,14 @@ def _texts(content):
     if not isinstance(content, list):
         return ''
     return '\n'.join(str(block.get('text', '')) for block in content if isinstance(block, dict))
+
+def _error_code(text):
+    # Longest first: cybersecurity_block is a prefix of cybersecurity_blocked.
+    lowered = text.lower()
+    for code in sorted(ERROR_CODES, key=lambda value: (-len(value), value)):
+        if code in lowered:
+            return code
+    return None
 
 def _match(text):
     for rule, pattern in NOTICES.items():
@@ -215,17 +223,16 @@ class Supervisor:
             folder = '-' + repo_path.strip('/').replace('/', '-')
             path = pathlib.Path(self.config['native_project_root']) / folder / (native_id + '.jsonl')
         elif provider == 'codex-cli':
-            # Codex writes one rollout per session under sessions/YYYY/MM/DD/.
-            # Its file name ends with the session UUID; cache the path once found.
-            known = self.state.setdefault('native_paths', {})
-            path = pathlib.Path(known[native_id]) if native_id in known else None
-            if path is None or not path.exists():
-                root = pathlib.Path(self.config['codex_sessions_root'])
-                found = sorted(root.glob('*/*/*/rollout-*-' + native_id + '.jsonl'))
-                if len(found) != 1:
-                    raise FileNotFoundError('native_transcript_missing' if not found else 'native_transcript_ambiguous')
-                path = found[0]
-                known[native_id] = str(path)
+            # Codex writes one rollout per session under sessions/YYYY/MM/DD/,
+            # and its file name ends with the session UUID. Check that exactly
+            # one matches on every scan: a second rollout for the same session
+            # must not go unread. The recorded path is informational only.
+            root = pathlib.Path(self.config['codex_sessions_root'])
+            found = sorted(root.glob('*/*/*/rollout-*-' + native_id + '.jsonl'))
+            if len(found) != 1:
+                raise FileNotFoundError('native_transcript_missing' if not found else 'native_transcript_ambiguous')
+            path = found[0]
+            self.state.setdefault('native_paths', {})[native_id] = str(path)
         else:
             raise ValueError('native_provider_unsupported')
         if not path.exists():
