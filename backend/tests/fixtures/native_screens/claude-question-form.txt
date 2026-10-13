@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.292
+▝▜██████▀  Sonnet 5.5 · Amazon Bedrock
+ ▝▝   ▝▝   <workspace>/work-q
+
+
+❯ Call the AskUserQuestion tool once: ask whether I prefer tea or coffee, with two options.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Beverage
+
+Do you prefer tea or coffee?
+
+❯ 1. Tea
+     Prefer tea
+  2. Coffee
+     Prefer coffee
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

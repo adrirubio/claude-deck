@@ -1,0 +1,23 @@
+─────────────────────────────────────────────────────
+←  ☐ E2E cleanup  ☐ Local tmux  ✔ Submit  →
+│ E1's E2E seed left 4 synthetic sessions (deck-e2e-1,
+│ -2, -3, -5) in the shared team tmux server. The
+│ permission layer refused E1's kill command. How should
+│ they be removed?
+❯ 1. I remove them myself
+     You run `! tmux kill-session -t =deck-e2e-1` (then
+     -2, -3, -5). The exact-name match touches only these
+     4. L1 does nothing.
+  2. L1 removes them
+     You authorize L1 to run the 4 exact-name
+     kill-session commands once. L1 then confirms that
+     the 6 team sessions still run.
+  3. Leave them for now
+     The sessions only run a fake echo loop. Deck can
+     show them as Release crew sessions until someone
+     removes them.
+  4. Type something.
+─────────────────────────────────────────────────────
+  5. Chat about this
+Enter to select · Tab/Arrow keys to navigate · Esc to
+cancel
