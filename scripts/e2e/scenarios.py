@@ -298,6 +298,16 @@ def seed_core(s: Seeder, root: Path) -> None:
         message_id=None, last_polled_at=at(minutes=2), last_requested_at=None,
         last_assessed_at=None, error_code=None,
     )
+    leader = next(slot for slot in RELEASE_SLOTS if slot["id"] == 1)
+    s.insert(
+        "mail_agent_sessions", id=3, member_id=1, provider=leader["provider"], source="mcp",
+        session_key="mcp:e2e-mail-leader", cwd=str(sample), tmux_target=None, pane_id=None, pid=None,
+        team_preset_id=RELEASE_TEAM, team_slot_id=1,
+        capability_token_hash=digest("e2e-mail-leader"), bound_pane_pid=None,
+        bound_pane_proc_start=None, closed_at=None, wake_enabled=0, mailbox_status="connected",
+        activity=None, last_seen_at=heartbeat, created_at=at(days=1),
+    )
+
     seed_lane_g(s, root, sample)
     seed_lane_c(s)
     seed_lane_b(s, root)
@@ -618,6 +628,27 @@ def start_panes(root: Path) -> None:
         subprocess.run(cmd, check=True)
 
 
+def bind_mail_sessions(s: Seeder, root: Path) -> None:
+    """Bind synthetic authenticated sessions to the isolated instance's live panes."""
+    from app.utils.peer_process import read_proc_stat
+
+    for slot_id in (1, IDLE_AGENT_SLOT):
+        target = f"deck-e2e-{slot_id}:0.0"
+        pane_pid = int(subprocess.check_output(
+            [str(root / "bin" / "tmux"), "display-message", "-p", "-t", target, "#{pane_pid}"],
+            text=True,
+        ).strip())
+        stat = read_proc_stat(pane_pid)
+        if stat is None:
+            raise SystemExit("seed: cannot bind an authenticated Mail session to a dead pane")
+        s.conn.execute(
+            "UPDATE mail_agent_sessions SET bound_pane_pid = ?, bound_pane_proc_start = ? "
+            "WHERE source = 'mcp' AND team_slot_id = ?",
+            (pane_pid, stat[1], slot_id),
+        )
+    s.conn.commit()
+
+
 def seed_all(s: Seeder, *, root: Path) -> None:
     seed_core(s, root)
     s.conn.commit()
@@ -628,3 +659,4 @@ def seed_all(s: Seeder, *, root: Path) -> None:
     s.conn.commit()
     if os.environ.get("E2E_NO_PANES") != "1":
         start_panes(root)
+        bind_mail_sessions(s, root)

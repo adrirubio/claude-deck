@@ -1,7 +1,8 @@
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AgentMailPage } from '@/features/agent-mail/AgentMailPage'
+import { setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { ConversationsTab } from '@/features/agent-mail/ConversationsTab'
 import { WaitingPanel } from '@/features/agent-mail/WaitingPanel'
 import {
@@ -20,13 +21,14 @@ vi.mock('@/features/agent-mail/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/agent-mail/api')>()
   return {
     ...actual,
+    fetchAgentMailAuthenticationStatus: vi.fn(),
     fetchAgentMailTeam: vi.fn(),
     fetchAgentMailMessages: vi.fn(),
     fetchAgentMailInstallStatus: vi.fn(),
     fetchAgentMailThread: vi.fn(),
   }
 })
-import { fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam, fetchAgentMailThread } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam, fetchAgentMailThread } from '@/features/agent-mail/api'
 
 function member(id: number, name: string, overrides: Partial<MailMemberResponse> = {}): MailMemberResponse {
   return {
@@ -296,7 +298,11 @@ describe('ConversationsTab', () => {
 })
 
 describe('Agent Mail page', () => {
+  afterEach(() => { sessionStorage.clear() })
+
   function load(members: MailMemberResponse[], messages: MailMessageResponse[]) {
+    setOperatorToken('test-director-key')
+    vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: true })
     vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members })
     vi.mocked(fetchAgentMailMessages).mockResolvedValue(messages)
     vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue({

@@ -6,6 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.models.database import AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailTeamMember
@@ -16,7 +17,8 @@ from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest_asyncio.fixture
-async def client(db):
+async def client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "test-director-key")
     async def _override():
         yield db
 
@@ -50,6 +52,7 @@ async def _member(db, repo_id, name):
 async def _actor_token(client, key="openclaw", name="OpenClaw"):
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
+        headers={"X-Deck-Operator-Token": "test-director-key"},
         json={
             "actor_key": key,
             "display_name": name,
@@ -169,7 +172,7 @@ async def test_external_context_request_preserves_sender_attribution(client, db)
     assert body["message"]["sender_actor_id"] == body["actor"]["id"]
     assert body["recipients"][0]["member_id"] == recipient.id
 
-    messages = await client.get("/api/v1/agent-mail/messages")
+    messages = await client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Operator-Token": "test-director-key"})
     assert messages.status_code == 200
     assert messages.json()[0]["sender_name"] == "OpenClaw"
     assert messages.json()[0]["sender_type"] == "external_actor"

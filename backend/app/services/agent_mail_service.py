@@ -1152,6 +1152,8 @@ class AgentMailService:
         sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if request.thread_root_id is not None and request.sender_member_id is not None:
+            await self.require_member_thread(db, request.thread_root_id, request.sender_member_id)
         if sender_type not in {None, "system", "director"}:
             raise ValueError("Invalid sender type")
         if sender_type is not None and (
@@ -2529,9 +2531,32 @@ class AgentMailService:
                 root.request_status = "acknowledged"
         await db.commit()
 
+    @staticmethod
+    def _member_root_access(member_id: int):
+        """A root belongs to its sender, recipient or delivery receipt holder."""
+        receipt = select(MailReceipt.id).where(
+            MailReceipt.message_id == MailMessage.id,
+            MailReceipt.member_id == member_id,
+        ).exists()
+        return ((MailMessage.sender_member_id == member_id)
+                | (MailMessage.recipient_member_id == member_id) | receipt)
+
+    async def require_member_thread(self, db: AsyncSession, message_id: int, member_id: int) -> None:
+        message = await db.get(MailMessage, message_id)
+        if message is None:
+            raise ValueError(f"Message {message_id} not found")
+        root_id = message.thread_root_id or message.id
+        permitted = await db.scalar(select(MailMessage.id).where(
+            MailMessage.id == root_id, self._member_root_access(member_id),
+        ))
+        if permitted is None:
+            raise PermissionError("thread_not_authorized")
+
     async def get_thread(
         self, db: AsyncSession, root_id: int, for_member_id: Optional[int] = None
     ) -> MailThreadResponse:
+        if for_member_id is not None:
+            await self.require_member_thread(db, root_id, for_member_id)
         root = await db.get(MailMessage, root_id)
         if root is None:
             raise ValueError(f"Message {root_id} not found")
@@ -2552,21 +2577,13 @@ class AgentMailService:
         )
 
     async def list_root_messages(
-        self, db: AsyncSession, limit: int = 100
+        self, db: AsyncSession, limit: int = 100, for_member_id: Optional[int] = None
     ) -> List[MailMessageResponse]:
-        roots = (
-            (
-                await db.execute(
-                    select(MailMessage)
-                    .where(MailMessage.thread_root_id.is_(None))
-                    .order_by(MailMessage.created_at.desc())
-                    .limit(limit)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [await self._message_response(db, root, for_member_id=None) for root in roots]
+        query = select(MailMessage).where(MailMessage.thread_root_id.is_(None))
+        if for_member_id is not None:
+            query = query.where(self._member_root_access(for_member_id))
+        roots = (await db.scalars(query.order_by(MailMessage.created_at.desc()).limit(limit))).all()
+        return [await self._message_response(db, root, for_member_id) for root in roots]
 
     async def _session_team_context(
         self,

@@ -20,7 +20,6 @@ from app.api.v1.deps import (
     require_current_mail_session,
     require_mail_session,
     require_operator,
-    require_operator_for_writes,
     resolve_request_pane,
 )
 from app.config import settings
@@ -74,11 +73,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# The install routes write the harnesses' native settings (hooks and MCP
-# servers), so they take the same Director key guard as the settings routers.
-# The Mail router's other writes stay open to agents.
-INSTALL_WRITES = [Depends(require_operator_for_writes)]
+async def require_mail_director(
+    x_deck_operator_token: Optional[str] = Header(default=None),
+) -> None:
+    """Require the Director key when the installation has configured one."""
+    if settings.operator_token:
+        await require_operator(x_deck_operator_token)
+
+
+# Mail install writes use the configured Director key in every authentication mode.
+INSTALL_WRITES = [Depends(require_mail_director)]
 _INITIAL_APPROVAL_MAX_ATTEMPTS = 2
+
+
+async def mail_read_session(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    x_deck_operator_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[MailAgentSession]:
+    """Use a Mail session or Director key, with an explicit legacy opt-out."""
+    if x_deck_operator_token is not None:
+        await require_mail_director(x_deck_operator_token)
+    if x_deck_session_token is not None:
+        return await require_mail_session(await mail_session(x_deck_session_token, db))
+    if (x_deck_operator_token is not None or not settings.operator_token
+            or not settings.mail_capability_tokens_required):
+        return None
+    await require_operator(x_deck_operator_token)
+    return None
+
+
+async def require_mail_install_operator(
+    x_deck_operator_token: Optional[str] = Header(default=None),
+) -> None:
+    """Protect install information in strict mode and validate supplied keys."""
+    if settings.operator_token and (settings.mail_capability_tokens_required or x_deck_operator_token is not None):
+        await require_operator(x_deck_operator_token)
 
 
 def _approval_response(request) -> GithubApprovalRequestResponse:
@@ -137,8 +167,18 @@ def _redact_generic_continuation_thread(
     )
 
 
+@router.get("/authentication-status", response_model=dict[str, bool])
+async def authentication_status():
+    """Public mode discovery contains no credential, Mail or launch data."""
+    return {"director_key_configured": bool(settings.operator_token)}
+
+
 @router.get("/team", response_model=TeamListResponse)
-async def get_team(sync: bool = True, db: AsyncSession = Depends(get_db)):
+async def get_team(
+    sync: bool = True,
+    session: Optional[MailAgentSession] = Depends(mail_read_session),
+    db: AsyncSession = Depends(get_db),
+):
     """Team roster with sessions and inbox counts."""
     if sync:
         await agent_mail_service.sync_observed_sessions(db)
@@ -168,7 +208,8 @@ async def get_team(sync: bool = True, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.patch("/members/{member_id}", response_model=MailMemberResponse)
+@router.patch("/members/{member_id}", response_model=MailMemberResponse,
+              dependencies=[Depends(require_mail_director)])
 async def update_member(
     member_id: int,
     update: MailMemberUpdate,
@@ -222,6 +263,8 @@ async def send_message(
         and request.sender_member_id != session.member_id
     ):
         raise HTTPException(status_code=403, detail="sender_not_token_holder")
+    if request.thread_root_id is not None:
+        await _require_member_thread(db, request.thread_root_id, session.member_id)
     request = request.model_copy(update={"sender_member_id": session.member_id})
     try:
         return await agent_mail_service.send_message(
@@ -231,6 +274,8 @@ async def send_message(
         )
     except MailAuthorityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="thread_not_authorized") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -775,10 +820,15 @@ async def _record_continuation_notice(
 
 
 @router.get("/messages", response_model=list[MailMessageResponse])
-async def list_messages(db: AsyncSession = Depends(get_db)):
+async def list_messages(
+    session: Optional[MailAgentSession] = Depends(mail_read_session),
+    db: AsyncSession = Depends(get_db),
+):
     return [
         redact_lease_message(_redact_generic_continuation_message(message))
-        for message in await agent_mail_service.list_root_messages(db)
+        for message in await agent_mail_service.list_root_messages(
+            db, for_member_id=session.member_id if session else None,
+        )
     ]
 
 
@@ -786,16 +836,30 @@ async def list_messages(db: AsyncSession = Depends(get_db)):
 async def get_thread(
     message_id: int,
     member_id: Optional[int] = None,
+    session: Optional[MailAgentSession] = Depends(mail_read_session),
     db: AsyncSession = Depends(get_db),
 ):
+    if session is not None and member_id is not None and member_id != session.member_id:
+        raise HTTPException(status_code=403, detail="member_not_token_holder")
     try:
         return redact_lease_thread(_redact_generic_continuation_thread(
             await agent_mail_service.get_thread(
                 db,
                 message_id,
-                for_member_id=member_id,
+                for_member_id=session.member_id if session else member_id,
             )
         ))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="thread_not_authorized") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _require_member_thread(db, message_id, member_id):
+    try:
+        await agent_mail_service.require_member_thread(db, message_id, member_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="thread_not_authorized") from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -810,6 +874,7 @@ async def mark_read(
     claimed = body.get("member_id")
     if claimed is not None and claimed != session.member_id:
         raise HTTPException(status_code=403, detail="member_not_token_holder")
+    await _require_member_thread(db, message_id, session.member_id)
     await agent_mail_service.mark_read(db, message_id, session.member_id)
     return {"ok": True}
 
@@ -824,6 +889,7 @@ async def ack_message(
     claimed = body.get("member_id")
     if claimed is not None and claimed != session.member_id:
         raise HTTPException(status_code=403, detail="member_not_token_holder")
+    await _require_member_thread(db, message_id, session.member_id)
     await agent_mail_service.ack_message(db, message_id, session.member_id)
     return {"ok": True}
 
@@ -1153,28 +1219,41 @@ async def _register_from_hook(db: AsyncSession, payload: dict):
     )
 
 
+async def _content_hook_session(db, token):
+    if not settings.mail_capability_tokens_required and token is None:
+        return None
+    return await require_mail_session(await mail_session(token, db))
+
+
+def _hook_inbox_reminder(event):
+    """The unauthenticated native hook contains no Mail data."""
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "Check your Deck inbox."}}
+
+
 @router.post("/hooks/session-start")
 async def hook_session_start(
     payload: dict[str, Any] = Body(...),
+    x_deck_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        member, session = await _register_from_hook(db, payload)
-        if member is None:
-            return {}
+        session = await _content_hook_session(db, x_deck_session_token)
+    except HTTPException:
+        return _hook_inbox_reminder("SessionStart")
+    try:
+        if session is not None:
+            member_id = session.member_id
+        else:
+            member, session = await _register_from_hook(db, payload)
+            if member is None:
+                return {}
+            member_id = member.id
         context = await agent_mail_service.build_session_start_context(
-            db,
-            member.id,
-            session.session_key if session is not None else None,
+            db, member_id, session.session_key if session is not None else None,
         )
         if not context:
             return {}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": context,
-            }
-        }
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
     except Exception as exc:
         logger.warning("session-start hook failed: %s", exc)
         return {}
@@ -1183,26 +1262,29 @@ async def hook_session_start(
 @router.post("/hooks/user-prompt-submit")
 async def hook_user_prompt_submit(
     payload: dict[str, Any] = Body(...),
+    x_deck_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        session_key = _hook_session_key(payload)
-        if session_key is None:
-            return {}
-        session = await agent_mail_service.heartbeat_session(db, session_key)
-        if session is None:
-            _, session = await _register_from_hook(db, payload)
-            if session is None:
+        session = await _content_hook_session(db, x_deck_session_token)
+    except HTTPException:
+        return _hook_inbox_reminder("UserPromptSubmit")
+    try:
+        if session is not None:
+            session = await agent_mail_service.heartbeat_session(db, session.session_key)
+        else:
+            session_key = _hook_session_key(payload)
+            if session_key is None:
                 return {}
+            session = await agent_mail_service.heartbeat_session(db, session_key)
+            if session is None:
+                _, session = await _register_from_hook(db, payload)
+        if session is None:
+            return {}
         context = await agent_mail_service.build_prompt_submit_context(db, session.member_id)
         if context is None:
             return {}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": context,
-            }
-        }
+        return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": context}}
     except Exception as exc:
         logger.warning("user-prompt-submit hook failed: %s", exc)
         return {}
@@ -1251,7 +1333,8 @@ def _require_confirmed(body: dict[str, Any] | None) -> None:
         raise HTTPException(status_code=400, detail='Pass {"confirmed": true} to mutate config')
 
 
-@router.get("/install/status", response_model=AgentMailInstallStatus)
+@router.get("/install/status", response_model=AgentMailInstallStatus,
+            dependencies=[Depends(require_mail_install_operator)])
 async def install_status():
     return await agent_mail_install_service.get_install_status()
 
@@ -1369,6 +1452,7 @@ async def uninstall_opencode(
     return await agent_mail_install_service.uninstall_opencode(db)
 
 
-@router.get("/install/snippets", response_model=AgentMailSnippets)
+@router.get("/install/snippets", response_model=AgentMailSnippets,
+            dependencies=[Depends(require_mail_install_operator)])
 async def install_snippets():
     return agent_mail_install_service.get_snippets()

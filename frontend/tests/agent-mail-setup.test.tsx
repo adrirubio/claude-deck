@@ -1,5 +1,5 @@
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AgentMailPage } from '@/features/agent-mail/AgentMailPage'
 import { HarnessMailDetails, HarnessMailSetup } from '@/features/agent-mail/HarnessMailSetup'
@@ -13,6 +13,7 @@ import {
   mailSetupState,
   mailTechnicalLines,
 } from '@/features/agent-mail/mailSetup'
+import { setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import type { AgentMailSetup } from '@/features/agent-mail/useAgentMailSetup'
 import type { AgentMailInstallStatus, AgentMailSnippets } from '@/types/agentMail'
 
@@ -20,17 +21,24 @@ vi.mock('@/features/agent-mail/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/agent-mail/api')>()
   return {
     ...actual,
+    fetchAgentMailAuthenticationStatus: vi.fn(),
     fetchAgentMailTeam: vi.fn(),
     fetchAgentMailMessages: vi.fn(),
     fetchAgentMailInstallStatus: vi.fn(),
   }
 })
-import { fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam } from '@/features/agent-mail/api'
+
+beforeEach(() => {
+  setOperatorToken('test-director-key')
+  vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: true })
+})
 
 const FULL_HOOKS = ['SessionStart', 'UserPromptSubmit', 'SessionEnd', 'PostToolUse', 'PreToolUse']
 
 function status(overrides: Partial<AgentMailInstallStatus> = {}): AgentMailInstallStatus {
   return {
+    mail_capability_tokens_required: true,
     pi_cli_available: true,
     pi_mail_ready: true,
     claude_code_hooks: FULL_HOOKS,

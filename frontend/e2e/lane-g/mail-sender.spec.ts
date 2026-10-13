@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { contrastFailures, useTheme, type Theme } from '../support/contrast'
 import { expect, test } from '../support/guard'
+import { enterDirectorKey } from '../support/director-key'
 import { expectKeyboardReachable } from '../support/keyboard'
 
 // #527: no message that the scheduler or a service created is shown as sent
@@ -15,6 +16,7 @@ const DIRECTOR_SUBJECT = 'Director note: keep #101 small'
 
 async function openConversations(page: Page): Promise<void> {
   await page.goto('/agent-mail')
+  await enterDirectorKey(page)
   await expect(page.getByRole('heading', { name: 'Agent Mail', exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Conversations' }).click()
 }

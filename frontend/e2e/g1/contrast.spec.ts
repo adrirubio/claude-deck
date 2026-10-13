@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { contrastFailures, useTheme, type Theme } from '../support/contrast'
 import { expect, test } from '../support/guard'
+import { enterDirectorKey } from '../support/director-key'
 
 // #510: all text meets WCAG AA contrast in both themes, and each colour has
 // one meaning across Overview, Work and Teams.
@@ -18,6 +19,7 @@ const ACTIVE_ROUTES = [
 
 async function open(page: Page, route: string, ready: string): Promise<void> {
   await page.goto(route)
+  if (route === '/agent-mail') await enterDirectorKey(page)
   await expect(page.getByRole('heading', { name: ready, exact: true })).toBeVisible()
   await page.waitForLoadState('networkidle').catch(() => undefined)
 }

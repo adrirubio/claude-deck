@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { expect } from '../support/guard'
+import { enterDirectorKey } from '../support/director-key'
 
 // Shared steps for the lane D (Agent Mail) journeys.
 
@@ -28,6 +29,7 @@ export async function showMailSetUp(page: Page): Promise<void> {
 
 export async function openAgentMail(page: Page, tab: 'Team' | 'Conversations'): Promise<void> {
   await page.goto('/agent-mail')
+  await enterDirectorKey(page)
   await expect(page.getByRole('heading', { name: 'Agent Mail', exact: true })).toBeVisible()
   await page.getByRole('tab', { name: tab, exact: true }).click()
   await expect(page.getByRole('tab', { name: tab, exact: true })).toHaveAttribute('aria-selected', 'true')
