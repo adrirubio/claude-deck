@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import JSON, insert, literal, select, update
 
 from app.models.api_model import utc_datetime
-from app.models.database import AgentTeamPreset, MailExternalActor
+from app.models.database import (AgentTeamPreset, AgentTeamSlot, MailExternalActor,
+                                 MailMessage, MailReceipt, MailTeamMember)
 from app.services import factory_audit_service as audit
 from app.services.factory_audit_service import sanitize_text
 
@@ -177,3 +178,63 @@ async def supervisor_checkin(db, actor, preset_id: int, next_check_at: datetime,
         await db.commit()
     team = await _team(db, preset_id)
     return supervisor_observation(team, now=current, actor=actor)
+
+
+async def send_supervisor_message(db, session, request):
+    """Store a direct actor message only for a currently bound team member."""
+    member = await db.get(MailTeamMember, session.member_id)
+    slot = await db.get(AgentTeamSlot, session.team_slot_id) if session.team_slot_id else None
+    if (member is None or slot is None or member.team_slot_id != slot.id
+            or session.team_preset_id != slot.preset_id or member.team_preset_id != slot.preset_id):
+        raise PermissionError("supervisor_address_not_bound")
+    current = datetime.now(timezone.utc).replace(tzinfo=None)
+    payload = {"supervisor_actor_id": request.actor_id}
+    statement = insert(MailMessage).from_select(
+        ["kind", "sender_member_id", "audience_type", "audience_id", "subject",
+         "body_markdown", "payload", "created_at"],
+        select(literal("message"), literal(member.id), literal("team_preset"), literal(str(slot.preset_id)),
+               literal(request.subject), literal(request.body_markdown), literal(payload, type_=JSON),
+               literal(current)).select_from(AgentTeamPreset).where(
+                   AgentTeamPreset.id == slot.preset_id,
+                   AgentTeamPreset.supervisor_actor_id == request.actor_id)).returning(MailMessage.id)
+    message_id = (await db.execute(statement)).scalar_one_or_none()
+    if message_id is None:
+        await db.rollback()
+        raise PermissionError("supervisor_address_not_bound")
+    db.add(MailReceipt(message_id=message_id, member_id=member.id, read_at=current))
+    await db.commit()
+    from app.services.agent_mail_service import agent_mail_service
+    message = await db.get(MailMessage, message_id)
+    return await agent_mail_service._message_response(db, message, member.id)
+
+
+def is_supervisor_message(root) -> bool:
+    return (root.kind == "message" and root.audience_type == "team_preset"
+            and root.sender_member_id is not None and root.thread_root_id is None
+            and isinstance(root.payload, dict) and "supervisor_actor_id" in root.payload)
+
+
+async def require_supervisor_thread(db, actor, root) -> None:
+    """A direct supervisor thread belongs only to its current bound actor."""
+    if not is_supervisor_message(root):
+        raise PermissionError("supervisor_actor_not_bound")
+    team = await db.scalar(select(AgentTeamPreset.id).where(
+        AgentTeamPreset.id == root.audience_id, AgentTeamPreset.supervisor_actor_id == actor.id))
+    if team is None or root.payload.get("supervisor_actor_id") != actor.id:
+        raise PermissionError("supervisor_actor_not_bound")
+
+
+async def supervisor_inbox(db, actor, *, limit: int = 50):
+    """Return bounded direct messages for teams the actor currently supervises."""
+    teams = list((await db.scalars(select(AgentTeamPreset.id)
+        .where(AgentTeamPreset.supervisor_actor_id == actor.id))).all())
+    if not teams:
+        raise PermissionError("supervisor_actor_not_bound")
+    roots = (await db.scalars(select(MailMessage).where(
+        MailMessage.thread_root_id.is_(None), MailMessage.kind == "message",
+        MailMessage.sender_member_id.is_not(None), MailMessage.audience_type == "team_preset",
+        MailMessage.audience_id.in_([str(team_id) for team_id in teams]),
+        MailMessage.payload["supervisor_actor_id"].as_integer() == actor.id)
+        .order_by(MailMessage.id.desc()).limit(max(1, min(100, limit))))).all()
+    from app.services.agent_mail_service import agent_mail_service
+    return [await agent_mail_service._message_response(db, root, None) for root in roots]

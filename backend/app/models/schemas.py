@@ -1842,6 +1842,45 @@ class MailSessionResponse(BaseModel):
     last_seen_at: Optional[datetime] = None
 
 
+class SupervisorAddress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int = Field(gt=0)
+    address: str
+    display_name: str | None = None
+
+
+class SupervisorObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["none", "healthy", "late", "absent"]
+    actor_id: int | None
+    address: SupervisorAddress | None
+    checked_at: datetime | None
+    next_check_at: datetime | None
+    grace_seconds: int = Field(ge=1)
+    note: str | None
+    attention: Literal["Supervisor check-in overdue"] | None
+
+
+class SupervisorBindingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int | None = Field(..., gt=0)
+    grace_seconds: int | None = Field(default=None, ge=1)
+
+
+class SupervisorCheckinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preset_id: int = Field(gt=0)
+    next_check_at: datetime
+    note: str | None = None
+
+
+class SupervisorMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int = Field(gt=0)
+    subject: str | None = None
+    body_markdown: str = Field(min_length=1, max_length=12000)
+
+
 class MailMemberResponse(BaseModel):
     """Durable team member with derived status and inbox counts."""
 
@@ -1854,6 +1893,7 @@ class MailMemberResponse(BaseModel):
     participant_kind: str = "repo"
     team_preset_id: Optional[int] = None
     team_preset_name: Optional[str] = None
+    supervisor_address: SupervisorAddress | None = None
     team_slot_id: Optional[int] = None
     team_slot_name: Optional[str] = None
     controlled_language_enabled: Optional[bool] = None

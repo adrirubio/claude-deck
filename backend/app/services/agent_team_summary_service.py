@@ -10,7 +10,7 @@ from mcp_shim.work_remaining_protocol import MAX_AGE
 
 from app.models.database import (
     AgentTeamPreset, GithubApprovalRequest, GithubOwnerObservationPause,
-    GithubWorkItem, GithubWorkspace, TeamGithubScope,
+    GithubWorkItem, GithubWorkspace, MailExternalActor, TeamGithubScope,
 )
 from app.models.factory_schemas import (
     AgentTeamSummaryResponse, TeamRemainingWork, TeamSummaryAttention, TeamSummaryHumanAction,
@@ -21,6 +21,7 @@ from app.services.github_operator_attention_service import github_operator_atten
 from app.services.github_work_progress_service import github_work_progress_service
 from app.services.agent_team_campaign_service import agent_team_campaign_service
 from app.services import required_ci_attention
+from app.services.agent_team_supervisor_service import observe_supervisor, supervisor_observation
 
 _ACTORS = ("owner", "leader", "operator", "controller")
 _KINDS = {"review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
@@ -44,7 +45,12 @@ class AgentTeamSummaryService:
     async def _snapshot(self, db, preset_id):
         team = (await db.execute(select(AgentTeamPreset.id, AgentTeamPreset.description,
             AgentTeamPreset.parent_issue_url, AgentTeamPreset.autonomy_enabled, AgentTeamPreset.updated_at,
-            AgentTeamPreset.backlog_milestone, AgentTeamPreset.planned_decisions)
+            AgentTeamPreset.backlog_milestone, AgentTeamPreset.planned_decisions,
+            AgentTeamPreset.supervisor_actor_id, AgentTeamPreset.supervisor_checked_at,
+            AgentTeamPreset.supervisor_next_check_at, AgentTeamPreset.supervisor_grace_seconds,
+            AgentTeamPreset.supervisor_note, AgentTeamPreset.supervisor_observed_status,
+            MailExternalActor.display_name.label("supervisor_display_name"))
+            .outerjoin(MailExternalActor, MailExternalActor.id == AgentTeamPreset.supervisor_actor_id)
             .where(AgentTeamPreset.id == preset_id))).one_or_none()
         if team is None:
             return None
@@ -89,6 +95,7 @@ class AgentTeamSummaryService:
     async def summary(self, db, preset_id):
         started = datetime.now(timezone.utc)
         deadline = asyncio.get_running_loop().time() + self.observation_seconds
+        await observe_supervisor(db, preset_id, now=started)
         initial = await self._snapshot(db, preset_id)
         if initial is None:
             return None
@@ -189,6 +196,15 @@ class AgentTeamSummaryService:
             confidence=confidence, reason="complete" if known else "context_changed" if changed
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]
+        supervisor = supervisor_observation(final_team, now=now, actor=SimpleNamespace(
+            id=final_team.supervisor_actor_id, display_name=final_team.supervisor_display_name)
+            if final_team.supervisor_actor_id is not None else None)
+        if supervisor["next_check_at"] is not None:
+            boundary = supervisor["next_check_at"]
+            if supervisor["status"] == "late":
+                boundary += timedelta(seconds=supervisor["grace_seconds"])
+            if boundary > now:
+                expires.append(boundary)
         campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
         unreadable = []
         for item in final[2][:self.item_limit]:
@@ -200,6 +216,7 @@ class AgentTeamSummaryService:
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
             required_ci_unreadable=unreadable,
+            supervisor_observation=supervisor,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
             next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)
 

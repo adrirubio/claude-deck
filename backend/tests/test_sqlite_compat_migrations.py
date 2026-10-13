@@ -18,6 +18,46 @@ from app.database import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [
+    ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
+     "supervisor_grace_seconds", "supervisor_observed_status"),
+    ("supervisor_grace_seconds", "supervisor_observed_status"),
+])
+async def test_supervisor_columns_migrate_legacy_rows_and_repeat_safely(missing):
+    columns = ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
+               "supervisor_grace_seconds", "supervisor_observed_status")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if "supervisor_actor_id" in missing:
+                await conn.execute(text("DROP TABLE agent_team_presets"))
+                await conn.execute(text("CREATE TABLE agent_team_presets ("
+                    "id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, description VARCHAR, created_by VARCHAR, "
+                    "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, autonomy_enabled BOOLEAN NOT NULL, "
+                    "leader_slot_id INTEGER, parent_issue_url VARCHAR, backlog_milestone VARCHAR, planned_decisions JSON)"))
+            else:
+                for column in missing:
+                    await conn.execute(text(f"ALTER TABLE agent_team_presets DROP COLUMN {column}"))
+            await conn.execute(text("INSERT INTO agent_team_presets "
+                "(name, description, created_at, updated_at, autonomy_enabled, leader_slot_id) "
+                "VALUES ('Existing', 'Keep this team.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 99)"))
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT * FROM agent_team_presets"))).mappings().one()
+            assert row["description"] == "Keep this team." and row["leader_slot_id"] == 99
+            assert row["autonomy_enabled"] == 0
+            assert all(row[column] is None for column in columns)
+            await conn.execute(text("UPDATE agent_team_presets SET supervisor_note='Safe note.', supervisor_grace_seconds=60"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT supervisor_note, supervisor_grace_seconds FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Safe note.", 60)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_coordination_revisions_migrate_without_resetting_quota_or_linkage():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

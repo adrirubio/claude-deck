@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, ConfigDict, Field
 from app.models.api_model import ApiModel as BaseModel
-from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal
+from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal, SupervisorObservation
 
 
 def _utc(value: datetime) -> datetime:
@@ -346,6 +346,7 @@ class AgentTeamSummaryResponse(FactoryModel):
     description: str | None
     parent_issue_url: str | None
     supervisor: Literal["none"] = "none"
+    supervisor_observation: SupervisorObservation | None = None
     checked_at: Timestamp
     valid_until: Timestamp
     coverage_complete: bool

@@ -1134,14 +1134,23 @@ export const manifest = [
   },
   {
     "name": "deck_send_message",
-    "description": "Send a plain message to another team member. For answerable questions use\n    deck_request_context; for handing work over use deck_create_handoff.",
+    "description": "Send a plain message to a team member or the current bound Supervisor.\n    Set exactly one target. For context requests use deck_request_context.\n    For handoffs use deck_create_handoff. Supervisor messages grant no authority.",
     "inputSchema": {
       "properties": {
         "to_member_id": {
-          "title": "To Member Id",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Member Id"
         },
         "body": {
+          "default": "",
           "title": "Body",
           "type": "string"
         },
@@ -1149,12 +1158,20 @@ export const manifest = [
           "default": "",
           "title": "Subject",
           "type": "string"
+        },
+        "to_supervisor_actor_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Supervisor Actor Id"
         }
       },
-      "required": [
-        "to_member_id",
-        "body"
-      ],
       "title": "deck_send_messageArguments",
       "type": "object"
     }

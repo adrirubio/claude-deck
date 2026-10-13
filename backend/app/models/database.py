@@ -149,6 +149,14 @@ class AgentTeamPreset(Base):
     parent_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
     backlog_milestone: Mapped[str | None] = mapped_column(String, nullable=True)
     planned_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    supervisor_actor_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
+    )
+    supervisor_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    supervisor_next_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    supervisor_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    supervisor_grace_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supervisor_observed_status: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AgentTeamSlot(Base):

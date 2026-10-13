@@ -183,7 +183,7 @@ def deck_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[s
     if not credential:
         return {"ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
     try:
-        response = httpx.request("POST", f"{DECK_API}/external-agent-mail/supervisor-checkin",
+        response = httpx.request("POST", f"{DECK_API}/external/agent-mail/supervisor-checkin",
             headers={"Authorization": f"Bearer {credential}"}, timeout=DECK_HTTP_TIMEOUT,
             json={"preset_id": preset_id, "next_check_at": next_check_at, "note": note})
         if not response.is_success:
@@ -431,12 +431,22 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-def deck_send_message(to_member_id: int, body: str, subject: str = "") -> dict:
-    """Send a plain message to another team member. For answerable questions use
-    deck_request_context; for handing work over use deck_create_handoff."""
+def deck_send_message(to_member_id: Optional[int] = None, body: str = "", subject: str = "",
+                      to_supervisor_actor_id: Optional[int] = None) -> dict:
+    """Send a plain message to a team member or the current bound Supervisor.
+    Set exactly one target. For context requests use deck_request_context.
+    For handoffs use deck_create_handoff. Supervisor messages grant no authority."""
+    if (to_member_id is None) == (to_supervisor_actor_id is None):
+        return {"ok": False, "error": {"code": "mail_target_required"}}
     err = _guard()
     if err:
         return err
+    if to_supervisor_actor_id is not None:
+        result = _request("POST", "/supervisor/messages", json={"actor_id": to_supervisor_actor_id,
+            "subject": subject or None, "body_markdown": body})
+        if not result["ok"]:
+            return result
+        return {"ok": True, "message_id": result["data"]["id"], **_counts()}
     result = _request(
         "POST",
         "/messages",

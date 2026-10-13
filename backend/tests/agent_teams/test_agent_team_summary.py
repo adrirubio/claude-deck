@@ -106,6 +106,34 @@ async def test_empty_team_has_zero_effort_and_no_actor(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_supervisor_summary_is_additive_sanitized_and_clock_derived(db, monkeypatch):
+    import hashlib
+    import json
+    from app.models.database import MailExternalActor
+    team, _, _ = await seed(db, ())
+    actor = MailExternalActor(actor_key="summary-supervisor", display_name="Supervisor", kind="external_tool",
+        token_hash=hashlib.sha256(b"private-actor-token").hexdigest(), description="private-actor-description")
+    db.add(actor); await db.flush()
+    now = datetime.now(timezone.utc)
+    team.supervisor_actor_id = actor.id
+    team.supervisor_checked_at = (now - timedelta(minutes=10)).replace(tzinfo=None)
+    team.supervisor_next_check_at = (now - timedelta(seconds=1)).replace(tzinfo=None)
+    team.supervisor_note = "token=private-note Checked."
+    await db.commit()
+    actor_id, actor_hash = actor.id, actor.token_hash
+    summary, _ = service(monkeypatch)
+    result = await summary.summary(db, team.id)
+    assert result.supervisor == "none"
+    observation = result.supervisor_observation
+    assert observation.status == "late" and observation.attention == "Supervisor check-in overdue"
+    assert observation.address.actor_id == actor_id and observation.grace_seconds == 1800
+    serialized = json.dumps(result.model_dump(mode="json"))
+    for private in (actor_hash, "private-actor-token", "private-actor-description", "private-note", "private-launch-prompt"):
+        assert private not in serialized
+    assert result.remaining_work.state == "known"
+
+
+@pytest.mark.asyncio
 async def test_team_ci_signal_has_safe_context_and_clears_without_authority_changes(db, monkeypatch):
     team, scope, items = await seed(db, ("verifying", "verifying", "merged"))
     team_id, scope_id, item_id = team.id, scope.id, items[0].id

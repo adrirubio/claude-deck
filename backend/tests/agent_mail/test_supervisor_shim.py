@@ -21,7 +21,7 @@ def test_supervisor_checkin_sends_only_actor_authentication(monkeypatch):
     monkeypatch.setattr(shim, "_guard", lambda: pytest.fail("Member registration must not run"))
     def request(method, url, **kwargs):
         assert method == "POST"
-        assert url.endswith("/external-agent-mail/supervisor-checkin")
+        assert url.endswith("/external/agent-mail/supervisor-checkin")
         assert kwargs["headers"] == {"Authorization": "Bearer synthetic-private-actor-token"}
         assert kwargs["json"] == {"preset_id": 7, "next_check_at": "2026-10-13T02:00:00Z", "note": "Checked."}
         return httpx.Response(200, json={"status": "healthy"}, request=httpx.Request(method, url))
@@ -45,3 +45,17 @@ def test_supervisor_transport_never_returns_error_prose(monkeypatch, mode):
     assert secret not in json.dumps(result)
     if mode == "timeout":
         assert result["outcome"] == "unknown"
+
+
+def test_member_message_transport_can_use_the_current_supervisor_address(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    sent = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+    monkeypatch.setattr(shim, "_request", lambda method, path, **kwargs:
+        sent.append((method, path, kwargs["json"])) or {"ok": True, "data": {"id": 19}})
+    assert shim.deck_send_message(to_supervisor_actor_id=7, body="Check the incident.")["message_id"] == 19
+    assert sent == [("POST", "/supervisor/messages", {"actor_id": 7, "subject": None,
+                                                      "body_markdown": "Check the incident."})]
+    assert not shim.deck_send_message(to_member_id=1, to_supervisor_actor_id=7, body="Ambiguous.")["ok"]
+    assert len(sent) == 1

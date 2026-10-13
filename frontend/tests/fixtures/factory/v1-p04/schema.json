@@ -124,6 +124,138 @@
           "title": "CampaignUnderWayItem",
           "type": "object"
         },
+        "SupervisorAddress": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "exclusiveMinimum": 0,
+              "title": "Actor Id",
+              "type": "integer"
+            },
+            "address": {
+              "title": "Address",
+              "type": "string"
+            },
+            "display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Display Name"
+            }
+          },
+          "required": [
+            "actor_id",
+            "address"
+          ],
+          "title": "SupervisorAddress",
+          "type": "object"
+        },
+        "SupervisorObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            },
+            "address": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SupervisorAddress"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attention": {
+              "anyOf": [
+                {
+                  "const": "Supervisor check-in overdue",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attention"
+            },
+            "checked_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Checked At"
+            },
+            "grace_seconds": {
+              "minimum": 1,
+              "title": "Grace Seconds",
+              "type": "integer"
+            },
+            "next_check_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Check At"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Note"
+            },
+            "status": {
+              "enum": [
+                "none",
+                "healthy",
+                "late",
+                "absent"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "actor_id",
+            "address",
+            "checked_at",
+            "next_check_at",
+            "grace_seconds",
+            "note",
+            "attention"
+          ],
+          "title": "SupervisorObservation",
+          "type": "object"
+        },
         "TeamCampaignSummary": {
           "additionalProperties": false,
           "properties": {
@@ -651,6 +783,17 @@
           "default": "none",
           "title": "Supervisor",
           "type": "string"
+        },
+        "supervisor_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupervisorObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "valid_until": {
           "format": "date-time",

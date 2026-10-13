@@ -84,6 +84,8 @@ from app.models.schemas import (
     TeamGithubScopeListResponse,
     TeamGithubScopeResponse,
     TeamGithubScopeUpdate,
+    SupervisorBindingRequest,
+    SupervisorObservation,
 )
 from app.services.agent_mail_service import (
     MailAuthorityError,
@@ -114,6 +116,7 @@ _CONTINUATION_POLICY_FIELDS = (
     "max_scope_paths",
     "max_scope_commands",
 )
+
 
 
 def _operator_actor() -> dict:
@@ -323,6 +326,30 @@ from app.api.v1.factory_delivery import router as delivery_router
 from app.services.factory_delivery_policy import scope_policy
 
 router = APIRouter()
+
+
+@router.get("/presets/{preset_id}/supervisor", response_model=SupervisorObservation,
+            dependencies=[Depends(require_operator)])
+async def read_supervisor(preset_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import observe_supervisor
+    observation = await observe_supervisor(db, preset_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="supervisor_team_missing")
+    return observation
+
+
+@router.put("/presets/{preset_id}/supervisor", response_model=SupervisorObservation,
+            dependencies=[Depends(require_operator)])
+async def update_supervisor(preset_id: int, request: SupervisorBindingRequest,
+                            db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import bind_supervisor
+    try:
+        return await bind_supervisor(db, preset_id, actor_id=request.actor_id,
+            grace_seconds=request.grace_seconds, set_grace="grace_seconds" in request.model_fields_set)
+    except ValueError as exc:
+        code = str(exc)
+        raise HTTPException(status_code=409 if code == "supervisor_binding_changed" else 404,
+                            detail=code) from exc
 router.include_router(delivery_router)
 
 logger = logging.getLogger(__name__)

@@ -762,6 +762,14 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if preset_columns and "leader_slot_id" not in preset_columns:
         await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    for column, definition in (
+        ("supervisor_actor_id", "INTEGER REFERENCES mail_external_actors(id) ON DELETE SET NULL"),
+        ("supervisor_checked_at", "DATETIME"), ("supervisor_next_check_at", "DATETIME"),
+        ("supervisor_note", "VARCHAR"), ("supervisor_grace_seconds", "INTEGER"),
+        ("supervisor_observed_status", "VARCHAR"),
+    ):
+        if preset_columns and column not in preset_columns:
+            await conn.execute(text(f"ALTER TABLE agent_team_presets ADD COLUMN {column} {definition}"))
     if preset_columns:
         await conn.execute(text(
             "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("
