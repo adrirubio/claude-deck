@@ -46,6 +46,7 @@ async def test_team_github_scope_round_trips(db):
     assert scope.dispatch_label == "claude-deck-ready"
     assert scope.design_label == "claude-deck-design"
     assert scope.merge_policy == "human"
+    assert scope.review_hold_label is None
     assert scope.max_approval_rounds == 3
     assert scope.max_concurrent_dispatched == 3
     assert scope.max_verification_retries == 2
@@ -62,6 +63,28 @@ async def test_team_github_scope_round_trips(db):
     assert scope.max_scope_paths == 32
     assert scope.max_scope_commands == 16
     assert scope.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_review_hold_label_api_apply_omission_and_clear(db):
+    from app.api.v1.agent_teams import _apply_scope_create, _scope_response
+    from app.models.schemas import TeamGithubScopeUpdate
+
+    preset = AgentTeamPreset(name="Review hold configuration")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r")
+    db.add(scope)
+    await db.commit()
+    assert _scope_response(scope).review_hold_label is None
+    _apply_scope_create(scope, TeamGithubScopeUpdate(review_hold_label="review-hold"))
+    await db.commit()
+    assert _scope_response(scope).review_hold_label == "review-hold"
+    _apply_scope_create(scope, TeamGithubScopeUpdate())
+    assert scope.review_hold_label == "review-hold"
+    _apply_scope_create(scope, TeamGithubScopeUpdate(review_hold_label=None))
+    await db.commit()
+    assert _scope_response(scope).review_hold_label is None
 
 
 def test_continuation_policy_rejects_invalid_caps():

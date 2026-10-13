@@ -436,6 +436,7 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         dispatch_label=scope.dispatch_label,
         design_label=scope.design_label,
         merge_policy=scope.merge_policy,
+        review_hold_label=scope.review_hold_label,
         delivery_policy=scope_policy(scope),
         delivery_policy_revision=scope.delivery_policy_revision,
         github_auth_mode=scope.github_auth_mode,
@@ -636,7 +637,7 @@ async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
 
 _SCOPE_CONFIGURATION_FIELDS = (
     "preset_id", "repo_owner", "repo_name", "repo_path", "dispatch_label", "design_label",
-    "merge_policy", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+    "merge_policy", "review_hold_label", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
     "max_auto_merges_per_day", "base_ref", "builds_out_of_tree", "build_dir_template",
     "build_command_hint", "max_build_parallelism", "github_auth_mode", "github_app_installation_id",
     "continuation_enabled", "max_continuation_revisions", "max_continuation_failed_heads",
@@ -735,6 +736,11 @@ def _apply_scope_create(
         scope.design_label = _clean_label(request.design_label, "Design label")
     if request.merge_policy is not None:
         scope.merge_policy = request.merge_policy
+    if "review_hold_label" in request.model_fields_set:
+        scope.review_hold_label = (
+            _clean_label(request.review_hold_label, "Review hold label")
+            if request.review_hold_label is not None else None
+        )
     if request.max_approval_rounds is not None:
         scope.max_approval_rounds = request.max_approval_rounds
     if request.max_concurrent_dispatched is not None:

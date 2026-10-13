@@ -773,16 +773,16 @@ async def test_compat_migrations_add_pr2_github_auth_columns_idempotently():
             for _ in range(2):
                 await _run_sqlite_compat_migrations(conn)
                 columns = await _sqlite_columns(conn, "team_github_scopes")
-                assert {"github_auth_mode", "github_app_installation_id"} <= columns
+                assert {"github_auth_mode", "github_app_installation_id", "review_hold_label"} <= columns
             row = (
                 await conn.execute(
                     text(
-                        "SELECT github_auth_mode, github_app_installation_id "
+                        "SELECT github_auth_mode, github_app_installation_id, review_hold_label "
                         "FROM team_github_scopes"
                     )
                 )
             ).one()
-            assert row == ("unknown", None)
+            assert row == ("unknown", None, None)
     finally:
         await engine.dispose()
 
@@ -1505,5 +1505,33 @@ async def test_v17_migration_preserves_authority_identities_and_resolves_consume
             assert preset_one.leader_slot_id == 11
             preset_four = await agent_team_service.get_preset(session, 4)
             assert preset_four.leader_slot_id == 999999
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_adds_merge_wait_clock_without_changing_rows():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            columns = await _sqlite_columns(conn, "github_work_items")
+            for column in ("merge_wait_head_sha", "merge_wait_started_at"):
+                if column in columns:
+                    await conn.execute(text(f"ALTER TABLE github_work_items DROP COLUMN {column}"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, "
+                "issue_url, github_updated_at, dispatch_status, issue_type, retry_count, "
+                "approval_round_count, active_scope_revision, attempt_phase, diagnostic_retry_count, "
+                "created_at, updated_at) VALUES (1, 1, 5, 'guard', 'url', CURRENT_TIMESTAMP, "
+                "'ready_for_review', 'code', 2, 1, 0, 'implementation', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "github_work_items")
+                assert {"merge_wait_head_sha", "merge_wait_started_at"} <= columns
+                row = (await conn.execute(text(
+                    "SELECT dispatch_status, retry_count, merge_wait_head_sha, merge_wait_started_at "
+                    "FROM github_work_items WHERE id = 1"))).one()
+                assert tuple(row) == ("ready_for_review", 2, None, None)
     finally:
         await engine.dispose()

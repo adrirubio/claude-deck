@@ -1504,6 +1504,73 @@ class GithubApprovalService:
             )
         ).scalar_one_or_none()
 
+    async def pending_initial_for_attempt(
+        self, db: AsyncSession, item: GithubWorkItem,
+    ) -> GithubApprovalRequest | None:
+        """Read the pending initial plan for the current dispatch and participants."""
+        if item.dispatch_nonce is None or item.approval_round_count < 1:
+            return None
+        try:
+            owner, leader = await self._current_participants(db, item)
+        except GithubApprovalError:
+            return None
+        return (await db.execute(select(GithubApprovalRequest).where(
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.request_kind == "initial_plan",
+            GithubApprovalRequest.scope_revision_id.is_(None),
+            GithubApprovalRequest.status == "pending",
+            GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+            GithubApprovalRequest.approval_round == item.approval_round_count,
+            GithubApprovalRequest.owner_member_id == owner.id,
+            GithubApprovalRequest.leader_member_id == leader.id,
+        ).execution_options(populate_existing=True))).scalar_one_or_none()
+
+    async def supersede_initial_for_timeout(
+        self, db: AsyncSession, item: GithubWorkItem, request: GithubApprovalRequest,
+    ) -> bool:
+        """Lock the bound item and supersede its initial plan without committing."""
+        owner, leader = await self._current_participants(db, item)
+        conditions = (
+            GithubApprovalRequest.id == request.id,
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.request_kind == "initial_plan",
+            GithubApprovalRequest.scope_revision_id.is_(None),
+            GithubApprovalRequest.status == "pending",
+            GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+            GithubApprovalRequest.approval_round == item.approval_round_count,
+            GithubApprovalRequest.owner_member_id == owner.id,
+            GithubApprovalRequest.leader_member_id == leader.id,
+            GithubApprovalRequest.created_at == request.created_at,
+            GithubApprovalRequest.request_fingerprint == request.request_fingerprint,
+        )
+        guard = await db.execute(update(GithubWorkItem).where(
+            GithubWorkItem.id == item.id,
+            GithubWorkItem.dispatch_status == "dispatched",
+            GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+            GithubWorkItem.approval_round_count == item.approval_round_count,
+            GithubWorkItem.owner_slot_id == owner.team_slot_id,
+            GithubWorkItem.active_scope_revision == 0,
+            GithubWorkItem.pr_number.is_(None),
+            GithubWorkItem.ack_received_at == item.ack_received_at,
+            GithubWorkItem.last_nudge_at == item.last_nudge_at,
+            exists(select(GithubApprovalRequest.id).where(*conditions)),
+        ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+        if guard.rowcount != 1:
+            return False
+        result = await db.execute(update(GithubApprovalRequest).where(*conditions).values(
+            status="superseded", superseded_at=datetime.utcnow(),
+        ).execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            return False
+        await db.refresh(item)
+        await db.refresh(request)
+        if request.request_message_id is not None:
+            await db.execute(update(MailMessage).where(
+                MailMessage.id == request.request_message_id,
+                MailMessage.request_status == "pending",
+            ).values(request_status="superseded").execution_options(synchronize_session=False))
+        return True
+
     async def current_terminal_for_attempt(
         self,
         db: AsyncSession,
