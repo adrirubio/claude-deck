@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HumanActionSummary } from '../src/features/agent-teams/HumanActionSummary'
 import { apiClient } from '../src/lib/api'
@@ -41,8 +41,26 @@ describe('Human actions above the team tabs', () => {
   it('removes resolved PRs from pending actions', async () => {
     vi.mocked(apiClient).mockResolvedValue({...summary(),actions:[{...pr,state:'resolved'}]})
     render(<HumanActionSummary presetId={1} onInspectAutonomy={() => {}} />)
-    expect(await screen.findByText('No pending human actions are currently reported.')).toBeTruthy()
+    // With no action left, the panel is not shown at all (#542).
+    await waitFor(() => expect(apiClient).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByRole('region',{name:'Human actions and decision gates'})).toBeNull()
+    expect(screen.queryByText('No pending human actions are currently reported.')).toBeNull()
     expect(screen.queryByRole('link',{name:'Open PR #38'})).toBeNull()
+  })
+  it('shows no panel and no 0-count line when there is nothing to do, even when coverage is incomplete', async () => {
+    vi.mocked(apiClient).mockResolvedValue({...summary(),coverage_complete:false,actions:[]})
+    render(<HumanActionSummary presetId={1} onInspectAutonomy={() => {}} />)
+    await waitFor(() => expect(apiClient).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByRole('region',{name:'Human actions and decision gates'})).toBeNull()
+    expect(screen.queryByText(/0 actions requested/)).toBeNull()
+    expect(screen.queryByText(/not a complete list/)).toBeNull()
+  })
+  it('keeps the incomplete-coverage note next to the actions it qualifies', async () => {
+    vi.mocked(apiClient).mockResolvedValue({...summary(),coverage_complete:false})
+    render(<HumanActionSummary presetId={1} onInspectAutonomy={() => {}} />)
+    expect(await screen.findByText(/not a complete list of current actions/)).toBeTruthy()
   })
   it('ignores previous-preset and StrictMode responses', async () => {
     let resolveOld: (value:unknown) => void=() => {}
@@ -50,7 +68,8 @@ describe('Human actions above the team tabs', () => {
       ? new Promise((resolve) => { resolveOld=resolve }) : Promise.resolve({...summary(),preset_id:2,actions:[]}))
     const view=render(<StrictMode><HumanActionSummary presetId={1} onInspectAutonomy={() => {}} /></StrictMode>)
     view.rerender(<StrictMode><HumanActionSummary presetId={2} onInspectAutonomy={() => {}} /></StrictMode>)
-    await screen.findByText('No pending human actions are currently reported.')
+    await waitFor(() => expect(vi.mocked(apiClient).mock.calls.some(([path]) => String(path).includes('/2/'))).toBe(true))
+    await act(async () => {})
     await act(async () => { resolveOld(summary()) })
     expect(screen.queryByRole('link',{name:'Open PR #38'})).toBeNull()
   })

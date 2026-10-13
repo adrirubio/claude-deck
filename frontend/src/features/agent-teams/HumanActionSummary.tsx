@@ -89,15 +89,21 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
   const requested = historical ? 0 : actions.filter((a) => a.state==='requested').length
   const gates = historical ? 0 : actions.filter((a) => a.state==='waiting_for_prerequisites').length
   const pending = historical ? 0 : actions.filter((a) => a.state==='context_pending').length
+  // With nothing to do and nothing wrong, the panel is not shown (#542).
+  if (!samePreset && !unavailable) return null
+  if (samePreset && !historical && actions.length===0) return null
+  // Open when an action is waiting for the person; otherwise one line, so the members stay on screen.
   return <section aria-label="Human actions and decision gates" className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 text-sm">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 className="flex items-center gap-2 font-semibold"><AlertCircle className="h-4 w-4" aria-hidden="true" />Human actions and decision gates</h2>
-        <p className="mt-1">{!samePreset ? unavailable ? 'Human-action status is unavailable.' : 'Checking reported human actions…'
+   <details open={requested>0}>
+    <summary className="cursor-pointer list-none">
+      <h2 className="inline-flex items-center gap-2 font-semibold"><AlertCircle className="h-4 w-4" aria-hidden="true" />Human actions and decision gates</h2>
+      <span className="ml-3">{!samePreset ? unavailable ? 'Human-action status is unavailable.' : 'Checking reported human actions…'
           : historical ? 'Retained requests need confirmation. Human-action status is unavailable or stale.'
-          : `${requested} ${requested===1 ? 'action requested' : 'actions requested'} · ${gates} ${gates===1 ? 'decision gate waiting' : 'decision gates waiting'}${pending ? ` · ${pending} ${pending===1 ? 'action needs details' : 'actions need details'}` : ''}`}</p>
-        {!historical && data && !data.coverage_complete && <p className="mt-1 text-muted-foreground">The Leader’s assessment or some observations need confirmation. This is not a complete list of current actions.</p>}
-        {!historical && data?.coverage_complete && actions.length===0 && <p className="mt-1 text-muted-foreground">No pending human actions are currently reported.</p>}
+          : `${requested} ${requested===1 ? 'action requested' : 'actions requested'} · ${gates} ${gates===1 ? 'decision gate waiting' : 'decision gates waiting'}${pending ? ` · ${pending} ${pending===1 ? 'action needs details' : 'actions need details'}` : ''}`}</span>
+    </summary>
+    <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        {!historical && data && !data.coverage_complete && actions.length>0 && <p className="mt-1 text-muted-foreground">The Leader’s assessment or some observations need confirmation. This is not a complete list of current actions.</p>}
       </div>
       <Button variant="outline" size="sm" onClick={onInspectAutonomy}>Open Autonomy details</Button>
     </div>
@@ -109,6 +115,8 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
         {action.pull_request_number && <a className="underline" href={`https://github.com/${action.repo}/pull/${action.pull_request_number}`} target="_blank" rel="noreferrer">Open PR #{action.pull_request_number}</a>}
         <a className="underline" href={`https://github.com/${action.repo}/issues/${action.issue_number}${action.instructions_state==='current' && /^[0-9a-f]{24}$/.test(action.context_request_id ?? '') ? '#current-operator-actions' : ''}`} target="_blank" rel="noreferrer">{action.instructions_state==='current' ? 'Read action instructions' : `Open issue #${action.issue_number}`}</a>
       </div>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-muted-foreground">Details</summary>
       {!historical && action.state==='context_pending' && <p className="mt-2 text-muted-foreground">The issue instructions are missing, stale, or unavailable. The blockage remains visible. Use Autonomy details if recovery is urgent.</p>}
       {!historical && action.state==='waiting_for_prerequisites' && <p className="mt-2 text-muted-foreground">This decision is not ready. Complete its required evidence first.</p>}
       {action.prerequisite_issue_numbers.length>0 && <p className="mt-2 text-muted-foreground">Required prerequisite evidence: {action.prerequisite_issue_numbers.map((n) => `#${n}`).join(', ')}. Their closure alone does not record acceptance.</p>}
@@ -116,7 +124,9 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
       {action.pr_observed_at && <p className="mt-1 text-muted-foreground">PR observed: {formatServerTime(action.pr_observed_at)}</p>}
       {action.instructions_updated_at && <p className="mt-1 text-muted-foreground">Issue instructions updated: {formatServerTime(action.instructions_updated_at)}</p>}
       <p className="mt-1 text-muted-foreground">{action.repo} · {action.source==='leader' ? 'Reported by the Leader' : 'Reported by dispatch'}{action.last_assessed_at ? ` · Assessment ${formatServerTime(action.last_assessed_at)}` : ''}</p>
+      </details>
     </li>)}</ul>}
     <p className="mt-3 text-xs text-muted-foreground">These requests do not approve work or satisfy a milestone. Waiting gates require their evidence and recorded decision.</p>
+   </details>
   </section>
 }

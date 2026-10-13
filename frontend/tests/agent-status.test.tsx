@@ -174,8 +174,8 @@ describe('one agent on three pages', () => {
           <Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes>
         </MemoryRouter>,
       )
-      const name = await screen.findByText(AGENT, { selector: 'p' })
-      const card = name.closest('div.rounded-lg') as HTMLElement
+      const name = await screen.findByText(AGENT, { selector: 'span' })
+      const card = name.closest('li') as HTMLElement
       await within(card).findByText('Can be woken')
       // The activity read starts once the team list has loaded (#544), so the badge clock catches up a tick later.
       await within(card).findByText('Idle for 3 h')
