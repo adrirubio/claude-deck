@@ -42,7 +42,7 @@ test('@active one agent shows the same online and wake state on Agent Mail, Live
   const live = await stateOf(page)
 
   await page.goto('/teams/1?tab=roster')
-  await expect(page.getByRole('heading', { name: 'Agent Teams', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Teams', exact: true })).toBeVisible()
   const teams = await stateOf(page)
 
   const states = { mail, live, teams }

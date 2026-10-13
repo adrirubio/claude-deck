@@ -70,7 +70,7 @@ export function SessionList({
     : `No ${emptyName} sessions found`
   const emptyHint = createDisabledReason
     ?? (teamLabel
-      ? `Use Agent Teams to launch more sessions for ${teamLabel}. New sessions from Live sessions are standalone and stay hidden while this team filter is active.`
+      ? `Use Teams to launch more sessions for ${teamLabel}. New sessions from Live sessions are standalone and stay hidden while this team filter is active.`
       : providerFilter === 'all'
       ? 'Launch or start a supported CLI in tmux.'
       : `Launch ${emptyName} from Live sessions or start it in tmux.`)

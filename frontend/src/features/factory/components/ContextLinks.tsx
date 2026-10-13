@@ -31,7 +31,7 @@ export function ContextLinks({ work: w }: { work: WorkProjection }) {
         Team
       </Link>
       <Link className={anchor} to={`/repositories/${w.repository.scope_id}`}>
-        Repository scope
+        Repository
       </Link>
       <Link className={anchor} to={`/agent-bridge?${bridge}`}>
         {target && w.session.state === "bound"

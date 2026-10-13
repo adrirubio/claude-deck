@@ -68,7 +68,7 @@ const escalationReasonLabels: Record<string, string> = {
   continuation_invalid_state: 'Continuation state invalid',
   continuation_pr_identity_invalid: 'Continuation PR identity invalid',
   dispatch_label_removed: 'Dispatch label removed',
-  abandoned_by_operator: 'Abandoned by operator',
+  abandoned_by_operator: 'Abandoned by the Director',
   prepared_owner_unavailable: 'Prepared owner unavailable',
   pr_closed_unmerged: 'PR closed without merge',
 }
@@ -109,7 +109,7 @@ function recoverySummary(item: GithubWorkItem) {
     return `Recovery revision ${item.active_scope_revision} was submitted; Deck is checking the PR.`
   }
   if (item.dispatch_status === 'dispatched' && item.active_scope_status === 'active') {
-    return `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. No operator action is needed unless it stalls.`
+    return `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. The Director needs to do nothing unless it stalls.`
   }
   if (item.continuation_block_code === 'continuation_not_escalated') return 'Recovery is not needed while this issue is progressing.'
   if (item.continuation_block_code) return `Recovery blocked: ${recoveryBlockLabel(item.continuation_block_code)}.`
@@ -298,7 +298,7 @@ export function WorkItemActions({
       setActionReason('')
       loadRevisions(item.id)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Operator action failed')
+      setErrorMessage(error instanceof Error ? error.message : 'Director action failed')
     } finally {
       setActionSaving(false)
     }
@@ -494,7 +494,7 @@ export function WorkItemActions({
               </section>
               <section className="space-y-3 rounded-lg border p-4" aria-labelledby="operator-actions-title">
                 <div>
-                  <h3 id="operator-actions-title" className="font-semibold">Operator remedies</h3>
+                  <h3 id="operator-actions-title" className="font-semibold">Director remedies</h3>
                   <p className="text-sm text-muted-foreground">Only remedies valid for this state appear. Deck checks current authority before changing the issue.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">

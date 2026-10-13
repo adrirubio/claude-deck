@@ -11,8 +11,8 @@ export function Pagination<T>({
     <div className="flex flex-wrap items-center gap-3" aria-live="polite">
       {state.paused && (
         <p className="text-sm">
-          Live updates paused while browsing older results
-          {state.needsRefresh ? " — detail changed; refresh needed" : ""}.
+          Updates are paused while you browse older results.
+          {state.needsRefresh ? " The data changed. Refresh to see it." : ""}
         </p>
       )}
       {(state.data?.has_more || state.paused) && (

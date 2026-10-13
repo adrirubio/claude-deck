@@ -4,6 +4,7 @@ import { stateLabel } from "../filterHelpers";
 import { GithubLink } from "./GithubLink";
 import { RelativeTime } from "./RelativeTime";
 import { anchor } from "./styles";
+import { waitingActorLabel } from "../waitingActor";
 
 const STATE_STYLE: Record<WorkProjection["category"], string> = {
   attention: "border-destructive/60 text-destructive",
@@ -17,8 +18,7 @@ const STATE_STYLE: Record<WorkProjection["category"], string> = {
 // "Waiting for" is shown only while the work is not finished and someone is awaited.
 function waitingText(work: WorkProjection) {
   if (!work.waiting || work.category === "finished") return null;
-  const actor = work.waiting.actor === "leader" ? "Leader" : work.waiting.actor;
-  return `Waiting for ${actor}: ${work.waiting.summary}`;
+  return `Waiting for ${waitingActorLabel(work.waiting.actor)}: ${work.waiting.summary}`;
 }
 
 export function WorkTable({ rows }: { rows: WorkProjection[] }) {
@@ -26,7 +26,7 @@ export function WorkTable({ rows }: { rows: WorkProjection[] }) {
     <div data-work-table className="overflow-x-auto rounded-lg border">
       <table className="w-full min-w-[720px] table-fixed text-left text-sm">
         <caption className="sr-only">
-          Delivery work across selected teams and watched scopes
+          Work of the selected teams and watched repositories
         </caption>
         <thead className="bg-muted">
           <tr>

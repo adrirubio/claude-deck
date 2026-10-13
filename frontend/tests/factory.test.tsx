@@ -159,7 +159,7 @@ describe("delivery read authority and filters", () => {
     await settle();
     fail = true;
     await act(async () => vi.advanceTimersByTimeAsync(5000));
-    expect(screen.getByRole("alert")).toHaveTextContent("Stale data");
+    expect(screen.getByRole("alert")).toHaveTextContent("Data may be out of date");
     expect(screen.getAllByText(/Fixture issue/)).toHaveLength(
       first.items.length,
     );
@@ -176,7 +176,7 @@ describe("delivery read authority and filters", () => {
       screen.getByText(/Recovery-only mode blocks normal intake/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Intake: 0 eligible · 2 blocked/),
+      screen.getByText(/Intake: 0 ready · 2 blocked/),
     ).toBeInTheDocument();
   });
   it("keeps configuration-only empty factories useful", async () => {
@@ -228,7 +228,7 @@ describe("cursor browsing V26/V27", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await settle();
-    expect(screen.getByText(/Live updates paused/)).toBeInTheDocument();
+    expect(screen.getByText(/Updates are paused while you browse older results/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "2" },
     });
@@ -237,7 +237,7 @@ describe("cursor browsing V26/V27", () => {
       target: { value: "1" },
     });
     await settle();
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Fixture issue/)).toHaveLength(2);
   });
   it("retains >100 paused rows, dirty state, return focus/scroll through real list/detail/action/Back routes", async () => {
@@ -311,7 +311,7 @@ describe("cursor browsing V26/V27", () => {
     await settle();
     expect(screen.getAllByText(/Navigation issue/)).toHaveLength(132);
     expect(
-      screen.getByText(/detail changed; refresh needed/),
+      screen.getByText(/The data changed\. Refresh to see it/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "No more results" }),
@@ -331,7 +331,7 @@ describe("cursor browsing V26/V27", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh from start" }));
     await settle();
     expect(screen.getAllByText(/Navigation issue/)).toHaveLength(50);
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(
       requests.filter((r) => r.path === "factory/work-items").length,
@@ -389,7 +389,7 @@ describe("cursor browsing V26/V27", () => {
     await settle();
     expect(requests).toHaveLength(reads);
     expect(
-      screen.getByText(/detail changed; refresh needed/),
+      screen.getByText(/The data changed\. Refresh to see it/),
     ).toBeInTheDocument();
     expect(container.scrollTop).toBe(91);
     expect(document.activeElement).toBe(
@@ -398,7 +398,7 @@ describe("cursor browsing V26/V27", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh from start" }));
     await settle();
     expect(screen.getAllByText(/Derived issue/)).toHaveLength(50);
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(requests.length).toBeGreaterThan(reads);
   });
@@ -474,7 +474,7 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
     const dialog = screen.getByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Operator token"), {
+    fireEvent.change(within(dialog).getByLabelText("Director key"), {
       target: { value: "test-operator" },
     });
     fireEvent.submit(
@@ -502,11 +502,11 @@ describe("work details and protected controls", () => {
     expect(within(warning).getByText(/discard prior PR, handoff, and attempt markers/)).toBeInTheDocument();
     expect(within(warning).getByText(/until the current owner releases it/)).toBeInTheDocument();
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     fireEvent.click(within(warning).getByRole("button", { name: "Cancel" }));
     await settle();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(requests).toHaveLength(1);
   });
 
@@ -535,11 +535,11 @@ describe("work details and protected controls", () => {
     expect(credentials).toEqual(["synthetic-operator"]);
     expect(requests.filter((r) => r.path.startsWith("factory/"))).toHaveLength(2);
     const message = screen.getByRole("status");
-    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "A new dispatch has not been observed");
+    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Deck has not yet seen a new dispatch");
     if (status === "pending") expect(message).toHaveTextContent("reset this work item to pending");
     if (status === "retained") expect(message).toHaveTextContent("Retry response status: escalated");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
   });
 
   it("requires a fresh confirmation after 401 before using a replacement credential", async () => {
@@ -559,7 +559,7 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
     const auth = screen.getByRole("dialog");
-    fireEvent.change(within(auth).getByLabelText("Operator token"), { target: { value: "synthetic-replacement" } });
+    fireEvent.change(within(auth).getByLabelText("Director key"), { target: { value: "synthetic-replacement" } });
     fireEvent.click(within(auth).getByRole("button", { name: "Authorize retry" }));
     await settle();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -591,11 +591,11 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry issue" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
-    expect(screen.getByLabelText("Operator token")).toBeInTheDocument();
+    expect(screen.getByLabelText("Director key")).toBeInTheDocument();
     // Browser history navigation remains possible while modal focus is trapped.
     await act(async () => navigateAway());
     await settle();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
   });
@@ -624,7 +624,7 @@ describe("work details and protected controls", () => {
     await act(async () => finish(jsonResponse({ detail: "Old denial" }, 401)));
     await settle();
     expect(getOperatorToken()).toBe("synthetic-new-context");
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(screen.queryByText("Old denial")).not.toBeInTheDocument();
     expect(requests.filter((r) => r.path === "factory/work-items/6")).toHaveLength(1);
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(1);
@@ -695,7 +695,7 @@ describe("polling after errors", () => {
     await steps(60000);
     expect(requests).toHaveLength(1);
     broken = false;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh observation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await settle();
     const reads = requests.length;
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -885,14 +885,14 @@ describe("work item page", () => {
     expect(document.body.textContent).not.toContain("..");
   });
 
-  it("shows the two observation times as separate labels", async () => {
+  it("shows the two update times as separate labels", async () => {
     itemFor(detail.completed.response);
     renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
     await settle();
-    const record = screen.getByText(/Deck record observation:/);
-    const observed = screen.getByText(/Details observed:/);
+    const record = screen.getByText(/Deck record updated:/);
+    const observed = screen.getByText(/Details updated:/);
     expect(record).not.toBe(observed);
-    expect(record.textContent).not.toMatch(/Details observed/);
+    expect(record.textContent).not.toMatch(/Details updated/);
   });
 
   it("uses one style for every context link", async () => {

@@ -10,6 +10,7 @@ import { anchor, panel } from "../components/styles";
 import { Time } from "../components/Time";
 import { stateLabel } from "../filterHelpers";
 import { useObservation } from "../reads";
+import { waitingActorLabel } from "../waitingActor";
 
 export function WorkDetailPage() {
   const { workItemId } = useParams();
@@ -50,9 +51,7 @@ export function WorkDetailPage() {
             </p>
             {w.waiting && (
               <p>
-                {w.waiting.actor === "leader"
-                  ? "Waiting for Leader"
-                  : `Waiting for ${w.waiting.actor}`}
+                Waiting for {waitingActorLabel(w.waiting.actor)}
                 : {w.waiting.summary}
               </p>
             )}
@@ -64,7 +63,7 @@ export function WorkDetailPage() {
             )}
             {w.waiting?.reason_code === "abandoned_by_operator" && (
               <p>
-                Operator requested stop. This remains Needs attention; the agent
+                The Director requested a stop. This remains Needs attention; the agent
                 may still run and retry may remain possible. Process termination
                 is not guaranteed.
               </p>
@@ -92,7 +91,7 @@ export function WorkDetailPage() {
                 </GithubLink>
               )}
             </div>
-            <Time value={w.item.updated_at} label="Deck record observation" />
+            <Time value={w.item.updated_at} label="Deck record updated" />
           </article>
           {w.item.required_ci_unreadable && (
             <RequiredCiNotice
@@ -135,7 +134,7 @@ export function WorkDetailPage() {
               <p>
                 Approver slot {w.approver?.slot_id ?? "unknown"} (
                 {w.approver?.source ?? "unknown"}) · owner session{" "}
-                {w.session.state} · observed runtime{" "}
+                {w.session.state} · runtime seen{" "}
                 {w.session.observed_provider ?? "unknown"}
               </p>
               <p className="break-all">
@@ -163,7 +162,7 @@ export function WorkDetailPage() {
                   ? `${w.workspace.id} (${w.workspace.state})`
                   : "association unknown"}
               </p>
-              <Time value={state.data!.generated_at} label="Details observed" />
+              <Time value={state.data!.generated_at} label="Details updated" />
             </div>
           </details>
         </>

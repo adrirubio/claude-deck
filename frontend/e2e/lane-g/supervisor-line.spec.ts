@@ -20,13 +20,13 @@ async function supervisorLine(page: import('@playwright/test').Page): Promise<st
 
 test('@active a team with a supervisor that checked in shows Healthy', async ({ page }) => {
   await page.goto('/teams/1')
-  await expect(page.getByRole('heading', { name: 'Agent Teams', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Teams', exact: true })).toBeVisible()
   expect(await supervisorLine(page)).toMatch(/Healthy/)
 })
 
 test('@active a team without a supervisor shows None, not an error', async ({ page }) => {
   await page.goto('/teams/2')
-  await expect(page.getByRole('heading', { name: 'Agent Teams', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Teams', exact: true })).toBeVisible()
   const line = await supervisorLine(page)
   expect(line).toMatch(/None|No supervisor/)
   expect(line).not.toMatch(/error|late|absent/i)

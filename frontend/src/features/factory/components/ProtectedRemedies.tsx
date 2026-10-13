@@ -99,8 +99,8 @@ export function ProtectedRemedies({
           response.retry_requested_at
           ? `Retry requested; re-dispatch is deferred until the current owner releases the workspace. Dispatch status: ${response.dispatch_status}. ${response.status_note ?? ""}`
           : response.dispatch_status === "pending"
-            ? "Retry reset this work item to pending. A new dispatch has not been observed."
-            : `Retry response status: ${response.dispatch_status}. A new dispatch has not been observed. ${response.status_note ?? ""}`,
+            ? "Retry reset this work item to pending. Deck has not yet seen a new dispatch."
+            : `Retry response status: ${response.dispatch_status}. Deck has not yet seen a new dispatch. ${response.status_note ?? ""}`,
         );
         await context.current.refresh();
       }
@@ -206,10 +206,10 @@ export function ProtectedRemedies({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Deck operator authorization</DialogTitle>
+            <DialogTitle>Director authorization</DialogTitle>
             <DialogDescription>
               Retry this issue using current server eligibility. Attempt markers may
-              reset. Uses the existing per-tab operator credential.
+              reset. Uses the Director key that this tab already holds.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -233,7 +233,7 @@ export function ProtectedRemedies({
             }}
           >
             <label className="grid gap-2">
-              Operator token
+              Director key
               <input
                 autoFocus
                 type="password"

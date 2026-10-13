@@ -60,7 +60,7 @@ for (const theme of ['light', 'dark'] as Theme[]) {
     await useTheme(page, theme)
     for (const route of ['/teams/1?tab=roster', '/teams/abc']) {
       await page.goto(route)
-      await expect(page.getByRole('heading', { name: 'Agent Teams', exact: true })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Teams', exact: true })).toBeVisible()
       const failures = await contrastFailures(page.locator('main'))
       expect(failures, `${route}: ${JSON.stringify(failures)}`).toEqual([])
     }

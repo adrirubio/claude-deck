@@ -13,7 +13,7 @@ const THEMES: Theme[] = ['light', 'dark']
 const ACTIVE_ROUTES = [
   { name: 'Overview', route: '/', ready: 'Overview' },
   { name: 'Work', route: '/work', ready: 'Work' },
-  { name: 'the Teams roster', route: '/teams/1?tab=roster', ready: 'Agent Teams' },
+  { name: 'the Teams roster', route: '/teams/1?tab=roster', ready: 'Teams' },
 ]
 
 async function open(page: Page, route: string, ready: string): Promise<void> {
@@ -66,7 +66,7 @@ for (const theme of THEMES) {
 
   test(`@active selected states use the neutral surface, not green, in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
-    await open(page, '/teams/1?tab=roster', 'Agent Teams')
+    await open(page, '/teams/1?tab=roster', 'Teams')
 
     // The selected team card: a neutral raised surface with a green left bar.
     const card = page.getByRole('button', { name: /Release crew/ }).first()
@@ -85,7 +85,7 @@ for (const theme of THEMES) {
 
   test(`@active the full Teams page meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
-    await open(page, '/teams/1?tab=autonomy', 'Agent Teams')
+    await open(page, '/teams/1?tab=autonomy', 'Teams')
     // The watched repo cards are short since #536: a state badge and a Manage link.
     await expect(page.getByRole('link', { name: /^Manage / }).first()).toBeVisible()
     const failures = await contrastFailures(page.locator('body'))

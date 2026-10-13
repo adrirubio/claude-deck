@@ -53,7 +53,7 @@ export function OverviewPage() {
           variant="outline"
           onClick={() => void Promise.all([state.refresh(), presetList.refresh(), refreshSummaries()])}
         >
-          Refresh observation
+          Refresh
         </Button>
       </div>
       <FactoryFilters />
@@ -74,13 +74,13 @@ export function OverviewPage() {
             </p>
             <Time
               value={state.data.automation.runtime.observed_at}
-              label="Runtime observed"
+              label="Runtime checked"
             />
             {state.data.automation.runtime.mode === "recovery_only" && (
               <p>
                 Recovery-only mode blocks normal intake for all
-                configured-enabled scopes. Protected recovery target details
-                remain in operator recovery.
+                repositories that are switched on. Details of the recovery
+                target stay in Director recovery.
               </p>
             )}
             {state.data.automation.runtime.scheduler_state === "stopped" && (
@@ -93,19 +93,19 @@ export function OverviewPage() {
               </p>
             )}
             <p>
-              {state.data.automation.configured_scopes} configured scopes ·{" "}
-              {state.data.automation.enabled_scopes} configured enabled ·{" "}
-              {state.data.automation.paused_scopes} configured paused
+              {state.data.automation.configured_scopes} repositories set up ·{" "}
+              {state.data.automation.enabled_scopes} switched on ·{" "}
+              {state.data.automation.paused_scopes} paused
             </p>
             <p>
-              Intake: {state.data.automation.intake_eligible_scopes} eligible ·{" "}
+              Intake: {state.data.automation.intake_eligible_scopes} ready ·{" "}
               {state.data.automation.intake_blocked_scopes} blocked ·{" "}
-              {state.data.automation.intake_unknown_scopes} unknown
+              {state.data.automation.intake_unknown_scopes} not known
             </p>
             <p>
-              Eligible scopes: {state.data.automation.stale_scopes} stale polls
-              · {state.data.automation.never_polled_scopes} never polled.
-              Eligibility still depends on access, readiness and capacity.
+              Repositories ready for intake: {state.data.automation.stale_scopes} with
+              an old GitHub check · {state.data.automation.never_polled_scopes} never
+              checked. Intake still depends on access, readiness and capacity.
             </p>
           </details>
           {state.data.automation.configured_scopes === 0 && (

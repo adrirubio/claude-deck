@@ -498,7 +498,7 @@ try {
       if (name === "detail" || name === "offline-detail") {
         const primary = await focusByTab('nav[aria-label="Work context"] a[href^="/agent-bridge?"]');
         const hierarchy = await evaluate("(() => {const nav=document.querySelector('nav[aria-label=\"Work context\"]'),links=[...nav.querySelectorAll('a')];return links.map(a=>({name:a.textContent.trim(),href:a.getAttribute('href'),border:getComputedStyle(a).borderTopWidth,tag:a.tagName,role:a.getAttribute('role')}));})()");
-        for (const label of ["Team", "Repository scope", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
+        for (const label of ["Team", "Repository", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
         assert(hierarchy.every(a => a.tag === "A" && a.role !== "button"));
         const sessionUrl = new URL(primary.href, "http://fixture.test");
         assert.equal(sessionUrl.searchParams.get("context"), "readonly");
@@ -579,14 +579,14 @@ try {
         for (let i = 0; i < 100; i++) {
           if (
             await evaluate(
-              'document.body.innerText.includes("Live updates paused")',
+              'document.body.innerText.includes("Updates are paused while you browse older results")',
             )
           )
             break;
           await sleep(50);
         }
         const after = await evaluate(
-          '({top:document.querySelector("main").scrollTop,left:document.querySelector("[data-work-table]")?.scrollLeft,href:document.activeElement?.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length,paused:document.body.innerText.includes("Live updates paused")})',
+          '({top:document.querySelector("main").scrollTop,left:document.querySelector("[data-work-table]")?.scrollLeft,href:document.activeElement?.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length,paused:document.body.innerText.includes("Updates are paused while you browse older results")})',
         );
         assert.equal(after.rows, before.rows);
         assert.equal(after.rows, 4);
