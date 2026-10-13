@@ -44,10 +44,10 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
     expect(requests).toHaveLength(before); expect(requests.every(r => r.method === 'GET')).toBe(true)
   })
-  it('does not intercept modified or middle clicks on Open details and still permits ordinary router navigation', async () => {
+  it('does not intercept modified or middle clicks on the item link and still permits ordinary router navigation', async () => {
     vi.useFakeTimers(); const { requests } = fixtureFetch(standard)
     renderRoute(<><Location/><WorkPage/></>, '/work', '*'); await settle()
-    const link = screen.getAllByRole('link', { name: 'Open details' })[0]
+    const link = within(document.querySelector('[data-work-table]') as HTMLElement).getAllByRole('link', { name: /^#\d+ / })[0]
     const href = link.getAttribute('href')
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { button: 1 }]) {
       const event = new MouseEvent('click', { bubbles: true, cancelable: true, ...options })

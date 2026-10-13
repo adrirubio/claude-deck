@@ -81,6 +81,26 @@ async def test_category_counts_cover_complete_selected_set(factory_client, facto
     assert response["items"][0]["category"] == category
 
 
+async def test_open_category_is_every_item_that_is_not_finished(factory_client, factory_store):
+    statuses = tuple(projection.STATUS_CATEGORY) + ("future_status",)
+    expected = sum(1 for i in range(132) if projection.STATUS_CATEGORY.get(statuses[i % 10], "unknown") != "finished")
+    first = await get_ok(factory_client, "work-items", category="open", limit=100)
+    assert first["filters"]["category"] == "open"
+    assert first["total"] == expected
+    assert first["counts"]["total"] == expected and first["counts"]["finished"] == 0
+    assert first["has_more"] and first["next_cursor"]
+    second = await get_ok(factory_client, "work-items", category="open", limit=100, cursor=first["next_cursor"])
+    rows = first["items"] + second["items"]
+    ids = [r["item"]["id"] for r in rows]
+    assert len(ids) == len(set(ids)) == expected
+    assert ids == sorted(ids, reverse=True)
+    assert all(r["category"] != "finished" for r in rows)
+    assert not {"merged", "completed"} & {r["item"]["dispatch_status"] for r in rows}
+    # A status that Deck does not know yet is not finished, so it is open.
+    assert "future_status" in {r["item"]["dispatch_status"] for r in rows}
+    assert {r["category"] for r in rows} == {"queued", "active", "review", "attention", "unknown"}
+
+
 async def test_provider_filter_matches_only_current_owner_and_repo_roster(factory_client, factory_store):
     response = await get_ok(factory_client, "work-items", provider="codex-cli", limit=100)
     assert response["total"] == sum(i % 7 != 0 for i in range(132))

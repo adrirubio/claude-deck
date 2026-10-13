@@ -9,13 +9,13 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // The seed has 5 items, so the journey measures the row height: the rows that
 // fit below the list top must be at least 12.
 // Design reference: screen 03 (Work list).
-// @pending until #511 merges.
+// @active: these journeys must pass (#511).
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 const ROW = 'main table tbody tr, main [role="row"]:not(:has([role="columnheader"]))'
 
-test('@pending at 1440 × 900 the list has room for at least 12 rows', async ({ page }) => {
+test('@active at 1440 × 900 the list has room for at least 12 rows', async ({ page }) => {
   await page.goto('/work')
   await expect(page.getByRole('heading', { name: 'Work', exact: true })).toBeVisible()
   const first = await page.locator(ROW).first().boundingBox()
@@ -24,7 +24,7 @@ test('@pending at 1440 × 900 the list has room for at least 12 rows', async ({ 
   expect(rowsThatFit, `row height ${first?.height}px at y=${first?.y}`).toBeGreaterThanOrEqual(12)
 })
 
-test('@pending the list defaults to active work, chosen by the "Active" chip', async ({ page }) => {
+test('@active the list defaults to active work, chosen by the "Active" chip', async ({ page }) => {
   await page.goto('/work')
   const active = page.locator('main').getByRole('button', { name: /^Active\b/ }).or(page.locator('main').getByRole('tab', { name: /^Active\b/ }))
   await expect(active.first()).toBeVisible()
@@ -38,7 +38,7 @@ test('@pending the list defaults to active work, chosen by the "Active" chip', a
   await expect(page.locator(ROW).filter({ hasText: 'Rename the sync command' })).toHaveCount(0)
 })
 
-test('@pending no finished row shows a waiting message', async ({ page }) => {
+test('@active no finished row shows a waiting message', async ({ page }) => {
   await page.goto('/work?category=finished')
   const finished = page.locator(ROW).filter({ hasText: 'Rename the sync command' })
   await expect(finished).toHaveCount(1)
@@ -46,7 +46,7 @@ test('@pending no finished row shows a waiting message', async ({ page }) => {
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the Work list meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the Work list meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/work')
     await expect(page.locator(ROW).first()).toBeVisible()

@@ -3144,6 +3144,7 @@
               "default": "all",
               "enum": [
                 "all",
+                "open",
                 "queued",
                 "active",
                 "review",

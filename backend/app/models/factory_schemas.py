@@ -28,7 +28,7 @@ class FactoryFilters(FactoryModel):
 
 
 class WorkFilters(FactoryFilters):
-    category: Literal["all", "queued", "active", "review", "attention", "finished", "unknown"] = "all"
+    category: Literal["all", "open", "queued", "active", "review", "attention", "finished", "unknown"] = "all"
 
 
 class FactoryCounts(FactoryModel):
