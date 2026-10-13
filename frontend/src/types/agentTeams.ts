@@ -151,12 +151,33 @@ export interface TeamCampaignSummary {
   decisions_ahead: CampaignDecision[]
 }
 
+// The status that the controller derives from the clock and the stored promise (#549).
+export interface SupervisorObservation {
+  status: 'none' | 'healthy' | 'late' | 'absent'
+  actor_id: number | null
+  checked_at: string | null
+  next_check_at: string | null
+  grace_seconds: number
+  note: string | null
+  attention: 'Supervisor check-in overdue' | null
+}
+
+// A member waits at an interactive screen. Only the fixed reason is on the wire.
+export interface TeamWaitingInput {
+  slot_id: number
+  reason: 'question' | 'trust' | 'sign_in'
+  label: 'Waiting for input'
+}
+
 // GET agent-teams/presets/{id}/summary. A display-only read: it grants no action.
 export interface AgentTeamSummary {
   preset_id: number
   description: string | null
   parent_issue_url: string | null
   supervisor: 'none'
+  // Missing on an older server. Null means Deck could not read it.
+  supervisor_observation?: SupervisorObservation | null
+  waiting_input?: TeamWaitingInput[] | null
   checked_at: string
   valid_until: string
   coverage_complete: boolean

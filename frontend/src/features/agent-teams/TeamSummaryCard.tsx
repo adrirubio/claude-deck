@@ -9,11 +9,33 @@ import type {
   AgentTeamPresetListResponse, AgentTeamSummary, TeamRemainingWork,
 } from '@/types/agentTeams'
 import { ACTION_TEXT, ATTENTION_TEXT } from './summaryText'
+import { supervisorWords, waitingText, type SupervisorChip } from './supervisorText'
 
 const HOLD_TEXT: Record<NonNullable<AgentTeamSummary['hold_code']>, string> = {
   hold: 'This team is on HOLD. Deck admits no new work.',
   recovery_only: 'This team is in recovery-only mode. Deck admits no new work.',
   hold_unavailable: 'Deck could not read the HOLD state of this team.',
+}
+
+const CHIP_STYLE: Record<SupervisorChip, string> = {
+  None: 'border-border text-muted-foreground',
+  Healthy: 'border-primary/60 text-primary',
+  Late: 'border-amber-500/70 text-amber-800 dark:text-amber-300',
+  Absent: 'border-destructive/70 text-destructive',
+}
+
+// The word is always shown, so colour is never the only signal.
+function SupervisorStatus({ summary }: { summary: AgentTeamSummary }) {
+  const observation = summary.supervisor_observation
+  if (!observation) return <>{summary.supervisor === 'none' ? 'None, not required.' : summary.supervisor}</>
+  // The server's own clock, so a wrong clock in the browser changes nothing.
+  const { chip, detail } = supervisorWords(observation, Date.parse(summary.checked_at))
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className={`rounded border px-2 text-xs font-medium ${CHIP_STYLE[chip]}`}>{chip}</span>
+      <span className="text-muted-foreground">{detail}</span>
+    </span>
+  )
 }
 
 const ACTORS = {
@@ -57,7 +79,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 // Display only: the card grants no approval, retry or merge action.
-export function TeamSummaryCard({ presetId, name, running, showChecked = true, compact = false }: {
+export function TeamSummaryCard({ presetId, name, running, showChecked = true, compact = false, slotNames }: {
   presetId: number
   name?: string
   // The team's autonomy switch. Shown as a plain word beside the name.
@@ -66,10 +88,14 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
   showChecked?: boolean
   // The Overview leaves out a row that has nothing to say, such as "Parent issue: None set."
   compact?: boolean
+  // Member names by slot id, for the "waiting for input" row.
+  slotNames?: Record<number, string>
 }) {
   const state = useObservation<AgentTeamSummary>(`agent-teams/presets/${presetId}/summary`)
   const summary = state.data
   const unreadable = summary?.required_ci_unreadable ?? []
+  const waiting = summary?.waiting_input ?? []
+  const overdue = summary?.supervisor_observation?.attention ?? null
   const actions = summary?.human_actions.filter(
     (action) => action.state === 'requested' || action.state === 'context_pending',
   ) ?? []
@@ -116,9 +142,9 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                 ) : 'None set.'}
               </Row>
             )}
-            <Row label="Supervisor">{summary.supervisor === 'none' ? 'None, not required.' : summary.supervisor}</Row>
+            <Row label="Supervisor"><SupervisorStatus summary={summary} /></Row>
             <Row label="Attention">
-              {summary.attention.length === 0 && unreadable.length === 0 ? 'None open.' : (
+              {summary.attention.length === 0 && unreadable.length === 0 && !overdue ? 'None open.' : (
                 <ul className="space-y-1">
                   {summary.attention.map((item, index) => (
                     <li
@@ -131,6 +157,9 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                       {item.resume_deadline && <> · resume by {formatServerTime(item.resume_deadline)}</>}
                     </li>
                   ))}
+                  {overdue && (
+                    <li className="text-amber-800 dark:text-amber-300">{overdue}</li>
+                  )}
                   {unreadable.map((item) => (
                     <li key={`ci-${item.work_item_id}`} className="text-amber-800 dark:text-amber-300">
                       {item.label} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link>
@@ -140,6 +169,15 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                 </ul>
               )}
             </Row>
+            {waiting.length > 0 && (
+              <Row label="Waiting for input">
+                <ul className="space-y-1">
+                  {waiting.map((entry) => (
+                    <li key={entry.slot_id}>{waitingText(entry, slotNames)}</li>
+                  ))}
+                </ul>
+              </Row>
+            )}
             <Row label="Remaining">{remainingText(summary.remaining_work)}</Row>
             <Row label="Next actor">
               {summary.next_actors.length
@@ -192,6 +230,7 @@ export function TeamSummaries({ teamId, onOverview = false }: { teamId?: string 
             running={preset.autonomy_enabled}
             showChecked={!onOverview}
             compact={onOverview}
+            slotNames={Object.fromEntries(preset.slots.map((slot) => [slot.id, slot.display_name]))}
           />
         ))}
       </div>

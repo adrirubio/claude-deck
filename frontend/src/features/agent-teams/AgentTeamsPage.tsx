@@ -1363,7 +1363,11 @@ export function AgentTeamsPage() {
             </div>
           ) : (
             <div className="space-y-6 p-5">
-              <TeamSummaryCard key={`summary-${selectedPreset.id}`} presetId={selectedPreset.id} />
+              <TeamSummaryCard
+                key={`summary-${selectedPreset.id}`}
+                presetId={selectedPreset.id}
+                slotNames={Object.fromEntries(selectedPreset.slots.map((slot) => [slot.id, slot.display_name]))}
+              />
               {contextParams.get('review_launch') === '1' && <section className="space-y-2 rounded border p-3"><h3 className="font-semibold">Review selected slot launch</h3><p>{selectedPreset.slots.find(slot => slot.id === requestedSlotId)?.display_name ?? 'Selected slot not found'} · slot {requestedSlotId ?? 'unknown'}. Opening this page does not launch or approve work.</p><Button className="h-auto whitespace-normal text-left" variant="outline" disabled={!selectedPreset.slots.some(slot => slot.id === requestedSlotId)} onClick={() => void openPlan(requestedSlotId ? [requestedSlotId] : null)}>Review current authenticated launch plan</Button></section>}
 
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
