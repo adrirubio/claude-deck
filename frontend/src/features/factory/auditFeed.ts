@@ -175,7 +175,8 @@ export function actorName(event: AuditEventRead, members: Record<number, string>
   if (event.actor_kind === "operator") return "Director";
   if (event.actor_kind === "member") {
     const match = /^member:(\d+)$/.exec(event.actor_reference ?? "");
-    if (match) return members[Number(match[1])] ?? `member ${match[1]}`;
+    // A name that cannot be found reads "An agent", never "member <id>".
+    if (match) return members[Number(match[1])] ?? "An agent";
     return "An agent";
   }
   return "Deck";

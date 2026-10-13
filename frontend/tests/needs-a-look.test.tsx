@@ -68,9 +68,16 @@ describe("NeedsALookPanel", () => {
     expect(onShowEvents).toHaveBeenCalledWith(expect.objectContaining({ itemContextKey: expect.stringMatching(/^item-/) }));
   });
 
-  it("names a member by id when the name is missing", () => {
+  it("reads \"an agent\" when the name is missing, never \"member <id>\"", () => {
     renderPanel({ names: {} });
-    expect(screen.getByText(/4 requests from member 2 were refused/)).toBeInTheDocument();
+    expect(screen.getByText(/4 requests from an agent were refused/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/member \d/);
+  });
+
+  it("waits for the names before it shows a group", () => {
+    renderPanel({ names: {}, namesReady: false });
+    expect(screen.getByText("Reading names.")).toBeInTheDocument();
+    expect(screen.queryByText(/requests from/)).not.toBeInTheDocument();
   });
 
   it("shows the empty sentence, the locked state with Unlock, and the page cap", () => {

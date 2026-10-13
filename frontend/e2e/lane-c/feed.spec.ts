@@ -17,13 +17,32 @@ test('@active every row names its team, its subject and its actor in plain words
   await openUnlockedAudit(page)
   const rows = page.locator(FEED_ROW)
   await expect(rows.first()).toBeVisible()
-  for (const row of (await rows.all()).slice(0, 8)) {
+  // #676: every row of the page, not the first 8 that happen to sort first.
+  const all = await page.locator('main [data-testid="audit-feed-row"]').all()
+  expect(all.length, 'the feed shows more than 8 rows').toBeGreaterThan(8)
+  for (const row of all) {
     const text = await plainText(row)
     expect(text, 'a team name').toMatch(/Release crew|Quiet team|Retired crew/)
     expect(text, 'a subject (issue or team)').toMatch(/#\d+|team|scope|repository/i)
     expect(text, 'an actor in plain words').toMatch(/Director|Deck|scheduler|B1 Backend|B2 Backend|Leader|Backend|Frontend/i)
     expect(text, 'no null, no code name, no ISO time').not.toMatch(new RegExp(`\\bnull\\b|${CODE_NAMES.source}|\\d{4}-\\d{2}-\\d{2}T`))
   }
+})
+
+test('@active both refusal groups name their member, in the panel and in the feed rows', async ({ page }) => {
+  await openUnlockedAudit(page)
+  const main = page.locator('main')
+  await expect(main.getByText(/requests from B1 Backend were refused on sample-app #101/)).toBeVisible()
+  await expect(main.getByText(/requests from B2 Backend were refused on sample-app #102/)).toBeVisible()
+  const refusalRows = page.locator(FEED_ROW).filter({ hasText: /Request refused/ })
+  const texts = await refusalRows.evaluateAll(rows => rows.map(row => (row.textContent ?? '').replace(/\s+/g, ' ')))
+  expect(texts.length, 'the refusal rows of both groups').toBeGreaterThanOrEqual(4)
+  for (const text of texts) {
+    expect(text).toMatch(/B1 Backend|B2 Backend/)
+    expect(text).not.toMatch(/\bmember \d+\b/i)
+  }
+  expect(texts.some(text => /B1 Backend/.test(text) && /#101/.test(text))).toBe(true)
+  expect(texts.some(text => /B2 Backend/.test(text) && /#102/.test(text))).toBe(true)
 })
 
 test('@active events of the deleted team show "(deleted)" with no broken links', async ({ page }) => {
@@ -58,3 +77,31 @@ for (const theme of ['light', 'dark'] as Theme[]) {
     await expectKeyboardReachable(page, page.locator('main'), 3)
   })
 }
+
+// #676: the names come from a separate read. A slow or failed read must never
+// put `member <id>` in a row. The rows wait for the read, then show the names.
+test('@active a slow member-name read never shows "member <id>" in the feed or the refusals', async ({ page }) => {
+  await page.route('**/api/v1/agent-mail/team*', async route => {
+    await new Promise(resolve => setTimeout(resolve, 2500))
+    await route.continue()
+  })
+  const seen: string[] = []
+  await openUnlockedAudit(page)
+  for (let step = 0; step < 12; step += 1) {
+    seen.push(await page.locator('main').innerText())
+    await page.waitForTimeout(250)
+  }
+  for (const text of seen) expect(text).not.toMatch(/\bmember \d+\b/i)
+  await expect(page.locator(FEED_ROW).first()).toBeVisible()
+  await expect(page.locator('main')).toContainText('B2 Backend')
+})
+
+test('@active a failed member-name read shows "An agent", never "member <id>"', async ({ page, guard }) => {
+  guard.expectStatus('GET', /\/api\/v1\/agent-mail\/team/, 503)
+  await page.route('**/api/v1/agent-mail/team*', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"down"}' }))
+  await openUnlockedAudit(page)
+  await expect(page.locator(FEED_ROW).first()).toBeVisible()
+  const text = await page.locator('main').innerText()
+  expect(text).not.toMatch(/\bmember \d+\b/i)
+  expect(text).toMatch(/An agent|an agent/)
+})

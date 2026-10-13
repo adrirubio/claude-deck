@@ -31,6 +31,15 @@ function stubFetch(keys?: KeyList) {
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
       return;
     }
+    // #676: the name reads answer at once, with no names. Rows wait for them, so a held read would hold every row.
+    if (url.pathname.endsWith("/agent-mail/team")) {
+      resolve(new Response(JSON.stringify({ members: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      return;
+    }
+    if (url.pathname.endsWith("/agent-teams/presets")) {
+      resolve(new Response(JSON.stringify({ presets: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      return;
+    }
     calls.push({
       url: new URL(String(input), "http://fixture.test"),
       headers: { ...(init?.headers as Record<string, string> | undefined) },

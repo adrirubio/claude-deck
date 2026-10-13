@@ -52,9 +52,10 @@ describe("buildFeed rows", () => {
     expect(JSON.stringify([rows[0].actor, rows[0].action, rows[0].subject, rows[0].reason])).not.toContain("brand_new_kind");
   });
 
-  it("names a member by id when Agent Mail gives no name", () => {
+  it("reads \"An agent\" when Agent Mail gives no name, never \"member <id>\"", () => {
     const { rows } = buildFeed([event("handoff_acceptance", 5, { actor_kind: "member", actor_reference: "member:9" })], CTX);
-    expect(rows[0].actor).toBe("member 9");
+    expect(rows[0].actor).toBe("An agent");
+    expect(JSON.stringify(rows)).not.toMatch(/member \d/);
   });
 
   it("does not credit a slot name from the snapshot to the operator", () => {
