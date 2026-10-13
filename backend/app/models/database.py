@@ -235,6 +235,7 @@ class TeamGithubScope(Base):
     dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
     design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
     merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
+    review_hold_label: Mapped[str | None] = mapped_column(String, nullable=True)
     delivery_policy: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
     delivery_policy_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
