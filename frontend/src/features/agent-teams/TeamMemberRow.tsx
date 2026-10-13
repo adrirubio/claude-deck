@@ -93,6 +93,22 @@ export function TeamMemberRow({
           )}
         </div>
       </div>
+      {(slot.area_labels?.length || slot.expertise) && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-3 py-1.5 text-xs">
+          <span className="uppercase text-muted-foreground">GitHub dispatch routing</span>
+          {slot.area_labels && slot.area_labels.length > 0 ? (
+            slot.area_labels.map((label) => <Badge key={label} variant="secondary">{label}</Badge>)
+          ) : (
+            <span>{isLeader ? 'None (the Leader routes this slot)' : 'None'}</span>
+          )}
+          {slot.expertise && (
+            <>
+              <span className="uppercase text-muted-foreground">Expertise</span>
+              <span className="text-muted-foreground">{slot.expertise}</span>
+            </>
+          )}
+        </div>
+      )}
       {expanded && (
         <div id={detailsId} className="grid gap-3 border-t px-3 py-3 text-sm md:grid-cols-2">
           {slot.charter && (
@@ -121,24 +137,6 @@ export function TeamMemberRow({
             <div>
               <p className="text-xs uppercase text-muted-foreground">Colour</p>
               <Badge variant="outline" className={cn('mt-1', colors.badge)}>{slot.ui_color}</Badge>
-            </div>
-          )}
-          {(slot.area_labels?.length || slot.expertise) && (
-            <div className="md:col-span-2 rounded-md border border-primary/20 bg-primary/5 p-3">
-              <p className="text-xs uppercase text-muted-foreground">GitHub dispatch routing</p>
-              {slot.area_labels && slot.area_labels.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {slot.area_labels.map((label) => <Badge key={label} variant="secondary">{label}</Badge>)}
-                </div>
-              ) : (
-                <p className="mt-2">{isLeader ? 'None (the Leader routes this slot)' : 'None'}</p>
-              )}
-              {slot.expertise && (
-                <>
-                  <p className="mt-3 text-xs uppercase text-muted-foreground">Expertise</p>
-                  <p className="mt-1 text-muted-foreground">{slot.expertise}</p>
-                </>
-              )}
             </div>
           )}
           {slot.warnings && slot.warnings.length > 0 && (

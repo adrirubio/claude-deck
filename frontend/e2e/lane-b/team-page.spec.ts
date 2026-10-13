@@ -9,14 +9,14 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // Seed (scripts/e2e/scenarios.py, seed_lane_b): "Docs crew" (team 5) has 4
 // members and no scope. Each seeded slot has "Synthetic charter for <name>."
 // Design reference: screen 06 (Teams).
-// @pending until #542 merges.
+// Active since #542.
 
 const TEAM = '/teams/5'
 const MEMBERS = ['D2 Docs lead', 'D3 Writer', 'D4 Editor', 'D5 Reviewer']
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-test('@pending the header and all 4 members are visible without scrolling', async ({ page }) => {
+test('@active the header and all 4 members are visible without scrolling', async ({ page }) => {
   await page.goto(TEAM)
   await expect(page.locator('main').getByRole('heading', { name: 'Docs crew' }).first()).toBeInViewport()
   for (const member of MEMBERS) {
@@ -25,7 +25,7 @@ test('@pending the header and all 4 members are visible without scrolling', asyn
   expect(await page.evaluate(() => window.scrollY)).toBe(0)
 })
 
-test('@pending no editable field shows until Edit team', async ({ page }) => {
+test('@active no editable field shows until Edit team', async ({ page }) => {
   await page.goto(TEAM)
   const main = page.locator('main')
   await expect(main.getByText('D2 Docs lead').first()).toBeVisible()
@@ -34,7 +34,7 @@ test('@pending no editable field shows until Edit team', async ({ page }) => {
   await expect(main.locator('input:not([type=checkbox]), textarea').first()).toBeVisible()
 })
 
-test('@pending no charter shows until a member row is expanded', async ({ page }) => {
+test('@active no charter shows until a member row is expanded', async ({ page }) => {
   await page.goto(TEAM)
   const main = page.locator('main')
   await expect(main.getByText('D3 Writer').first()).toBeVisible()
@@ -46,7 +46,7 @@ test('@pending no charter shows until a member row is expanded', async ({ page }
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the team page meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the team page meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto(TEAM)
     await expect(page.locator('main').getByText('D2 Docs lead').first()).toBeVisible()

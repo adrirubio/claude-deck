@@ -11,7 +11,8 @@ import { formatServerTime, parseServerTime } from '@/lib/serverTime'
 // A relative age with the exact time on hover and for a screen reader.
 function AgeText({ value, now }: { value: string | null | undefined; now: number }) {
   if (!value) return <>never</>
-  return <time dateTime={value} title={formatServerTime(value)}>{relativeAge(value, now)}<span className="sr-only"> ({formatServerTime(value)})</span></time>
+  // The relative age is in parentheses. The exact time is the hover text and a hidden text for a screen reader.
+  return <>(<time dateTime={value} title={formatServerTime(value)}>{relativeAge(value, now)}</time>)<span className="sr-only"> {formatServerTime(value)}</span></>
 }
 
 type Entry = {
