@@ -93,7 +93,7 @@ test('@active a lane zooms and restores, and Escape restores the lanes before it
 // until the F3 fix activates it in its own PR. The dark
 // theme passes, and the keyboard journeys are @active.
 for (const theme of ['light', 'dark'] as Theme[]) {
-  const tag = theme === 'light' ? '@pending' : '@active'
+  const tag = '@active'
   test(`${tag} Team lanes meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await openLanes(page)

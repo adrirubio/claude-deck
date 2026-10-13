@@ -109,8 +109,8 @@ export function TeamLanesView({
                   title={`${laneLabel(session)} · ${session.provider_display_name} · ${activity}`}
                 >
                   <span className="font-medium">{laneLabel(session)}</span>
-                  {session.team_slot_role && <span className="text-[11px] opacity-80">{session.team_slot_role}</span>}
-                  <span className="text-[11px] opacity-80">{session.provider_display_name}</span>
+                  {session.team_slot_role && <span className="text-[11px]">{session.team_slot_role}</span>}
+                  <span className="text-[11px]">{session.provider_display_name}</span>
                   <span className="text-[11px]">{activity}</span>
                 </button>
               )
