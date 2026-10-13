@@ -112,7 +112,7 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
             />
           )}
           <div className="min-w-0">
-            <p className="break-words text-sm font-medium">{primaryLabel}</p>
+            <p className="wrap-break-word text-sm font-medium">{primaryLabel}</p>
             <p className="text-xs text-muted-foreground">
               {session.provider_display_name}{showRole ? ` · ${teamRoleLabel}` : ''}
             </p>
@@ -148,7 +148,7 @@ export function SessionCard({ session, gridPosition, onClick, onRefresh, onKill,
                 <button
                   type="button"
                   role="menuitem"
-                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-destructive hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-destructive hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => { setMenuOpen(false); onKill(session) }}
                 >
                   Kill session…

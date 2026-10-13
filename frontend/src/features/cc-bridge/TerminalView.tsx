@@ -333,7 +333,7 @@ export function TerminalView({
             </span>
             <button
               type="button"
-              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1"
               aria-label="Keyboard shortcuts"
               title={`Keyboard shortcuts (${LEADER_PREFIX_LABEL})`}
               onMouseDown={stopShortcutButtonPropagation}

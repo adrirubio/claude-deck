@@ -407,7 +407,7 @@ export function CCBridgePage() {
                           key={team.id}
                           type="button"
                           role="menuitem"
-                          className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => { setLanesMenuOpen(false); openTeamLanes(team.id) }}
                         >
                           {team.name} <span className="text-muted-foreground">({team.count})</span>

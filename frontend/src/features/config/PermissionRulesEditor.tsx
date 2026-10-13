@@ -208,7 +208,7 @@ export function PermissionRulesEditor({
                           title={validation.valid ? undefined : validation.error}
                         >
                           {!validation.valid && (
-                            <AlertTriangle className="h-3 w-3 text-amber-500 flex-shrink-0" />
+                            <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
                           )}
                           <span className={!validation.valid ? 'text-amber-700 dark:text-amber-400' : ''}>
                             {rule.length > 80 ? rule.slice(0, 80) + '...' : rule}

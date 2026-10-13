@@ -60,7 +60,7 @@ function CountLink({ label, onClick, children }: { label: string; onClick: () =>
     <button
       type="button"
       aria-label={`${label}. Go to Waiting on someone`}
-      className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       onClick={onClick}
     >
       {children}

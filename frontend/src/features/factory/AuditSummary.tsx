@@ -34,7 +34,7 @@ export function AuditSummary({ metrics }: AuditSummaryProps) {
                   aria-expanded={openHelp === result.id}
                   aria-controls={`help-${result.id}`}
                   onClick={() => setOpenHelp(openHelp === result.id ? null : result.id)}
-                  className="rounded p-0.5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="rounded p-0.5 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <HelpCircle aria-hidden="true" className="h-3.5 w-3.5" />
                 </button>

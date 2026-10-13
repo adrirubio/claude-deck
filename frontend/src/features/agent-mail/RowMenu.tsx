@@ -51,7 +51,7 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="rounded-md border p-1.5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="rounded-md border p-1.5 hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       >
         <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
       </button>
@@ -67,7 +67,7 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
                 setOpen(false)
                 item.onSelect()
               }}
-              className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50"
+              className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden disabled:opacity-50"
             >
               {item.label}
             </button>

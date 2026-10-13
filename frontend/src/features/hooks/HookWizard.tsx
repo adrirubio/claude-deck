@@ -221,7 +221,7 @@ export function HookWizard({ open, onOpenChange, onCreate }: HookWizardProps) {
                         </p>
                       </div>
                       {event === e.name && (
-                        <Check className="h-5 w-5 text-primary flex-shrink-0 ml-2" />
+                        <Check className="h-5 w-5 text-primary shrink-0 ml-2" />
                       )}
                     </div>
                   </button>
@@ -489,7 +489,7 @@ export function HookWizard({ open, onOpenChange, onCreate }: HookWizardProps) {
                         </p>
                       </div>
                       {scope === "user" && (
-                        <Check className="h-5 w-5 text-primary flex-shrink-0 ml-2" />
+                        <Check className="h-5 w-5 text-primary shrink-0 ml-2" />
                       )}
                     </div>
                   </button>
@@ -513,7 +513,7 @@ export function HookWizard({ open, onOpenChange, onCreate }: HookWizardProps) {
                         </p>
                       </div>
                       {scope === "project" && (
-                        <Check className="h-5 w-5 text-primary flex-shrink-0 ml-2" />
+                        <Check className="h-5 w-5 text-primary shrink-0 ml-2" />
                       )}
                     </div>
                   </button>

@@ -34,7 +34,7 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
       id={WAITING_PANEL_ID}
       tabIndex={-1}
       aria-labelledby="waiting-on-someone-title"
-      className="rounded-lg border px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="rounded-lg border px-4 py-1.5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 id="waiting-on-someone-title" className="text-sm font-semibold">

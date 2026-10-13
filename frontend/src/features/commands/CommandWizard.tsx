@@ -286,7 +286,7 @@ export function CommandWizard({ onComplete, onCancel }: CommandWizardProps) {
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                className="w-full h-40 p-4 mt-2 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full h-40 p-4 mt-2 font-mono text-sm border rounded-md resize-y focus:outline-hidden focus:ring-2 focus:ring-primary"
                 placeholder="Write your command instructions here..."
               />
             </div>
