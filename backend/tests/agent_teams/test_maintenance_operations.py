@@ -533,6 +533,100 @@ def test_upgrade_preserves_baseline_authority_through_nullable_startup_migration
     assert not service.enabled
 
 
+def upgrade_with_schema_change(service, monkeypatch, stage, migrate):
+    monkeypatch.setattr(service, 'authority', lambda **kwargs: Maintenance.authority(service, **kwargs))
+    run, api = service.run, service.api
+    migrated = False
+    def apply_once():
+        nonlocal migrated
+        if not migrated:
+            migrate()
+            migrated = True
+    def run_with_migration(argv, **kwargs):
+        result = run(argv, **kwargs)
+        if argv[1] == 'start' and stage == 'after_start':
+            apply_once()
+        return result
+    def api_with_migration(method, path, body=None):
+        result = api(method, path, body)
+        if method == 'PATCH' and stage == 'before_start':
+            apply_once()
+        return result
+    monkeypatch.setattr(service, 'run', run_with_migration)
+    monkeypatch.setattr(service, 'api', api_with_migration)
+
+
+@pytest.mark.parametrize('stage', ['before_start', 'after_start'])
+@pytest.mark.parametrize('storage', ['VIRTUAL', 'STORED'])
+@pytest.mark.parametrize('addition', ['nullable_null', 'populated', 'nonnullable', 'nonnullable_empty'])
+def test_upgrade_checks_all_generated_column_additions(tmp_path, monkeypatch, stage, storage, addition):
+    service, request = configured_upgrade(tmp_path)
+    with sqlite3.connect(service.profile.database) as db:
+        db.execute('CREATE TABLE team_github_scopes (id INTEGER PRIMARY KEY,max_scope_paths INTEGER)')
+        if addition != 'nonnullable_empty':
+            db.execute('INSERT INTO team_github_scopes VALUES (1,29)')
+    def migrate():
+        expression = 'NULL' if addition in {'nullable_null', 'nonnullable_empty'} else 'max_scope_paths+1'
+        constraint = ' NOT NULL' if addition.startswith('nonnullable') else ''
+        with sqlite3.connect(service.profile.database) as db:
+            # A populated table cannot receive a STORED column through ALTER ADD.
+            db.execute('CREATE TABLE migrated_scope (id INTEGER PRIMARY KEY,max_scope_paths INTEGER,'
+                       'generated_guard INTEGER GENERATED ALWAYS AS ('+expression+') '+storage+constraint+')')
+            db.execute('INSERT INTO migrated_scope (id,max_scope_paths) SELECT id,max_scope_paths FROM team_github_scopes')
+            db.execute('DROP TABLE team_github_scopes')
+            db.execute('ALTER TABLE migrated_scope RENAME TO team_github_scopes')
+    upgrade_with_schema_change(service, monkeypatch, stage, migrate)
+    allowed = stage == 'after_start' and addition == 'nullable_null'
+    if allowed:
+        service.upgrade(request)
+    else:
+        with pytest.raises(ValueError, match='maintenance_authority_schema_changed'):
+            service.upgrade(request)
+    record = read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')
+    expected = 'deployed_paused' if allowed else (
+        'failed_paused_needs_inspection' if stage == 'before_start' else 'failed_stopped_needs_inspection')
+    assert record['status'] == expected
+    assert record.get('authority_preserved', False) == allowed
+    assert not service.enabled
+
+
+@pytest.mark.parametrize('stage', ['before_start', 'after_start'])
+@pytest.mark.parametrize('change', ['value', 'removed', 'storage', 'unchanged'])
+def test_upgrade_preserves_baseline_generated_columns(tmp_path, monkeypatch, stage, change):
+    service, request = configured_upgrade(tmp_path)
+    with sqlite3.connect(service.profile.database) as db:
+        db.executescript('''
+            CREATE TABLE team_github_scopes (id INTEGER PRIMARY KEY,updated_at TEXT,
+                generated_guard INTEGER GENERATED ALWAYS AS (length(updated_at)) VIRTUAL);
+            INSERT INTO team_github_scopes (id,updated_at) VALUES (1,'initial');
+        ''')
+    def migrate():
+        with sqlite3.connect(service.profile.database) as db:
+            if change == 'value':
+                # updated_at is volatile. Its generated value remains authority.
+                db.execute("UPDATE team_github_scopes SET updated_at='changed length'")
+            elif change == 'removed':
+                db.execute('ALTER TABLE team_github_scopes DROP COLUMN generated_guard')
+            elif change == 'storage':
+                db.execute('CREATE TABLE migrated_scope (id INTEGER PRIMARY KEY,updated_at TEXT,'
+                           'generated_guard INTEGER GENERATED ALWAYS AS (length(updated_at)) STORED)')
+                db.execute('INSERT INTO migrated_scope (id,updated_at) SELECT id,updated_at FROM team_github_scopes')
+                db.execute('DROP TABLE team_github_scopes')
+                db.execute('ALTER TABLE migrated_scope RENAME TO team_github_scopes')
+    upgrade_with_schema_change(service, monkeypatch, stage, migrate)
+    if change == 'unchanged':
+        service.upgrade(request)
+    else:
+        with pytest.raises(ValueError):
+            service.upgrade(request)
+    record = read_json(Path(service.profile.state_dir)/'maintenance/upgrade-1.json')
+    expected = 'deployed_paused' if change == 'unchanged' else (
+        'failed_paused_needs_inspection' if stage == 'before_start' else 'failed_stopped_needs_inspection')
+    assert record['status'] == expected
+    assert record.get('authority_preserved', False) == (change == 'unchanged')
+    assert not service.enabled
+
+
 @pytest.mark.parametrize('reason', ['owner_generation_unavailable', 'deployed_context_changed', 'private_value_with_underscores', '/private/synthetic-secret', 'validation_private_input'])
 def test_maintenance_cli_shows_only_public_reason_codes(tmp_path, monkeypatch, capsys, reason):
     import runpy

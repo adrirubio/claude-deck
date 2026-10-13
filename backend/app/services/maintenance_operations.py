@@ -452,8 +452,9 @@ class Maintenance:
                     if columns is not None and table in columns:
                         raise ValueError('maintenance_authority_schema_changed')
                     return None
-                info = list(db.execute('PRAGMA table_info('+quote(table)+')'))
-                current = {row['name']:[row['type'],row['notnull'],row['dflt_value'],row['pk']] for row in info}
+                # table_info omits generated columns. Include their values and kind.
+                info = list(db.execute('PRAGMA table_xinfo('+quote(table)+')'))
+                current = {row['name']:[row['type'],row['notnull'],row['dflt_value'],row['pk'],row['hidden']] for row in info}
                 manifest[table] = current
                 primary = [row['name'] for row in info if row['pk']]
                 if not primary:

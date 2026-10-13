@@ -87,6 +87,8 @@ The request binds the old and target heads, clean candidate, accepted PRs and co
 The operation records complete policy, roster, coordination and database identity before the first control change. It pauses autonomy, removes the arming marker and waits for the active supervisor to observe the pause. It backs up the database, then rechecks current CI and every owner checkpoint. It proves controller termination before changing its source. It preserves native sessions, owner sources, recorded authority and protected files. It changes only declared version fields. After start, it checks health and retained state. Success reports `deployed_paused`; activation remains a separate operation.
 
 A column manifest records each baseline column and its schema properties.
+The manifest includes generated columns and their storage kind.
+Generated column values also remain part of recorded authority.
 The operation captures this manifest and the authority rows in one read transaction.
 Before start, schema checks remain strict.
 After start, new nullable columns are allowed only when every retained row contains `NULL` in them.
