@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal, init_db
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
+from app.services.test_instance_campaign_service import test_instance_campaign_poller
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
         # A test instance runs no autonomous dispatch and must not signal
         # tmux clients that belong to other servers on the host.
         logger.warning("Test instance: dispatch scheduler and relay cleanup are off")
+        await test_instance_campaign_poller.start()
     else:
         try:
             await github_dispatch_scheduler.start()
@@ -42,6 +44,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Cleanup
     from app.services.cc_bridge.pty_relay import close_all_relays
+    if settings.test_instance:
+        await test_instance_campaign_poller.shutdown()
     await github_dispatch_scheduler.shutdown()
     await close_all_relays()
 

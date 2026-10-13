@@ -8,6 +8,7 @@ These tests replace the cleanup with a recorder: they never run the real one.
 import httpx
 import pytest
 from pydantic_settings import BaseSettings
+from types import SimpleNamespace
 
 from app import main
 from app.config import Settings, settings
@@ -36,10 +37,18 @@ def startup_calls(monkeypatch):
     async def close_relays():
         calls.append("close_all_relays")
 
+    async def campaign_start():
+        calls.append("campaign_start")
+
+    async def campaign_shutdown():
+        calls.append("campaign_shutdown")
+
     monkeypatch.setattr(main, "init_db", no_db)
     monkeypatch.setattr(main.agent_bridge_attachment_service, "cleanup_expired", no_cleanup_expired)
     monkeypatch.setattr(main.github_dispatch_scheduler, "start", scheduler_start)
     monkeypatch.setattr(main.github_dispatch_scheduler, "shutdown", scheduler_shutdown)
+    monkeypatch.setattr(main, "test_instance_campaign_poller", SimpleNamespace(
+        start=campaign_start, shutdown=campaign_shutdown), raising=False)
     monkeypatch.setattr(pty_relay, "cleanup_orphaned_relays", lambda: calls.append("relay_cleanup"))
     monkeypatch.setattr(pty_relay, "close_all_relays", close_relays)
     return calls
@@ -54,12 +63,16 @@ async def test_test_instance_skips_scheduler_and_relay_cleanup(monkeypatch, star
 
     assert "relay_cleanup" not in startup_calls
     assert "scheduler_start" not in startup_calls
-    assert startup_calls == ["init_db", "scheduler_shutdown", "close_all_relays"]
+    assert startup_calls == ["init_db", "campaign_start", "campaign_shutdown",
+                             "scheduler_shutdown", "close_all_relays"]
 
 
 @pytest.mark.asyncio
-async def test_normal_instance_keeps_scheduler_and_relay_cleanup(monkeypatch, startup_calls):
+@pytest.mark.parametrize("identity", [False, True])
+async def test_normal_instance_keeps_scheduler_and_relay_cleanup(monkeypatch, startup_calls, identity):
     monkeypatch.setattr(settings, "test_instance", False)
+    monkeypatch.setattr(settings, "test_instance_root", "/tmp/synthetic-instance" if identity else "")
+    monkeypatch.setattr(settings, "test_instance_token", "synthetic-test-token" if identity else "")
 
     async with main.lifespan(main.app):
         pass

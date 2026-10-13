@@ -21,6 +21,7 @@ by their seeded names where they can.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -387,14 +388,33 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
 
 # Lane C (#604): states for the Audit journeys in frontend/e2e/lane-c/.
 # A live team with the deleted team's name, so Audit must list two distinct
-# "Retired crew" entries (#516). It has no slots, scope or work items, so the
-# Overview count and the team filters on Overview and Work do not change.
+# "Retired crew" entries (#516). It has no slots or work items.
+# #652 adds its read-only milestone scope later. Work counts stay unchanged.
 DUPLICATE_NAME_TEAM = 4
 
 
 def seed_lane_c(s: Seeder) -> None:
     preset(s, DUPLICATE_NAME_TEAM, "Retired crew", "A new team that reuses an old team name.",
            autonomy=False, leader_slot=None)
+
+
+def seed_campaign_backlogs(s: Seeder, root: Path) -> None:
+    """Give the live duplicate-name team a backlog; keep Quiet team idle."""
+    scope(s, 4, DUPLICATE_NAME_TEAM, "example-org", "retired-site",
+          root / "repos" / "retired-site", enabled=False)
+    s.conn.execute("UPDATE agent_team_presets SET backlog_milestone = ? WHERE id = ?",
+                   ("Retired site 1.0", DUPLICATE_NAME_TEAM))
+    s.conn.execute("UPDATE agent_team_presets SET backlog_milestone = ? WHERE id = ?",
+                   ("Sample app 2.0", RELEASE_TEAM))
+    data = {"repositories": [
+        {"owner": "example-org", "repo": "retired-site", "available": True,
+         "milestones": [{"number": 7, "title": "Retired site 1.0"}],
+         "issues": [{"number": 901, "title": "Refresh the old website", "labels": [],
+                     "milestone": {"number": 7, "title": "Retired site 1.0"}}]},
+        {"owner": "example-org", "repo": "sample-app", "available": False,
+         "milestones": [{"number": 8, "title": "Sample app 2.0"}], "issues": []},
+    ]}
+    (root / "campaign-backlog.json").write_text(json.dumps(data))
 
 
 async def seed_history() -> None:
@@ -515,6 +535,7 @@ def seed_all(s: Seeder, *, root: Path) -> None:
     s.conn.commit()
     asyncio.run(seed_history())
     delete_retired_team(s)
+    seed_campaign_backlogs(s, root)
     s.conn.commit()
     if os.environ.get("E2E_NO_PANES") != "1":
         start_panes(root)

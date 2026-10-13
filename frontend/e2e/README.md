@@ -25,7 +25,13 @@ The E2E journeys drive the built Deck UI in Chromium against one isolated Deck i
 7. It starts the backend on `127.0.0.1:$E2E_PORT` from the temporary root, so no `.env` file loads. The backend serves the UI on the same origin. The backend reports the instance root and the run token on `/health` (only on a test instance).
 8. On exit, it stops the backend, kills only the private tmux server and removes only a marked root.
 
-The instance sets `TEST_INSTANCE=1`. With this setting the backend does not start the dispatch scheduler and does not run the start-up relay cleanup. All GitHub HTTP calls fail as connection errors and open no socket.
+The instance sets `TEST_INSTANCE=1`. The backend does not start the dispatch scheduler or run the start-up relay cleanup.
+
+All GitHub HTTP calls fail as connection errors and open no socket. A separate offline campaign client reads fixed milestones from the seed.
+
+Only the test-instance campaign poll fills the campaign cache. Observations expire after 60 seconds. The poll opens no socket and changes no stored rows.
+
+The live duplicate-name `Retired crew` has one not-started milestone issue. `Release crew` has an unavailable backlog. `Quiet team` keeps its idle state.
 
 ### Refusals
 
