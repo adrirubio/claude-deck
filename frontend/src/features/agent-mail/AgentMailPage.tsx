@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, Terminal, Users } from 'lucide-react'
 import { toast } from 'sonner'
@@ -6,6 +6,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type {
   AgentMailInstallStatus,
@@ -25,13 +32,37 @@ import {
 } from './api'
 import { AgentMailHelpDialog } from './AgentMailHelpDialog'
 import { ComposeDialog, type ComposePreset } from './ComposeDialog'
+import { ConversationsTab } from './ConversationsTab'
+import {
+  ALL_TEAMS,
+  buildConversations,
+  membersInTeam,
+  teamNames,
+  type ChipId,
+} from './conversations'
 import { connectedHarnessNames, joinNames } from './mailSetup'
 import { MemberEditDialog } from './MemberEditDialog'
-import { RequestsTab, type RequestKindFilter, type RequestStatusFilter } from './RequestsTab'
 import { TeamTab, type TeamStatusFilter } from './TeamTab'
 import { ThreadDialog } from './ThreadDialog'
+import { WaitingPanel } from './WaitingPanel'
+
+const ALL_TEAMS_VALUE = '__all_teams__'
 
 const OPERATIONAL_POLL_INTERVAL_MS = 5000
+
+/** A count in the totals line. It jumps to the panel that lists what the count counts. */
+function CountLink({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={`${label}. Go to Waiting on someone`}
+      className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
 
 export function AgentMailPage() {
   const [members, setMembers] = useState<MailMemberResponse[]>([])
@@ -42,9 +73,11 @@ export function AgentMailPage() {
   const [activeTab, setActiveTab] = useState('team')
   const [teamSearch, setTeamSearch] = useState('')
   const [teamStatus, setTeamStatus] = useState<TeamStatusFilter>('all')
-  const [requestSearch, setRequestSearch] = useState('')
-  const [requestKind, setRequestKind] = useState<RequestKindFilter>('all')
-  const [requestStatus, setRequestStatus] = useState<RequestStatusFilter>('all')
+  const [conversationSearch, setConversationSearch] = useState('')
+  const [chip, setChip] = useState<ChipId>('all')
+  const [team, setTeam] = useState(ALL_TEAMS)
+  const [recipientMemberId, setRecipientMemberId] = useState<number | null>(null)
+  const waitingRef = useRef<HTMLElement>(null)
   const [editingMember, setEditingMember] = useState<MailMemberResponse | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composePreset, setComposePreset] = useState<ComposePreset | null>(null)
@@ -104,15 +137,35 @@ export function AgentMailPage() {
     return () => window.clearInterval(timer)
   }, [loadOperationalData])
 
+  const teams = useMemo(() => teamNames(members), [members])
+  // A team that no member has any more (for example after a delete) shows all teams.
+  const activeTeam = teams.includes(team) ? team : ALL_TEAMS
+  const teamMembers = useMemo(() => membersInTeam(members, activeTeam), [members, activeTeam])
+  const conversations = useMemo(() => buildConversations(messages, members), [messages, members])
+
+  const showWaiting = (memberId: number | null) => {
+    setRecipientMemberId(memberId)
+    setChip('all')
+    setActiveTab('conversations')
+  }
+
+  // The count badges point at the panel that lists what they count.
+  const goToWaiting = () => {
+    const panel = waitingRef.current
+    if (!panel) return
+    panel.scrollIntoView?.({ block: 'start' })
+    panel.focus({ preventScroll: true })
+  }
+
   const stats = useMemo(() => {
-    const connected = members.filter((member) => member.status === 'connected').length
-    const observed = members.filter((member) => member.status === 'observed').length
-    const unread = members.reduce((total, member) => total + member.unread_count, 0)
-    const pending = members.reduce((total, member) => total + member.pending_count, 0)
-    const unseenPending = members.reduce((total, member) => total + member.unseen_pending_count, 0)
-    const stalePending = members.reduce((total, member) => total + member.stale_pending_count, 0)
+    const connected = teamMembers.filter((member) => member.status === 'connected').length
+    const observed = teamMembers.filter((member) => member.status === 'observed').length
+    const unread = teamMembers.reduce((total, member) => total + member.unread_count, 0)
+    const pending = teamMembers.reduce((total, member) => total + member.pending_count, 0)
+    const unseenPending = teamMembers.reduce((total, member) => total + member.unseen_pending_count, 0)
+    const stalePending = teamMembers.reduce((total, member) => total + member.stale_pending_count, 0)
     return { connected, observed, unread, pending, unseenPending, stalePending }
-  }, [members])
+  }, [teamMembers])
 
   const claudeReady = Boolean(
     installStatus
@@ -129,7 +182,8 @@ export function AgentMailPage() {
   const hasConfiguredIntegration = claudeReady || codexReady || copilotReady || opencodeReady
   const setUpNames = connectedHarnessNames(installStatus)
   const showSetupNotice = !installLoading && (!hasConfiguredIntegration || members.length === 0)
-  const showCodexRegistrationNotice = !installLoading && codexReady && stats.connected === 0 && stats.observed > 0
+  const showCodexRegistrationNotice = !installLoading && codexReady
+    && !members.some((member) => member.status === 'connected') && members.some((member) => member.status === 'observed')
 
   const openCompose = (
     kind: Exclude<MailMessageKind, 'answer'> = 'message',
@@ -188,18 +242,30 @@ export function AgentMailPage() {
             Agent Mail
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Coordinate local agent sessions through structured context requests and handoffs.
+            Messages between your agents, and between you and them.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={activeTeam === ALL_TEAMS ? ALL_TEAMS_VALUE : activeTeam}
+            onValueChange={(value) => setTeam(value === ALL_TEAMS_VALUE ? ALL_TEAMS : value)}
+          >
+            <SelectTrigger aria-label="Team" className="w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_TEAMS_VALUE}>All teams</SelectItem>
+              {teams.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <RefreshButton onClick={refreshAll} loading={loading || installLoading} />
           <Button variant="outline" onClick={() => setHelpOpen(true)}>
             <BookOpen className="mr-2 h-4 w-4" />
             How it works
           </Button>
-          <Button onClick={() => openCompose('context_request')}>
+          <Button onClick={() => openCompose('message')}>
             <MessageSquarePlus className="mr-2 h-4 w-4" />
-            New request
+            Write a message
           </Button>
         </div>
       </div>
@@ -249,26 +315,42 @@ export function AgentMailPage() {
         aria-label="Agent Mail totals"
         className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2 text-sm"
       >
-        <span><span className="font-semibold">{members.length}</span> participants</span>
+        <span><span className="font-semibold">{teamMembers.length}</span> participants</span>
         <span><span className="font-semibold">{stats.connected}</span> connected</span>
         <span><span className="font-semibold">{stats.observed}</span> observed only</span>
         <span className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{stats.unread} unread</Badge>
-          <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
-            {stats.pending} pending
-          </Badge>
-          {stats.unseenPending > 0 && (
-            <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
-              {stats.unseenPending} unseen
+          <CountLink label={`${stats.unread} unread`} onClick={goToWaiting}>
+            <Badge variant="secondary">{stats.unread} unread</Badge>
+          </CountLink>
+          <CountLink label={`${stats.pending} pending`} onClick={goToWaiting}>
+            <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
+              {stats.pending} pending
             </Badge>
+          </CountLink>
+          {stats.unseenPending > 0 && (
+            <CountLink label={`${stats.unseenPending} unseen`} onClick={goToWaiting}>
+              <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
+                {stats.unseenPending} unseen
+              </Badge>
+            </CountLink>
           )}
           {stats.stalePending > 0 && (
-            <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
-              {stats.stalePending} stale
-            </Badge>
+            <CountLink label={`${stats.stalePending} stale`} onClick={goToWaiting}>
+              <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
+                {stats.stalePending} stale
+              </Badge>
+            </CountLink>
           )}
         </span>
       </div>
+
+      <WaitingPanel
+        ref={waitingRef}
+        members={teamMembers}
+        loading={loading}
+        recipientMemberId={recipientMemberId}
+        onShowRecipient={showWaiting}
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid h-auto w-full grid-cols-2 md:w-[360px]">
@@ -276,14 +358,14 @@ export function AgentMailPage() {
             <Users className="h-4 w-4" />
             Team
           </TabsTrigger>
-          <TabsTrigger value="requests" className="gap-2">
+          <TabsTrigger value="conversations" className="gap-2">
             <Inbox className="h-4 w-4" />
-            Requests
+            Conversations
           </TabsTrigger>
         </TabsList>
         <TabsContent value="team" className="mt-4">
           <TeamTab
-            members={members}
+            members={teamMembers}
             loading={loading}
             repoSearch={teamSearch}
             statusFilter={teamStatus}
@@ -295,19 +377,20 @@ export function AgentMailPage() {
             nudgingMemberId={nudgingMemberId}
           />
         </TabsContent>
-        <TabsContent value="requests" className="mt-4">
-          <RequestsTab
-            messages={messages}
+        <TabsContent value="conversations" className="mt-4">
+          <ConversationsTab
+            conversations={conversations}
             members={members}
             loading={loading}
-            search={requestSearch}
-            kindFilter={requestKind}
-            statusFilter={requestStatus}
-            onSearchChange={setRequestSearch}
-            onKindFilterChange={setRequestKind}
-            onStatusFilterChange={setRequestStatus}
+            search={conversationSearch}
+            chip={chip}
+            team={activeTeam}
+            recipientMemberId={recipientMemberId}
+            messageCount={messages.length}
+            onSearchChange={setConversationSearch}
+            onChipChange={setChip}
+            onClearRecipient={() => setRecipientMemberId(null)}
             onOpenThread={setThreadMessage}
-            onCompose={openCompose}
           />
         </TabsContent>
       </Tabs>
