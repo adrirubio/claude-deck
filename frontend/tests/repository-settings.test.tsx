@@ -95,6 +95,15 @@ describe('RepositorySettings', () => {
     expect(screen.getByText('Technical details').closest('details')).not.toHaveAttribute('open')
   })
 
+  it('explains the optional build hint in the edit dialog', async () => {
+    const user = userEvent.setup()
+    render(<RepositorySettings {...settingsProps()} />)
+    await user.click(screen.getByRole('button', { name: EDIT }))
+    expect(screen.getByText('Build instructions for the agent (optional)')).toBeInTheDocument()
+    expect(screen.getByText(/Deck does not run a build/)).toBeInTheDocument()
+    expect(screen.getByText(/may include \{issue_number\}/)).toBeInTheDocument()
+  })
+
   it('distinguishes a missing polling token from unresolved dispatch mode', () => {
     const view = render(<RepositorySettings {...settingsProps({ scope: { ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false } })} />)
     expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))

@@ -106,7 +106,6 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
     loadError: null,
     onRefresh: vi.fn().mockResolvedValue(undefined),
     onToggleAutonomy: vi.fn().mockResolvedValue(undefined),
-    onCreateScope: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
 }
@@ -159,14 +158,11 @@ describe('AutonomyPanel', () => {
     expect(props.onToggleAutonomy).not.toHaveBeenCalled()
   })
 
-  it('explains first-run setup and optional build hints', async () => {
-    const user = userEvent.setup()
+  it('explains first-run setup and sends adding a repository to the one setup flow', () => {
     render(<AutonomyPanel {...panelProps({ scopes: [], workItems: [] })} />)
     expect(screen.getByText('Before you enable autonomy')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Add repo' }))
-    expect(screen.getByText('Build instructions for the agent (optional)')).toBeInTheDocument()
-    expect(screen.getByText(/Deck does not run a build/)).toBeInTheDocument()
-    expect(screen.getByText(/may include \{issue_number\}/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Add a repository' })).toHaveAttribute('href', '/repositories/new?team_id=1')
+    expect(screen.queryByRole('button', { name: /add repo/i })).not.toBeInTheDocument()
   })
 
   it('submits the Director key with Enter', async () => {

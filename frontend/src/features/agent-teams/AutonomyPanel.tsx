@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { KeyRound, Plus, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
@@ -26,13 +26,10 @@ import type {
   GithubRecoveryGate,
   GithubWorkItem,
   TeamGithubScope,
-  TeamGithubScopeInput,
-  TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import { BacklogCoordination } from './BacklogCoordination'
 import { workItemAttention } from './workItemAttention'
 import { useOperatorTokenFlow } from './useOperatorTokenFlow'
-import { ScopeDialog, type ScopeDialogState } from './ScopeSettingsDialogs'
 import { fetchGithubRecoveryGate, fetchGithubRecoveryGateActive } from './api'
 
 export { OperatorTokenDialog } from './OperatorTokenDialog'
@@ -47,7 +44,6 @@ export function AutonomyPanel({
   loadError,
   onRefresh,
   onToggleAutonomy,
-  onCreateScope,
 }: {
   preset: AgentTeamPreset
   scopes: TeamGithubScope[]
@@ -58,12 +54,8 @@ export function AutonomyPanel({
   loadError: string | null
   onRefresh: () => Promise<void>
   onToggleAutonomy: (enabled: boolean, operatorToken: string) => Promise<void>
-  onCreateScope: (input: TeamGithubScopeInput, operatorToken: string) => Promise<void>
 }) {
-  const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
-  const scopeTriggerRef = useRef<HTMLButtonElement | null>(null)
   const enableTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const addRepoButtonRef = useRef<HTMLButtonElement | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
   const [enableConfirmOpen, setEnableConfirmOpen] = useState(false)
   const [enableWarnings, setEnableWarnings] = useState<string[]>([])
@@ -174,10 +166,6 @@ export function AutonomyPanel({
     setEnableConfirmOpen(true)
   }
 
-  const saveScope = async (input: TeamGithubScopeInput | TeamGithubScopeUpdate) => {
-    await withOperatorToken((token) => onCreateScope(input as TeamGithubScopeInput, token))
-  }
-
   return (
     <div className="space-y-5">
       {loadError && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">Refresh failed: {loadError}</p>}
@@ -227,10 +215,10 @@ export function AutonomyPanel({
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button ref={addRepoButtonRef} onClick={(event) => { scopeTriggerRef.current = event.currentTarget; setScopeDialog({ mode: 'add' }) }}>
+          <Link className={buttonVariants({})} to={`/repositories/new?team_id=${preset.id}`}>
             <Plus className="mr-2 h-4 w-4" />
-            Add repo
-          </Button>
+            Add a repository
+          </Link>
         </div>
       </div>
 
@@ -245,7 +233,7 @@ export function AutonomyPanel({
             <h3 className="font-semibold text-foreground">Before you enable autonomy</h3>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
-              <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
+              <li>Add a repository with an existing primary checkout under your home directory and labels to watch. Use Add a repository above.</li>
               <li>In Roster, assign and launch the Leader slot. It approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
@@ -285,7 +273,6 @@ export function AutonomyPanel({
         </CardContent>
       </Card>
 
-      <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} onReturnFocus={() => (scopeTriggerRef.current?.isConnected ? scopeTriggerRef.current : addRepoButtonRef.current)?.focus()} />
       {tokenDialog}
       <AlertDialog open={enableConfirmOpen} onOpenChange={setEnableConfirmOpen}>
         <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); enableTriggerRef.current?.focus() }}>

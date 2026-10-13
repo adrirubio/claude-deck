@@ -58,12 +58,10 @@ import type {
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
-  TeamGithubScopeInput,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
-  createTeamGithubScope,
   createAgentTeamFromBridge,
   createAgentTeamFromMail,
   createAgentTeamPreset,
@@ -1154,18 +1152,6 @@ export function AgentTeamsPage() {
     }
   }
 
-  const createGithubScope = async (input: TeamGithubScopeInput, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await createTeamGithubScope(selectedPreset.id, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo added')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to add watched repo')
-      throw error
-    }
-  }
-
   const removeSlot = async (slot: AgentTeamSlot) => {
     try {
       const updated = await withOperatorToken((token) => deleteAgentTeamSlot(slot.id, token))
@@ -1571,7 +1557,6 @@ export function AgentTeamsPage() {
                     loadError={autonomyDataPresetId === selectedPreset.id ? autonomyLoadError : null}
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
-                    onCreateScope={createGithubScope}
                   />
                 </TabsContent>
               </Tabs>
