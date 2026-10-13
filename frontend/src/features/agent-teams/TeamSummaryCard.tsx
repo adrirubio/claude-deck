@@ -2,39 +2,18 @@ import { Link } from 'react-router-dom'
 
 import { ReadStatus } from '@/features/factory/components/ReadStatus'
 import { anchor } from '@/features/factory/components/styles'
-import { requiredCiReason } from '@/features/factory/components/RequiredCiNotice'
+import { requiredCiReason } from '@/features/factory/components/requiredCiReason'
 import { useObservation } from '@/features/factory/reads'
 import { formatServerTime } from '@/lib/serverTime'
 import type {
-  AgentTeamPresetListResponse, AgentTeamSummary, TeamRemainingWork, TeamSummaryAttention, TeamSummaryHumanAction,
+  AgentTeamPresetListResponse, AgentTeamSummary, TeamRemainingWork,
 } from '@/types/agentTeams'
+import { ACTION_TEXT, ATTENTION_TEXT } from './summaryText'
 
 const HOLD_TEXT: Record<NonNullable<AgentTeamSummary['hold_code']>, string> = {
   hold: 'This team is on HOLD. Deck admits no new work.',
   recovery_only: 'This team is in recovery-only mode. Deck admits no new work.',
   hold_unavailable: 'Deck could not read the HOLD state of this team.',
-}
-
-const ATTENTION_TEXT: Record<TeamSummaryAttention['code'], string> = {
-  attempt_stopped: 'Attempt stopped',
-  recovery_decision: 'Recovery decision needed',
-  human_review: 'Human review needed',
-  owner_stalled: 'Owner stalled',
-  observation_pause: 'Observation paused',
-  hold: 'Team on HOLD',
-  recovery_only: 'Team in recovery-only mode',
-  hold_unavailable: 'HOLD state unknown',
-}
-
-const ACTION_TEXT: Record<TeamSummaryHumanAction['kind'], string> = {
-  review_pr: 'Review the PR',
-  merge_pr: 'Merge the PR',
-  inspect_attempt: 'Inspect the attempt',
-  inspect_checkpoint: 'Inspect the checkpoint',
-  milestone_acceptance: 'Accept the milestone',
-  pilot_decision: 'Make the pilot decision',
-  scope_clarification: 'Clarify the scope',
-  provide_evidence: 'Provide evidence',
 }
 
 const ACTORS = {
@@ -78,7 +57,16 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 // Display only: the card grants no approval, retry or merge action.
-export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: string }) {
+export function TeamSummaryCard({ presetId, name, running, showChecked = true, compact = false }: {
+  presetId: number
+  name?: string
+  // The team's autonomy switch. Shown as a plain word beside the name.
+  running?: boolean
+  // The Overview states one update time for the page, so its cards hide this line.
+  showChecked?: boolean
+  // The Overview leaves out a row that has nothing to say, such as "Parent issue: None set."
+  compact?: boolean
+}) {
   const state = useObservation<AgentTeamSummary>(`agent-teams/presets/${presetId}/summary`)
   const summary = state.data
   const unreadable = summary?.required_ci_unreadable ?? []
@@ -88,11 +76,20 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
   return (
     <section
       aria-label={name ? `Team summary: ${name}` : 'Team summary'}
-      className="space-y-3 rounded-lg border bg-card p-4 text-sm"
+      className={`space-y-3 rounded-lg border bg-card text-sm ${compact ? 'p-3' : 'p-4'}`}
     >
       {name && (
-        <h4 className="text-base font-semibold">
+        <h4 className="flex flex-wrap items-center gap-2 text-base font-semibold">
           <Link className={anchor} to={`/teams/${presetId}`}>{name}</Link>
+          {running !== undefined && (
+            <span
+              className={`rounded border px-2 text-xs font-medium ${running
+                ? 'border-primary/60 text-primary'
+                : 'border-border text-muted-foreground'}`}
+            >
+              {running ? 'Running' : 'Paused'}
+            </span>
+          )}
         </h4>
       )}
       <ReadStatus state={state} />
@@ -110,13 +107,15 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
           )}
           <dl className="space-y-2">
             <Row label="Outcome">{summary.description || 'No outcome is set.'}</Row>
-            <Row label="Parent issue">
-              {summary.parent_issue_url ? (
-                <a className={anchor} href={summary.parent_issue_url} target="_blank" rel="noreferrer">
-                  {parentIssueLabel(summary.parent_issue_url)}
-                </a>
-              ) : 'None set.'}
-            </Row>
+            {(!compact || summary.parent_issue_url) && (
+              <Row label="Parent issue">
+                {summary.parent_issue_url ? (
+                  <a className={anchor} href={summary.parent_issue_url} target="_blank" rel="noreferrer">
+                    {parentIssueLabel(summary.parent_issue_url)}
+                  </a>
+                ) : 'None set.'}
+              </Row>
+            )}
             <Row label="Supervisor">{summary.supervisor === 'none' ? 'None, not required.' : summary.supervisor}</Row>
             <Row label="Attention">
               {summary.attention.length === 0 && unreadable.length === 0 ? 'None open.' : (
@@ -166,7 +165,7 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
               This summary may be incomplete: Deck did not read every item.
             </p>
           )}
-          <p className="text-xs text-muted-foreground">Checked {formatServerTime(summary.checked_at)}</p>
+          {showChecked && <p className="text-xs text-muted-foreground">Checked {formatServerTime(summary.checked_at)}</p>}
         </>
       )}
     </section>
@@ -174,19 +173,26 @@ export function TeamSummaryCard({ presetId, name }: { presetId: number; name?: s
 }
 
 // One card for each team. A team filter limits the list to that team.
-export function TeamSummaries({ teamId }: { teamId?: string | null }) {
+export function TeamSummaries({ teamId, onOverview = false }: { teamId?: string | null; onOverview?: boolean }) {
   const state = useObservation<AgentTeamPresetListResponse>('agent-teams/presets')
   const presets = (state.data?.presets ?? []).filter(
     (preset) => !teamId || String(preset.id) === teamId,
   )
   return (
-    <section aria-label="Teams" className="space-y-3">
+    <section aria-label="Teams" className={onOverview ? 'space-y-2' : 'space-y-3'}>
       <h3 className="text-lg font-semibold">Teams</h3>
       <ReadStatus state={state} />
       {state.data && presets.length === 0 && <p>No teams to show.</p>}
       <div className="grid gap-4 lg:grid-cols-2">
         {presets.map((preset) => (
-          <TeamSummaryCard key={preset.id} presetId={preset.id} name={preset.name} />
+          <TeamSummaryCard
+            key={preset.id}
+            presetId={preset.id}
+            name={preset.name}
+            running={preset.autonomy_enabled}
+            showChecked={!onOverview}
+            compact={onOverview}
+          />
         ))}
       </div>
     </section>

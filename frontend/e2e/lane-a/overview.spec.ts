@@ -9,11 +9,11 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // Seed: Release crew has open Director actions (#101 attention, #102 review);
 // Quiet team is idle and paused (autonomy off, scope intake disabled).
 // Design reference: screens 01 (Needs you), 02 (Idle and paused), 21 (light).
-// @pending until #508 merges.
+// Active since #508 (with the Progress card).
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-test('@pending with open Director actions, the first visible item is the action list', async ({ page }) => {
+test('@active with open Director actions, the first visible item is the action list', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   const first = page.locator('main').getByRole('heading').nth(1)
@@ -21,7 +21,7 @@ test('@pending with open Director actions, the first visible item is the action 
   await expect(first).toBeInViewport()
 })
 
-test('@pending the idle state fits one viewport and says "idle and paused" once', async ({ page }) => {
+test('@active the idle state fits one viewport and says "idle and paused" once', async ({ page }) => {
   await page.goto('/?team_id=2')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   await expect(page.locator('main').getByText(/idle and paused/i)).toHaveCount(1)
@@ -29,7 +29,29 @@ test('@pending the idle state fits one viewport and says "idle and paused" once'
   expect(height, 'the idle Overview fits 900 px').toBeLessThanOrEqual(900)
 })
 
-test('@pending no empty section shows a filter message when no filter is set', async ({ page }) => {
+test('@active the idle Overview does not scroll inside the page', async ({ page }) => {
+  await page.goto('/?team_id=2')
+  await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+  await expect(page.locator('main').getByText('Nothing needs you right now.')).toBeVisible()
+  // The page scrolls inside <main>, so the document height proves nothing. Measure <main>.
+  const { scroll, client } = await page.locator('main').evaluate(element => ({ scroll: element.scrollHeight, client: element.clientHeight }))
+  expect(scroll, 'the idle Overview fits the main area').toBeLessThanOrEqual(client)
+})
+
+test('@active the Progress card shows Done, Under way, Still to do and the decisions ahead', async ({ page }) => {
+  await page.goto('/')
+  const main = page.locator('main')
+  await expect(main.getByRole('heading', { name: /^Progress/ })).toBeVisible()
+  const card = main.getByRole('article', { name: /^Progress:/ }).first()
+  await expect(card).toBeVisible()
+  for (const name of [/^Done/, /^Under way/, /^Still to do/]) await expect(card.getByRole('heading', { name })).toBeVisible()
+  await expect(card.getByText(/Your decisions ahead/)).toBeVisible()
+  // Order: the action list comes before the Progress card.
+  const headings = await main.getByRole('heading').allInnerTexts()
+  expect(headings.findIndex(text => /^Needs you/.test(text))).toBeLessThan(headings.findIndex(text => /^Progress/.test(text)))
+})
+
+test('@active no empty section shows a filter message when no filter is set', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   await page.waitForLoadState('networkidle').catch(() => undefined)
@@ -38,7 +60,7 @@ test('@pending no empty section shows a filter message when no filter is set', a
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the Overview meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the Overview meets AA contrast and is keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()

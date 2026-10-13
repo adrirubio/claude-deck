@@ -129,6 +129,28 @@ export interface TeamRemainingWork {
   reason: 'complete' | 'report_unknown' | 'observation_incomplete' | 'context_changed'
 }
 
+export interface CampaignDoneItem { title: string; merged_at: string | null }
+export interface CampaignUnderWayItem {
+  title: string
+  owner_short_name: string | null
+  state_phrase: 'building it' | 'reviewing it' | 'waiting for checks' | 'waiting for you'
+}
+export interface CampaignDecision { text: string; state: 'later' | 'now' | 'done' }
+
+// The progress of one team's campaign (#548, #587). Counts come from the server.
+export interface TeamCampaignSummary {
+  backlog_state: 'available' | 'backlog unavailable'
+  done_count: number
+  latest_done: CampaignDoneItem[]
+  under_way_count: number
+  under_way: CampaignUnderWayItem[]
+  queued_count: number
+  queued: { title: string }[]
+  not_started_count: number | null
+  not_started_groups: { area: string; count: number }[]
+  decisions_ahead: CampaignDecision[]
+}
+
 // GET agent-teams/presets/{id}/summary. A display-only read: it grants no action.
 export interface AgentTeamSummary {
   preset_id: number
@@ -145,6 +167,7 @@ export interface AgentTeamSummary {
   remaining_work: TeamRemainingWork
   next_actors: ('owner' | 'leader' | 'operator' | 'controller')[]
   next_actor_coverage_complete: boolean
+  campaign?: TeamCampaignSummary
 }
 
 export interface AgentTeamPresetListResponse {

@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { ApiHttpError, apiClient } from "@/lib/api";
 
 // Shared per-URL read state. No mutation, credential, owner claim or GitHub poll.
@@ -139,6 +139,46 @@ export function useObservation<T>(endpoint: string | null) {
   }
   const state = useSyncExternalStore(read.subscribe, read.snapshot) as ReadState<T>;
   return { ...state, refresh: read.refresh };
+}
+
+// Several reads at once, for a page that combines the same data as its cards.
+// Each endpoint keeps its own shared state, so a card that reads one of them
+// adds no request. The snapshot stays the same object until one state changes.
+export function useObservations<T>(endpoints: string[]) {
+  const key = endpoints.join("\n");
+  const reads = useMemo(
+    () =>
+      key
+        ? key.split("\n").map((endpoint) => {
+            if (!observations.has(endpoint))
+              observations.set(endpoint, new Observation(endpoint));
+            return observations.get(endpoint)! as Observation<T>;
+          })
+        : [],
+    [key],
+  );
+  const last = useRef<ReadState<T>[]>([]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const stops = reads.map((read) => read.subscribe(listener));
+      return () => stops.forEach((stop) => stop());
+    },
+    [reads],
+  );
+  const snapshot = useCallback(() => {
+    const next = reads.map((read) => read.snapshot());
+    const previous = last.current;
+    if (previous.length === next.length && previous.every((state, i) => state === next[i]))
+      return previous;
+    last.current = next;
+    return next;
+  }, [reads]);
+  const states = useSyncExternalStore(subscribe, snapshot);
+  const refresh = useCallback(
+    () => Promise.all(reads.map((read) => read.refresh())).then(() => undefined),
+    [reads],
+  );
+  return { states, refresh };
 }
 
 export interface Page<T> {
