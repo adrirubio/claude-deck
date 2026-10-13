@@ -43,7 +43,7 @@ import { fetchCCSessions } from '@/features/cc-bridge/api'
 import type { AgentSession } from '@/features/cc-bridge/types'
 import { TeamMemberPicker } from './TeamMemberPicker'
 import { TeamHeader } from './TeamHeader'
-import { EditTeamDialog } from './EditTeamDialog'
+import { EditTeamPanel } from './EditTeamPanel'
 import { TeamMemberRow } from './TeamMemberRow'
 import { TeamProgress } from './TeamProgress'
 import { PROVIDER_IDS, isHiddenByDefault, memberItems, sessionItems, sessionKey, sessionsToSlots, usableSessions } from './teamSources'
@@ -1342,7 +1342,7 @@ export function AgentTeamsPage() {
             <button
               key={preset.id}
               type="button"
-              onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
+              onClick={() => { setEditTeamOpen(false); setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
               aria-current={selectedPresetId === preset.id ? 'page' : undefined}
               title={`Updated ${formatDate(preset.updated_at)}`}
               className={cn(
@@ -1373,6 +1373,18 @@ export function AgentTeamsPage() {
                 onPlan={() => void openPlan(null)}
                 planDisabled={selectedPreset.slots.every((slot) => !slot.enabled) || planLoading}
                 onAutonomy={openAutonomySwitch}
+              />
+              <EditTeamPanel
+                open={editTeamOpen}
+                onOpenChange={setEditTeamOpen}
+                name={name}
+                onNameChange={setName}
+                description={description}
+                onDescriptionChange={setDescription}
+                saving={saving}
+                onSave={savePreset}
+                onDuplicate={duplicatePreset}
+                onDelete={removePreset}
               />
 
               <HumanActionSummary key={selectedPreset.id} presetId={selectedPreset.id} onInspectAutonomy={() => setAutonomyTab('autonomy')} />
@@ -1452,18 +1464,6 @@ export function AgentTeamsPage() {
       </div>
 
       <NewPresetDialog mode={presetDialog} onOpenChange={setPresetDialog} onCreate={createPreset} />
-      <EditTeamDialog
-        open={editTeamOpen && selectedPreset !== undefined}
-        onOpenChange={setEditTeamOpen}
-        name={name}
-        onNameChange={setName}
-        description={description}
-        onDescriptionChange={setDescription}
-        saving={saving}
-        onSave={savePreset}
-        onDuplicate={duplicatePreset}
-        onDelete={removePreset}
-      />
       <SlotDialog
         state={slotDialog}
         onOpenChange={setSlotDialog}
