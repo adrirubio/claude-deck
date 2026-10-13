@@ -20,13 +20,13 @@ import type {
   MailMessageResponse,
   MailThreadResponse,
 } from '@/types/agentMail'
+import { SenderLabel } from './SenderLabel'
 import { ackAgentMailRequest, fetchAgentMailThread, replyInAgentMailThread } from './api'
 import {
   KIND_LABEL,
   formatDateTime,
   recipientName,
   requestBadgeClass,
-  senderName,
   senderTypeLabel,
 } from './utils'
 
@@ -60,7 +60,7 @@ function MessageBlock({ message, members }: {
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <span>
-          From {senderName(message, members)} to {recipientName(message, members)}
+          From <SenderLabel message={message} members={members} /> to {recipientName(message, members)}
         </span>
         {senderTypeLabel(message) && (
           <Badge variant="outline" className="text-xs">

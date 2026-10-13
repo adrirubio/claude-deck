@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { SenderLabel } from './SenderLabel'
 import {
   Select,
   SelectContent,
@@ -160,7 +161,7 @@ export function RequestsTab({
                     </h3>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                       <span>
-                        {senderName(message, members)} to {recipientName(message, members)}
+                        <SenderLabel message={message} members={members} /> to {recipientName(message, members)}
                       </span>
                       {senderTypeLabel(message) && (
                         <Badge variant="outline" className="text-xs">

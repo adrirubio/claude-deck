@@ -8,7 +8,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // comes from the scheduler (payload kind github_dispatch_idle_nudge);
 // "Director note: keep #101 small" is a message that the Director wrote.
 // The Requests tab shows each message as "<sender> to <recipient>".
-// @pending until #527 merges.
+// Design reference: screen 14 (Agent Mail).
 
 const SYSTEM_SUBJECT = 'Progress check: issue #101'
 const DIRECTOR_SUBJECT = 'Director note: keep #101 small'
@@ -30,7 +30,7 @@ async function senderLine(page: Page, subject: string): Promise<string> {
   return match?.[1].trim() ?? ''
 }
 
-test('@pending a scheduler message is not shown as sent by the Director', async ({ page }) => {
+test('@active a scheduler message is not shown as sent by the Director', async ({ page }) => {
   await openRequests(page)
   expect(await senderLine(page, SYSTEM_SUBJECT)).not.toMatch(/Director/)
   expect(await senderLine(page, DIRECTOR_SUBJECT)).toMatch(/Director/)
@@ -40,7 +40,7 @@ test('@pending a scheduler message is not shown as sent by the Director', async 
 // badges on the Requests tab fail AA in the dark theme today ("1" 2.68:1,
 // "2" 3.57:1, "stale" 3.57:1); they are reported separately.
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending the changed message cards meet AA contrast and are keyboard reachable in the ${theme} theme`, async ({ page }) => {
+  test(`@active the changed message cards meet AA contrast and are keyboard reachable in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await openRequests(page)
     for (const subject of [SYSTEM_SUBJECT, DIRECTOR_SUBJECT]) {
