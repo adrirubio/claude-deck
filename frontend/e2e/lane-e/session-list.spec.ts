@@ -69,7 +69,7 @@ test('@active Kill is never next to the Watch target', async ({ page }) => {
 // the contrast journeys stay @pending until the F3 fix activates them in its
 // own PR. The keyboard journeys are @active.
 for (const theme of ['light', 'dark'] as Theme[]) {
-  test(`@pending Live sessions meets AA contrast in the ${theme} theme`, async ({ page }) => {
+  test(`@active Live sessions meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await page.goto('/agent-bridge')
     await expect(page.getByText('Sessions (8)')).toBeVisible()

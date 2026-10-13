@@ -327,7 +327,7 @@ export function TerminalView({
             </div>
             <span className={cn(
               'text-xs shrink-0',
-              connected ? 'text-green-500' : 'text-foreground/70'
+              connected ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'
             )}>
               {connected ? 'Connected' : 'Disconnected'}
             </span>

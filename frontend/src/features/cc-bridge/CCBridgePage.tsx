@@ -350,7 +350,7 @@ export function CCBridgePage() {
                   )}
                   onClick={() => setProviderFilter(value)}
                 >
-                  {label} <span className="opacity-70">({filterCounts[value]})</span>
+                  {label} <span className="font-normal">({filterCounts[value]})</span>
                 </button>
               ))}
             </div>
@@ -370,7 +370,7 @@ export function CCBridgePage() {
                     )}
                     onClick={() => applyTeamFilter('all')}
                   >
-                    All teams <span className="opacity-70">({sessions.length})</span>
+                    All teams <span className="font-normal">({sessions.length})</span>
                   </button>
                   {teamOptions.map((team) => (
                     <button
@@ -384,7 +384,7 @@ export function CCBridgePage() {
                       )}
                       onClick={() => applyTeamFilter(team.id)}
                     >
-                      {team.name} <span className="opacity-70">({team.count})</span>
+                      {team.name} <span className="font-normal">({team.count})</span>
                     </button>
                   ))}
                 </div>
