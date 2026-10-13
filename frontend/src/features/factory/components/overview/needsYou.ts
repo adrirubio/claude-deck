@@ -1,4 +1,5 @@
 import { ACTION_TEXT, ATTENTION_TEXT } from "@/features/agent-teams/summaryText";
+import { waitingText } from "@/features/agent-teams/supervisorText";
 import type { AgentTeamPreset, AgentTeamSummary } from "@/types/agentTeams";
 
 export interface NeedsYouRow {
@@ -46,6 +47,29 @@ export function needsYouRows(
         team: preset.name,
         href: item.work_item_id ? `/work/${item.work_item_id}` : fallback,
         cta: `Open #${item.issue_number}`,
+      });
+    }
+    // A member waits at an interactive screen. Only the fixed reason is shown.
+    const names = Object.fromEntries(preset.slots.map((slot) => [slot.id, slot.display_name]));
+    for (const entry of summary.waiting_input ?? []) {
+      rows.push({
+        key: `${preset.id}-waiting-${entry.slot_id}`,
+        title: "Waiting for input",
+        detail: waitingText(entry, names),
+        team: preset.name,
+        href: "/agent-bridge",
+        cta: "Open live sessions",
+      });
+    }
+    const overdue = summary.supervisor_observation?.attention;
+    if (overdue) {
+      rows.push({
+        key: `${preset.id}-supervisor`,
+        title: overdue,
+        detail: `supervisor is ${summary.supervisor_observation!.status}`,
+        team: preset.name,
+        href: `/teams/${preset.id}`,
+        cta: "Open the team",
       });
     }
     for (const item of summary.required_ci_unreadable ?? []) {

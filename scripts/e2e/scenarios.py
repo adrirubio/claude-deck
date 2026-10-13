@@ -364,11 +364,13 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
         created_at=at(days=1), last_used_at=at(minutes=2),
     )
     preset_columns = {name for name, _, _ in s.columns("agent_team_presets")}
-    if {"supervisor_actor_id", "next_check_at"} <= preset_columns:
-        next_check = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=8)).isoformat(sep=" ")
+    if {"supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at"} <= preset_columns:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         s.conn.execute(
-            "UPDATE agent_team_presets SET supervisor_actor_id = ?, next_check_at = ? WHERE id = ?",
-            (LANE_G_SUPERVISOR_ACTOR, next_check, RELEASE_TEAM),
+            "UPDATE agent_team_presets SET supervisor_actor_id = ?, supervisor_checked_at = ?, "
+            "supervisor_next_check_at = ? WHERE id = ?",
+            (LANE_G_SUPERVISOR_ACTOR, (now - timedelta(minutes=2)).isoformat(sep=" "),
+             (now + timedelta(minutes=8)).isoformat(sep=" "), RELEASE_TEAM),
         )
 
     # #550: item #102 (PR #202) cannot have its required CI read for 2 hours,
