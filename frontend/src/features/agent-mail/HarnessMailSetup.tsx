@@ -71,6 +71,11 @@ export function HarnessMailSetup({ providerId, harnessInstalled, setup }: Harnes
       <section aria-label="Agent Mail" className="rounded-lg border bg-card p-3 text-sm">
         <span className="font-medium">Agent Mail:</span>{' '}
         {loading ? 'Checking the setup…' : 'The setup state is unavailable.'}
+        {setup.recommendKey && <p>Set a Director key to protect Director actions.</p>}
+        {!loading && setup.enterKey && (
+          <Button size="sm" variant="outline" onClick={() => void setup.enterKey()}>{setup.recommendKey ? 'Retry' : 'Enter the Director key'}</Button>
+        )}
+        {setup.tokenDialog}
       </section>
     )
   }
@@ -95,13 +100,18 @@ export function HarnessMailSetup({ providerId, harnessInstalled, setup }: Harnes
 
   return (
     <section aria-label="Agent Mail" className="space-y-3 rounded-lg border bg-card p-3">
+      {setup.tokenDialog}
+      {setup.recommendKey && <p className="text-sm">Set a Director key to protect Director actions.</p>}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm">
           <span className="font-medium">Agent Mail:</span>{' '}
           {/* data-plain: "Restart sessions" is a plain phrase, not a code name (see the harness page checks). */}
           <span data-plain="mail-state">{mailSetupLine(state)}</span>
         </p>
-        {managed && (
+        {setup.needsKey && setup.enterKey && (
+          <Button size="sm" variant="outline" onClick={() => void setup.enterKey()}>Enter the Director key</Button>
+        )}
+        {managed && !setup.needsKey && (
           <div className="flex flex-wrap gap-2">
             {actions.setUp && (
               <Button size="sm" onClick={() => setConfirming('setup')}>Set up</Button>

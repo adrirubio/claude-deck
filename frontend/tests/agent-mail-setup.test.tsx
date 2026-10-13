@@ -21,14 +21,18 @@ vi.mock('@/features/agent-mail/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/agent-mail/api')>()
   return {
     ...actual,
+    fetchAgentMailAuthenticationStatus: vi.fn(),
     fetchAgentMailTeam: vi.fn(),
     fetchAgentMailMessages: vi.fn(),
     fetchAgentMailInstallStatus: vi.fn(),
   }
 })
-import { fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam } from '@/features/agent-mail/api'
 
-beforeEach(() => setOperatorToken('test-director-key'))
+beforeEach(() => {
+  setOperatorToken('test-director-key')
+  vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: true })
+})
 
 const FULL_HOOKS = ['SessionStart', 'UserPromptSubmit', 'SessionEnd', 'PostToolUse', 'PreToolUse']
 

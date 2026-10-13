@@ -11,7 +11,7 @@ import { openUnlockedAudit, plainText } from './support'
 // Design reference: screens 16 and 17 (Audit).
 
 const CODE_NAMES = /\b(work_lifecycle|continuation_request|scope_policy_change|team_delete|approval_decision|revision_outcome)\b/
-const FEED_ROW = 'main [role="feed"] article, main [data-testid="audit-feed-row"], main ol li'
+const FEED_ROW = 'main [role="feed"] article, main [data-testid="audit-feed-row"]'
 
 test('@active every row names its team, its subject and its actor in plain words', async ({ page }) => {
   await openUnlockedAudit(page)

@@ -13,6 +13,10 @@ import type {
   TeamListResponse,
 } from '@/types/agentMail'
 
+export function fetchAgentMailAuthenticationStatus(): Promise<{ director_key_configured: boolean }> {
+  return apiClient<{ director_key_configured: boolean }>('agent-mail/authentication-status')
+}
+
 function directorReadHeaders(): Record<string, string> {
   const token = getOperatorToken()
   return token ? { 'X-Deck-Operator-Token': token } : {}

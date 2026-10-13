@@ -20,7 +20,6 @@ from app.api.v1.deps import (
     require_current_mail_session,
     require_mail_session,
     require_operator,
-    require_operator_for_writes,
     resolve_request_pane,
 )
 from app.config import settings
@@ -74,10 +73,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# The install routes write the harnesses' native settings (hooks and MCP
-# servers), so they take the same Director key guard as the settings routers.
-# The Mail router's other writes stay open to agents.
-INSTALL_WRITES = [Depends(require_operator_for_writes)]
+async def require_mail_director(
+    x_deck_operator_token: Optional[str] = Header(default=None),
+) -> None:
+    """Require the Director key when the installation has configured one."""
+    if settings.operator_token:
+        await require_operator(x_deck_operator_token)
+
+
+# Mail install writes use the configured Director key in every authentication mode.
+INSTALL_WRITES = [Depends(require_mail_director)]
 _INITIAL_APPROVAL_MAX_ATTEMPTS = 2
 
 
@@ -88,10 +93,11 @@ async def mail_read_session(
 ) -> Optional[MailAgentSession]:
     """Use a Mail session or Director key, with an explicit legacy opt-out."""
     if x_deck_operator_token is not None:
-        await require_operator(x_deck_operator_token)
+        await require_mail_director(x_deck_operator_token)
     if x_deck_session_token is not None:
         return await require_mail_session(await mail_session(x_deck_session_token, db))
-    if x_deck_operator_token is not None or not settings.mail_capability_tokens_required:
+    if (x_deck_operator_token is not None or not settings.operator_token
+            or not settings.mail_capability_tokens_required):
         return None
     await require_operator(x_deck_operator_token)
     return None
@@ -101,7 +107,7 @@ async def require_mail_install_operator(
     x_deck_operator_token: Optional[str] = Header(default=None),
 ) -> None:
     """Protect install information in strict mode and validate supplied keys."""
-    if settings.mail_capability_tokens_required or x_deck_operator_token is not None:
+    if settings.operator_token and (settings.mail_capability_tokens_required or x_deck_operator_token is not None):
         await require_operator(x_deck_operator_token)
 
 
@@ -161,6 +167,12 @@ def _redact_generic_continuation_thread(
     )
 
 
+@router.get("/authentication-status", response_model=dict[str, bool])
+async def authentication_status():
+    """Public mode discovery contains no credential, Mail or launch data."""
+    return {"director_key_configured": bool(settings.operator_token)}
+
+
 @router.get("/team", response_model=TeamListResponse)
 async def get_team(
     sync: bool = True,
@@ -197,7 +209,7 @@ async def get_team(
 
 
 @router.patch("/members/{member_id}", response_model=MailMemberResponse,
-              dependencies=[Depends(require_operator)])
+              dependencies=[Depends(require_mail_director)])
 async def update_member(
     member_id: int,
     update: MailMemberUpdate,
@@ -251,6 +263,8 @@ async def send_message(
         and request.sender_member_id != session.member_id
     ):
         raise HTTPException(status_code=403, detail="sender_not_token_holder")
+    if request.thread_root_id is not None:
+        await _require_member_thread(db, request.thread_root_id, session.member_id)
     request = request.model_copy(update={"sender_member_id": session.member_id})
     try:
         return await agent_mail_service.send_message(
@@ -260,6 +274,8 @@ async def send_message(
         )
     except MailAuthorityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="thread_not_authorized") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

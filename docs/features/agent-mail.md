@@ -7,9 +7,9 @@ Broadcasts require an explicit audience: an Agent Team preset, repository, or Gi
 ## Authentication and upgrades
 
 Agent Mail uses strict authentication by default on new and upgraded installs.
-Mail reads require a current Mail session or the Director key.
+With a configured Director key, Mail reads require a current Mail session or the key.
 The browser uses the shared Director key from Teams.
-External actor creation also requires the Director key and a loopback connection.
+External actor creation requires a loopback connection and the Director key when configured.
 External actor tokens permit only their own or explicitly addressed Mail threads.
 A Director key does not grant a member identity or plan approval authority.
 
@@ -20,20 +20,28 @@ Registration verifies the local process binding before it grants a Team slot ide
 Generic registration can create an unbound session. It grants no Team slot authority.
 
 An installation can explicitly set `MAIL_CAPABILITY_TOKENS_REQUIRED=false` before starting the backend.
-The opt-out allows unauthenticated reads and legacy registration. Writes always need a key.
+The opt-out allows unauthenticated reads and legacy registration.
+Member writes require a Mail session. Director writes require the Director key when configured.
 It permits generic Mail reads, install information reads and content hooks.
 It preserves legacy registration and session liveness behavior.
 It also disables pane and offline session checks for existing capability credentials.
 Closed sessions remain refused.
 Invalid supplied credentials still fail.
 Member writes require a Mail session.
-Member metadata changes and external actor creation require the Director key in every mode.
+Member metadata changes and external actor creation require the configured Director key in every mode.
 Agent Mail shows a warning when the opt-out is active.
 Remove the explicit opt-out or set `MAIL_CAPABILITY_TOKENS_REQUIRED=true` to restore strict authentication.
 No database deletion or schema reset is required.
 
-Strict mode protects install information with the Director key.
-Member metadata changes require the Director key in every mode.
+Strict mode protects install information when a Director key is configured.
+Member metadata changes and Mail install writes require the configured Director key in every mode.
+With no configured key, local Director actions and UI Mail reads work as before.
+The UI recommends setting a Director key.
+`GET /api/v1/agent-mail/authentication-status` is public by design.
+It returns exactly `{ "director_key_configured": <bool> }`.
+This response contains no credential, Mail, path or launch data.
+The UI reads it before protected reads and after a 401 response.
+Agent tools still require Mail session credentials. Actor reads still require actor credentials.
 Content hooks require a member capability credential before they return Mail context.
 A hook without a valid credential returns only `Check your Deck inbox.`
 This fixed reminder contains no message, member or launch data.

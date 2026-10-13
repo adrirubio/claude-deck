@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import require_operator
+from app.api.v1.agent_mail import require_mail_director
 from app.database import get_db
 from app.models.database import MailExternalActor
 from app.models.schemas import (
@@ -73,7 +73,7 @@ def _rate_limit_response(exc: ExternalAgentMailRateLimitError) -> HTTPException:
 
 
 @router.post("/actors", response_model=MailExternalActorCreateResponse,
-             dependencies=[Depends(require_operator)])
+             dependencies=[Depends(require_mail_director)])
 async def create_external_actor(
     request: Request,
     actor_request: MailExternalActorCreate,

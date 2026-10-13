@@ -3,17 +3,20 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiHttpError } from '@/lib/api'
 import { AgentMailPage } from '@/features/agent-mail/AgentMailPage'
+import { HarnessMailSetup } from '@/features/agent-mail/HarnessMailSetup'
 import { useAgentMailSetup } from '@/features/agent-mail/useAgentMailSetup'
 import { setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import type { AgentMailInstallStatus } from '@/types/agentMail'
 
 vi.mock('@/features/agent-mail/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/features/agent-mail/api')>(),
+  applyCodexAgentMailInstall: vi.fn(),
+  fetchAgentMailAuthenticationStatus: vi.fn(),
   fetchAgentMailTeam: vi.fn(),
   fetchAgentMailMessages: vi.fn(),
   fetchAgentMailInstallStatus: vi.fn(),
 }))
-import { fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam,
+import { applyCodexAgentMailInstall, fetchAgentMailAuthenticationStatus, fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam,
   fetchAgentMailThread, sendAgentMailMessage } from '@/features/agent-mail/api'
 
 const status = (required = true) => ({
@@ -26,6 +29,7 @@ const status = (required = true) => ({
 beforeEach(() => {
   sessionStorage.clear()
   vi.clearAllMocks()
+  vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: true })
   vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members: [] })
   vi.mocked(fetchAgentMailMessages).mockResolvedValue([])
   vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue(status())
@@ -69,6 +73,7 @@ describe('Agent Mail authentication', () => {
     }
     expect(fetchAgentMailTeam).toHaveBeenCalledTimes(1)
     expect(fetchAgentMailMessages).toHaveBeenCalledTimes(1)
+    expect(fetchAgentMailAuthenticationStatus).toHaveBeenCalledTimes(code === 401 ? 2 : 1)
   })
 
   it('keeps polling after a temporary server failure', async () => {
@@ -137,4 +142,117 @@ describe('Agent Mail authentication', () => {
     expect(fetch.mock.calls[2][1].headers.Authorization).toBe('Bearer test-actor-token')
     expect(fetch.mock.calls[2][1].headers['X-Deck-Operator-Token']).toBeUndefined()
   })
+})
+
+
+function HarnessSetupProbe() {
+  const setup = useAgentMailSetup()
+  return <HarnessMailSetup providerId="codex-cli" harnessInstalled setup={setup} />
+}
+
+describe('Harness Mail key entry', () => {
+  it('waits for deliberate key entry before its first protected read', async () => {
+    render(<HarnessSetupProbe />)
+    const enter = await screen.findByRole('button', { name: 'Enter the Director key' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fetchAgentMailInstallStatus).not.toHaveBeenCalled()
+    fireEvent.click(enter)
+    const dialog = await screen.findByRole('dialog', { name: 'Director key' })
+    fireEvent.change(dialog.querySelector('input')!, { target: { value: 'fresh-director-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use key' }))
+    await waitFor(() => expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('button', { name: 'Set up' })).toBeInTheDocument()
+  })
+
+  it('keeps protected reads stopped after key entry is cancelled', async () => {
+    render(<HarnessSetupProbe />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Enter the Director key' }))
+    await screen.findByRole('dialog', { name: 'Director key' })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(fetchAgentMailInstallStatus).not.toHaveBeenCalled()
+  })
+
+  it('recovers once with a changed key after a refusal', async () => {
+    setOperatorToken('refused-director-key')
+    vi.mocked(fetchAgentMailInstallStatus).mockRejectedValueOnce(new ApiHttpError('Refused', 401))
+    render(<HarnessSetupProbe />)
+    await waitFor(() => expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enter the Director key' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Director key' })
+    fireEvent.change(dialog.querySelector('input')!, { target: { value: 'recovered-director-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use key' }))
+    await waitFor(() => expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(2))
+    expect(fetchAgentMailAuthenticationStatus).toHaveBeenCalledTimes(2)
+    expect(await screen.findByRole('button', { name: 'Set up' })).toBeInTheDocument()
+  })
+
+  it('refuses another protected read when the entered key is unchanged', async () => {
+    setOperatorToken('refused-director-key')
+    vi.mocked(fetchAgentMailInstallStatus).mockRejectedValue(new ApiHttpError('Refused', 401))
+    render(<HarnessSetupProbe />)
+    await waitFor(() => expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enter the Director key' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Director key' })
+    fireEvent.change(dialog.querySelector('input')!, { target: { value: 'refused-director-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use key' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('Mail without a configured Director key', () => {
+  it('keeps Mail reads available and shows a non-blocking recommendation', async () => {
+    vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: false })
+    render(<MemoryRouter><AgentMailPage /></MemoryRouter>)
+    expect(await screen.findByText('Set a Director key')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(fetchAgentMailTeam).toHaveBeenCalledTimes(1))
+    expect(fetchAgentMailMessages).toHaveBeenCalledTimes(1)
+    expect(fetchAgentMailAuthenticationStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps harness setup available and recommends a key without prompting', async () => {
+    vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: false })
+    render(<HarnessSetupProbe />)
+    expect(await screen.findByText('Set a Director key to protect Director actions.')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Set up' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1)
+    expect(fetchAgentMailAuthenticationStatus).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+it('refreshes public key mode after 401 and keeps automatic reads stopped', async () => {
+  setOperatorToken('refused-director-key')
+  vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValueOnce({ director_key_configured: true })
+    .mockResolvedValue({ director_key_configured: false })
+  vi.mocked(fetchAgentMailTeam).mockRejectedValueOnce(new ApiHttpError('Refused', 401))
+  const interval = vi.spyOn(window, 'setInterval')
+  render(<MemoryRouter><AgentMailPage /></MemoryRouter>)
+  expect(await screen.findByText('Set a Director key')).toBeInTheDocument()
+  expect(fetchAgentMailAuthenticationStatus).toHaveBeenCalledTimes(2)
+  for (const [callback] of interval.mock.calls) {
+    if (typeof callback === 'function') await act(async () => { callback(); callback() })
+  }
+  expect(fetchAgentMailTeam).toHaveBeenCalledTimes(1)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+
+it.each([401, 503])('keeps the install confirmation open after HTTP %s', async (code) => {
+  setOperatorToken('test-director-key')
+  vi.mocked(applyCodexAgentMailInstall).mockRejectedValue(new ApiHttpError('Install unavailable', code))
+  render(<HarnessSetupProbe />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Set up' }))
+  const dialog = await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+  await waitFor(() => expect(applyCodexAgentMailInstall).toHaveBeenCalledTimes(1))
+  await waitFor(() => {
+    expect(dialog).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled()
+  })
+  expect(fetchAgentMailInstallStatus).toHaveBeenCalledTimes(1)
 })

@@ -77,7 +77,7 @@ import {
   updateAgentTeamLeader,
   updateAgentTeamSlot,
 } from './api'
-import { fetchAgentMailTeam } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailTeam } from '@/features/agent-mail/api'
 import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
@@ -1321,8 +1321,20 @@ export function AgentTeamsPage() {
             How it works
           </Button>
           <Button variant="outline" onClick={async () => {
-            const token = await requestOperatorToken()
-            if (token) setPresetDialog('from-mail')
+            try {
+              if (!getOperatorToken()) {
+                const mode = await fetchAgentMailAuthenticationStatus()
+                if (!mode.director_key_configured) {
+                  toast.info('Set a Director key to protect Director actions.')
+                  setPresetDialog('from-mail')
+                  return
+                }
+              }
+              const token = await requestOperatorToken()
+              if (token) setPresetDialog('from-mail')
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'Mail authentication status is unavailable.')
+            }
           }}>
             <GitBranch className="mr-2 h-4 w-4" />
             From Mail

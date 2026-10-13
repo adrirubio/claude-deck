@@ -1152,6 +1152,8 @@ class AgentMailService:
         sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if request.thread_root_id is not None and request.sender_member_id is not None:
+            await self.require_member_thread(db, request.thread_root_id, request.sender_member_id)
         if sender_type not in {None, "system", "director"}:
             raise ValueError("Invalid sender type")
         if sender_type is not None and (

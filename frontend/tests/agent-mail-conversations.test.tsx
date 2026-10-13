@@ -21,13 +21,14 @@ vi.mock('@/features/agent-mail/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/agent-mail/api')>()
   return {
     ...actual,
+    fetchAgentMailAuthenticationStatus: vi.fn(),
     fetchAgentMailTeam: vi.fn(),
     fetchAgentMailMessages: vi.fn(),
     fetchAgentMailInstallStatus: vi.fn(),
     fetchAgentMailThread: vi.fn(),
   }
 })
-import { fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam, fetchAgentMailThread } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailInstallStatus, fetchAgentMailMessages, fetchAgentMailTeam, fetchAgentMailThread } from '@/features/agent-mail/api'
 
 function member(id: number, name: string, overrides: Partial<MailMemberResponse> = {}): MailMemberResponse {
   return {
@@ -301,6 +302,7 @@ describe('Agent Mail page', () => {
 
   function load(members: MailMemberResponse[], messages: MailMessageResponse[]) {
     setOperatorToken('test-director-key')
+    vi.mocked(fetchAgentMailAuthenticationStatus).mockResolvedValue({ director_key_configured: true })
     vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members })
     vi.mocked(fetchAgentMailMessages).mockResolvedValue(messages)
     vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue({

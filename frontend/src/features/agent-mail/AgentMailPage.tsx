@@ -4,6 +4,7 @@ import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, Terminal, Users } from 
 import { toast } from 'sonner'
 import { ApiHttpError } from '@/lib/api'
 import { clearOperatorToken, getOperatorToken } from '@/features/agent-teams/operatorAuth'
+import { useAgentMailAuthenticationStatus } from './useAgentMailSetup'
 import { useOperatorTokenFlow } from '@/features/agent-teams/useOperatorTokenFlow'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { RefreshButton } from '@/components/shared/RefreshButton'
@@ -68,17 +69,21 @@ function CountLink({ label, onClick, children }: { label: string; onClick: () =>
 }
 
 export function AgentMailPage() {
+  const { directorKeyConfigured, requiresDirectorKey, readAuthenticationStatus } = useAgentMailAuthenticationStatus()
   const { requestToken, tokenDialog } = useOperatorTokenFlow('Agent Mail requires the Director key.')
   const protectedReadsBlocked = useRef(false)
   const pollingEnabled = useRef(false)
 
-  const stopRefusedReads = useCallback((error: unknown) => {
+  const stopRefusedReads = useCallback(async (error: unknown) => {
     if (error instanceof ApiHttpError && (error.status === 503 || (error.status >= 400 && error.status < 500))) {
       protectedReadsBlocked.current = true
       pollingEnabled.current = false
-      if (error.status === 401) clearOperatorToken()
+      if (error.status === 401) {
+        clearOperatorToken()
+        try { await readAuthenticationStatus(true) } catch { /* Keep protected reads stopped. */ }
+      }
     }
-  }, [])
+  }, [readAuthenticationStatus])
   const [members, setMembers] = useState<MailMemberResponse[]>([])
   const [messages, setMessages] = useState<MailMessageResponse[]>([])
   const [installStatus, setInstallStatus] = useState<AgentMailInstallStatus | null>(null)
@@ -100,7 +105,7 @@ export function AgentMailPage() {
   const [nudgingMemberId, setNudgingMemberId] = useState<number | null>(null)
 
   const loadOperationalData = useCallback(async (showLoading = true) => {
-    if (protectedReadsBlocked.current || !getOperatorToken()) return
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
     if (showLoading) {
       setLoading(true)
     }
@@ -113,31 +118,40 @@ export function AgentMailPage() {
       setMessages(roots)
       pollingEnabled.current = true
     } catch (error) {
-      stopRefusedReads(error)
+      await stopRefusedReads(error)
       toast.error(error instanceof Error ? error.message : 'Failed to load Agent Mail')
     } finally {
       if (showLoading) {
         setLoading(false)
       }
     }
-  }, [stopRefusedReads])
+  }, [stopRefusedReads, requiresDirectorKey])
 
   const loadInstallData = useCallback(async () => {
-    if (protectedReadsBlocked.current || !getOperatorToken()) return
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
     setInstallLoading(true)
     try {
       setInstallStatus(await fetchAgentMailInstallStatus())
     } catch (error) {
-      stopRefusedReads(error)
+      await stopRefusedReads(error)
       toast.error(error instanceof Error ? error.message : 'Failed to load install status')
     } finally {
       setInstallLoading(false)
     }
-  }, [stopRefusedReads])
+  }, [stopRefusedReads, requiresDirectorKey])
 
   const refreshAll = useCallback(async () => {
     pollingEnabled.current = false
-    if (!await requestToken()) {
+    let configured: boolean
+    try {
+      configured = await readAuthenticationStatus()
+    } catch (error) {
+      setLoading(false)
+      setInstallLoading(false)
+      toast.error(error instanceof Error ? error.message : 'Mail authentication status is unavailable.')
+      return
+    }
+    if (configured && !await requestToken()) {
       protectedReadsBlocked.current = true
       setLoading(false)
       setInstallLoading(false)
@@ -146,7 +160,7 @@ export function AgentMailPage() {
     protectedReadsBlocked.current = false
     pollingEnabled.current = true
     await Promise.all([loadOperationalData(), loadInstallData()])
-  }, [loadInstallData, loadOperationalData, requestToken])
+  }, [loadInstallData, loadOperationalData, requestToken, readAuthenticationStatus])
 
   useEffect(() => {
     let cancelled = false
@@ -264,11 +278,17 @@ export function AgentMailPage() {
   return (
     <div className="space-y-4">
       {tokenDialog}
+      {directorKeyConfigured === false && (
+        <Alert>
+          <AlertTitle>Set a Director key</AlertTitle>
+          <AlertDescription>Set a Director key to protect Director actions. Mail is available without it.</AlertDescription>
+        </Alert>
+      )}
       {installStatus?.mail_capability_tokens_required === false && (
         <Alert variant="destructive">
           <AlertTitle>Agent Mail uses legacy authentication.</AlertTitle>
           <AlertDescription>The opt-out allows unauthenticated reads and legacy registration.
-            Writes always need a key.</AlertDescription>
+            Member writes need a session key. Director writes need the Director key when configured.</AlertDescription>
         </Alert>
       )}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
