@@ -6,9 +6,9 @@
     "protected-errors.json": "dd54587e32b53c33ddde27b43bcd8be413662cc2153bf4dfba5a9e93be518151",
     "repositories.json": "1749e1b194b71859891d28adf7d1c2e8683ef0c6ac0ab7000b27fce00e6d9559",
     "repository.json": "0bb10513a04713b1ffefb5897bd765c1b5bea8596e50f3f968913bf02cde61d1",
-    "schema.json": "6b6bdc4bcbf4ed46af3c876e8e64f39a86584da66239b45d7fdfdd2909a8d708",
-    "work-item.json": "13e70d69aaf1c1cc5010ea4cb34c3653a6dba127f3ed78d35fa5e94f30beebbd",
-    "work-items.json": "a91dbac3899d3b23575bc3f37cc15020d34d4a43c647aff1bbe0bb40dbe7a882"
+    "schema.json": "ab9962822f7627658c2327a570e306be191fe022e12a7f38679508c3df0b377a",
+    "work-item.json": "15d52bedb2c931fd3759abad6e57d9b237331fc30abc65096d06cb9ef5bc16ab",
+    "work-items.json": "386debcbbadafcfc3757f8653de126c3e5b624d0eefa9eb75b7dba95f428481b"
   },
   "artifact_source": "current working tree; historical review fields do not approve regenerated artifacts",
   "based_on_p01_manifest_sha256": "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",

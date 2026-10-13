@@ -392,6 +392,8 @@ class GithubWorkItem(Base):
     dispatch_base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    checks_unavailable_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checks_unavailable_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active_scope_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempt_phase: Mapped[str] = mapped_column(

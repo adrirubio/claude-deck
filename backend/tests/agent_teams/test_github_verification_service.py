@@ -27,6 +27,7 @@ from app.models.database import (
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_verification_service import github_verification_service
 from app.services.github_check_observation import GithubCheckObservationError
+from app.services.github_work_item_projection import _work_item_response
 from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_app_auth_service import (
@@ -3505,6 +3506,70 @@ class _UnavailableChecksClient(_Client):
 
 
 @pytest.mark.asyncio
+async def test_unreadable_ci_tracks_first_observation_and_clears_on_pending_read(db):
+    scope = await _scope(db, merge_policy="auto", max_verification_retries=2)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5,
+                       retry_count=2, last_verified_sha="sha")
+    class Unreadable(_UnavailableChecksClient):
+        async def list_check_runs_for_ref(self, owner, repo, ref):
+            raise GithubCheckObservationError("github_checks_unavailable")
+    client = Unreadable()
+    started = datetime.utcnow()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert getattr(item, "checks_unavailable_since", None) is not None
+    assert started <= item.checks_unavailable_since <= datetime.utcnow()
+    assert item.checks_unavailable_reason == "unknown"
+    first_observation = item.checks_unavailable_since
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.checks_unavailable_since == first_observation
+    assert item.dispatch_status == "verifying" and item.retry_count == 2
+    assert item.diagnostic_retry_count == 0
+
+    item.checks_unavailable_since = datetime.utcnow() - timedelta(minutes=16)
+    await db.commit()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    signal = _work_item_response(item, scope).required_ci_unreadable
+    assert signal.label == "Required CI cannot be read"
+    assert signal.reason == "unknown"
+    assert item.retry_count == 2 and item.diagnostic_retry_count == 0
+
+    pending = _Client(check_runs=[{"name": "ci", "status": "in_progress", "conclusion": None}])
+    await github_verification_service.process_scope(db, scope, client=pending)
+    await db.refresh(item)
+    assert item.checks_unavailable_since is None
+    assert item.checks_unavailable_reason is None
+    assert _work_item_response(item, scope).required_ci_unreadable is None
+    assert item.dispatch_status == "verifying" and item.retry_count == 2
+    assert pending.merge_calls == pending.ready_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_readable_failed_check_clears_unreadable_state_without_approving_ci(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5,
+                       checks_unavailable_since=datetime.utcnow() - timedelta(minutes=16),
+                       checks_unavailable_reason="api_error")
+    client = _Client(check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}])
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.checks_unavailable_since is None and item.checks_unavailable_reason is None
+    assert item.retry_count == 1
+    assert item.dispatch_status == "dispatched"
+    assert client.ready_calls == client.merge_calls == 0
+
+    item.checks_unavailable_since = datetime.utcnow() - timedelta(minutes=16)
+    item.checks_unavailable_reason = "api_error"
+    await db.commit()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.checks_unavailable_since is None and item.checks_unavailable_reason is None
+    assert item.retry_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["verifying", "ready_for_review"])
 async def test_ci_observation_error_keeps_budget_and_prevents_merge(db, state):
     scope = await _scope(db, merge_policy="auto", max_verification_retries=2)
@@ -3545,8 +3610,20 @@ async def test_ci_observation_error_preserves_continuation_authority(db, phase):
     assert item.diagnostic_retry_count == 0
     assert (revision.status, revision.failed_head_count, revision.evidence,
             workspace.lease_token, workspace.leased_item_id) == authority
+    assert item.checks_unavailable_since is not None
     assert "checks are unavailable" in item.status_note
     assert not (await db.execute(select(MailMessage))).scalars().all()
+
+    pending = _Client(check_runs=[{"name": "ci", "status": "in_progress", "conclusion": None}])
+    await github_verification_service.process_scope(db, scope, client=pending)
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.checks_unavailable_since is None and item.checks_unavailable_reason is None
+    assert item.retry_count == 7 and item.diagnostic_retry_count == 0
+    assert (revision.status, revision.failed_head_count, workspace.lease_token, workspace.leased_item_id) == (
+        authority[0], authority[1], authority[3], authority[4])
+    assert pending.merge_calls == pending.ready_calls == 0
 
 
 @pytest.mark.asyncio

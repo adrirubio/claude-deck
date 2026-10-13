@@ -31,6 +31,9 @@ describe('frozen factory fixture parity and provenance', () => {
     const p04Text = JSON.stringify(frontendP04WorkItem)
     expect(p04Text).toContain('explicit_assignment')
     expect(p04Text).not.toContain('first_enabled_slot')
+    expect(p04Text).toContain('checks_unavailable_since')
+    expect(p04Text).toContain('checks_unavailable_reason')
+    expect(p04Text).toContain('required_ci_unreadable')
   })
 
   it('verifies every P04 manifest artifact hash in both lanes', () => {

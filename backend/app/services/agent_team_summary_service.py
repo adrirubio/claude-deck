@@ -14,11 +14,13 @@ from app.models.database import (
 )
 from app.models.factory_schemas import (
     AgentTeamSummaryResponse, TeamRemainingWork, TeamSummaryAttention, TeamSummaryHumanAction,
+    TeamRequiredCIUnreadable,
 )
 from app.services.github_coordination_service import hold_code
 from app.services.github_operator_attention_service import github_operator_attention_service
 from app.services.github_work_progress_service import github_work_progress_service
 from app.services.agent_team_campaign_service import agent_team_campaign_service
+from app.services import required_ci_attention
 
 _ACTORS = ("owner", "leader", "operator", "controller")
 _KINDS = {"review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
@@ -60,6 +62,7 @@ class AgentTeamSummaryService:
             GithubWorkItem.dispatch_status, GithubWorkItem.escalation_reason, GithubWorkItem.dispatch_nonce,
             GithubWorkItem.owner_slot_id, GithubWorkItem.active_scope_revision, GithubWorkItem.attempt_phase,
             GithubWorkItem.dispatch_head_ref, GithubWorkItem.last_verified_sha, GithubWorkItem.updated_at,
+            GithubWorkItem.checks_unavailable_since, GithubWorkItem.checks_unavailable_reason,
             GithubWorkspace.id.label("workspace_id"), GithubWorkspace.lease_token,
             GithubWorkspace.leased_at, GithubWorkspace.path,
         ).outerjoin(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
@@ -187,9 +190,16 @@ class AgentTeamSummaryService:
             else "observation_incomplete" if not complete else "report_unknown")
         final_team = final[0]
         campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
+        unreadable = []
+        for item in final[2][:self.item_limit]:
+            signal = required_ci_attention.signal(item, now=now)
+            if signal is not None:
+                unreadable.append(TeamRequiredCIUnreadable(**signal.model_dump(),
+                    work_item_id=item.id, scope_id=item.scope_id, issue_number=item.issue_number))
         return AgentTeamSummaryResponse(preset_id=preset_id, description=final_team.description,
             parent_issue_url=final_team.parent_issue_url, checked_at=now, valid_until=min(expires),
             coverage_complete=complete, hold_code=hold, attention=attention, human_actions=human_actions,
+            required_ci_unreadable=unreadable,
             remaining_work=remaining, next_actors=[actor for actor in _ACTORS if actor in actors],
             next_actor_coverage_complete=complete and len(observations) == total, campaign=campaign)
 

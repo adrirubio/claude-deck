@@ -106,6 +106,36 @@ async def test_empty_team_has_zero_effort_and_no_actor(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_team_ci_signal_has_safe_context_and_clears_without_authority_changes(db, monkeypatch):
+    team, scope, items = await seed(db, ("verifying", "verifying", "merged"))
+    team_id, scope_id, item_id = team.id, scope.id, items[0].id
+    started = datetime.utcnow() - timedelta(minutes=16)
+    items[0].checks_unavailable_since = started
+    items[0].checks_unavailable_reason = "synthetic-private-error"
+    items[1].checks_unavailable_since = datetime.utcnow()
+    items[1].checks_unavailable_reason = "api_error"
+    items[2].checks_unavailable_since = started
+    await db.commit()
+    summary, _ = service(monkeypatch)
+    result = await summary.summary(db, team_id)
+    assert result.attention == []
+    assert len(result.required_ci_unreadable) == 1
+    signal = result.required_ci_unreadable[0]
+    assert (signal.work_item_id, signal.scope_id, signal.issue_number) == (item_id, scope_id, 1)
+    assert signal.since == started.replace(tzinfo=timezone.utc)
+    assert signal.reason == "unknown"
+    public = result.model_dump_json()
+    for private in ("synthetic-private-error", "private-nonce", "private-launch", "/private", "lease_token"):
+        assert private not in public
+    item = await db.get(GithubWorkItem, item_id)
+    assert item.dispatch_status == "verifying" and item.retry_count == item.diagnostic_retry_count == 0
+    item.checks_unavailable_since = item.checks_unavailable_reason = None
+    await db.commit()
+    assert (await summary.summary(db, team_id)).required_ci_unreadable == []
+    assert (await db.get(TeamGithubScope, scope_id)).enabled
+
+
+@pytest.mark.asyncio
 async def test_active_team_sums_all_unfinished_items_and_preserves_actors(db, monkeypatch):
     team, _, items = await seed(db, ("dispatched", "verifying", "merged", "completed"))
     summary, reads = service(monkeypatch, {

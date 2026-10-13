@@ -878,6 +878,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
     work_item_columns = {row[1] for row in result.fetchall()}
     if work_item_columns and "status_note" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
+    if work_item_columns and "checks_unavailable_since" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN checks_unavailable_since DATETIME"))
+    if work_item_columns and "checks_unavailable_reason" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN checks_unavailable_reason VARCHAR"))
     if work_item_columns and "auto_merged_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
     if work_item_columns and "last_verified_sha" not in work_item_columns:

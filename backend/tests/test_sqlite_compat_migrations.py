@@ -72,6 +72,35 @@ async def test_campaign_columns_migrate_existing_data_and_repeat_safely():
 
 
 @pytest.mark.asyncio
+async def test_unreadable_ci_columns_preserve_existing_attempts_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for name in ("checks_unavailable_since", "checks_unavailable_reason"):
+                await conn.execute(text(f"ALTER TABLE github_work_items DROP COLUMN {name}"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
+                "dispatch_status, issue_type, retry_count, approval_round_count, active_scope_revision, "
+                "attempt_phase, diagnostic_retry_count, created_at, updated_at) VALUES "
+                "(1, 1, 5, 'Existing', 'url', CURRENT_TIMESTAMP, 'verifying', 'code', 7, 2, 1, "
+                "'diagnostic', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            await _run_sqlite_compat_migrations(conn)
+            after = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["checks_unavailable_since"] is None and after["checks_unavailable_reason"] is None
+            await conn.execute(text("UPDATE github_work_items SET checks_unavailable_since='2026-10-13 00:00:00', "
+                                    "checks_unavailable_reason='api_error' WHERE id=1"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT checks_unavailable_since, checks_unavailable_reason "
+                                           "FROM github_work_items WHERE id=1"))).one()
+            assert tuple(row) == ("2026-10-13 00:00:00", "api_error")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migrations_repair_misdefined_named_indexes():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

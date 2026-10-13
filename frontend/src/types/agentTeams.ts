@@ -105,6 +105,20 @@ export interface TeamSummaryHumanAction {
   pull_request_number?: number | null
 }
 
+export interface RequiredCIUnreadableSignal {
+  code: 'required_ci_unreadable'
+  label: 'Required CI cannot be read'
+  since: string
+  reason: 'permission_missing' | 'workflow_missing' | 'api_error' | 'unknown'
+  next_steps: string[]
+}
+
+export interface TeamRequiredCIUnreadable extends RequiredCIUnreadableSignal {
+  work_item_id: number
+  scope_id: number
+  issue_number: number
+}
+
 export interface TeamRemainingWork {
   state: 'known' | 'unknown'
   unfinished_items: number
@@ -126,6 +140,7 @@ export interface AgentTeamSummary {
   coverage_complete: boolean
   hold_code: 'hold' | 'recovery_only' | 'hold_unavailable' | null
   attention: TeamSummaryAttention[]
+  required_ci_unreadable?: TeamRequiredCIUnreadable[]
   human_actions: TeamSummaryHumanAction[]
   remaining_work: TeamRemainingWork
   next_actors: ('owner' | 'leader' | 'operator' | 'controller')[]
@@ -415,6 +430,9 @@ export interface GithubWorkItem {
   retry_requested_at?: string | null
   escalation_reason?: string | null
   status_note?: string | null
+  checks_unavailable_since?: string | null
+  checks_unavailable_reason?: RequiredCIUnreadableSignal['reason'] | null
+  required_ci_unreadable?: RequiredCIUnreadableSignal | null
   auto_merged_at?: string | null
   active_scope_revision: number
   active_scope_summary?: string | null

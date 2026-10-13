@@ -24,6 +24,32 @@ async def get_ok(client, path, **params):
     return response.json()
 
 
+async def test_ci_signal_reaches_work_list_and_detail_with_safe_reason(factory_client, factory_store):
+    item_id = factory_store.ids.by_status["verifying"]
+    since = datetime.utcnow() - timedelta(minutes=16)
+    async with factory_store.maker() as db:
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(
+            checks_unavailable_since=since, checks_unavailable_reason=PRIVATE))
+        await db.commit()
+    detail = await get_ok(factory_client, f"work-items/{item_id}")
+    item = detail["work_item"]["item"]
+    signal = item["required_ci_unreadable"]
+    assert signal["code"] == "required_ci_unreadable"
+    assert signal["label"] == "Required CI cannot be read"
+    assert signal["reason"] == item["checks_unavailable_reason"] == "unknown"
+    assert signal["next_steps"]
+    listing = await get_ok(factory_client, "work-items", category="active", limit=100)
+    row = next(row for row in listing["items"] if row["item"]["id"] == item_id)
+    assert row["item"]["required_ci_unreadable"] == signal
+    assert PRIVATE not in json.dumps(detail) and PRIVATE not in json.dumps(listing)
+    async with factory_store.maker() as db:
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(
+            checks_unavailable_since=None, checks_unavailable_reason=None))
+        await db.commit()
+    cleared = (await get_ok(factory_client, f"work-items/{item_id}"))["work_item"]["item"]
+    assert cleared["required_ci_unreadable"] is None and cleared["checks_unavailable_since"] is None
+
+
 async def test_complete_counts_and_timestamp_id_pagination(factory_client, factory_store):
     first = await get_ok(factory_client, "work-items", limit=100)
     assert first["total"] == 132
