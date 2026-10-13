@@ -2104,7 +2104,7 @@ class MailMessageResponse(BaseModel):
     kind: str
     sender_member_id: Optional[int] = None
     sender_actor_id: Optional[int] = None
-    sender_type: str = "director"
+    sender_type: str = "system"
     sender_actor_kind: Optional[str] = None
     approval_round: Optional[int] = None
     decision: Optional[str] = None

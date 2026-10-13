@@ -709,6 +709,8 @@ class MailMessage(Base):
     sender_actor_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
+    # New ORM notices come from Deck. The migration leaves historical rows null.
+    sender_type: Mapped[str | None] = mapped_column(String, default="system", nullable=True)
     approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)
     audience_type: Mapped[str | None] = mapped_column(String, nullable=True)

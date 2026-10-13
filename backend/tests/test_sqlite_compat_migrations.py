@@ -466,15 +466,15 @@ async def test_compat_migration_adds_mail_audience_columns_without_changing_hist
                 await _run_sqlite_compat_migrations(conn)
 
             columns = await _sqlite_columns(conn, "mail_messages")
-            assert {"audience_type", "audience_id"} <= columns
+            assert {"audience_type", "audience_id", "sender_type"} <= columns
             assert (
                 await conn.execute(
                     text(
-                        "SELECT id, kind, body_markdown, audience_type, audience_id "
+                        "SELECT id, kind, body_markdown, audience_type, audience_id, sender_type "
                         "FROM mail_messages WHERE id = 7"
                     )
                 )
-            ).one() == (7, "message", "historical body", None, None)
+            ).one() == (7, "message", "historical body", None, None, None)
             assert (
                 await conn.execute(
                     text(

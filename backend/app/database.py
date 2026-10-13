@@ -1031,6 +1031,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(mail_messages)"))
     message_columns = {row[1] for row in result.fetchall()}
+    if message_columns and "sender_type" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_type VARCHAR"))
     if message_columns and "sender_actor_id" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_actor_id INTEGER"))
     if message_columns and "approval_round" not in message_columns:

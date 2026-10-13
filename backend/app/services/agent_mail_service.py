@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -59,6 +60,29 @@ STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
 TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
+LEGACY_SYSTEM_PAYLOAD_KINDS = {
+    "github_backlog_reconcile", "github_owner_followup",
+    "github_dispatch_assignment", "github_dispatch_handoff",
+    "github_dispatch_continuation_idle_nudge", "github_dispatch_recovery_proposal_requested",
+    "github_lease_release_reminder", "github_dispatch_ack_nudge",
+    "github_dispatch_brief_nudge", "github_dispatch_idle_nudge",
+    "github_dispatch_escalation", "github_dispatch_label_removed",
+    "github_dispatch_blocker_merged", "github_continuation_cancelled",
+    "github_dispatch_code_pr_ready", "github_dispatch_design_pr_ready",
+    "github_owner_observation_pause",
+}
+LEGACY_SYSTEM_SUBJECTS = {
+    "Reconcile assigned backlog and independent work", "Code PR ready for review",
+    "Design PR ready for review", "Dispatch label removed",
+}
+LEGACY_SYSTEM_SUBJECT_PATTERN = re.compile(
+    r"(?:Autonomous dispatch|Continuation progress check|Recovery proposal requested|"
+    r"Release needed|Ack needed|Unread dispatch brief|Progress check|Blocker merged|Observation pause): issue #[0-9]+"
+    r"|GitHub dispatch handoff: work item [0-9]+"
+    r"|Owner turn completed: inspect remaining issue #[0-9]+"
+    r"|Approved continuation revision [0-9]+ for work item [0-9]+"
+    r"|Continuation revision [0-9]+ cancelled for work item [0-9]+"
+)
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: call `deck_check_inbox(unread_only=False)` now. "
     "Read task and review messages. Then answer pending context requests and handoffs. "
@@ -1068,6 +1092,7 @@ class AgentMailService:
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
         operator_authorized: bool = False,
+        sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
         if request.decision is not None:
@@ -1082,6 +1107,7 @@ class AgentMailService:
             authenticated_sender_member_id=authenticated_sender_member_id,
             delivery_key=delivery_key,
             operator_authorized=operator_authorized,
+            sender_type=sender_type,
             commit=commit,
         )
 
@@ -1123,8 +1149,22 @@ class AgentMailService:
         delivery_key: Optional[str] = None,
         authoritative_approval_round: int | None = None,
         operator_authorized: bool = False,
+        sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if sender_type not in {None, "system", "director"}:
+            raise ValueError("Invalid sender type")
+        if sender_type is not None and (
+            request.sender_member_id is not None or sender_actor_id is not None
+        ):
+            raise ValueError("sender_type cannot override a member or external actor")
+        if sender_type == "director" and not operator_authorized:
+            raise ValueError("Director sender requires operator authorization")
+        sender_type = (
+            "external_actor" if sender_actor_id is not None
+            else "member" if request.sender_member_id is not None
+            else sender_type or "system"
+        )
         if delivery_key is not None and request.kind == "broadcast":
             existing = (
                 await db.execute(
@@ -1137,6 +1177,7 @@ class AgentMailService:
                     existing,
                     request,
                     sender_actor_id=sender_actor_id,
+                    sender_type=sender_type,
                     operator_authorized=operator_authorized,
                 ):
                     raise MailDeliveryIntegrityError(
@@ -1149,6 +1190,7 @@ class AgentMailService:
                 db,
                 request,
                 sender_actor_id=sender_actor_id,
+                sender_type=sender_type,
                 authenticated_sender_member_id=authenticated_sender_member_id,
                 authoritative_approval_round=authoritative_approval_round,
                 operator_authorized=operator_authorized,
@@ -1160,6 +1202,7 @@ class AgentMailService:
                         db,
                         request,
                         sender_actor_id=sender_actor_id,
+                        sender_type=sender_type,
                         authenticated_sender_member_id=authenticated_sender_member_id,
                         delivery_key=delivery_key,
                         authoritative_approval_round=authoritative_approval_round,
@@ -1179,6 +1222,7 @@ class AgentMailService:
                     message,
                     request,
                     sender_actor_id=sender_actor_id,
+                    sender_type=sender_type,
                     operator_authorized=operator_authorized,
                 ):
                     raise MailDeliveryIntegrityError(
@@ -1214,6 +1258,7 @@ class AgentMailService:
         request: MailMessageCreate,
         *,
         sender_actor_id: int | None,
+        sender_type: str,
         operator_authorized: bool,
     ) -> bool:
         if request.recipient_member_id is not None or request.thread_root_id is not None:
@@ -1235,6 +1280,7 @@ class AgentMailService:
             "payload": request.payload or None,
             "recipient_member_id": request.recipient_member_id,
             "sender_actor_id": sender_actor_id,
+            "sender_type": sender_type,
             "sender_member_id": request.sender_member_id,
             "subject": request.subject,
             "thread_root_id": request.thread_root_id,
@@ -1248,6 +1294,7 @@ class AgentMailService:
             "payload": message.payload or None,
             "recipient_member_id": message.recipient_member_id,
             "sender_actor_id": message.sender_actor_id,
+            "sender_type": self._stored_sender_type(message),
             "sender_member_id": message.sender_member_id,
             "subject": message.subject,
             "thread_root_id": message.thread_root_id,
@@ -1399,6 +1446,7 @@ class AgentMailService:
         db: AsyncSession,
         request: MailMessageCreate,
         *,
+        sender_type: str,
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
@@ -1465,6 +1513,7 @@ class AgentMailService:
             kind=request.kind,
             sender_member_id=request.sender_member_id,
             sender_actor_id=sender_actor_id,
+            sender_type=sender_type,
             recipient_member_id=request.recipient_member_id,
             subject=request.subject,
             body_markdown=request.body_markdown,
@@ -1665,6 +1714,7 @@ class AgentMailService:
         db: AsyncSession,
         sender_member_id: Optional[int],
         sender_actor_id: Optional[int],
+        sender_type: str,
     ) -> tuple[str, str, str | None]:
         if sender_actor_id is not None:
             actor = await db.get(MailExternalActor, sender_actor_id)
@@ -1672,9 +1722,34 @@ class AgentMailService:
                 return actor.display_name, "external_actor", actor.kind
             return "unknown external actor", "external_actor", None
         if sender_member_id is None:
-            return "Director", "director", None
+            if sender_type == "system":
+                return "Deck", "system", None
+            if sender_type == "director":
+                return "Director", "director", None
+            return "Deck or Director (recorded before v3.1)", "legacy", None
         member = await db.get(MailTeamMember, sender_member_id)
         return (member.display_name if member else "unknown", "member", None)
+
+    @staticmethod
+    def _stored_sender_type(message: MailMessage) -> str:
+        """Resolve old attribution in one place without changing historical rows."""
+        if message.sender_actor_id is not None:
+            return "external_actor"
+        if message.sender_member_id is not None:
+            return "member"
+        if message.sender_type is not None:
+            return message.sender_type
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        kind = payload.get("kind")
+        if ((isinstance(kind, str) and kind in LEGACY_SYSTEM_PAYLOAD_KINDS)
+                or payload.get("notice") == "native_input_wait"
+                or (message.delivery_key or "").startswith(
+                    ("backlog:", "owner-followup:", "github-approval:", "github-recovery:")
+                )
+                or message.subject in LEGACY_SYSTEM_SUBJECTS
+                or LEGACY_SYSTEM_SUBJECT_PATTERN.fullmatch(message.subject or "")):
+            return "system"
+        return "legacy"
 
     async def _message_response(
         self, db: AsyncSession, message: MailMessage, for_member_id: Optional[int]
@@ -1699,6 +1774,7 @@ class AgentMailService:
             db,
             message.sender_member_id,
             message.sender_actor_id,
+            self._stored_sender_type(message),
         )
         return MailMessageResponse(
             id=message.id,
