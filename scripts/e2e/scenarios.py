@@ -18,6 +18,7 @@ by their seeded names where they can.
 | Lane C (#604) | #516 a live team named like the deleted one; #520 a second group of refused requests. |
 | Lane G (#606) | #527 mail senders, #528 lease and reminders, #535 active revision, #549 supervisor. |
 | One agent, one state (#540) | F2 Frontend: a live fake pane, a live MCP session and an observation 3 h old. |
+| Lane D (#669) | Mail charters; #530 'Docs crew' mail members; #529 four read and acknowledged threads. |
 """
 from __future__ import annotations
 
@@ -174,7 +175,7 @@ def member(s: Seeder, member_id: int, preset_id: int, slot: dict[str, Any], repo
         "mail_team_members", id=member_id, identity_key=f"slot:{preset_id}:{slot['id']}:e2e-seed",
         repo_id=digest(str(repo))[:16], repo_path=str(repo), repo_name=repo.name,
         display_name=slot["name"], participant_kind="team_slot", team_preset_id=preset_id,
-        team_slot_id=slot["id"], role=slot["role"], charter=None,
+        team_slot_id=slot["id"], role=slot["role"], charter=f"Synthetic charter for {slot['name']}.",
         last_inbox_checked_at=at(hours=2), created_at=at(days=20), updated_at=at(hours=2),
     )
 
@@ -300,6 +301,7 @@ def seed_core(s: Seeder, root: Path) -> None:
     seed_lane_g(s, root, sample)
     seed_lane_c(s)
     seed_lane_b(s, root)
+    seed_lane_d(s, root)
 
 
 # Lane G (#606): states for the backend journeys in frontend/e2e/lane-g/.
@@ -443,6 +445,29 @@ def seed_lane_b(s: Seeder, root: Path) -> None:
     docs = make_repo(root, "docs-site")
     preset(s, FOUR_MEMBER_TEAM, "Docs crew", "Write the user guide.", autonomy=False, leader_slot=12)
     slots(s, FOUR_MEMBER_TEAM, FOUR_MEMBER_SLOTS, docs)
+
+
+# Lane D (#669): Agent Mail. The 4 Docs crew members give two small teams
+# (Docs crew and Quiet team) for the #530 roster, as on design screen 15.
+# The 4 threads are read and acknowledged, so the unread, pending and stale
+# counts do not change. With the 4 "Release needed" notices in one row, the
+# #529 list has 10 thread rows.
+LANE_D_THREADS = (
+    (200, 2, 4, "Pair on the CSV export", "Can you check the export page with me?"),
+    (201, 4, 6, "Docs for the export page", "The export page is ready for docs."),
+    (202, 6, 7, "Journey for the export page", "Please add a journey for the export page."),
+    (203, 7, 1, "Export journeys pass", "The export journeys pass on the branch."),
+)
+
+
+def seed_lane_d(s: Seeder, root: Path) -> None:
+    docs = make_repo(root, "docs-site")
+    for slot in FOUR_MEMBER_SLOTS:
+        member(s, slot["id"], FOUR_MEMBER_TEAM, slot, docs)
+    for index, (message_id, sender, recipient, subject, body) in enumerate(LANE_D_THREADS):
+        sent = at(hours=7, minutes=10 * index)
+        message(s, message_id, sender=sender, recipient=recipient, subject=subject, body=body,
+                sent=sent, read=sent, acked=sent)
 
 
 async def reconcile_lane_g_revision() -> None:
