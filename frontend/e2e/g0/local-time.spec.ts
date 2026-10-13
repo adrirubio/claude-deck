@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { enterDirectorKey } from '../support/director-key'
+import { chooseUnlockEvents, enterDirectorKey } from '../support/director-key'
 import { expect, test } from '../support/guard'
 import { localClockPattern, localTimeText, seedAgo } from '../support/time'
 
@@ -30,6 +30,7 @@ test('@active one seeded moment shows the same local time on Work and Audit', as
   const work = await timeText(page, 'Document the import format')
 
   await page.goto('/audit')
+  await chooseUnlockEvents(page)
   await enterDirectorKey(page)
   const audit = await timeText(page, 'dispatched')
 

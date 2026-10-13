@@ -341,30 +341,39 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.queryByText(/Retained events/)).not.toBeInTheDocument();
   });
 
-  it("waits for one submitted token and never sends the superseded mount audit read", async () => {
+  it("asks for the Director key only through Unlock events and sends one audit read (#515)", async () => {
     const stub = stubFetch();
     render(<AuditMetricsPage />);
     await waitFor(() => expect(stub.metrics()).toHaveLength(1));
     stub.metrics()[0].respond(windowBody("mount"));
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    // No stored key: the page opens with no dialog, no audit read and no count.
+    await screen.findByRole("button", { name: "Unlock events" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(stub.audit()).toHaveLength(0);
+    expect(screen.getByText(/Audit events are protected\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Total audit events/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
 
-    // While locked the Team select offers only "All teams" (#516), so the choice is the Window.
-    // A text query also finds the control while the modal dialog hides the page from role queries.
+    // While locked the Team select offers only "All teams" (#516), and a choice does not ask for the key.
     expect(screen.getAllByText("All teams")).toHaveLength(1);
-    expect(screen.queryByText("Team B")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Window"), { target: { value: "last30" } });
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+    stub.metrics()[1].respond(windowBody("30"));
+    await flushLate();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(stub.audit()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unlock events" }));
+    await waitFor(() => expect(stub.metrics()).toHaveLength(3));
+    stub.metrics()[2].respond(windowBody("B"));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(stub.audit()).toHaveLength(0);
     fireEvent.change(screen.getByPlaceholderText("Enter secret value"),
       { target: { value: "synthetic-submitted" } });
     fireEvent.click(screen.getByRole("button", { name: "Use key" }));
-    await flushLate();
-    expect(stub.audit()).toHaveLength(0);
-    expect(getOperatorToken()).toBe("synthetic-submitted");
-
-    stub.metrics()[1].respond(windowBody("B"));
     await waitFor(() => expect(stub.audit()).toHaveLength(1));
+    expect(getOperatorToken()).toBe("synthetic-submitted");
     expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-submitted");
     expect(stub.audit()[0].url.searchParams.has("team_context_key")).toBe(false);
     const after = Date.parse(stub.audit()[0].url.searchParams.get("occurred_after") ?? "");
@@ -372,7 +381,37 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     stub.audit()[0].respond(eventsBody("B-event"));
     await waitFor(() => expect(screen.getByText(/B-event/)).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Audit events are protected\./)).not.toBeInTheDocument();
+    expect(screen.getByText(/Total audit events matching filters: 1/)).toBeInTheDocument();
     expect(stub.audit()).toHaveLength(1);
+  });
+
+  it("shows no count after a cancelled key request, and says why", async () => {
+    const stub = stubFetch();
+    render(<AuditMetricsPage />);
+    await waitFor(() => expect(stub.metrics()).toHaveLength(1));
+    stub.metrics()[0].respond(windowBody("mount"));
+    fireEvent.click(await screen.findByRole("button", { name: "Unlock events" }));
+    await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+    stub.metrics()[1].respond(windowBody("again"));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByText(/Events are not shown\. The Director key request was cancelled\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Total audit events/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\b\d+ events?\b/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unlock events" })).toBeInTheDocument();
+    expect(stub.audit()).toHaveLength(0);
+  });
+
+  it("opens with a stored key and loads the events with no dialog (#515)", async () => {
+    const stub = stubFetch();
+    setOperatorToken("synthetic-operator");
+    await mountWith(stub);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unlock events" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Total audit events matching filters: 1/)).toBeInTheDocument();
   });
 
   it("shows the exact 401 refusal, clears the refused token and asks for a replacement", async () => {
@@ -389,7 +428,11 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(screen.getByText("note mount")).toBeInTheDocument();
     expect(getOperatorToken()).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("Window"), { target: { value: "last30" } });
+    // The refusal shows no count and offers Unlock events. Only Unlock asks for the replacement.
+    expect(screen.queryByText(/Total audit events/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Events are not shown\./)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Unlock events" }));
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     stub.metrics()[1].respond(windowBody("A"));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
@@ -503,13 +546,19 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(await screen.findByText("No recorded events for this team yet.")).toBeInTheDocument();
   });
 
-  it.each(["Escape", "Cancel"])("restores focus to the Team select after %s closes the token dialog (R11)",
+  it.each(["Escape", "Cancel"])("restores focus to the Unlock events button after %s closes the token dialog (R11)",
     async (dismissal) => {
       const stub = stubFetch();
       render(<AuditMetricsPage />);
       await waitFor(() => expect(stub.metrics()).toHaveLength(1));
       stub.metrics()[0].respond(windowBody("mount"));
-      // The mount read opens the dialog; nothing invoked it, so focus falls back to the Team select.
+      // The page opens with no dialog (#515). Only Unlock events opens it.
+      const unlock = await screen.findByRole("button", { name: "Unlock events" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      unlock.focus();
+      fireEvent.click(unlock);
+      await waitFor(() => expect(stub.metrics()).toHaveLength(2));
+      stub.metrics()[1].respond(windowBody("B"));
       await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
       if (dismissal === "Escape") {
         fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
@@ -517,18 +566,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
         fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       }
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Team")));
-
-      // Opened from the Window select: focus returns to that invoking control.
-      const windowSelect = screen.getByLabelText("Window");
-      windowSelect.focus();
-      fireEvent.change(windowSelect, { target: { value: "last30" } });
-      await waitFor(() => expect(stub.metrics()).toHaveLength(2));
-      stub.metrics()[1].respond(windowBody("B"));
-      await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await waitFor(() => expect(document.activeElement).toBe(windowSelect));
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Unlock events" })));
     });
 
   it("labels each retained result with its own identity after cancellation or failure", async () => {
@@ -536,16 +574,24 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     setOperatorToken("synthetic-operator");
     await mountWith(stub);
 
-    // Cancellation: the token prompt for Apply-B is cancelled.
+    // Locked: no stored key, so the Apply-B read asks for nothing and the old rows stay, labelled.
     clearOperatorToken();
     await apply("team:b");
     await waitFor(() => expect(stub.metrics()).toHaveLength(2));
     stub.metrics()[1].respond(windowBody("B"));
+    await waitFor(() => expect(screen.getByText("Retained events: the events are locked.")).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText(/mount-event/)).toBeInTheDocument();
+    expect(stub.audit()).toHaveLength(1);
+
+    // Cancellation: the Director chooses Unlock and cancels the key request.
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    await waitFor(() => expect(stub.metrics()).toHaveLength(3));
+    stub.metrics()[2].respond(windowBody("B2"));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.getByText(
       "Audit read cancelled. Safe metrics remain available.")).toBeInTheDocument());
-    expect(screen.getByText(/mount-event/)).toBeInTheDocument();
     expect(screen.getByText(/Showing events for team all, scope all, page 1/)).toBeInTheDocument();
     expect(screen.getByText("Retained events: the latest read was cancelled.")).toBeInTheDocument();
     expect(stub.audit()).toHaveLength(1);
@@ -554,8 +600,8 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     // successful identity, never C.
     setOperatorToken("synthetic-operator");
     await apply("team:c");
-    await waitFor(() => expect(stub.metrics()).toHaveLength(3));
-    stub.metrics()[2].respond({ detail: "synthetic metrics failure" }, 500);
+    await waitFor(() => expect(stub.metrics()).toHaveLength(4));
+    stub.metrics()[3].respond({ detail: "synthetic metrics failure" }, 500);
     await waitFor(() => expect(stub.audit()).toHaveLength(2));
     stub.audit()[1].respond({ detail: "synthetic audit failure" }, 500);
     await waitFor(() => expect(screen.getByText("Retained events: the latest read failed.")).toBeInTheDocument());

@@ -21,3 +21,8 @@ export async function enterDirectorKey(page: Page, key: string = DIRECTOR_KEY): 
   await dialog.getByRole('button', { name: SUBMIT_NAME }).click()
   await expect(dialog).toBeHidden()
 }
+
+/** Choose "Unlock events" on Audit. The page asks for the key only then (#515). */
+export async function chooseUnlockEvents(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /unlock events/i }).first().click()
+}

@@ -73,7 +73,7 @@ type EventsResult = {
   page: number;
   observedAt: string;
 };
-type ReadState = "idle" | "pending" | "failed" | "cancelled";
+type ReadState = "idle" | "pending" | "failed" | "cancelled" | "locked";
 type RefusalResult = { groups: RefusalGroup[]; truncated: boolean };
 // #520: "Show events" narrows the events table to the refused requests of one item.
 type EventFocus = { itemContextKey: string; label: string };
@@ -98,6 +98,7 @@ function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilt
   if (state === "pending") return "a newer read is pending";
   if (state === "failed") return "the latest read failed";
   if (state === "cancelled") return "the latest read was cancelled";
+  if (state === "locked") return "the events are locked";
   if (!matches) return `it does not match the applied selection (${describeFilters(applied, names)})`;
   return null;
 }
@@ -115,6 +116,10 @@ export function AuditMetricsPage() {
   const [eventsResult, setEventsResult] = useState<EventsResult | null>(null);
   const [metricsState, setMetricsState] = useState<ReadState>("idle");
   const [eventsState, setEventsState] = useState<ReadState>("idle");
+  // #515: true after the API refused the Director key. The page then offers Unlock events again.
+  const [eventsRefused, setEventsRefused] = useState(false);
+  // #515: true from the Unlock click until that read ends. The locked box stays, so focus keeps its button.
+  const [unlocking, setUnlocking] = useState(false);
   const [metricsError, setMetricsError] = useState("");
   const [eventsError, setEventsError] = useState("");
   const [refusalResult, setRefusalResult] = useState<RefusalResult | null>(null);
@@ -230,13 +235,23 @@ export function AuditMetricsPage() {
     filters: AppliedFilters,
     requestedPage: number,
     applyId: number = applyEpochRef.current,
+    ask = false,
   ): Promise<string | null> {
     const epoch = ++auditEpochRef.current;
     const current = () => epoch === auditEpochRef.current && applyId === applyEpochRef.current;
+    // #515: the key dialog opens only when the Director chooses Unlock events.
+    if (!ask && !getOperatorToken()) {
+      setUnlocking(false);
+      setEventsState("locked");
+      setEventsError("");
+      setStatus("Audit events are locked. Safe metrics remain available.");
+      return null;
+    }
     setEventsState("pending");
     const token = await requestToken();
     if (!current()) return null;
     if (!token) {
+      setUnlocking(false);
       setEventsState("cancelled");
       setStatus("Audit read cancelled. Safe metrics remain available.");
       return null;
@@ -255,6 +270,8 @@ export function AuditMetricsPage() {
       if (!current()) return token;
       setEventsResult({ data, filters, page: requestedPage, observedAt: new Date().toISOString() });
       setEventsState("idle");
+      setUnlocking(false);
+      setEventsRefused(false);
       setEventsError("");
       setStatus(`Loaded ${data.items.length} of ${data.total} audit events.`);
       return token;
@@ -266,6 +283,8 @@ export function AuditMetricsPage() {
         clearOperatorToken();
       }
       if (!current()) return null;
+      setEventsRefused(refused);
+      setUnlocking(false);
       setEventsState("failed");
       setEventsError(cause instanceof Error ? cause.message : "Audit read refused.");
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
@@ -340,6 +359,12 @@ export function AuditMetricsPage() {
     }
   }
 
+  // #515: the one way to ask for the Director key.
+  function unlockEvents() {
+    setUnlocking(true);
+    void applyReads(applied, 1, true);
+  }
+
   function showRefusalEvents(group: RefusalGroup) {
     if (!group.itemContextKey) return;
     const next = { itemContextKey: group.itemContextKey, label: group.itemLabel };
@@ -356,7 +381,7 @@ export function AuditMetricsPage() {
   }
 
   // One applied identity drives both reads so the filters always match.
-  async function applyReads(filters: AppliedFilters, requestedPage: number) {
+  async function applyReads(filters: AppliedFilters, requestedPage: number, ask = false) {
     const applyId = ++applyEpochRef.current;
     await Promise.resolve();
     if (applyId !== applyEpochRef.current) return;
@@ -366,7 +391,7 @@ export function AuditMetricsPage() {
     await loadMetrics(filters, applyId);
     // A delayed old metrics completion must never start an old audit epoch.
     if (applyId !== applyEpochRef.current) return;
-    const token = await loadAudit(filters, requestedPage, applyId);
+    const token = await loadAudit(filters, requestedPage, applyId, ask);
     if (applyId !== applyEpochRef.current) return;
     if (token) {
       void loadFeedContext(() => applyId === applyEpochRef.current);
@@ -417,6 +442,10 @@ export function AuditMetricsPage() {
     : null;
   // C13: paging uses the identity of the rows on screen. It waits while those
   // rows belong to another selection or a read is pending.
+  // #515: no count and no feed while the events are locked, cancelled or refused.
+  // The box stays from the Unlock click until that read ends, so focus returns to the same button.
+  const eventsBlocked = !eventsResult
+    && (["locked", "cancelled", "failed"].includes(eventsState) || (eventsState === "pending" && unlocking));
   const pagingBlocked = !eventsResult || !sameFilters(eventsResult.filters, applied)
     || eventsState === "pending";
 
@@ -496,7 +525,7 @@ export function AuditMetricsPage() {
         names={memberNames}
         truncated={refusalResult?.truncated ?? false}
         onShowEvents={showRefusalEvents}
-        onUnlock={() => void applyReads(applied, 1)}
+        onUnlock={unlockEvents}
       />
 
       <section aria-labelledby="events" className="space-y-2 rounded border p-3">
@@ -522,30 +551,52 @@ export function AuditMetricsPage() {
           </p>
         )}
         {eventsError && <p role="alert" className="text-sm text-destructive">{eventsError}</p>}
-        {(isNoEventKey(applied.teamKey) || isNoEventKey(applied.scopeKey)) && (
+        {eventsBlocked && (
+          <div data-testid="events-locked" className="space-y-2 rounded border border-dashed p-3 text-sm">
+            <p>
+              <span className="font-medium">Locked.</span> Audit events are protected. They can include changed
+              settings and reasons, and agents cannot read them.
+            </p>
+            {eventsState === "cancelled" && (
+              <p>Events are not shown. The Director key request was cancelled.</p>
+            )}
+            {eventsState === "failed" && <p>Events are not shown. The read was refused or failed.</p>}
+            {(eventsState !== "failed" || eventsRefused) && (
+              <Button onClick={unlockEvents} disabled={eventsState === "pending"}>Unlock events</Button>
+            )}
+          </div>
+        )}
+        {!eventsResult && eventsState === "pending" && !unlocking && (
+          <p className="text-sm text-muted-foreground">Reading events.</p>
+        )}
+        {eventsResult && (isNoEventKey(applied.teamKey) || isNoEventKey(applied.scopeKey)) && (
           <p className="text-sm">
             No recorded events for this {isNoEventKey(applied.teamKey) ? "team" : "repository"} yet.
           </p>
         )}
-        <ActivityFeed
-          feed={feed}
-          now={eventsResult ? Date.parse(eventsResult.observedAt) : 0}
-          snapshotLabels={namedSnapshotValues}
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" disabled={pagingBlocked || page <= 1}
-            onClick={() => eventsResult && void loadAudit(eventsResult.filters, eventsResult.page - 1)}>
-            Previous page
-          </Button>
-          <p className="text-sm">Page {page} of {pageCount}</p>
-          <Button variant="outline" disabled={pagingBlocked || page >= pageCount}
-            onClick={() => eventsResult && void loadAudit(eventsResult.filters, eventsResult.page + 1)}>
-            Next page
-          </Button>
-        </div>
+        {eventsResult && (
+          <ActivityFeed
+            feed={feed}
+            now={Date.parse(eventsResult.observedAt)}
+            snapshotLabels={namedSnapshotValues}
+          />
+        )}
+        {eventsResult && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="outline" disabled={pagingBlocked || page <= 1}
+              onClick={() => void loadAudit(eventsResult.filters, eventsResult.page - 1)}>
+              Previous page
+            </Button>
+            <p className="text-sm">Page {page} of {pageCount}</p>
+            <Button variant="outline" disabled={pagingBlocked || page >= pageCount}
+              onClick={() => void loadAudit(eventsResult.filters, eventsResult.page + 1)}>
+              Next page
+            </Button>
+          </div>
+        )}
       </section>
 
-      <p className="text-sm">Total audit events matching filters: {total}</p>
+      {eventsResult && <p className="text-sm">Total audit events matching filters: {total}</p>}
 
       <details className="rounded border p-3">
         <summary className="cursor-pointer font-semibold">All metrics (technical)</summary>
