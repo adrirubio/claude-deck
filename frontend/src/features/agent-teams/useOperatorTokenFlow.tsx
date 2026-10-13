@@ -13,7 +13,11 @@ export function useOperatorTokenFlow(reason: string) {
   const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
   const requestToken = useCallback((message: string | null = null): Promise<string | null> => {
     const stored = getOperatorToken()
-    if (stored) return Promise.resolve(stored)
+    if (stored) {
+      // Another control on the page may have stored the key. Follow the storage.
+      setOperatorTokenStored(true)
+      return Promise.resolve(stored)
+    }
     if (tokenPromiseRef.current) return tokenPromiseRef.current
     const pending = new Promise<string | null>((resolve) => {
       tokenResolverRef.current = resolve

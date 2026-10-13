@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
-import { cleanup, render as renderUi, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render as renderUi, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
@@ -10,7 +10,9 @@ import { WorkItemPanel } from '../src/features/agent-teams/WorkItemPanel'
 import { useOperatorTokenFlow } from '../src/features/agent-teams/useOperatorTokenFlow'
 import { useWorkItemOperations } from '../src/features/agent-teams/useWorkItemOperations'
 import type { GithubScopeRevision, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
-import { fixtureFetch, jsonResponse, settle } from './helpers/factory'
+import { WorkDetailPage } from '../src/features/factory/pages/WorkDetailPage'
+import detail from './fixtures/factory/v1-p04/work-item.json'
+import { fixtureFetch, jsonResponse, renderRoute, settle } from './helpers/factory'
 
 // The publication reader has its own request, expiry and error tests.
 vi.mock('../src/features/agent-teams/WorkPublicationPanel', () => ({ WorkPublicationPanel: () => null }))
@@ -245,5 +247,84 @@ describe('WorkItemPanel on the Work item page', () => {
     expect(await screen.findByText('Enter the Director key to load recovery history.')).toBeInTheDocument()
     expect(calls.some((call) => call.path.endsWith('/scope-revisions'))).toBe(false)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('A1 findings on the Work item page', () => {
+  const page = detail.operator_stop_retry_eligible.response.work_item
+  const record = {
+    ...workItem,
+    id: page.item.id,
+    scope_id: page.item.scope_id,
+    dispatch_status: 'escalated' as const,
+    retry_allowed: true,
+  }
+  const serve = (items: GithubWorkItem[], calls: { path: string; method: string; key: string | null }[]) =>
+    fixtureFetch((path, _query, options) => {
+      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Deck-Operator-Token') })
+      if (path.startsWith('factory/work-items/')) return jsonResponse(detail.operator_stop_retry_eligible.response)
+      if (path === `agent-teams/presets/${page.team.id}/github-work-items`) return jsonResponse({ items })
+      if (path.endsWith('/retry')) return jsonResponse({ ...record, dispatch_status: 'pending' })
+      if (path.endsWith('/scope-revisions')) return jsonResponse([])
+      return jsonResponse({}, 404)
+    })
+
+  it('loads recovery history after Retry stored the key (one key state for both controls)', async () => {
+    clearOperatorToken()
+    const calls: { path: string; method: string; key: string | null }[] = []
+    serve([record], calls)
+    renderRoute(<WorkDetailPage />, `/work/${page.item.id}`, '/work/:workItemId')
+    await settle()
+    expect(await screen.findByText('Enter the Director key to load recovery history.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry issue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm retry' }))
+    await settle()
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Operator token'), { target: { value: 'test-operator' } })
+    fireEvent.submit(within(dialog).getByRole('button', { name: 'Authorize retry' }).closest('form')!)
+    await settle()
+    expect(calls.some((call) => call.path.endsWith('/retry') && call.key === 'test-operator')).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading history' }))
+    await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/scope-revisions'))).toHaveLength(1))
+    expect(calls.find((call) => call.path.endsWith('/scope-revisions'))!.key).toBe('test-operator')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(await screen.findByText('No continuation revisions recorded.')).toBeInTheDocument()
+  })
+
+  it('keeps protected history by item ID for an item outside the latest 200 records', async () => {
+    setOperatorToken('test-operator')
+    const calls: { path: string; method: string; key: string | null }[] = []
+    fixtureFetch((path, _query, options) => {
+      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Deck-Operator-Token') })
+      if (path.startsWith('factory/work-items/')) return jsonResponse(detail.operator_stop_retry_eligible.response)
+      if (path === `agent-teams/presets/${page.team.id}/github-work-items`) return jsonResponse({ items: [] })
+      if (path.endsWith('/scope-revisions')) return jsonResponse([{ ...revision, revision: 2, status: 'approved' }])
+      return jsonResponse({}, 404)
+    })
+    renderRoute(<WorkDetailPage />, `/work/${page.item.id}`, '/work/:workItemId')
+    await settle()
+    expect(await screen.findByText(/Item actions are unavailable: this item is not in the latest 200 records/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume prepared attempt' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect protected revision history' }))
+    expect(await screen.findByText('Revision 2: approved')).toBeInTheDocument()
+    const history = calls.find((call) => call.path === `agent-teams/github-work-items/${page.item.id}/scope-revisions`)!
+    expect(history.method).toBe('GET')
+    expect(history.key).toBe('test-operator')
+  })
+
+  it('asks for the Director key when history by item ID needs it', async () => {
+    clearOperatorToken()
+    const user = userEvent.setup()
+    const calls: { path: string; method: string; key: string | null }[] = []
+    serve([], calls)
+    renderRoute(<WorkDetailPage />, `/work/${page.item.id}`, '/work/:workItemId')
+    await settle()
+    await user.click(await screen.findByRole('button', { name: 'Inspect protected revision history' }))
+    await user.type(screen.getByPlaceholderText('Enter secret value'), 'typed-key')
+    await user.click(screen.getByRole('button', { name: 'Use key' }))
+    expect(await screen.findByText('No continuation revisions recorded.')).toBeInTheDocument()
+    expect(calls.find((call) => call.path.endsWith('/scope-revisions'))!.key).toBe('typed-key')
   })
 })

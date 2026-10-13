@@ -249,6 +249,7 @@ export function WorkItemActions({
   const retryLoadRevisions = () => {
     if (itemId === null) return
     if (!operatorTokenStored) {
+      // A key found in storage turns the stored flag on, and the effect above loads the history.
       void onRequestOperatorToken()
       return
     }
