@@ -66,7 +66,7 @@ describe('harness page', () => {
     expect(within(tile).getByText('Tools that the harness can call')).toBeInTheDocument()
     expect(within(tile).getByText('1 server')).toBeInTheDocument()
     expect(within(screen.getByRole('link', { name: 'Slash commands' }).closest('li') as HTMLElement).getByText('None yet')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'All harnesses' })).toHaveAttribute('href', '/harnesses')
+    expect(screen.getByRole('link', { name: 'Harnesses' })).toHaveAttribute('href', '/harnesses')
   })
 
   it('shows no code name and no access code outside Technical details', async () => {

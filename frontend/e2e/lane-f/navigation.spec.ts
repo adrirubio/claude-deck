@@ -6,7 +6,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // reaches all harnesses; one click reaches any other native page of the same
 // harness; each native page has its own heading and tab title.
 // Design reference: screens 19 (harness page) and 20 (settings page).
-// @pending until #522 merges.
+// @active since #522 merged.
 
 const HARNESSES = ['claude-code', 'codex-cli']
 
@@ -14,6 +14,8 @@ const HARNESSES = ['claude-code', 'codex-cli']
 async function nativePages(page: Page, harness: string): Promise<string[]> {
   await page.goto(`/harnesses/${harness}`)
   await expect(page.locator('main')).toBeVisible()
+  // The tiles appear after the registry and the catalog load (the skeleton card shows first).
+  await expect(page.locator(`main a[href^="/harnesses/${harness}/"]`).first()).toBeVisible()
   const hrefs = await page.locator(`main a[href^="/harnesses/${harness}/"]`).evaluateAll(
     links => links.map(link => link.getAttribute('href') ?? ''),
   )
@@ -21,7 +23,7 @@ async function nativePages(page: Page, harness: string): Promise<string[]> {
 }
 
 for (const harness of HARNESSES) {
-  test(`@pending ${harness}: breadcrumbs reach the harness page, then all harnesses`, async ({ page }) => {
+  test(`@active ${harness}: breadcrumbs reach the harness page, then all harnesses`, async ({ page }) => {
     const pages = await nativePages(page, harness)
     expect(pages.length).toBeGreaterThan(0)
     await page.goto(pages[0])
@@ -33,7 +35,7 @@ for (const harness of HARNESSES) {
     await expect(page).toHaveURL(/\/harnesses$/)
   })
 
-  test(`@pending ${harness}: a native page links to every other native page of the harness`, async ({ page }) => {
+  test(`@active ${harness}: a native page links to every other native page of the harness`, async ({ page }) => {
     const pages = await nativePages(page, harness)
     await page.goto(pages[0])
     const subnav = page.getByRole('navigation', { name: new RegExp(harness.replace('-cli', '') + '|pages|settings', 'i') })
@@ -43,7 +45,7 @@ for (const harness of HARNESSES) {
     for (const other of pages.slice(1)) expect(linked, `a link to ${other}`).toContain(other)
   })
 
-  test(`@pending ${harness}: each native page has its own heading and tab title`, async ({ page }) => {
+  test(`@active ${harness}: each native page has its own heading and tab title`, async ({ page }) => {
     const pages = await nativePages(page, harness)
     const titles: string[] = []
     const headings: string[] = []
@@ -60,7 +62,7 @@ for (const harness of HARNESSES) {
   })
 }
 
-test('@pending the breadcrumbs and sub-navigation are keyboard reachable', async ({ page }) => {
+test('@active the breadcrumbs and sub-navigation are keyboard reachable', async ({ page }) => {
   await page.goto('/harnesses/claude-code/mcp')
   await expectKeyboardReachable(page, page.getByRole('navigation', { name: /breadcrumb/i }), 2)
 })

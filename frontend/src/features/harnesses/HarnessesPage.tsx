@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronLeft, Lock, Terminal } from "lucide-react";
+import { Lock, Terminal } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { useProviderContext, NativeProviderScope } from "@/contexts/ProviderContext";
 import { DashboardProvider, useDashboard } from "@/contexts/DashboardContext";
@@ -9,11 +9,12 @@ import { fetchAgentTeamPresets } from "@/features/agent-teams/api";
 import { harnesses } from "@/features/factory/filterHelpers";
 import { CLICKABLE_CARD } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { surfaceRegistry, nativeAccess, type NativeSurface } from "@/features/native-settings/surfaceRegistry";
-import { SURFACE_GROUPS, surfaceInfo } from "@/features/harnesses/surfaceCatalog";
+import { surfaceRegistry, nativeAccess } from "@/features/native-settings/surfaceRegistry";
+import { SURFACE_GROUPS } from "@/features/harnesses/surfaceCatalog";
+import { HarnessBreadcrumb } from "@/features/harnesses/HarnessNav";
+import { availablePages, focusRing, useDocumentTitle } from "@/features/harnesses/harnessPages";
 import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus, type ProviderOperations } from "@/types/providers";
 
-const focusRing = "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 // A card shows no "unknown" or "unavailable" while the registry or its own operating catalog still loads.
 function HarnessCardSkeleton({ id }: { id: AgentProviderId }) {
@@ -99,14 +100,6 @@ function TechnicalDetails({ id, metadata }: { id: AgentProviderId; metadata?: Ag
   );
 }
 
-/** The pages that this harness has, with the access that the loaded catalog grants. */
-function availablePages(id: AgentProviderId, metadata: AgentProviderStatus | undefined, catalog: ProviderOperations) {
-  return (Object.keys(surfaceInfo) as NativeSurface[])
-    .filter(surface => surfaceRegistry[id][surface])
-    .map(surface => ({ surface, info: surfaceInfo[surface]!, access: nativeAccess(id, surface, metadata, catalog) }))
-    .filter((page): page is typeof page & { access: NonNullable<typeof page.access> } => page.access !== null);
-}
-
 function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; metadata?: AgentProviderStatus; catalog: ProviderOperations; withCounts: boolean }) {
   const { stats } = useDashboard({ autoFetch: withCounts });
   const providerStats = withCounts && stats?.providerId === id ? stats : null;
@@ -154,15 +147,14 @@ function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; met
 
 function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
   const { state, catalog } = useProviderOperations(id);
+  useDocumentTitle(`${harnesses[id]} · Claude Deck`);
   const summaryAccess = catalog ? nativeAccess(id, "summary", metadata, catalog) : null;
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
   const status = harnessStatus(metadata, catalog);
   return (
     <NativeProviderScope providerId={id} onSelect={() => undefined}>
       <div className="space-y-6">
-        <nav aria-label="Breadcrumb" className="text-sm">
-          <Link className={`inline-flex items-center gap-1 text-muted-foreground hover:underline ${focusRing}`} to="/harnesses"><ChevronLeft className="h-3 w-3" aria-hidden="true" />All harnesses</Link>
-        </nav>
+        <HarnessBreadcrumb harnessId={id} />
         <header className="space-y-1">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-2xl font-semibold">{harnesses[id]}</h2>
@@ -252,7 +244,9 @@ export function HarnessesPage() {
   const ids = Object.keys(harnesses).filter(id => !providerId || providerId === id) as AgentProviderId[];
   const teamCounts = useTeamCounts();
   const single = providerId && ids.length === 1 ? ids[0] : null;
+  useDocumentTitle(single ? null : "Harnesses · Claude Deck");
   return <section className="space-y-5">
+    {!single && <HarnessBreadcrumb />}
     {!single && <h2 className="text-2xl font-semibold">Harnesses{providerId ? ` · ${harnesses[providerId as AgentProviderId] ?? providerId}` : ""}</h2>}
     {!single && <p>The agent tools on this machine. Open one to see its settings pages.</p>}
     {loading && <p role="status">Loading harness registry…</p>}
