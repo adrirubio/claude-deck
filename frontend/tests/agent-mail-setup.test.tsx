@@ -233,6 +233,26 @@ describe('Agent Mail page', () => {
     expect(screen.getByRole('link', { name: 'Manage in Harnesses' })).toHaveAttribute('href', '/harnesses')
   })
 
+  it('shows the totals in one compact line with the same numbers', async () => {
+    vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members: [
+      { id: 1, display_name: 'A', participant_kind: 'repo', status: 'connected', unread_count: 3, pending_count: 2,
+        unseen_pending_count: 1, stale_pending_count: 1, can_nudge: false, sessions: [] },
+      { id: 2, display_name: 'B', participant_kind: 'repo', status: 'observed', unread_count: 0, pending_count: 0,
+        unseen_pending_count: 0, stale_pending_count: 0, can_nudge: false, sessions: [] },
+    ] as never })
+    vi.mocked(fetchAgentMailMessages).mockResolvedValue([])
+    vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue(status())
+    render(<MemoryRouter><AgentMailPage /></MemoryRouter>)
+    const totals = await screen.findByRole('group', { name: 'Agent Mail totals' })
+    await waitFor(() => expect(totals.textContent).toContain('2 participants'))
+    expect(totals.textContent).toContain('1 connected')
+    expect(totals.textContent).toContain('1 observed only')
+    expect(totals.textContent).toContain('3 unread')
+    expect(totals.textContent).toContain('2 pending')
+    expect(totals.textContent).toContain('1 unseen')
+    expect(totals.textContent).toContain('1 stale')
+  })
+
   it('points the setup notice at Harnesses when nothing is set up', async () => {
     vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members: [] })
     vi.mocked(fetchAgentMailMessages).mockResolvedValue([])

@@ -6,7 +6,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type {
   AgentMailInstallStatus,
@@ -245,49 +244,30 @@ export function AgentMailPage() {
         </Alert>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Participants</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Users className="h-5 w-5 text-muted-foreground" />
-              {members.length}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Connected</CardDescription>
-            <CardTitle className="text-3xl">{stats.connected}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Observed only</CardDescription>
-            <CardTitle className="text-3xl">{stats.observed}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Inbox load</CardDescription>
-            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-              <Badge variant="secondary">{stats.unread} unread</Badge>
-              <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
-                {stats.pending} pending
-              </Badge>
-              {stats.unseenPending > 0 && (
-                <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
-                  {stats.unseenPending} unseen
-                </Badge>
-              )}
-              {stats.stalePending > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
-                  {stats.stalePending} stale
-                </Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+      <div
+        role="group"
+        aria-label="Agent Mail totals"
+        className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2 text-sm"
+      >
+        <span><span className="font-semibold">{members.length}</span> participants</span>
+        <span><span className="font-semibold">{stats.connected}</span> connected</span>
+        <span><span className="font-semibold">{stats.observed}</span> observed only</span>
+        <span className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{stats.unread} unread</Badge>
+          <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
+            {stats.pending} pending
+          </Badge>
+          {stats.unseenPending > 0 && (
+            <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
+              {stats.unseenPending} unseen
+            </Badge>
+          )}
+          {stats.stalePending > 0 && (
+            <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
+              {stats.stalePending} stale
+            </Badge>
+          )}
+        </span>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
