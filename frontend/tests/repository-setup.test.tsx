@@ -101,6 +101,30 @@ describe("guided repository setup", () => {
     expect(mocks.setOperatorToken).toHaveBeenCalledWith("fixture-token");
   });
 
+  it("selects the team named in the address, so Add a repository from a team starts there", async () => {
+    mocks.apiClient.mockResolvedValue({ status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z", checks: {} });
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [
+      { id: 6, name: "Other crew", autonomy_enabled: false, slots: [] },
+      { id: 7, name: "Release crew", autonomy_enabled: true, slots: [] },
+    ] });
+    render(<MemoryRouter initialEntries={["/repositories/new?team_id=7"]}><RepositorySetupPage /></MemoryRouter>);
+    await waitFor(() => expect(mocks.fetchAgentTeamPresets).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    expect(screen.getByLabelText("Team setup")).toHaveValue("existing");
+    expect(screen.getByLabelText("Team")).toHaveValue("7");
+  });
+
+  it("ignores a team in the address that does not exist", async () => {
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [{ id: 6, name: "Other crew", autonomy_enabled: false, slots: [] }] });
+    render(<MemoryRouter initialEntries={["/repositories/new?team_id=99"]}><RepositorySetupPage /></MemoryRouter>);
+    await waitFor(() => expect(mocks.fetchAgentTeamPresets).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("Team")).not.toBeInTheDocument();
+  });
+
   it("keeps the form when the key prompt is cancelled and offers Enter key", async () => {
     let stored: string | null = null;
     mocks.getOperatorToken.mockImplementation(() => stored);

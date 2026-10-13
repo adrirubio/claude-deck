@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ApiHttpError, apiClient } from "@/lib/api";
 import {
@@ -170,6 +170,9 @@ function isDefiniteCreateNonWrite(cause: unknown) {
 }
 
 export function RepositorySetupPage() {
+  // "Add a repository" from a team page names the team: ?team_id=N.
+  const [searchParams] = useSearchParams();
+  const requestedTeam = Number(searchParams.get("team_id")) || null;
   const [draft, setDraft] = useState<Draft>(initial);
   const [step, setStep] = useState(0);
   const [preflight, setPreflight] = useState<{ key: string; value: Preflight } | null>(null);
@@ -310,6 +313,9 @@ export function RepositorySetupPage() {
     const lists = await Promise.all(list.presets.map((preset) => fetchTeamGithubScopes(preset.id)));
     setPresets(list.presets);
     setScopes(lists.flatMap((item) => item.scopes));
+    if (requestedTeam && list.presets.some((item) => item.id === requestedTeam)) {
+      setDraft((current) => ({ ...current, teamMode: "existing", teamId: requestedTeam }));
+    }
   }
 
   useEffect(() => {

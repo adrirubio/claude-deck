@@ -32,14 +32,14 @@ test('@active a work item loads', async ({ page }) => {
 test('@active Repositories lists the seeded scopes', async ({ page }) => {
   await page.goto('/repositories')
   await expect(page.getByRole('heading', heading('Repositories'))).toBeVisible()
-  // The Repository filter select also lists these names, as options. Match the cards.
+  // The Repository filter select also lists these names, as options. Match the table links.
   await expect(page.getByRole('link', { name: 'example-org/sample-app' }).first()).toBeVisible()
   await expect(page.getByRole('link', { name: 'example-org/quiet-lib' }).first()).toBeVisible()
 })
 
 test('@active a repository loads', async ({ page }) => {
   await page.goto('/repositories/1')
-  await expect(page.getByRole('heading', heading(/Repository scope 1/))).toBeVisible()
+  await expect(page.getByRole('heading', heading('example-org/sample-app'))).toBeVisible()
   await expect(page.getByText('example-org/sample-app').first()).toBeVisible()
 })
 

@@ -67,7 +67,8 @@ for (const theme of THEMES) {
   test(`@active the full Teams page meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
     await open(page, '/teams/1?tab=autonomy', 'Agent Teams')
-    await expect(page.getByText('code merge:', { exact: false }).first()).toBeVisible()
+    // The watched repo cards are short since #536: a state badge and a Manage link.
+    await expect(page.getByRole('link', { name: /^Manage / }).first()).toBeVisible()
     const failures = await contrastFailures(page.locator('body'))
     expect(failures, describeFailures(failures)).toEqual([])
   })
