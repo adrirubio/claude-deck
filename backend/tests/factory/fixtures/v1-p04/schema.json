@@ -291,6 +291,68 @@
           "title": "TeamRemainingWork",
           "type": "object"
         },
+        "TeamRequiredCIUnreadable": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            },
+            "work_item_id": {
+              "exclusiveMinimum": 0,
+              "title": "Work Item Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "since",
+            "reason",
+            "work_item_id",
+            "scope_id",
+            "issue_number"
+          ],
+          "title": "TeamRequiredCIUnreadable",
+          "type": "object"
+        },
         "TeamSummaryAttention": {
           "additionalProperties": false,
           "properties": {
@@ -576,6 +638,13 @@
         },
         "remaining_work": {
           "$ref": "#/$defs/TeamRemainingWork"
+        },
+        "required_ci_unreadable": {
+          "items": {
+            "$ref": "#/$defs/TeamRequiredCIUnreadable"
+          },
+          "title": "Required Ci Unreadable",
+          "type": "array"
         },
         "supervisor": {
           "const": "none",
@@ -1761,6 +1830,50 @@
           "title": "OwnerReference",
           "type": "object"
         },
+        "RequiredCIUnreadableSignal": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          "required": [
+            "since",
+            "reason"
+          ],
+          "title": "RequiredCIUnreadableSignal",
+          "type": "object"
+        },
         "SafeWorkItem": {
           "additionalProperties": false,
           "properties": {
@@ -1786,6 +1899,37 @@
             "attempt_phase": {
               "title": "Attempt Phase",
               "type": "string"
+            },
+            "checks_unavailable_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "permission_missing",
+                    "workflow_missing",
+                    "api_error",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Reason"
+            },
+            "checks_unavailable_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Since"
             },
             "created_at": {
               "format": "date-time",
@@ -1867,6 +2011,17 @@
                 }
               ],
               "title": "Pr Number"
+            },
+            "required_ci_unreadable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequiredCIUnreadableSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "retry_count": {
               "title": "Retry Count",
@@ -2645,6 +2800,50 @@
           "title": "OwnerReference",
           "type": "object"
         },
+        "RequiredCIUnreadableSignal": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          "required": [
+            "since",
+            "reason"
+          ],
+          "title": "RequiredCIUnreadableSignal",
+          "type": "object"
+        },
         "SafeWorkItem": {
           "additionalProperties": false,
           "properties": {
@@ -2670,6 +2869,37 @@
             "attempt_phase": {
               "title": "Attempt Phase",
               "type": "string"
+            },
+            "checks_unavailable_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "permission_missing",
+                    "workflow_missing",
+                    "api_error",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Reason"
+            },
+            "checks_unavailable_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Since"
             },
             "created_at": {
               "format": "date-time",
@@ -2751,6 +2981,17 @@
                 }
               ],
               "title": "Pr Number"
+            },
+            "required_ci_unreadable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequiredCIUnreadableSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "retry_count": {
               "title": "Retry Count",

@@ -12,6 +12,12 @@ Use this skill for the outer supervising agent. Keep the team's authenticated Le
 Link the saved team to its parent issue with `parent_issue_url`.
 Use `description` for the outcome. Keep completion conditions in the parent issue.
 Use `deck_get_team_summary` to read existing attention, human actions, HOLD, pauses, effort totals, and next actors.
+Read its optional `required_ci_unreadable` array for unreadable CI after the 15-minute grace period.
+Work item responses supply the same signal and `checks_unavailable_since`.
+Use the safe reason and fixed next steps to check GitHub access and configured workflows.
+This replaces manual comparison of repeated status notes.
+Unreadable checks consume no retry or diagnostic budget.
+A later successful read clears the signal, including pending or failed checks.
 Check expiry and coverage. Incomplete, stale, unknown, or changed-context reports keep the whole estimate Unknown.
 The read limits observations to eight seconds and 64 unfinished items. Its effort total excludes waiting time.
 The summary grants no approval, owner contact, resume, retry, lease, merge, or milestone authority.

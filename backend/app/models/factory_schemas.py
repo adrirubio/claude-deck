@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, ConfigDict, Field
 from app.models.api_model import ApiModel as BaseModel
-from app.models.schemas import AgentStatus
+from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal
 
 
 def _utc(value: datetime) -> datetime:
@@ -168,6 +168,9 @@ class SafeWorkItem(FactoryModel):
     updated_at: Timestamp
     github_updated_at: Timestamp
     last_verified_sha: str | None
+    checks_unavailable_since: Timestamp | None = None
+    checks_unavailable_reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"] | None = None
+    required_ci_unreadable: RequiredCIUnreadableSignal | None = None
 
 
 class WorkProjection(FactoryModel):
@@ -332,6 +335,12 @@ class TeamCampaignSummary(FactoryModel):
     decisions_ahead: list[CampaignDecision]
 
 
+class TeamRequiredCIUnreadable(RequiredCIUnreadableSignal):
+    work_item_id: PositiveId
+    scope_id: PositiveId
+    issue_number: PositiveId
+
+
 class AgentTeamSummaryResponse(FactoryModel):
     preset_id: PositiveId
     description: str | None
@@ -342,6 +351,7 @@ class AgentTeamSummaryResponse(FactoryModel):
     coverage_complete: bool
     hold_code: Literal["hold", "recovery_only", "hold_unavailable"] | None
     attention: list[TeamSummaryAttention]
+    required_ci_unreadable: list[TeamRequiredCIUnreadable] = Field(default_factory=list)
     human_actions: list[TeamSummaryHumanAction]
     remaining_work: TeamRemainingWork
     next_actors: list[Literal["owner", "leader", "operator", "controller"]]

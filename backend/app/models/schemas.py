@@ -2657,6 +2657,17 @@ class AgentTeamActivityResponse(BaseModel):
     slots: List[AgentActivityDisplayObservation] = Field(default_factory=list)
 
 
+class RequiredCIUnreadableSignal(BaseModel):
+    code: Literal["required_ci_unreadable"] = "required_ci_unreadable"
+    label: Literal["Required CI cannot be read"] = "Required CI cannot be read"
+    since: datetime
+    reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"]
+    next_steps: List[str] = Field(default_factory=lambda: [
+        "Check GitHub access and the configured required workflows.",
+        "Deck will poll again. Unreadable checks do not grant verification or consume a retry.",
+    ])
+
+
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int
@@ -2689,6 +2700,9 @@ class GithubWorkItemResponse(BaseModel):
     retry_requested_at: Optional[datetime] = None
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
+    checks_unavailable_since: Optional[datetime] = None
+    checks_unavailable_reason: Optional[str] = None
+    required_ci_unreadable: Optional[RequiredCIUnreadableSignal] = None
     auto_merged_at: Optional[datetime] = None
     active_scope_revision: int
     active_scope_summary: Optional[str] = None

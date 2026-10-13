@@ -329,7 +329,8 @@ Status grants no approval, lease renewal, wake delivery, or recovery permission.
 
 | Observation | Response |
 |---|---|
-| Required CI is pending or cannot be read | Check the actual execution and credential read access; keep the item unverified |
+| Required CI is pending | Check the actual execution; keep the item unverified |
+| Required CI cannot be read | Read `required_ci_unreadable` in the team summary or Work item response. Check GitHub access and configured workflows. Keep the item unverified |
 | Current bound native work is active | Let the supported observer supply contact; avoid interrupting reasoning with routine Mail |
 | Native observation is unknown, but the exact bound owner is live | Inspect the recorded observation pause and recovery window; use the supported remedy if eligible |
 | Owner, approval, ACK or workspace identity is stale | Hold the affected action; reconcile through the authorized workflow |
@@ -341,6 +342,13 @@ Status grants no approval, lease renewal, wake delivery, or recovery permission.
 | A member waits at an interactive screen (question form, trust prompt, sign-in) | Read the pane. Fix the cause in the harness configuration. Cancel a question form once, then send the decision through Mail. Do not answer an operator decision with keystrokes |
 | Automatic merge fell back to a human after `mergeable_state` `unstable` or `blocked` | Check that every required check passed on the exact verified head and that the merge tree is unchanged; then merge with the head SHA match. A check that is still running can cause this |
 | A test instance starts sessions in the team tmux server or registers in production Mail | Treat it as an incident. Remove the exact sessions through Deck. Require a private tmux socket and no real agent CLIs before the harness work continues |
+
+Deck records `checks_unavailable_since` at the first unreadable check observation.
+After 15 minutes, `required_ci_unreadable` supplies the signal, a safe reason code, and fixed next steps.
+This removes manual comparison of repeated status notes.
+A successful read clears the signal, including reads of pending or failed checks.
+Unreadable checks consume no retry or diagnostic budget.
+The signal grants no approval, retry, lease, merge, or milestone authority.
 
 Verify a claim before you act on it or relay it. An agent's description of an incident is a report, not evidence. Run a read-only check and state what you checked.
 

@@ -37,6 +37,7 @@ from app.services.github_client import (
     github_client,
 )
 from app.services.github_check_observation import GithubCheckObservationError
+from app.services import required_ci_attention
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_recovery_gate import (
     GithubRecoveryOnlyAttempt,
@@ -1045,9 +1046,16 @@ class GithubVerificationService:
                     )
                 else:
                     await self._process_review_item(db, scope, item, client)
+                # Repeated failed-head reads can return without another state write.
+                # Persist the successful read even when that path uses no retry.
+                if any(inspect(item).attrs[name].history.has_changes() for name in (
+                    "checks_unavailable_since", "checks_unavailable_reason"
+                )):
+                    await db.commit()
             except GithubCheckObservationError as exc:
                 # Missing or ambiguous CI evidence must not consume a retry or
                 # diagnostic budget. Continue polling the other work items.
+                required_ci_attention.note_unreadable(item, required_ci_attention.error_reason(exc))
                 self._set_failure_note(
                     item, f"GitHub checks are unavailable; will poll again: {exc}"
                 )
@@ -1436,6 +1444,7 @@ class GithubVerificationService:
         if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
             return
 
+        required_ci_attention.note_readable(item)
         envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
         observations = dict(envelope.get("diagnostic_observations") or {})
         observation = {
@@ -1763,6 +1772,7 @@ class GithubVerificationService:
         )
         if not await claim_policy_context(db, item, policy_guard):
             return
+        required_ci_attention.note_readable(item)
         blockers = required_check_blockers(policy, checks, head_sha)
         if not checks and not policy.required_checks:
             if await self._process_combined_status(
@@ -2138,6 +2148,7 @@ class GithubVerificationService:
         status = await client.get_combined_status_for_ref(
             scope.repo_owner, scope.repo_name, head_sha,
         )
+        required_ci_attention.note_readable(item)
         pending = [
             str(check.get("name") or check.get("id") or "unnamed check")
             for check in checks
@@ -2227,6 +2238,7 @@ class GithubVerificationService:
         )
         if not await claim_policy_context(db, item, policy_guard):
             return True
+        required_ci_attention.note_readable(item)
         contexts = status.get("statuses") or []
         if not contexts:
             return False

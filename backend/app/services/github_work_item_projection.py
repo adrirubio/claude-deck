@@ -14,6 +14,7 @@ from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevisio
 from app.models.schemas import GithubWorkItemResponse
 from app.services.github_approval_service import CONTINUABLE_ESCALATIONS
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services import required_ci_attention
 
 
 def _work_item_response(
@@ -90,6 +91,10 @@ def _work_item_response(
         retry_requested_at=item.retry_requested_at,
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
+        checks_unavailable_since=item.checks_unavailable_since,
+        checks_unavailable_reason=(required_ci_attention.safe_reason(item.checks_unavailable_reason)
+                                   if item.checks_unavailable_since is not None else None),
+        required_ci_unreadable=required_ci_attention.signal(item),
         auto_merged_at=item.auto_merged_at,
         active_scope_revision=item.active_scope_revision,
         active_scope_summary=(
