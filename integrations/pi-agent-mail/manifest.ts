@@ -1160,6 +1160,40 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_supervisor_checkin",
+    "description": "Promise the next supervisor check with an ISO 8601 UTC time.\n    Only the bound external actor can call this tool. The promise grants no authority.\n    The controller derives health. The next check must be within 24 hours.",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "next_check_at": {
+          "title": "Next Check At",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "preset_id",
+        "next_check_at"
+      ],
+      "title": "deck_supervisor_checkinArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_update_team_campaign",
     "description": "Replace campaign metadata. Use null to clear either field.\n\n    backlog_milestone is an exact GitHub milestone title.\n    Each planned decision has text and state: later, now, or done.\n    The caller supplies the Director key for this call.\n    The tool never loads, stores, logs, returns, or publishes the key.\n    A session key grants no authority for this write.\n    ",
     "inputSchema": {

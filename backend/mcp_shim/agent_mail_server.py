@@ -163,6 +163,44 @@ def _team_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-teams", path, **kwargs)
 
 
+def _redact_actor_credential(value: Any, credential: str) -> Any:
+    if isinstance(value, str):
+        return value.replace(credential, "[redacted]")
+    if isinstance(value, dict):
+        return {_redact_actor_credential(key, credential): _redact_actor_credential(item, credential)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_actor_credential(item, credential) for item in value]
+    return value
+
+
+@mcp.tool()
+def deck_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[str] = None) -> dict:
+    """Promise the next supervisor check with an ISO 8601 UTC time.
+    Only the bound external actor can call this tool. The promise grants no authority.
+    The controller derives health. The next check must be within 24 hours."""
+    credential = os.environ.get("CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN")
+    if not credential:
+        return {"ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
+    try:
+        response = httpx.request("POST", f"{DECK_API}/external-agent-mail/supervisor-checkin",
+            headers={"Authorization": f"Bearer {credential}"}, timeout=DECK_HTTP_TIMEOUT,
+            json={"preset_id": preset_id, "next_check_at": next_check_at, "note": note})
+        if not response.is_success:
+            return {"ok": False, "error": {"code": "supervisor_checkin_refused",
+                                            "status_code": response.status_code}}
+        data = response.json()
+        if not isinstance(data, dict):
+            return {"ok": False, "error": {"code": "supervisor_response_invalid"}}
+        return {"ok": True, "data": _redact_actor_credential(data, credential)}
+    except (httpx.HTTPError, TimeoutError):
+        return {"ok": False, "error": {"code": "supervisor_transport_unavailable"},
+                "outcome": "unknown",
+                "suggestion": "Read the supervisor observation before repeating this check-in."}
+    except ValueError:
+        return {"ok": False, "error": {"code": "supervisor_response_invalid"}, "outcome": "unknown"}
+
+
 def _bridge_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-bridge", path, **kwargs)
 
