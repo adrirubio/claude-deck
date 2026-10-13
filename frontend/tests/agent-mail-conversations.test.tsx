@@ -1,7 +1,8 @@
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AgentMailPage } from '@/features/agent-mail/AgentMailPage'
+import { setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { ConversationsTab } from '@/features/agent-mail/ConversationsTab'
 import { WaitingPanel } from '@/features/agent-mail/WaitingPanel'
 import {
@@ -296,7 +297,10 @@ describe('ConversationsTab', () => {
 })
 
 describe('Agent Mail page', () => {
+  afterEach(() => { sessionStorage.clear() })
+
   function load(members: MailMemberResponse[], messages: MailMessageResponse[]) {
+    setOperatorToken('test-director-key')
     vi.mocked(fetchAgentMailTeam).mockResolvedValue({ members })
     vi.mocked(fetchAgentMailMessages).mockResolvedValue(messages)
     vi.mocked(fetchAgentMailInstallStatus).mockResolvedValue({
