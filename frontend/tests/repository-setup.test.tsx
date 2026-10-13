@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   updateAgentTeamLeader: vi.fn(),
   updateAgentTeamPreset: vi.fn(),
   updateTeamGithubScope: vi.fn(),
+  projects: [] as Array<{ name: string; path: string }>,
   getOperatorToken: vi.fn(() => "synthetic-operator"),
   setOperatorToken: vi.fn(),
   clearOperatorToken: vi.fn(),
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({ apiClient: mocks.apiClient, ApiHttpError: mocks.ApiHttpError }));
+vi.mock("@/contexts/ProjectContext", () => ({ useOptionalProjectContext: () => ({ projects: mocks.projects }) }));
 vi.mock("@/features/agent-teams/operatorAuth", () => ({
   getOperatorToken: mocks.getOperatorToken,
   setOperatorToken: mocks.setOperatorToken,
@@ -50,6 +52,7 @@ import { RepositorySetupPage } from "../src/features/factory/RepositorySetupPage
 describe("guided repository setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.projects = [];
     mocks.getOperatorToken.mockReturnValue("synthetic-operator");
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
@@ -69,7 +72,7 @@ describe("guided repository setup", () => {
     });
   });
 
-  it("asks for an operator token before the first protected read when none is stored", async () => {
+  it("opens with no dialog and no protected read, and asks for the Director key at Check access", async () => {
     let stored: string | null = null;
     mocks.getOperatorToken.mockImplementation(() => stored);
     mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
@@ -78,21 +81,50 @@ describe("guided repository setup", () => {
     });
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
 
-    // The bounded configuration observation is operator-protected (R1): the
-    // shared credential helper prompts before the first protected read.
-    const dialog = await screen.findByRole("dialog");
-    const tokenInput = within(dialog).getByPlaceholderText("Enter secret value");
+    // The mount load uses the public reads of the Teams page. No key is asked.
+    await waitFor(() => expect(mocks.fetchAgentTeamPresets).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(mocks.fetchConfigurationObservation).not.toHaveBeenCalled();
     expect(mocks.apiClient).not.toHaveBeenCalled();
-    fireEvent.change(tokenInput, { target: { value: "fixture-token" } });
-    fireEvent.click(screen.getByRole("button", { name: "Use key" }));
-
-    await waitFor(() => expect(mocks.fetchConfigurationObservation).toHaveBeenCalledTimes(1));
-    expect(mocks.setOperatorToken).toHaveBeenCalledWith("fixture-token");
 
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Deck needs the key to check access to this repository.")).toBeInTheDocument();
+    expect(mocks.apiClient).not.toHaveBeenCalled();
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "fixture-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use key" }));
+
+    await waitFor(() => expect(mocks.apiClient).toHaveBeenCalledTimes(1));
+    expect(mocks.setOperatorToken).toHaveBeenCalledWith("fixture-token");
+  });
+
+  it("keeps the form when the key prompt is cancelled and offers Enter key", async () => {
+    let stored: string | null = null;
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
+    mocks.apiClient.mockResolvedValue({ status: "ready", observed_at: "2026-10-05T00:00:00Z", checks: {} });
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("The Director key is needed to check access");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Repository owner")).toHaveValue("example");
+    expect(screen.getByRole("button", { name: "Check access and labels" })).toBeEnabled();
+    expect(mocks.apiClient).not.toHaveBeenCalled();
+
+    fireEvent.click(within(notice).getByRole("button", { name: "Enter key" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "later-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use key" }));
+    await waitFor(() => expect(screen.queryByText(/The Director key is needed/)).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
     await waitFor(() => expect(mocks.apiClient).toHaveBeenCalledTimes(1));
   });
@@ -1047,7 +1079,8 @@ describe("guided repository setup", () => {
     const originalObservation = mocks.fetchConfigurationObservation.getMockImplementation()!;
     mocks.fetchConfigurationObservation.mockImplementation(async () => {
       reads += 1;
-      if (reads >= 3) {
+      // The mount load is public now, so the protected reads start at the save.
+      if (reads >= 2) {
         finalReadEntered = true;
         signalFinalRead?.();
         await finalReadGate;
@@ -1095,6 +1128,10 @@ describe("guided repository setup", () => {
     mocks.createAgentTeamPreset.mockResolvedValue(teamFixture(false));
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
 
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
     // The credential prompt is modal: page inputs are inaccessible while it is
     // open, so changed inputs during any credential wait are unreachable. The
     // live-intent checks remain as defense in depth.
@@ -1104,10 +1141,6 @@ describe("guided repository setup", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Use key" }));
 
     // With unchanged inputs the flow continues normally.
-    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
-    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
-    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
-    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
     fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
     fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
     fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
@@ -1653,4 +1686,128 @@ describe("guided repository setup", () => {
     expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
   });
 
+  describe("step 1 inputs, steps and the Director key prompt (#537)", () => {
+    it("fills owner and name from a GitHub URL, an SSH URL or owner/name, and clears them for other text", () => {
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      const field = screen.getByLabelText("GitHub repository");
+      for (const [text, owner, repo] of [
+        ["https://github.com/adrirubio/claude-deck-docs", "adrirubio", "claude-deck-docs"],
+        ["https://github.com/adrirubio/claude-deck.git", "adrirubio", "claude-deck"],
+        ["git@github.com:example/synthetic-product.git", "example", "synthetic-product"],
+        ["example/other", "example", "other"],
+      ]) {
+        fireEvent.change(field, { target: { value: text } });
+        expect(screen.getByLabelText("Repository owner")).toHaveValue(owner);
+        expect(screen.getByLabelText("Repository name")).toHaveValue(repo);
+      }
+      fireEvent.change(field, { target: { value: "not a repository" } });
+      expect(screen.getByLabelText("Repository owner")).toHaveValue("");
+      expect(screen.getByLabelText("Repository name")).toHaveValue("");
+    });
+
+    it("offers repositories that are already watched, with no extra request", async () => {
+      mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [{ id: 12, name: "T", slots: [], autonomy_enabled: false }] });
+      mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [scopeFixture(55, 12, true, "synthetic-product", "claude-deck-ready")] });
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      const group = await screen.findByRole("group", { name: "Repositories Deck already watches" });
+      fireEvent.click(within(group).getByRole("button", { name: "example/synthetic-product" }));
+      expect(screen.getByLabelText("GitHub repository")).toHaveValue("example/synthetic-product");
+      expect(screen.getByLabelText("Repository owner")).toHaveValue("example");
+      expect(screen.getByLabelText("Repository name")).toHaveValue("synthetic-product");
+      expect(mocks.fetchAgentTeamPresets).toHaveBeenCalledTimes(1);
+      expect(mocks.fetchTeamGithubScopes).toHaveBeenCalledTimes(1);
+    });
+
+    it("completes step 1 with no path or branch typed: a URL, a local project and the default branch", () => {
+      mocks.projects = [{ name: "docs-source", path: "/home/me/docs-source" }];
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      expect(screen.getByRole("button", { name: "Continue to configuration" })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "https://github.com/adrirubio/claude-deck-docs" } });
+      fireEvent.change(screen.getByLabelText("Local checkout"), { target: { value: "/home/me/docs-source" } });
+      expect(screen.getByLabelText("Primary checkout path")).toHaveValue("/home/me/docs-source");
+      expect(screen.getByLabelText("Branch")).toHaveValue("origin/HEAD");
+      expect(screen.getByLabelText(/^Base branch/)).toHaveValue("origin/HEAD");
+      expect(screen.getByRole("button", { name: "Continue to configuration" })).toBeEnabled();
+    });
+
+    it("offers the checkouts that loaded teams already use, once, after the local projects", async () => {
+      mocks.projects = [{ name: "docs-source", path: "/home/me/docs-source" }];
+      const slot = (id: number, path: string) => ({ id, display_name: `Slot ${id}`, enabled: true, provider: "codex-cli", role: "Worker", repo_path: path, area_labels: [], expertise: null });
+      mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [
+        { id: 1, name: "A", autonomy_enabled: false, slots: [slot(1, "/work/sample-app"), slot(2, "/home/me/docs-source")] },
+        { id: 2, name: "B", autonomy_enabled: false, slots: [slot(3, "/work/sample-app")] },
+      ] });
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      await waitFor(() => expect(within(screen.getByLabelText("Local checkout")).getAllByRole("option")).toHaveLength(4));
+      const options = within(screen.getByLabelText("Local checkout")).getAllByRole("option").map((o) => o.textContent);
+      expect(options).toEqual(["Choose a local project…", "docs-source (/home/me/docs-source)", "sample-app (/work/sample-app)", "Other path…"]);
+      fireEvent.change(screen.getByLabelText("Local checkout"), { target: { value: "/work/sample-app" } });
+      expect(screen.getByLabelText("Primary checkout path")).toHaveValue("/work/sample-app");
+    });
+
+    it("lets the person pick another path or branch, and returns to the default branch", () => {
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "__other" } });
+      expect(screen.getByLabelText(/^Base branch/)).toHaveValue("origin/");
+      expect(document.querySelector("details")).toHaveAttribute("open");
+      fireEvent.change(screen.getByLabelText(/^Base branch/), { target: { value: "origin/release" } });
+      expect(screen.getByLabelText("Branch")).toHaveValue("__other");
+      fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "origin/HEAD" } });
+      expect(screen.getByLabelText(/^Base branch/)).toHaveValue("origin/HEAD");
+      fireEvent.change(screen.getByLabelText("Local checkout"), { target: { value: "__other" } });
+      expect(screen.getByLabelText("Primary checkout path")).toHaveValue("");
+    });
+
+    it("uses plain hints and marks required and optional steps with a progress bar", () => {
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      expect(screen.getByText(/Deck reads the checkout and checks that it can see the repository and its labels\. Nothing changes\./)).toBeInTheDocument();
+      expect(screen.queryByText(/checkout identity, repository access/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/separate steps/)).not.toBeInTheDocument();
+      const steps = within(screen.getByRole("list", { name: "Setup steps" })).getAllByRole("listitem").map((item) => item.textContent);
+      expect(steps).toEqual(["1. Repositoryrequired", "2. Team and rolesrequired", "3. Routingoptional", "4. Policyoptional", "5. Reviewrequired", "6. Saved setup"]);
+      expect(screen.getByRole("progressbar", { name: "Setup progress" })).toHaveAttribute("aria-valuenow", "1");
+    });
+
+    it("skips the optional steps from Routing to Review", async () => {
+      mockReadyPreflightAndRoster();
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+      fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+      fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+      fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+      fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      fireEvent.click(screen.getByRole("button", { name: "Skip optional steps" }));
+      expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: "Setup progress" })).toHaveAttribute("aria-valuenow", "5");
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument();
+    });
+
+    it("asks for the Director key at Save with its reason, and a cancel keeps the draft", async () => {
+      let stored: string | null = "synthetic-operator";
+      mocks.getOperatorToken.mockImplementation(() => stored);
+      mockReadyPreflightAndRoster();
+      mocks.createAgentTeamPreset.mockResolvedValue(teamFixture(false));
+      render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+      fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+      fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+      fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+      fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+      fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      fireEvent.click(screen.getByRole("button", { name: "Skip optional steps" }));
+      fireEvent.click(screen.getByLabelText(/Save configuration only/));
+      stored = null;
+      fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Deck needs the key to save this setup.")).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(await screen.findByRole("status")).toHaveTextContent("The Director key is needed to save");
+      expect(mocks.createAgentTeamPreset).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Save configuration" })).toBeEnabled();
+      expect(screen.getByText(/Repository: example\/synthetic-product/)).toBeInTheDocument();
+    });
+  });
 });

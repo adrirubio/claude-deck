@@ -246,6 +246,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// For screens that work without the provider. It starts no request of its own.
+// eslint-disable-next-line react-refresh/only-export-components
+export function useOptionalProjectContext() {
+  return useContext(ProjectContext);
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function useProjectContext() {
   const context = useContext(ProjectContext);
