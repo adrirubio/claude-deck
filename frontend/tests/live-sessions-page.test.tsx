@@ -10,7 +10,14 @@ vi.mock('../src/features/cc-bridge/useCCSessions', () => ({
 }))
 vi.mock('../src/features/cc-bridge/TerminalView', () => ({ TerminalView: () => <p>Terminal</p> }))
 vi.mock('../src/features/cc-bridge/TeamLanesView', () => ({
-  TeamLanesView: ({ teamLabel }: { teamLabel: string }) => <p>Lanes for {teamLabel}</p>,
+  TeamLanesView: ({ teamLabel, start, zoomed, sessions, onToggleZoom }: { teamLabel: string; start: number; zoomed: string | null; sessions: Array<{ tmux_target: string }>; onToggleZoom: (target: string) => void }) => (
+    <div>
+      <p>Lanes for {teamLabel}</p>
+      <p>start {start} of {sessions.length}</p>
+      <p>{zoomed ? `zoomed ${zoomed}` : 'not zoomed'}</p>
+      <button type="button" onClick={() => onToggleZoom(sessions[0].tmux_target)}>zoom first</button>
+    </div>
+  ),
 }))
 vi.mock('../src/features/cc-bridge/NewSessionDialog', () => ({ NewSessionDialog: () => null }))
 vi.mock('../src/features/cc-bridge/KillSessionDialog', () => ({ KillSessionDialog: () => null }))
@@ -63,5 +70,40 @@ describe('Live sessions page', () => {
 
     expect(screen.queryByRole('menu')).toBeNull()
     expect(screen.getByText('Lanes for Alpha')).toBeInTheDocument()
+  })
+
+  it('restores the four lanes on the first Escape and exits team lanes on the second', () => {
+    mocks.sessions = [session(1, 1, 'Alpha'), session(2, 1, 'Alpha')]
+    render(<MemoryRouter><CCBridgePage /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: /^Alpha/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Team lanes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'zoom first' }))
+    expect(screen.getByText('zoomed t:0.1')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByText('Lanes for Alpha')).toBeInTheDocument()
+    expect(screen.getByText('not zoomed')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByText('Lanes for Alpha')).toBeNull()
+  })
+
+  it('shifts the lanes window with Alt+Arrow keys only when no lane is zoomed', () => {
+    mocks.sessions = Array.from({ length: 6 }, (_, index) => session(index + 1, 1, 'Alpha'))
+    render(<MemoryRouter><CCBridgePage /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: /^Alpha/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Team lanes' }))
+    expect(screen.getByText('start 0 of 6')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'ArrowRight', altKey: true })
+    expect(screen.getByText('start 1 of 6')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(screen.getByText('start 1 of 6')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'ArrowLeft', altKey: true })
+    expect(screen.getByText('start 0 of 6')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'zoom first' }))
+    fireEvent.keyDown(document, { key: 'ArrowRight', altKey: true })
+    expect(screen.getByText('start 0 of 6')).toBeInTheDocument()
   })
 })
