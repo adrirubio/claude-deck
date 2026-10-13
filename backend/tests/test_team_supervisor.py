@@ -204,3 +204,9 @@ def test_an_acknowledged_damaged_fragment_is_skipped(tmp_path, monkeypatch):
     sup, ok, stopped = _scan_file(tmp_path, monkeypatch, [line, SNAPSHOT + b"\n"],
                                   acknowledged_damaged_records=[hashlib.sha256(line).hexdigest()])
     assert ok is True and stopped == []
+
+
+@pytest.mark.parametrize("line", [b"null\n", CRASH + b"null\n", b"[1]\n"], ids=["null", "padded_null", "list"])
+def test_a_record_that_is_not_an_object_fails_closed(tmp_path, monkeypatch, line):
+    with pytest.raises(ValueError, match="native_record_not_object"):
+        _scan_file(tmp_path, monkeypatch, [line])
