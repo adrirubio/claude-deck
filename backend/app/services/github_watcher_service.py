@@ -746,6 +746,8 @@ class GithubWatcherService:
         )
         # The claim already wrote the transition; the fact and the claim
         # commit together, and an audit failure rolls both back.
+        from app.services.github_terminal_revision_service import complete_current_revision
+        await complete_current_revision(db, item, source=fact_source, terminal_status="completed")
         await db.commit()
         await db.refresh(item)
         try:

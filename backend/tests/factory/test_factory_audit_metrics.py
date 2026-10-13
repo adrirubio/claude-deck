@@ -4619,6 +4619,40 @@ async def _recovery_sample(db):
     return next(s for s in result.metrics if s.name == "recovery_success")
 
 
+async def test_terminal_revision_reconciliation_clears_live_metric_without_inventing_delivery(db):
+    """An explicit operator repair ends authority. It does not prove delivery."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_terminal_revision_service import terminal_revision_report, reconcile_terminal_revision
+
+    await _seed_item(db, 42)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    revision_id = await _insert_revision(db, 42)
+    await db.execute(text("UPDATE github_work_items SET dispatch_status='merged', dispatch_nonce='n', "
+                          "active_scope_revision=1 WHERE id=42"))
+    await db.execute(text("UPDATE github_attempt_scope_revisions SET status='active' WHERE id=:id"),
+                     {"id":revision_id})
+    await db.commit()
+
+    async def samples():
+        now = datetime.utcnow()
+        result = await metrics.build_metrics_window(db,window_start=now-timedelta(hours=1),
+                                                    window_end=now+timedelta(hours=1))
+        return {sample.name:sample for sample in result.metrics}
+    before = await samples()
+    assert before["active_revisions"].value == 1.0
+    report = await terminal_revision_report(db, 1)
+    assert (await samples())["active_revisions"].value == 1.0
+    item = await db.get(GithubWorkItem,42)
+    await reconcile_terminal_revision(db,item,revision_id,report["revisions"][0]["context_sha256"],
+                                      "test-terminal-metric","Inspect the terminal item.")
+    after = await samples()
+    assert after["active_revisions"].value == 0.0
+    assert after["current_queue"].value == 0.0
+    assert after["delivered_in_window"].value == 0.0
+    assert after["active_revisions"].source == "live_persisted_state"
+
+
 async def test_final_recovery_identity_survives_automatic_revision_id_reuse(db):
     """Final P2 (B4 8bc review, owner copy of its probe; Astra): one revision
     result observed by two call sites counts once, also after the live item

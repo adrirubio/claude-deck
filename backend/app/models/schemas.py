@@ -5,6 +5,15 @@ from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict,
 from app.models.api_model import ApiModel as BaseModel, naive_utc_confirmation
 
 
+class TerminalRevisionReconcileRequest(BaseModel):
+    """One explicit operator decision for an unchanged terminal revision."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    operation_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+    expected_context_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=1, max_length=240)
+
+
 class ConfigFile(BaseModel):
     """Represents a configuration file."""
 
