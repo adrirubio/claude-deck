@@ -97,8 +97,6 @@ function describeFilters(filters: AppliedFilters, names: FilterNames) {
 function retainedReason(state: ReadState, matches: boolean, applied: AppliedFilters, names: FilterNames) {
   if (state === "pending") return "a newer read is pending";
   if (state === "failed") return "the latest read failed";
-  if (state === "cancelled") return "the latest read was cancelled";
-  if (state === "locked") return "the events are locked";
   if (!matches) return `it does not match the applied selection (${describeFilters(applied, names)})`;
   return null;
 }
@@ -229,6 +227,24 @@ export function AuditMetricsPage() {
     }
   }
 
+  // #659: one path withdraws everything protected when the Director key is
+  // refused in ANY read. It ends every active read, so a late response cannot
+  // bring rows or groups back, and it hides the events and the refused requests.
+  function revokeProtected(message: string) {
+    auditEpochRef.current += 1;
+    refusalEpochRef.current += 1;
+    focusRef.current = null;
+    setFocus(null);
+    setEventsResult(null);
+    setRefusalResult(null);
+    setRefusalState("locked");
+    setUnlocking(false);
+    setEventsRefused(true);
+    setEventsState("failed");
+    setEventsError(message);
+    setStatus("Audit events could not be loaded. Safe metrics remain available.");
+  }
+
   // C01: audit reads use the per-tab operator workflow with the operator
   // credential header. Exact 503 and 401 refusals surface to the operator.
   async function loadAudit(
@@ -242,6 +258,8 @@ export function AuditMetricsPage() {
     // #515: the key dialog opens only when the Director chooses Unlock events.
     if (!ask && !getOperatorToken()) {
       setUnlocking(false);
+      // #659: no key, so no protected rows, labels or counts stay on the page.
+      setEventsResult(null);
       setEventsState("locked");
       setEventsError("");
       setStatus("Audit events are locked. Safe metrics remain available.");
@@ -252,6 +270,7 @@ export function AuditMetricsPage() {
     if (!current()) return null;
     if (!token) {
       setUnlocking(false);
+      setEventsResult(null);
       setEventsState("cancelled");
       setStatus("Audit read cancelled. Safe metrics remain available.");
       return null;
@@ -283,12 +302,18 @@ export function AuditMetricsPage() {
         clearOperatorToken();
       }
       if (!current()) return null;
-      setEventsRefused(refused);
+      const message = cause instanceof Error ? cause.message : "Audit read refused.";
+      if (refused) {
+        revokeProtected(message);
+        return null;
+      }
+      // A 5xx or a network error keeps the earlier data.
+      setEventsRefused(false);
       setUnlocking(false);
       setEventsState("failed");
-      setEventsError(cause instanceof Error ? cause.message : "Audit read refused.");
+      setEventsError(message);
       setStatus("Audit events could not be loaded. Safe metrics remain available.");
-      return refused ? null : token;
+      return token;
     }
   }
 
@@ -325,7 +350,7 @@ export function AuditMetricsPage() {
       if (!current()) return;
       if (cause instanceof ApiHttpError && cause.status === 401) {
         if (getOperatorToken() === token) clearOperatorToken();
-        setRefusalState("locked");
+        revokeProtected(cause.message);
       } else {
         setRefusalState("failed");
       }

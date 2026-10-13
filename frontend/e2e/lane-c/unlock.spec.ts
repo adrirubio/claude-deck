@@ -49,3 +49,28 @@ test('@active with a stored key, the events load on entry', async ({ page }) => 
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.locator('main').getByText(/continuation|refused|request/i).first()).toBeVisible()
 })
+
+test('@active loaded events and counts leave the page when the key is gone and the new key request is cancelled (#659)', async ({ page }) => {
+  await page.addInitScript(([key, value]) => window.sessionStorage.setItem(key, value), [KEY_STORAGE, DIRECTOR_KEY])
+  await openAudit(page)
+  const rows = page.getByTestId('audit-feed-row')
+  await expect(rows.first()).toBeVisible()
+  await expect(page.locator('main')).toContainText('Total audit events matching filters')
+
+  // The key is gone and a filter changes. Nothing protected may stay on the page.
+  await page.evaluate(key => window.sessionStorage.removeItem(key), KEY_STORAGE)
+  await page.getByRole('combobox', { name: /^Window$/ }).selectOption('last30')
+  const main = page.locator('main')
+  await expect(page.getByTestId('events-locked')).toBeVisible()
+  await expect(rows).toHaveCount(0)
+  await expect(main).not.toContainText('Total audit events matching filters')
+
+  // The Director chooses Unlock and cancels. The page stays locked, with no rows and no count.
+  await page.getByRole('button', { name: 'Unlock events' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: /cancel/i }).click()
+  await expect(main).toContainText(/Events are not shown/)
+  await expect(rows).toHaveCount(0)
+  await expect(main).not.toContainText('Total audit events matching filters')
+  await expect(main).not.toContainText(/Page \d+ of \d+/)
+  await expect(main).not.toContainText(EVENT_COUNT)
+})
