@@ -14,12 +14,12 @@ export async function openUnlockedAudit(page: Page, query = ''): Promise<void> {
   await page.waitForLoadState('networkidle').catch(() => undefined)
 }
 
-/** The visible text of a region without its "Technical detail(s)" disclosures. */
+/** The visible text of a region without its technical disclosures ("Technical detail", "All metrics (technical)"). */
 export async function plainText(region: Locator): Promise<string> {
   return region.evaluate(root => {
     const clone = root.cloneNode(true) as Element
     clone.querySelectorAll('details').forEach(details => {
-      if (/technical detail/i.test(details.querySelector('summary')?.textContent ?? '')) details.remove()
+      if (/technical/i.test(details.querySelector('summary')?.textContent ?? '')) details.remove()
     })
     return (clone.textContent ?? '').replace(/\s+/g, ' ')
   })

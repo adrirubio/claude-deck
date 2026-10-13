@@ -9,6 +9,8 @@ import { NeedsALookPanel, type RefusalReadState } from "./NeedsALookPanel";
 import { fetchAgentMailTeam } from "@/features/agent-mail/api";
 import { fetchAgentTeamPresets } from "@/features/agent-teams/api";
 import { ActivityFeed } from "./ActivityFeed";
+import { AuditSummary } from "./AuditSummary";
+import { metricLabel, tableNotes, tableValue } from "./auditSummary";
 import { buildFeed } from "./auditFeed";
 import { OperatorTokenDialog } from "@/features/agent-teams/AutonomyPanel";
 import {
@@ -375,6 +377,7 @@ export function AuditMetricsPage() {
   }, []);
 
   const metrics = metricsResult?.data ?? null;
+  const notes = tableNotes(metrics?.metrics ?? []);
   const events = eventsResult?.data.items ?? [];
   const feed = buildFeed(events, { teams: teamNames, members: memberNames });
   const labels = eventsResult?.data.snapshot_labels ?? [];
@@ -412,9 +415,25 @@ export function AuditMetricsPage() {
       <header>
         <h2 className="text-xl font-semibold">Audit coverage and delivery metrics</h2>
         <p className="text-sm text-muted-foreground">
-          These aggregates never fetch fresh external facts and never change any record.
+          How delivery is going, and what needs a look.
         </p>
       </header>
+
+      <AuditSummary metrics={metrics} />
+
+      <div className="space-y-1">
+        {metricsResult && (
+          <p className="text-xs text-muted-foreground">
+            Showing metrics for {describeFilters(metricsResult.filters)}, observed at {formatServerTime(metricsResult.observedAt)}.
+          </p>
+        )}
+        {metricsRetained && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Retained metrics: {metricsRetained}.
+          </p>
+        )}
+        {metricsError && <p role="alert" className="text-sm text-destructive">{metricsError}</p>}
+      </div>
 
       <NeedsALookPanel
         state={refusalState}
@@ -424,96 +443,6 @@ export function AuditMetricsPage() {
         onShowEvents={showRefusalEvents}
         onUnlock={() => void applyReads(applied, 1)}
       />
-
-      <section aria-labelledby="explanations" className="space-y-2 rounded border p-3">
-        <h3 id="explanations" className="font-semibold">How to read these numbers</h3>
-        <p className="text-sm">
-          Terminal tracking is not delivery. A closed item without result evidence counts as unknown.
-          Terminal tracking, delivery and independent human review are separate metrics.
-        </p>
-        <p className="text-sm">
-          Unknown outcomes are separate from explicit non-delivery. Both are reported with counts and reasons.
-        </p>
-        <p className="text-sm">
-          Coverage starts at the installed instrumentation marker. Earlier intervals stay missing; they are
-          never reconstructed. Imported state is labelled as an observed snapshot at the marker time.
-        </p>
-        <p className="text-sm">
-          Ledger events are retained for the life of the database. Deleted resources keep their snapshot
-          labels and show unavailable live links.
-        </p>
-      </section>
-
-      <section aria-labelledby="coverage" className="space-y-2 rounded border p-3">
-        <h3 id="coverage" className="font-semibold">Window and coverage</h3>
-        {metricsResult && (
-          <p className="text-sm text-muted-foreground">
-            Showing metrics for {describeFilters(metricsResult.filters)}, observed at {metricsResult.observedAt}.
-          </p>
-        )}
-        {metricsRetained && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Retained metrics: {metricsRetained}.
-          </p>
-        )}
-        {metrics ? (
-          <dl className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
-            <div><span className={labelClass}>Requested window</span>{metrics.window_start} to {metrics.window_end}</div>
-            <div><span className={labelClass}>Filter scope</span>{metrics.filter_scope}</div>
-            <div><span className={labelClass}>Instrumentation start</span>{metrics.instrumentation_start ?? "unavailable"}</div>
-            <div><span className={labelClass}>Available interval</span>
-              {metrics.available_interval_start ?? "unavailable"} to {metrics.available_interval_end ?? "unavailable"}
-            </div>
-            <div className="sm:col-span-2">
-              <span className={labelClass}>Missing intervals</span>
-              {metrics.missing_intervals.length ? metrics.missing_intervals.join(", ") : "none recorded"}
-            </div>
-            <div className="sm:col-span-2"><span className={labelClass}>Counting unit</span>{metrics.counting_unit_note}</div>
-          </dl>
-        ) : (
-          <p className="text-sm">No window loaded.</p>
-        )}
-        {metricsError && <p role="alert" className="text-sm text-destructive">{metricsError}</p>}
-      </section>
-
-      <section aria-labelledby="metrics" className="space-y-2 rounded border p-3">
-        <h3 id="metrics" className="font-semibold">Metrics</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left">
-                <th className="p-2">Metric</th>
-                <th className="p-2">Unit</th>
-                <th className="p-2">Value</th>
-                <th className="p-2">Samples</th>
-                <th className="p-2">Unknown</th>
-                <th className="p-2">Excluded</th>
-                <th className="p-2">Source</th>
-                <th className="p-2">Coverage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(metrics?.metrics ?? []).map((sample) => (
-                <tr key={sample.name} className="border-t align-top">
-                  <td className="p-2 break-words">{sample.name}</td>
-                  <td className="p-2 break-words">{sample.counting_unit}</td>
-                  <td className="p-2">{sample.value === null ? "unknown" : sample.value}</td>
-                  <td className="p-2">{sample.sample_count}</td>
-                  <td className="p-2">
-                    {sample.unknown_count}
-                    {sample.unknown_reasons.length > 0 && (
-                      <div className="text-xs text-muted-foreground">{sample.unknown_reasons.join("; ")}</div>
-                    )}
-                  </td>
-                  <td className="p-2">{sample.excluded_count}</td>
-                  <td className="p-2 break-words">{sample.source}</td>
-                  <td className="p-2 break-words">{sample.coverage}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       <section aria-labelledby="filters" className="space-y-2 rounded border p-3">
         <h3 id="filters" className="font-semibold">Historical filters</h3>
@@ -584,6 +513,74 @@ export function AuditMetricsPage() {
       </section>
 
       <p className="text-sm">Total audit events matching filters: {total}</p>
+
+      <details className="rounded border p-3">
+        <summary className="cursor-pointer font-semibold">All metrics (technical)</summary>
+        <div className="mt-3 space-y-4">
+          {metrics ? (
+            <dl className="grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
+              <div><span className={labelClass}>Requested window</span>{metrics.window_start} to {metrics.window_end}</div>
+              <div><span className={labelClass}>Filter scope</span>{metrics.filter_scope}</div>
+              <div><span className={labelClass}>Instrumentation start</span>{metrics.instrumentation_start ?? "unavailable"}</div>
+              <div><span className={labelClass}>Available interval</span>
+                {metrics.available_interval_start ?? "unavailable"} to {metrics.available_interval_end ?? "unavailable"}
+              </div>
+              <div className="sm:col-span-2">
+                <span className={labelClass}>Missing intervals</span>
+                {metrics.missing_intervals.length ? metrics.missing_intervals.join(", ") : "none recorded"}
+              </div>
+              <div className="sm:col-span-2"><span className={labelClass}>Counting unit</span>{metrics.counting_unit_note}</div>
+            </dl>
+          ) : (
+            <p className="text-sm">No window loaded.</p>
+          )}
+          <div>
+            <table className="w-full table-fixed text-sm">
+              <thead>
+                <tr className="text-left">
+                  <th className="w-2/5 p-2">Metric</th>
+                  <th className="p-2">Value</th>
+                  <th className="p-2">Samples</th>
+                  <th className="p-2">Unknown</th>
+                  <th className="p-2">Excluded</th>
+                  <th className="p-2">Coverage</th>
+                  <th className="p-2">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(metrics?.metrics ?? []).map((sample) => (
+                  <tr key={sample.name} className="border-t align-top">
+                    <td className="p-2 break-words">
+                      <span className="block font-medium">{metricLabel(sample.name)}</span>
+                      <span className="block text-xs text-muted-foreground">{sample.name}</span>
+                      <span className="block text-xs text-muted-foreground">{sample.counting_unit}</span>
+                      <span className="block text-xs text-muted-foreground">{sample.source}</span>
+                    </td>
+                    <td className="p-2">{tableValue(sample)}</td>
+                    <td className="p-2">{sample.sample_count}</td>
+                    <td className="p-2">{sample.unknown_count}</td>
+                    <td className="p-2">{sample.excluded_count}</td>
+                    <td className="p-2 break-words">{notes.coverage[sample.name]}</td>
+                    <td className="p-2">
+                      {(notes.refs[sample.name] ?? []).map((ref) => (
+                        <a key={ref} href={`#metric-note-${ref}`} className="mr-1 text-primary underline">{ref}</a>
+                      ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {notes.footnotes.length > 0 && (
+              <ol className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {notes.footnotes.map((note, index) => (
+                  <li key={note} id={`metric-note-${index + 1}`}>{index + 1}. {note}</li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+      </details>
+
       <OperatorTokenDialog
         open={tokenDialogOpen}
         value={tokenInput}
