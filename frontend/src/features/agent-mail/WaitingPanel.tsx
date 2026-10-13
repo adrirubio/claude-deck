@@ -34,11 +34,18 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
       id={WAITING_PANEL_ID}
       tabIndex={-1}
       aria-labelledby="waiting-on-someone-title"
-      className="rounded-lg border px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="rounded-lg border px-4 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <h2 id="waiting-on-someone-title" className="text-sm font-semibold">
-        Waiting on someone ({items.length})
-      </h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="waiting-on-someone-title" className="text-sm font-semibold">
+          Waiting on someone ({items.length})
+        </h2>
+        {items.length > VISIBLE_ITEMS && (
+          <Button size="sm" variant="ghost" className="h-6" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+            {expanded ? 'Show fewer' : `Show all ${items.length}`}
+          </Button>
+        )}
+      </div>
       {items.length === 0 ? (
         <p className="mt-1 text-sm text-muted-foreground">
           {loading ? 'Loading messages...' : 'Nobody is waiting on anyone.'}
@@ -46,7 +53,7 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
       ) : (
         <ul className="mt-1 divide-y">
           {shown.map((item) => (
-            <li key={item.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-0.5 text-sm">
+            <li key={item.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-0 text-sm">
               {item.warn ? (
                 <AlertTriangle role="img" aria-label="Needs attention" className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
               ) : (
@@ -67,11 +74,6 @@ export const WaitingPanel = forwardRef<HTMLElement, WaitingPanelProps>(function 
             </li>
           ))}
         </ul>
-      )}
-      {items.length > VISIBLE_ITEMS && (
-        <Button size="sm" variant="ghost" className="mt-1 h-7" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-          {expanded ? 'Show fewer' : `Show all ${items.length}`}
-        </Button>
       )}
     </section>
   )

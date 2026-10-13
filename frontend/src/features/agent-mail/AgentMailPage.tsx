@@ -234,7 +234,7 @@ export function AgentMailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-3xl font-bold">
@@ -363,7 +363,7 @@ export function AgentMailPage() {
             Conversations
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="team" className="mt-4">
+        <TabsContent value="team" className="mt-3">
           <TeamTab
             members={teamMembers}
             loading={loading}
@@ -377,7 +377,7 @@ export function AgentMailPage() {
             nudgingMemberId={nudgingMemberId}
           />
         </TabsContent>
-        <TabsContent value="conversations" className="mt-4">
+        <TabsContent value="conversations" className="mt-3">
           <ConversationsTab
             conversations={conversations}
             members={members}
