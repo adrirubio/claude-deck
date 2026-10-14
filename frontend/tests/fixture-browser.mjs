@@ -203,6 +203,19 @@ function respond(req) {
   unknown.push(key);
   return null;
 }
+// Serve only the files that exist in dist when the server starts. A request
+// selects one of them by name, so no file path is built from the request.
+const distRoot = path.resolve(process.cwd(), "dist");
+const assets = new Map();
+const listAssets = async (dir) => {
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) await listAssets(full);
+    else if (entry.isFile()) assets.set("/" + path.relative(distRoot, full).split(path.sep).join("/"), full);
+  }
+};
+await listAssets(distRoot);
+const indexFile = path.join(distRoot, "index.html");
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url.startsWith("/api/v1/")) {
@@ -211,21 +224,8 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(data ?? { detail: "No fixture for endpoint" }));
       return;
     }
-    // Serve only files inside dist. A prefix test would also accept a sibling
-    // such as dist-other, so compare against dist plus a path separator.
-    const root = path.resolve(process.cwd(), "dist");
-    let file = path.resolve(root, "." + path.sep + decodeURIComponent(req.url.split("?")[0]));
-    if (file !== root && !file.startsWith(root + path.sep)) {
-      res.writeHead(404);
-      res.end("Not found");
-      return;
-    }
-    try {
-      const stat = await fs.stat(file);
-      if (!stat.isFile()) file = path.join(process.cwd(), "dist/index.html");
-    } catch {
-      file = path.join(process.cwd(), "dist/index.html");
-    }
+    // An unknown name is a client route: serve the app shell, as before.
+    const file = assets.get(decodeURIComponent(req.url.split("?")[0])) ?? indexFile;
     res.setHeader(
       "Content-Type",
       file.endsWith(".js")
