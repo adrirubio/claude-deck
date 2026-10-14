@@ -26,7 +26,7 @@ bash backend/test_commands_api.sh                         # Curl-based API tests
 cd frontend && npm run lint      # ESLint
 
 # Version
-./scripts/bump-version.sh <major|minor|patch>  # Sync version across VERSION, package.json, pyproject.toml
+./scripts/bump-version.sh <X.Y.Z>  # Set the version in VERSION, package.json, pyproject.toml and the lock files
 ```
 
 ## Architecture
@@ -64,7 +64,7 @@ All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hoo
 ## Key Decisions
 
 - **Backend**: FastAPI + async SQLAlchemy + aiosqlite + SQLite
-- **Frontend**: React 19 + Vite 7 + TypeScript + TailwindCSS + shadcn/ui
+- **Frontend**: React 19 + Vite 8 + TypeScript + Tailwind CSS 4 + shadcn/ui
 - **Database**: SQLite at `backend/claude_registry.db` (auto-created via `create_all`, no migrations)
 - **API**: RESTful `/api/v1/`, Vite proxies `/api` → `http://localhost:8000`
 - **CORS**: `localhost:5173`

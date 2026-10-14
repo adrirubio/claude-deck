@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - Unreleased
+
+The release date is set when the release is published. v3.1 makes the factory pages readable for a Director, and hardens the local API.
+
+### Upgrade notes
+- **Node.js 22.12 or later** is now required to build and test the frontend. Vite 8 and Vitest 5 need it. `scripts/install.sh` checks the version.
+- **Agent Mail authentication is strict by default.** Agents need their Mail session credential, and external actors read and write only threads they created or are addressed in. When a Director key is configured, Agent Mail setup, member edits, actor creation and the UI's Mail reads need it. An install with no Director key keeps working as before and shows a recommendation to set one. An explicit opt-out restores the earlier unauthenticated reads; writes always need a key. See the Agent Mail guide.
+- **Controller upgrades:** the maintenance upgrade now tolerates nullable columns that a startup migration adds, and accepts checkpoints from owners that work in a leased dispatch workspace. Its CLI prints the refusal reason code.
+
+### Added
+- **Overview:** answers what has happened, what is happening and what still needs to happen. It shows a campaign progress bar, a team summary card, the supervisor's status, unanswered release reminders, and items that wait for someone.
+- **Teams:** a readable team page (header and members first, editing behind Edit team), a link from a team to its parent issue, and From Bridge and From Mail creation from the selected sessions only.
+- **Audit:** a plain-language delivery summary, a readable activity feed, a "Needs a look" panel for refused agent requests, and Team, Repository and Window selects. Events unlock only when the Director chooses to.
+- **Agent Mail:** "Waiting on someone" first, conversations grouped by team, a compact roster, the sender shown as Deck, Director or agent, and Mail setup on each harness page.
+- **Live sessions:** a readable session list with Kill away from Watch, Team lanes that show every member four at a time, and the shared Director-key prompt for new sessions.
+- **Harnesses:** breadcrumbs, a page per harness with grouped native pages, a compact list, and local projects folded into harness pages.
+- **Factory signals:** one shared agent status across Agent Mail, Live sessions and Teams; an attention signal when required CI cannot be read; an optional supervisor check-in; unattended-launch results.
+- **E2E journeys:** an isolated Playwright instance with deterministic seed data, and a required `e2e` CI job. Every lane has active journeys, including contrast, keyboard and a no-flicker check of the factory pages.
+
+### Changed
+- **Work and Repositories** are the single home of a work item and of repository setup. The Work list is compact and defaults to active work. Repository setup no longer asks for the key on entry or requires hand-typed paths.
+- **Plain-language copy** on Director-facing pages: for example "Teams", "Director" and "updated" times.
+- **Frontend dependencies:** Tailwind CSS 4, Vite 8 with plugin-react 6, lucide-react 1.x and Vitest 5.
+
+### Fixed
+- **Flicker:** the factory pages no longer show a "Refreshing…" line or flash "Previous" labels during each background refresh.
+- **Delivery:** a pending check no longer uses up the merge retry budget; draft PRs are never promoted or auto-merged, and a configured review-hold label is honoured; a status report cannot move a merged item back to escalated.
+- **Dispatch:** the Leader acknowledgement deadline starts when the plan request arrives; native owner contact renews in a leased dispatch workspace; workspace-release reminders are bounded; a merged item keeps no active continuation revision.
+- **Factory pages** stop polling after a permanent 404 or 422, show local times in the right time zone, show a way back and plain errors on the Work item page, and keep the reader's place on Audit.
+- **Accessibility:** WCAG AA contrast fixes in both themes (team cards, Autonomy, Agent Mail badges, Live sessions counts, Team lanes labels).
+
+### Security
+- **Local API hardening:** settings writes need the Director key when one is configured; Agent Mail authentication defaults as described in the upgrade notes; the Agent Mail install routes need the Director key.
+- **Unattended team sessions:** interactive question prompts are blocked, and workspaces are pre-trusted for team sessions.
+
+
 ## [3.0.0] - Unreleased
 
 The release date is set when the release is published.
