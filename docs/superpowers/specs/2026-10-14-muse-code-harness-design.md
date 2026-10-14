@@ -35,7 +35,7 @@ A new `MuseCliProvider` in `backend/app/services/providers/muse_cli.py`, modelle
 - **Plain launch:** `muse --trust-workspace --model <model> [--reasoning-effort <tier>] [--yolo] [<prompt>]`. `skip_permissions` maps to `--yolo`. Team slots always use `--trust-workspace`, because Deck pre-trusts team workspaces for every harness.
 - **Resume launch:** `muse --trust-workspace --model <model> [--yolo] resume <session_id>`. The id must be a UUID; otherwise the launch is refused with a block code.
 - **Options:** `model`, `reasoning_effort` (Muse's tiers: none, minimal, low, medium, high, xhigh, max and ultra), `skip_permissions`, `prompt`, `session_id` and `mode`. Other `SpawnCommandOptions` fields are reported as unsupported, as `pi_cli.py` does. That includes the Bedrock fields: Muse runs only on Meta.
-- **Process match:** argv0 `muse`. The launcher script runs the runtime binary, so descendant matching must accept the runtime's process name. The name is found during implementation.
+- **Process match:** argv0 `muse` (the launcher script) or `muse-bin-<version>` (the binary that the launcher `exec`s, for example `muse-bin-1.4.8-R6256.1`).
 - **Capability matrix:** an entry for `muse-cli`. Mark capabilities `supported` only when this design implements them; everything else is `unsupported` or `unknown`.
 
 ### 2. Session identity
@@ -43,7 +43,7 @@ A new `MuseCliProvider` in `backend/app/services/providers/muse_cli.py`, modelle
 The TUI cannot be given a session id, so Deck discovers it, as it does for Codex.
 
 - **Primary source:** the `SessionStart` hook that the Agent Mail install adds (section 4). It sends `session_id` and `cwd` to Deck's existing hook route. That route already records Claude Code sessions, and its provider allowlist and session-key prefix gain `muse-cli`.
-- **Fallback:** if the hook is absent, find the newest `session.jsonl` under the dated session folders whose opening record names the slot's workspace as `cwd`, created after the pane started. That is the same freshness rule as the Codex rollout discovery.
+- **Process-bound discovery:** the `muse-bin-<version>` process holds its session's `.session.lock` open, at `~/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/.session.lock`. Deck reads `/proc/<pid>/fd`, takes the session folder's name as the id, and accepts it only if that folder's `session.jsonl` has `session.opened.observed` with the same `session_id` and `runtime.session.metadata` with `workspace_root` equal to the pane's cwd. That is as strict as the Codex rollout discovery.
 
 After the first launch, the slot stores the id in `launch_options.session_id` and relaunches in resume mode. This avoids the session-mismatch failure from v3.1.
 
@@ -51,9 +51,10 @@ After the first launch, the slot stores the id in `launch_options.session_id` an
 
 A new `muse_activity_service.py`, modelled on `pi_activity_service.py`. It reads the bound session's `session.jsonl` incrementally, with a bounded read size, and derives the same states as the other harnesses.
 
-- **working:** a model request or a tool batch has started and has not completed.
-- **idle:** the last `model_completed` has a finishing `finish_reason`, and no tool batch is open.
-- **waiting for input:** a `user_input_prompt_requested` with no later answer. This is the exact signal, and it feeds the existing waiting-input notice for the bound Supervisor.
+- **working:** a `runtime.session` event of kind `started` that carries a `prompt` (a turn start), with no later `terminal`.
+- **idle:** the turn's `terminal` event with `terminal: "completed"`. Any other `terminal` value is `unknown`.
+- **waiting for input:** a `user_input_prompt_requested` whose `prompt_id` has no later `user_input_prompt_settled`. This is the exact signal, and it feeds the existing waiting-input notice for the bound Supervisor.
+- **Binding:** the file must contain `session.opened.observed` with the slot's session id, and `runtime.session.metadata` with `workspace_root` equal to the pane's cwd. Timestamps (`recorded_at`) are epoch microseconds.
 - **unknown:** an unreadable, ambiguous or missing transcript. Unknown grants no authority, as for every harness.
 
 `recognize_native_input_wait()` also accepts `muse-cli`, with the spike's question form as a fixture. A `NUL`-padded or partial last line is treated like the guard does: it is not parsed until it is complete.
@@ -62,11 +63,12 @@ A new `muse_activity_service.py`, modelled on `pi_activity_service.py`. It reads
 
 New install and uninstall functions in `agent_mail_install_service.py`, with `POST /agent-mail/install/muse/apply` and `.../uninstall`. Both routes need the Director key when one is configured, like the other install routes, and `test_settings_write_guard.py` lists them.
 
-- **MCP:** merge one `claude-deck-mail` entry into the workspace `.mcp.json`. Keep the other servers, and refuse to overwrite a malformed file.
-- **Hooks:** merge Deck's entries into the workspace `.muse/hooks.json`: `SessionStart` (identity and Mail context) and `UserPromptSubmit` (inbox nudges). They use the same hook command and payload handling as Claude Code.
-- **Status:** `muse_cli_available`, `muse_mcp_installed`, `muse_hooks` and `muse_hooks_missing` in `AgentMailInstallStatus`, plus a snippet for manual setup.
+The install is **user-wide**, like every other harness's install, in Muse's user settings file `~/.config/muse/settings.json`. The directory comes from `$MUSE_CONFIG_DIR` when it is set. A per-workspace install would write `.mcp.json` and `.muse/hooks.json` into dispatch workspaces, which are git clones. Those files would be untracked changes, and the maintenance and publication checks require a clean tree. The spike confirmed that the settings file accepts a `hooks` block, and that user-level hooks fire even in an untrusted directory.
 
-The install never edits the user's global `~/.config/muse/settings.json`.
+- **MCP:** set `mcpServers.claude-deck-mail` to a stdio entry that runs Deck's `agent_mail_server.py` shim. Keep all other servers and settings, and refuse to overwrite a malformed file.
+- **Hooks:** add `SessionStart` and `UserPromptSubmit` groups in Claude Code's layout. They run `agent_mail_hook.py --provider muse-cli`, as Codex does, and Deck's hook route accepts `muse-cli` with the session-key prefix `muse`.
+- **Uninstall:** remove only Deck's entries, recognised by the shim markers. Keep the rest of the file.
+- **Status:** `muse_cli_available`, `muse_mcp_installed`, `muse_hooks` and `muse_hooks_missing` in `AgentMailInstallStatus`.
 
 ### 5. Unattended safety: questions
 
@@ -97,7 +99,7 @@ Add `muse-cli` with the label "Muse Code" to:
 
 ### 8. Version visibility
 
-The launcher updates itself. Each Muse session records its Muse Code version, from the transcript metadata or `muse --version` at launch, so a change during a campaign is visible. Pinning is out of scope: Deck does not change the user's launcher.
+The launcher updates itself; the spike saw 1.4.7 become 1.4.8 within one hour. Each Muse observation records the session's version, from the `muse-bin-<version>` process name and the transcript's `runtime.session.metadata.build`, so a change during a campaign is visible. Pinning is out of scope: Deck does not change the user's launcher.
 
 ## Out of scope
 
