@@ -36,6 +36,9 @@ type Progress = {
   remaining_work?: RemainingWork
 }
 
+const POLL_MS = 15_000
+const REFRESH_GRACE_MS = 3_000
+
 const phases: Record<string, string> = {
   paused: 'Automation paused', complete: 'Tracked work complete', intervention: 'Intervention needed',
   plan_review: 'Plan review', handoff: 'Owner handoff', queue: 'Admission or capacity wait',
@@ -112,6 +115,8 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
     let request: AbortController | undefined
+    // Refresh when the shown observation expires, so new data replaces it without a gap.
+    let expiresAt = NaN
     const poll = async () => {
       request?.abort()
       const controller = new AbortController()
@@ -130,6 +135,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
         if (!valid(next, id, nonce, owner)) throw new Error('Invalid progress data')
         if (active && !controller.signal.aborted) {
           setResult({ key: requestKey, data: next }); setError(false); setClock(Date.now())
+          expiresAt = timestamp(next.valid_until)
         }
       } catch {
         if (active) { setError(true); setClock(Date.now()) }
@@ -138,7 +144,8 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
         if (active) {
           setLoading(false)
           setManual(false)
-          timer = setTimeout(() => { void poll() }, 15_000)
+          const untilExpiry = Number.isFinite(expiresAt) ? expiresAt - Date.now() : POLL_MS
+          timer = setTimeout(() => { void poll() }, Math.min(POLL_MS, Math.max(1_000, untilExpiry)))
         }
       }
     }
@@ -150,11 +157,16 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const expiry = data && matches ? timestamp(data.valid_until) : NaN
   useEffect(() => {
     const update = () => setClock(Date.now())
-    const timer = Number.isFinite(expiry) ? setTimeout(update, Math.max(0, expiry - Date.now() + 1)) : undefined
+    // Tick at expiry and at the end of the refresh grace, so a late refresh is marked as previous.
+    const timers = Number.isFinite(expiry)
+      ? [0, REFRESH_GRACE_MS].map((extra) => setTimeout(update, Math.max(0, expiry + extra - Date.now() + 1)))
+      : []
     window.addEventListener('focus', update)
-    return () => { clearTimeout(timer); window.removeEventListener('focus', update) }
+    return () => { timers.forEach(clearTimeout); window.removeEventListener('focus', update) }
   }, [expiry])
-  const current = Boolean(matches && !error && clock < expiry)
+  // While the refresh that started at expiry runs, keep the last values for a short,
+  // bounded time. A late or failed refresh still marks them as previous.
+  const current = Boolean(matches && !error && (clock < expiry || (loading && clock < expiry + REFRESH_GRACE_MS)))
   const publication = matches ? data?.publication : null
   const publicationCurrent = current && publication?.state === 'current'
   const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Deck', none: 'None' }

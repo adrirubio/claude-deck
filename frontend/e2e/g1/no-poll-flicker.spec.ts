@@ -7,6 +7,8 @@ import { expect, test } from '../support/guard'
 // announced to a screen reader.
 // The seed has no user input here, so every layout shift counts. The limit is
 // 0.001 in total. Only the text of relative times may change between polls.
+// Text that changes and then changes back is a flicker too, for example labels
+// that briefly read "Previous phase" while a refresh is in flight.
 
 const SCREENS = [
   { name: 'Overview', route: '/', heading: 'Overview' },
@@ -30,6 +32,18 @@ async function watch(page: Page): Promise<void> {
     previous.__flickerStop?.()
     const state = { shift: 0, transient: [] as string[], announced: [] as string[] }
     const added = new WeakSet<Node>()
+    // Each text node's values in this window. Digits are masked, so clocks and
+    // relative times that tick are one value.
+    const texts = new WeakMap<Node, string[]>()
+    const mask = (value: string | null) => (value ?? '').replace(/\d/g, '#').trim()
+    const noteText = (node: Node, before: string | null) => {
+      const seen = texts.get(node) ?? [mask(before)]
+      const now = mask(node.textContent)
+      if (now === seen[seen.length - 1]) return
+      if (seen.includes(now)) state.transient.push(`text "${seen[seen.length - 1].slice(0, 60)}"`)
+      seen.push(now)
+      texts.set(node, seen)
+    }
     const describe = (element: Element) => {
       const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60)
       return `<${element.tagName.toLowerCase()}> "${text}"`
@@ -47,6 +61,7 @@ async function watch(page: Page): Promise<void> {
     shifts.observe({ type: 'layout-shift', buffered: false })
     const mutations = new MutationObserver(records => {
       for (const record of records) {
+        if (record.type === 'characterData') { noteText(record.target, record.oldValue); continue }
         record.addedNodes.forEach(node => {
           each(node, element => {
             added.add(element)
@@ -67,7 +82,7 @@ async function watch(page: Page): Promise<void> {
         })
       }
     })
-    mutations.observe(document.body, { childList: true, subtree: true })
+    mutations.observe(document.body, { childList: true, subtree: true, characterData: true, characterDataOldValue: true })
     previous.__flickerStop = () => { shifts.disconnect(); mutations.disconnect() }
     ;(window as unknown as { __flicker: typeof state }).__flicker = state
   })
@@ -125,7 +140,8 @@ async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
     ? page.waitForResponse(response => /\/progress$/.test(response.url()), { timeout: 20_000 })
     : Promise.resolve(null)
   await page.waitForTimeout(WATCH_MS)
-  await progress
+  // Read after the page has rendered the progress answer, not the moment it arrives.
+  if (await progress) await page.waitForTimeout(1_000)
   const result = await read(page)
   const buttons = screen.name === 'Work item' ? await readProgressButton(page) : null
   page.off('response', onResponse)

@@ -52,7 +52,10 @@ it('expires a report while refresh hangs and does not restore it after A to B to
   const view = render(<WorkPublicationPanel item={item} />)
   await act(async () => { await vi.advanceTimersByTimeAsync(0) })
   expect(screen.getByText('Next:').parentElement?.textContent).toContain('B2 publishes')
+  // The refresh starts at expiry. The report stays for the bounded grace, then expires.
   await act(async () => { await vi.advanceTimersByTimeAsync(15001) })
+  expect(screen.getByText('Next:').parentElement?.textContent).toContain('B2 publishes')
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
   expect(screen.getByText('Estimate:').parentElement?.textContent).toBe('Estimate: Unknown.')
   view.rerender(<WorkPublicationPanel item={{ ...item, id: 2, dispatch_nonce: 'other' }} />)
   view.rerender(<WorkPublicationPanel item={item} />)
