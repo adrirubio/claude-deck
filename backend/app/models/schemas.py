@@ -2241,6 +2241,10 @@ class AgentMailInstallStatus(BaseModel):
     codex_mcp_installed: bool
     codex_hooks: List[str] = Field(default_factory=list)
     codex_hooks_missing: List[str] = Field(default_factory=list)
+    muse_cli_available: bool = False
+    muse_mcp_installed: bool = False
+    muse_hooks: List[str] = Field(default_factory=list)
+    muse_hooks_missing: List[str] = Field(default_factory=list)
     copilot_cli_available: bool = False
     copilot_mcp_installed: bool = False
     copilot_hooks: List[str] = Field(default_factory=list)

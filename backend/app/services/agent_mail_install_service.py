@@ -1,5 +1,6 @@
 """Install Agent Mail integration into supported local agent CLIs."""
 import json
+import os
 import logging
 import shlex
 import shutil
@@ -701,6 +702,8 @@ async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
                 get_codex_home() / "config.toml",
                 codex_hooks_path(),
             ]
+        elif scope == "muse":
+            paths = [muse_settings_path()]
         elif scope == "copilot":
             paths = [
                 get_copilot_home() / "mcp-config.json",
@@ -752,6 +755,81 @@ async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
         logger.warning("agent mail pre-mutation backup failed: %s", exc)
 
 
+MUSE_MAIL_HOOK_EVENTS = {"SessionStart": "session-start", "UserPromptSubmit": "user-prompt-submit"}
+
+
+def muse_settings_path() -> Path:
+    from app.services.providers.muse_cli import muse_config_dir
+    return muse_config_dir() / "settings.json"
+
+
+def muse_cli_available() -> bool:
+    return shutil.which("muse") is not None
+
+
+def muse_hook_command(slug: str) -> str:
+    return provider_hook_command("muse-cli", slug)
+
+
+def _muse_mcp_entry() -> dict:
+    return {"transport": "stdio", "command": sys.executable, "args": [shim_path()],
+            "env": {"CLAUDE_DECK_URL": deck_base_url(), "CLAUDE_DECK_PROVIDER": "muse-cli"}}
+
+
+def _load_muse_settings() -> dict:
+    path = muse_settings_path()
+    if not path.exists():
+        return {"schema_version": 1}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read the Muse settings file: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError("The Muse settings file must contain a JSON object")
+    for key in ("mcpServers", "hooks"):
+        if key in doc and not isinstance(doc[key], dict):
+            raise ValueError(f"The Muse settings field '{key}' must be a JSON object")
+    return doc
+
+
+def _write_muse_settings(doc: dict) -> None:
+    path = muse_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".deck-tmp")
+    temporary.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def muse_mcp_installed() -> bool:
+    try:
+        entry = _load_muse_settings().get("mcpServers", {}).get(MCP_SERVER_NAME)
+    except ValueError:
+        return False
+    return isinstance(entry, dict) and shim_path() in entry.get("args", [])
+
+
+def installed_muse_hooks() -> list[str]:
+    try:
+        hooks = _load_muse_settings().get("hooks", {})
+    except ValueError:
+        return []
+    return [event for event, slug in MUSE_MAIL_HOOK_EVENTS.items()
+            if any(_muse_hook_group_is_current(group, slug) for group in hooks.get(event, []) or [])]
+
+
+def _muse_hook_group_is_current(group: object, slug: str) -> bool:
+    # Deck's Muse groups carry no matcher, so they run for every session source.
+    if not isinstance(group, dict) or group.get("matcher") is not None:
+        return False
+    hooks = group.get("hooks")
+    return isinstance(hooks, list) and any(_codex_hook_matches_event(hook, slug) for hook in hooks)
+
+
+def _muse_hook_entry(slug: str) -> dict:
+    return {"hooks": [{"type": "command", "command": muse_hook_command(slug), "timeout": 2}]}
+
+
+
 async def get_install_status() -> AgentMailInstallStatus:
     from app.services.pi_mail_readiness import pi_mail_readiness
 
@@ -767,6 +845,8 @@ async def get_install_status() -> AgentMailInstallStatus:
     missing = [event for event in MAIL_HOOK_EVENTS if event not in installed_events]
     codex_hook_events = installed_codex_hooks()
     codex_missing = [event for event in CODEX_MAIL_HOOK_EVENTS if event not in codex_hook_events]
+    muse_hook_events = installed_muse_hooks()
+    muse_missing = [event for event in MUSE_MAIL_HOOK_EVENTS if event not in muse_hook_events]
     copilot_hook_events = installed_copilot_hooks()
     copilot_missing = [
         event for event in COPILOT_MAIL_HOOK_EVENTS if event not in copilot_hook_events
@@ -788,6 +868,10 @@ async def get_install_status() -> AgentMailInstallStatus:
         codex_mcp_installed=codex_mcp_installed(),
         codex_hooks=codex_hook_events,
         codex_hooks_missing=codex_missing,
+        muse_cli_available=muse_cli_available(),
+        muse_mcp_installed=muse_mcp_installed(),
+        muse_hooks=muse_hook_events,
+        muse_hooks_missing=muse_missing,
         copilot_cli_available=copilot_cli_available(),
         copilot_mcp_installed=copilot_mcp_installed(),
         copilot_hooks=copilot_hook_events,
@@ -1044,3 +1128,36 @@ def get_snippets() -> AgentMailSnippets:
         opencode_config_json=opencode_config_json,
         opencode_plugin_js=_opencode_plugin_content(),
     )
+
+
+async def apply_muse_install(db: AsyncSession) -> AgentMailInstallStatus:
+    if not muse_cli_available():
+        raise ValueError("Muse Code is not available on this machine")
+    doc = _load_muse_settings()
+    await _backup_before_mutation(db, "muse")
+    doc.setdefault("schema_version", 1)
+    doc.setdefault("mcpServers", {})[MCP_SERVER_NAME] = _muse_mcp_entry()
+    _prune_codex_mail_hooks(doc)
+    hooks = doc.setdefault("hooks", {})
+    for event, slug in MUSE_MAIL_HOOK_EVENTS.items():
+        groups = hooks.setdefault(event, [])
+        if not isinstance(groups, list):
+            raise ValueError(f"Muse hooks event {event} must contain a list")
+        groups.append(_muse_hook_entry(slug))
+    _write_muse_settings(doc)
+    return await get_install_status()
+
+
+async def uninstall_muse(db: AsyncSession) -> AgentMailInstallStatus:
+    if not muse_settings_path().exists():
+        return await get_install_status()
+    doc = _load_muse_settings()
+    await _backup_before_mutation(db, "muse")
+    servers = doc.get("mcpServers", {})
+    changed = servers.pop(MCP_SERVER_NAME, None) is not None
+    changed = _prune_codex_mail_hooks(doc) or changed
+    if not doc.get("hooks"):
+        doc.pop("hooks", None)
+    if changed:
+        _write_muse_settings(doc)
+    return await get_install_status()
