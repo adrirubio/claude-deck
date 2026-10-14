@@ -87,11 +87,9 @@ test('@active a lane zooms and restores, and Escape restores the lanes before it
   await expect(page.getByText('Release crew · 8 members')).toHaveCount(0)
 })
 
-// In the light theme the member strip's role and harness labels are
-// `span.text-[11px] opacity-80` (TeamLanesView.tsx:112-113) and fail AA at
-// 3.65:1. Reported to L1 (#667): the light contrast journey stays @pending
-// until the F3 fix activates it in its own PR. The dark
-// theme passes, and the keyboard journeys are @active.
+// The light contrast journey checks the member strip's role and harness
+// labels. They failed AA at 3.65:1 while they were `opacity-80` (#667). The
+// journey is active since #674 (PR #684) removed the opacity.
 for (const theme of ['light', 'dark'] as Theme[]) {
   const tag = '@active'
   test(`${tag} Team lanes meets AA contrast in the ${theme} theme`, async ({ page }) => {
