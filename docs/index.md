@@ -39,7 +39,7 @@ Factory filters are independent of the saved native harness preference and local
 
 This reference describes the integrated product source candidate. Earlier packaged releases and separately pinned runtime or pilot environments can retain previous navigation and capabilities; integrating source does not upgrade those environments.
 
-[Harnesses](/features/harnesses) includes the versioned operations/readiness catalog for all five harnesses, bounded local configuration observations and guarded native pages. See the [Providers API](/api/providers) for the catalog contract. Native adapters remain provider-specific; catalog support does not create an editor or grant authority.
+[Harnesses](/features/harnesses) includes the versioned operations/readiness catalog for all six harnesses, bounded local configuration observations and guarded native pages. See the [Providers API](/api/providers) for the catalog contract. Native adapters remain provider-specific; catalog support does not create an editor or grant authority.
 
 Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
 
