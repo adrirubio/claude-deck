@@ -2,7 +2,7 @@
 # Fake harness binary for the Deck E2E instance. No network, no credentials.
 #
 # scripts/e2e-instance.sh copies this file to <tmp>/bin/<name> for each
-# provider (claude, codex, copilot, opencode, pi). The name comes from $0.
+# provider (claude, codex, copilot, opencode, pi, muse). The name comes from $0.
 # - Probes (--version, --help, any --json call) return at once.
 # - Without a terminal on stdin it exits 0, so a Deck subprocess never hangs.
 # - In a terminal (a tmux pane) it echoes its input with argv[0] set to the

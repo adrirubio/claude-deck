@@ -31,7 +31,7 @@ function card(page: import('@playwright/test').Page, harness: string): Locator {
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-test('@active all 5 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
+test('@active all 6 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
   await page.goto('/harnesses')
   await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()
   for (const harness of HARNESSES) {
