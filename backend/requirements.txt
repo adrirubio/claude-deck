@@ -72,7 +72,7 @@ packaging==26.3
     # via pytest
 pluggy==1.6.0
     # via pytest
-pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+pycparser==3.11 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
 pydantic==2.13.4
     # via
