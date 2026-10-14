@@ -22,6 +22,7 @@ export const harnesses = {
   "copilot-cli": "Copilot CLI",
   "opencode-cli": "OpenCode",
   "pi-cli": "Pi",
+  "muse-cli": "Muse Code",
 };
 export function factoryQuery(params: URLSearchParams, category = false) {
   const result = new URLSearchParams();

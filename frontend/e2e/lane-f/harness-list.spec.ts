@@ -8,7 +8,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // Design reference: screen 18 (harness list).
 // @active since #523 merged.
 
-const HARNESSES = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli']
+const HARNESSES = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli', 'muse-cli']
 // Words and codes that belong only inside "Technical details".
 const TECHNICAL = /\bunknown\b|\badapter\b|\bbinding\b|\b[a-z]+(?:_[a-z]+)+\b|write capable|read only/i
 

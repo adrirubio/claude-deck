@@ -11,6 +11,7 @@ const HARNESS_LABELS: Record<string, string> = {
   'copilot-cli': 'GitHub Copilot CLI',
   'opencode-cli': 'OpenCode CLI',
   'pi-cli': 'Pi',
+  'muse-cli': 'Muse Code',
 }
 
 /** The plain harness name of a member, from its first session. The data has no model name. */

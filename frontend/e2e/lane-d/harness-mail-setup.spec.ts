@@ -15,7 +15,7 @@ import { enterDirectorKey } from '../support/director-key'
 // Design reference: screens 14 (Agent Mail) and 19 (harness page).
 // @active since #531 merged into release/v3.1 (PR #664).
 
-const MANAGED = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli']
+const MANAGED = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'muse-cli']
 const PATH = /(^|\s)(\/|~\/)[\w.-]+/
 
 /** Answer every install write with 503 and count the writes. */

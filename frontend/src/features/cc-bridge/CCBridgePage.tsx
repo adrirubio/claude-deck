@@ -38,6 +38,7 @@ const PROVIDER_FILTERS: { value: ProviderFilter; label: string }[] = [
   { value: 'copilot-cli', label: 'Copilot' },
   { value: 'opencode-cli', label: 'OpenCode' },
   { value: 'pi-cli', label: 'Pi' },
+  { value: 'muse-cli', label: 'Muse Code' },
 ]
 
 function addTarget(prev: string[], target: string): string[] {
@@ -170,6 +171,7 @@ export function CCBridgePage() {
     'copilot-cli': sessions.filter((session) => session.provider === 'copilot-cli').length,
     'opencode-cli': sessions.filter((session) => session.provider === 'opencode-cli').length,
     'pi-cli': sessions.filter((session) => session.provider === 'pi-cli').length,
+    'muse-cli': sessions.filter((session) => session.provider === 'muse-cli').length,
   }
 
   const initialDialogProvider = providerFilter === 'all' ? selectedProviderId : providerFilter

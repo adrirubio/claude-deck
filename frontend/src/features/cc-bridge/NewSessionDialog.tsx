@@ -145,9 +145,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
   const isPi = provider === 'pi-cli'
+  const isMuse = provider === 'muse-cli'
   const supportsPlatform = launchDescriptor?.bedrock_supported ?? false
   const isBedrock = supportsPlatform && launchOptions.platform === 'bedrock'
-  const modeOptions = isOpenCode || isPi
+  const modeOptions = isOpenCode || isPi || isMuse
     ? OPENCODE_MODE_OPTIONS
     : isCopilot
       ? COPILOT_MODE_OPTIONS
@@ -181,6 +182,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (!open) return
     if (provider === 'pi-cli') {
       setLaunchOptions({ platform: 'openrouter' })
+      setMode('plain')
+      return
+    }
+    if (provider === 'muse-cli') {
+      setLaunchOptions({}) // Muse runs only on Meta; a remembered platform does not apply.
       setMode('plain')
       return
     }

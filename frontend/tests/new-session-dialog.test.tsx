@@ -25,7 +25,7 @@ vi.mock('../src/hooks/useProviders', () => ({
 vi.mock('../src/contexts/ProviderContext', () => ({
   useProviderContext: () => ({
     selectedProviderId: 'claude-code',
-    providers: [{ id: 'claude-code', display_name: 'Claude Code', installed: true }, { id: 'codex-cli', display_name: 'Codex CLI', installed: true }],
+    providers: [{ id: 'claude-code', display_name: 'Claude Code', installed: true }, { id: 'codex-cli', display_name: 'Codex CLI', installed: true }, { id: 'muse-cli', display_name: 'Muse Code', installed: true }],
   }),
 }))
 const folders = vi.hoisted(() => ({ value: [] as Array<{ path: string; name: string; source: 'team' | 'tracked'; detail?: string }> }))
@@ -85,6 +85,22 @@ describe('NewSessionDialog', () => {
     expect(vi.mocked(spawnSession).mock.calls[0][1]).toBe('stored-key')
     await waitFor(() => expect(onSpawned).toHaveBeenCalledWith('deck:1.0'))
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('offers Muse Code only a new or resumed session and sends no remembered platform', async () => {
+    localStorage.setItem('cc-bridge.platform', JSON.stringify({ platform: 'bedrock', aws_region: 'eu-west-1' }))
+    setOperatorToken('stored-key')
+    open()
+    fireEvent.change(selects()[0], { target: { value: 'muse-cli' } })
+
+    expect(within(selects()[1]).getAllByRole('option').map(option => option.textContent).filter(Boolean)).toEqual(['New session', 'Resume a previous session'])
+    fireEvent.change(selects()[2], { target: { value: TEAM } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }))
+
+    await waitFor(() => expect(spawnSession).toHaveBeenCalledTimes(1))
+    const request = vi.mocked(spawnSession).mock.calls[0][0]
+    expect(request).toMatchObject({ provider: 'muse-cli', mode: 'plain' })
+    expect(JSON.stringify(request)).not.toMatch(/bedrock|aws_region/)
   })
 
   it('shows the path field only for "Other folder…" or when no folder is known', () => {

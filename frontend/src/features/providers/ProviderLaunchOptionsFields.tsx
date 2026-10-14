@@ -81,7 +81,8 @@ export function ProviderLaunchOptionsFields({
   const isClaude = provider === 'claude-code'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
-  const usesSimpleModelInput = isCopilot || isOpenCode || provider === 'pi-cli' || ((isCodex || isClaude) && isBedrock)
+  const isMuse = provider === 'muse-cli'
+  const usesSimpleModelInput = isCopilot || isOpenCode || isMuse || provider === 'pi-cli' || ((isCodex || isClaude) && isBedrock)
   const simpleModelKey: keyof SlotLaunchOptions = (isCodex || isClaude) && isBedrock ? 'bedrock_model' : 'model'
   const simpleModelValue = (isCodex || isClaude) && isBedrock ? bedrockModel : model
 
@@ -111,6 +112,9 @@ export function ProviderLaunchOptionsFields({
 
   return (
     <div className="grid gap-4">
+      {isMuse && (
+        <p className="text-sm text-muted-foreground">Meta · runs on your Muse subscription through Muse Code. Questions are detected and sent to the Supervisor; Muse cannot block them.</p>
+      )}
       {provider === 'pi-cli' && (
         <p className="text-sm text-muted-foreground">OpenRouter · default moonshotai/kimi-k3. Agent Mail requires the Deck extension; Pi tools are not sandboxed by Deck.</p>
       )}
@@ -166,7 +170,7 @@ export function ProviderLaunchOptionsFields({
             id="provider-model"
             value={simpleModelValue}
             onChange={(event) => setOption(simpleModelKey, event.target.value)}
-            placeholder={isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
+            placeholder={isMuse ? 'muse-wonder-1.0' : isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
             disabled={disabled}
           />
         </div>

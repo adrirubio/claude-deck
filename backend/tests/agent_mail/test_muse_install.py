@@ -41,8 +41,9 @@ async def test_install_keeps_existing_servers_and_hooks(settings_file):
 
 @pytest.mark.asyncio
 async def test_install_creates_a_versioned_file(settings_file):
-    await svc.apply_muse_install(None)
+    status = await svc.apply_muse_install(None)
     assert json.loads(settings_file.read_text())["schema_version"] == 1
+    assert status.muse_settings_path == str(settings_file)
 
 
 @pytest.mark.asyncio

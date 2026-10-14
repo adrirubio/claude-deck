@@ -205,6 +205,20 @@ export function uninstallOpenCodeAgentMail(): Promise<AgentMailInstallStatus> {
   })
 }
 
+export function applyMuseAgentMailInstall(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/muse/apply', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
+export function uninstallMuseAgentMail(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/muse/uninstall', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
 export function fetchAgentMailSnippets(): Promise<AgentMailSnippets> {
   return apiClient<AgentMailSnippets>('agent-mail/install/snippets', { headers: directorReadHeaders() })
 }

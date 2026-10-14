@@ -1,6 +1,6 @@
 import type { AgentStatus } from './agentStatus'
 
-export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
+export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli' | 'muse-cli'
 export type AgentTeamLaunchAction = 'reuse' | 'adopt' | 'spawn' | 'skip' | 'blocked'
 export type AgentTeamLaunchStatus =
   | 'ready'

@@ -36,7 +36,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(screen.getAllByRole('link', { name: /^Open/ })[0]).toHaveAttribute('href', '/harnesses/claude-code')
     expect(screen.queryByRole('navigation', { name: /native surfaces/ })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Refresh observations' })).toBeNull()
-    expect(screen.getAllByRole('article')).toHaveLength(5)
+    expect(screen.getAllByRole('article')).toHaveLength(6)
     const before = requests.length
     fireEvent.click(screen.getAllByRole('link', { name: /^Open/ })[0]); await settle()
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses/claude-code')

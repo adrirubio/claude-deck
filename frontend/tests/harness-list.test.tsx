@@ -54,7 +54,7 @@ describe('compact harness list', () => {
   it('shows status, version, page count and the number of teams on one card per harness', async () => {
     open(); await settle()
 
-    expect(screen.getAllByRole('article')).toHaveLength(5)
+    expect(screen.getAllByRole('article')).toHaveLength(6)
     const claude = card('Claude Code')
     expect(within(claude).getByText('Ready')).toBeInTheDocument()
     expect(within(claude).getByText('v1.2.3')).toBeInTheDocument()

@@ -872,6 +872,7 @@ async def get_install_status() -> AgentMailInstallStatus:
         muse_mcp_installed=muse_mcp_installed(),
         muse_hooks=muse_hook_events,
         muse_hooks_missing=muse_missing,
+        muse_settings_path=str(muse_settings_path()),
         copilot_cli_available=copilot_cli_available(),
         copilot_mcp_installed=copilot_mcp_installed(),
         copilot_hooks=copilot_hook_events,

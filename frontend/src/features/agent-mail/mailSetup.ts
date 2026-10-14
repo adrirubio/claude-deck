@@ -17,9 +17,9 @@ export function isCompleteInstallStatus(value: unknown): value is AgentMailInsta
 export type MailSetupState = 'connected' | 'partial' | 'not_set_up' | 'automatic_ready' | 'automatic_unavailable'
 
 /** The four harnesses with a managed Set up and Remove action. */
-export type MailActionHarness = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli'
+export type MailActionHarness = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'muse-cli'
 
-export const MAIL_ACTION_HARNESSES: MailActionHarness[] = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli']
+export const MAIL_ACTION_HARNESSES: MailActionHarness[] = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'muse-cli']
 
 export const HARNESS_NAMES: Record<AgentProviderId, string> = {
   'claude-code': 'Claude Code',
@@ -27,6 +27,7 @@ export const HARNESS_NAMES: Record<AgentProviderId, string> = {
   'copilot-cli': 'GitHub Copilot CLI',
   'opencode-cli': 'OpenCode CLI',
   'pi-cli': 'Pi',
+  'muse-cli': 'Muse Code',
 }
 
 export function hasMailAction(providerId: AgentProviderId): providerId is MailActionHarness {
@@ -49,6 +50,13 @@ export function mailSetupState(providerId: AgentProviderId, status: AgentMailIns
     case 'copilot-cli': {
       const whole = status.copilot_mcp_installed && status.copilot_hooks_missing.length === 0
       const some = status.copilot_mcp_installed || status.copilot_hooks.length > 0
+      return whole ? 'connected' : some ? 'partial' : 'not_set_up'
+    }
+    case 'muse-cli': {
+      const missing = status.muse_hooks_missing ?? []
+      const installed = status.muse_hooks ?? []
+      const whole = Boolean(status.muse_mcp_installed) && missing.length === 0
+      const some = Boolean(status.muse_mcp_installed) || installed.length > 0
       return whole ? 'connected' : some ? 'partial' : 'not_set_up'
     }
     case 'opencode-cli': {
@@ -80,7 +88,7 @@ export function mailSetupActions(state: MailSetupState): { setUp: boolean; remov
 /** The harnesses with a connected setup, for the line on the Agent Mail page. */
 export function connectedHarnessNames(status: AgentMailInstallStatus | null): string[] {
   if (!status) return []
-  const ids: AgentProviderId[] = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli']
+  const ids: AgentProviderId[] = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli', 'muse-cli']
   return ids
     .filter((id) => {
       const state = mailSetupState(id, status)
@@ -136,6 +144,18 @@ export function mailTechnicalLines(providerId: AgentProviderId, status: AgentMai
         { label: 'Hooks file', value: status.copilot_hooks_path || 'unavailable' },
         { label: 'Hooks', value: status.copilot_hooks_missing.length === 0 ? 'installed' : `${status.copilot_hooks.length}/${total} installed` },
         { label: 'MCP', value: status.copilot_mcp_installed ? 'installed' : 'not installed' },
+        ...common,
+      ]
+    }
+    case 'muse-cli': {
+      const installed = status.muse_hooks ?? []
+      const missing = status.muse_hooks_missing ?? []
+      return [
+        { label: 'Muse Code', value: status.muse_cli_available ? 'available' : 'missing' },
+        { label: 'Settings file', value: status.muse_settings_path || 'unavailable' },
+        { label: 'Hooks', value: missing.length === 0 ? 'installed' : `${installed.length}/${installed.length + missing.length} installed` },
+        { label: 'MCP', value: status.muse_mcp_installed ? 'installed' : 'not installed' },
+        { label: 'Question prompt block', value: 'not available: questions are detected and escalated' },
         ...common,
       ]
     }
@@ -228,6 +248,24 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
         mutations: [
           'Copilot CLI: run `copilot mcp remove claude-deck-mail`',
           `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: remove managed Agent Mail hook file`,
+        ],
+      }
+    case 'muse-cli:setup':
+      return {
+        title: 'Install Agent Mail for Muse Code',
+        description: 'A backup is attempted before Claude Deck adds the Muse Code MCP server and lifecycle hooks to the Muse user settings.',
+        mutations: [
+          `${status.muse_settings_path || '~/.config/muse/settings.json'}: set mcpServers.claude-deck-mail`,
+          `${status.muse_settings_path || '~/.config/muse/settings.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
+          command,
+        ],
+      }
+    case 'muse-cli:remove':
+      return {
+        title: 'Remove Agent Mail from Muse Code',
+        description: 'A backup is attempted before Claude Deck removes its MCP server and hooks. Other Muse settings stay as they are.',
+        mutations: [
+          `${status.muse_settings_path || '~/.config/muse/settings.json'}: remove mcpServers.claude-deck-mail and the Agent Mail hook commands`,
         ],
       }
     case 'opencode-cli:setup':

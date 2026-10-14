@@ -9,6 +9,7 @@ import {
   applyCodexAgentMailInstall,
   applyCopilotAgentMailInstall,
   applyOpenCodeAgentMailInstall,
+  applyMuseAgentMailInstall,
   fetchAgentMailAuthenticationStatus,
   fetchAgentMailInstallStatus,
   fetchAgentMailSnippets,
@@ -16,6 +17,7 @@ import {
   uninstallCodexAgentMail,
   uninstallCopilotAgentMail,
   uninstallOpenCodeAgentMail,
+  uninstallMuseAgentMail,
 } from './api'
 import { isCompleteInstallStatus, type MailActionHarness, type MailActionMode } from './mailSetup'
 
@@ -36,6 +38,10 @@ const ACTIONS: Record<MailActionHarness, Record<MailActionMode, { run: () => Pro
   'opencode-cli': {
     setup: { run: applyOpenCodeAgentMailInstall, label: 'OpenCode CLI install updated' },
     remove: { run: uninstallOpenCodeAgentMail, label: 'OpenCode CLI install removed' },
+  },
+  'muse-cli': {
+    setup: { run: applyMuseAgentMailInstall, label: 'Muse Code install updated' },
+    remove: { run: uninstallMuseAgentMail, label: 'Muse Code install removed' },
   },
 }
 
