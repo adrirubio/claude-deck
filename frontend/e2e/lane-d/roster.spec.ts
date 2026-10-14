@@ -24,10 +24,9 @@ function row(page: Page, member: string) {
 // The fit journey shows Agent Mail as set up (showMailSetUp): the #552 rule
 // keeps the instance without Agent Mail setup, and the "Agent setup required"
 // banner (about 134 px) is not on a Director's set-up page.
-// @pending: the "Waiting on someone" panel of #529 (136 px with 3 items) is
-// above the tabs now, so the last Quiet team row ends at 910 px, 10 px below
-// the viewport. #530 passed before #529 merged. Reported to L1 (#669); a
-// gate-fix issue for F2 activates this journey.
+// The fit journey failed after #529 put its "Waiting on someone" panel above
+// the tabs: the last Quiet team row ended at 910 px (#669). It is active since
+// #682 (PR #683) made the panel compact.
 test('@active at 1440 × 900 all members of two teams are visible without scrolling', async ({ page }) => {
   await showMailSetUp(page)
   await openAgentMail(page, 'Team')

@@ -63,11 +63,9 @@ test('@active Kill is never next to the Watch target', async ({ page }) => {
   await page.keyboard.press('Escape')
 })
 
-// The filter chip counts ("(8)", "(7)" ...) are `span.opacity-70` and fail AA
-// in both themes today: 2.99:1 (light), 3.85:1 (dark) and 3.64:1 on the
-// chosen green chip (CCBridgePage.tsx:353, 373 and 387). Reported to L1 (#667);
-// the contrast journeys stay @pending until the F3 fix activates them in its
-// own PR. The keyboard journeys are @active.
+// The contrast journeys check the filter chip counts ("(8)", "(7)" ...). They
+// failed AA while the counts were `span.opacity-70` (#667). They are active
+// since #674 (PR #684) removed the opacity.
 for (const theme of ['light', 'dark'] as Theme[]) {
   test(`@active Live sessions meets AA contrast in the ${theme} theme`, async ({ page }) => {
     await useTheme(page, theme)
