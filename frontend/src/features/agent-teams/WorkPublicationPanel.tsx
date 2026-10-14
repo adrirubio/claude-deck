@@ -103,6 +103,8 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const data = result?.key === requestKey ? result.data : null
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(false)
+  // True only for a refresh that the user started. The automatic poll keeps the button as it is.
+  const [manual, setManual] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [clock, setClock] = useState(Date.now)
 
@@ -135,6 +137,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
         clearTimeout(deadline)
         if (active) {
           setLoading(false)
+          setManual(false)
           timer = setTimeout(() => { void poll() }, 15_000)
         }
       }
@@ -167,8 +170,8 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   return <section className="space-y-3 rounded-lg border p-4" aria-label="Progress and publication">
     <div className="flex items-center justify-between gap-3">
       <h3 className="font-semibold">Progress and publication</h3>
-      <Button variant="outline" size="sm" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>
-        {loading ? 'Refreshing…' : 'Refresh progress'}
+      <Button variant="outline" size="sm" disabled={manual} onClick={() => { setManual(true); setRefresh((value) => value + 1) }}>
+        {manual ? 'Refreshing…' : 'Refresh progress'}
       </Button>
     </div>
     {ownerActivity?.slot_id === owner && <p className="text-xs text-muted-foreground">
