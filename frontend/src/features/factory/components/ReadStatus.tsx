@@ -24,9 +24,8 @@ export function ReadStatus<T>({
     MISSING_STATUS.includes(error.status);
   return (
     <div aria-live="polite" className="text-sm">
-      {state.refreshing && (
-        <p>{state.data ? "Refreshing…" : "Loading…"}</p>
-      )}
+      {/* A background refresh with data on screen shows nothing: no shift, no announcement. */}
+      {state.refreshing && !state.data && <p>Loading…</p>}
       {absent && (
         <p role="alert" className="rounded border border-destructive p-3">
           This {missing} does not exist.
