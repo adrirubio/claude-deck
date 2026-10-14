@@ -47,7 +47,7 @@ _PROC = Path("/proc")
 
 def recognize_native_input_wait(provider: str, screen: str) -> str | None:
     """Recognize captured active prompts. None means the screen is unknown."""
-    if provider not in {"claude-code", "codex-cli"} or len(screen) > 65536:
+    if provider not in {"claude-code", "codex-cli", "muse-cli"} or len(screen) > 65536:
         return None
     plain = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", screen)
     plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", plain)
@@ -65,6 +65,13 @@ def recognize_native_input_wait(provider: str, screen: str) -> str | None:
                 and re.search(r"(?m)^❯\s*(?:No,|Yes,)", active)):
             return "trust"
         if any(re.fullmatch(r"❯\s*", line) for line in lines[-4:]):
+            return "clear"
+    elif provider == "muse-cli":
+        if (re.search(r"Enter to select\s*·\s*↑/↓ to move\s*·\s*Tab for an optional note\s*·\s*Esc to interrupt", active)
+                and re.search(r"(?m)^⟩\s*\d+\.", active)):
+            return "question"
+        status = any(re.match(r"muse-[a-z0-9.\-]+ · ", line) for line in lines[-3:])
+        if status and any(re.fullmatch(r"❯\s*", line) for line in lines[-5:]):
             return "clear"
     else:
         if (footer.endswith("Press enter to continue") and "Welcome to Codex" in active

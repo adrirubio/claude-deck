@@ -17,10 +17,21 @@ SCREENS = Path(__file__).resolve().parents[1] / "fixtures/native_screens"
     ("codex-cli", "codex-sign-in.ansi", "sign_in"),
     ("claude-code", "claude-idle-after-declined-question.txt", "clear"),
     ("codex-cli", "codex-idle-prompt.txt", "clear"),
+    ("muse-cli", "muse-question-form.txt", "question"),
+    ("muse-cli", "muse-idle-prompt.txt", "clear"),
 ])
 def test_captured_native_input_screens(provider, name, expected):
     from app.services.agent_activity_service import recognize_native_input_wait
     assert recognize_native_input_wait(provider, (SCREENS / name).read_text()) == expected
+
+
+@pytest.mark.parametrize("provider,name", [
+    ("muse-cli", "claude-question-form.txt"), ("muse-cli", "codex-idle-prompt.txt"),
+    ("codex-cli", "muse-idle-prompt.txt"),
+])
+def test_one_harness_screen_is_not_another_harness_wait(provider, name):
+    from app.services.agent_activity_service import recognize_native_input_wait
+    assert recognize_native_input_wait(provider, (SCREENS / name).read_text()) is None
 
 
 @pytest.mark.parametrize("provider,screen", [("pi-cli", ""), ("claude-code", ""), ("codex-cli", "Unrecognized screen.")])
