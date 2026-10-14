@@ -7,6 +7,8 @@ import { useInstanceDocumentTitle } from "@/hooks/useInstanceDocumentTitle";
 import { useProviderContext } from "@/contexts/ProviderContext";
 import { getInstanceAccentClasses } from "@/lib/instanceAccent";
 import { cn } from "@/lib/utils";
+import { Link } from "react-router-dom";
+import { harnessSummary } from "./harnessSummary";
 
 export function Header() {
   const { theme } = useTheme();
@@ -17,6 +19,7 @@ export function Header() {
   const providerStatuses = providers
     .map((provider) => status?.providers?.[provider.id] ?? provider)
     .filter((provider) => provider.installed || provider.id === selectedProviderId);
+  const summary = harnessSummary(providerStatuses);
   useInstanceDocumentTitle(instance);
 
   const instanceTitle = instance
@@ -63,25 +66,22 @@ export function Header() {
                   <span className="truncate">{instance.name}</span>
                 </Badge>
               )}
-              {providerStatuses.map((provider) => (
-                <Badge
-                  key={provider.id}
-                  variant="outline"
-                  title={provider.unavailable_reason ?? undefined}
-                  className={cn(
-                    "hidden md:inline-flex gap-1 text-xs",
-                    provider.installed ? "font-mono" : "border-destructive/40 text-destructive"
-                  )}
+              {providerStatuses.length > 0 && (
+                <Link
+                  to="/harnesses"
+                  title={summary.title}
+                  aria-label={`${summary.label}. Open Harnesses`}
+                  className="hidden md:inline-flex rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  {provider.installed ? (
-                    <Terminal className="h-3 w-3" />
-                  ) : (
-                    <AlertCircle className="h-3 w-3" />
-                  )}
-                  {provider.display_name}
-                  {provider.version ? ` v${provider.version}` : provider.installed ? " installed" : " missing"}
-                </Badge>
-              ))}
+                  <Badge
+                    variant="outline"
+                    className={cn("gap-1 text-xs hover:border-primary/50", summary.problem && "border-destructive/40 text-destructive")}
+                  >
+                    {summary.problem ? <AlertCircle className="h-3 w-3" /> : <Terminal className="h-3 w-3" />}
+                    {summary.label}
+                  </Badge>
+                </Link>
+              )}
               {status.environment?.agent_cli_warning && (
                 <Badge
                   variant="outline"
