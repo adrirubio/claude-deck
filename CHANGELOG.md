@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.1.0] - Unreleased
+## [3.1.0] - 2026-10-14
 
-The release date is set when the release is published. v3.1 makes the factory pages readable for a Director, and hardens the local API.
+v3.1 makes the factory pages readable for a Director, and hardens the local API.
 
 ### Upgrade notes
 - **Node.js 22.12 or later** is now required to build and test the frontend. Vite 8 and Vitest 5 need it. `scripts/install.sh` checks the version.
@@ -43,9 +43,7 @@ The release date is set when the release is published. v3.1 makes the factory pa
 - **Unattended team sessions:** interactive question prompts are blocked, and workspaces are pre-trusted for team sessions.
 
 
-## [3.0.0] - Unreleased
-
-The release date is set when the release is published.
+## [3.0.0] - 2026-10-09
 
 ### Added
 - **Overview, Work and Repositories**: Show factory work counts, owners, waiting reasons, pull request context, and watched-scope intake, polling and overlap observations across teams.
