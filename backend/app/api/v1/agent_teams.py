@@ -3373,6 +3373,12 @@ async def read_activation_readiness(
                 )
                 if not pi_identity:
                     return False, "native_identity", member.id, None, None
+            elif slot.provider == "muse-cli":
+                # The muse launcher execs a versioned muse-bin-<version> binary
+                # (app/services/providers/muse_cli.py::is_muse_command).
+                from app.services.providers.muse_cli import is_muse_command
+                if not is_muse_command(argv[0]):
+                    return False, "native_identity", member.id, None, None
             elif not (argv0 == marker or argv0 == slot.provider):
                 return False, "native_identity", member.id, None, None
             # Authenticated MCP process: when the session process differs

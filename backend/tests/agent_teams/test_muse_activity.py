@@ -129,3 +129,35 @@ async def test_discovered_muse_identity_switches_the_slot_to_resume(db):
     assert not await activity._save_codex_identities(db, [second], [{"discovered_session_id": SID}], current)
     await db.refresh(slots[1])
     assert slots[1].launch_mode == "plain" and "session_id" not in slots[1].launch_options
+
+
+def test_a_log_larger_than_the_tail_keeps_its_binding(tmp_path):
+    # The metadata and opened records are written once, at the head; a long session pushes them out of the tail.
+    import json
+    import os
+    import app.services.muse_activity_service as m
+
+    lines = (FIX / "turn_completed.jsonl").read_bytes().splitlines(keepends=True)
+    started = next(i for i, line in enumerate(lines) if b'"prompt"' in line)
+    filler = json.loads(lines[started])
+    filler["payload"]["event"] = {"kind": "output", "text": "x" * 4096}
+    filler_line = (json.dumps(filler) + "\n").encode()
+    count = m._TAIL_BYTES // len(filler_line) + 10
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(b"".join(lines[:started]) + filler_line * count + b"".join(lines[started:]))
+
+    tail, _offset, failure = m._read_lines(path, os.getuid())
+
+    assert failure is None
+    assert muse_state_from_lines(tail, SID, CWD, NOW, START)[:2] == ("idle", "native_turn_completed")
+
+
+def test_an_out_of_range_timestamp_is_invalid_not_an_error():
+    import json
+
+    lines = (FIX / "turn_completed.jsonl").read_bytes().splitlines(keepends=True)
+    row = json.loads(lines[-1])
+    row["recorded_at"] = 10**25
+    lines[-1] = (json.dumps(row) + "\n").encode()
+    with pytest.raises(ValueError):
+        muse_state_from_lines(lines, SID, CWD, NOW, START)

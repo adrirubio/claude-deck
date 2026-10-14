@@ -19,6 +19,8 @@ import stat
 from app.services.providers.muse_cli import is_muse_command, muse_data_dir
 
 _TAIL_BYTES = 1_048_576
+_HEAD_BYTES = 262_144
+_BINDING_RECORDS = {"session.opened.observed", "runtime.session.metadata"}
 _MAX_DESCRIPTORS = 4096
 _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _PROGRESS = {"model_completed", "assistant_tool_calls_committed", "tool_result_batch_committed"}
@@ -39,7 +41,10 @@ def _sessions_root() -> Path:
 def _timestamp(value: object) -> datetime:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError("Muse recorded_at must be integer microseconds")
-    return datetime.fromtimestamp(value / 1_000_000, timezone.utc)
+    try:
+        return datetime.fromtimestamp(value / 1_000_000, timezone.utc)
+    except (OverflowError, OSError) as exc:
+        raise ValueError("Muse recorded_at is out of range") from exc
 
 
 def muse_state_from_lines(lines: list[bytes], session_id: str, cwd: str, now: datetime,
@@ -141,6 +146,9 @@ def _read_lines(path: Path, uid: int) -> tuple[list[bytes] | None, int, str | No
                 or before.st_mode & stat.S_IWOTH):
             raise ValueError("Unsafe native observation file")
         offset = max(0, before.st_size - _TAIL_BYTES)
+        # The binding records are written once, near the head; a long session
+        # pushes them out of the tail. Keep them from a bounded head read.
+        head = stream.read(min(_HEAD_BYTES, offset)) if offset else b""
         stream.seek(offset)
         data = stream.read(_TAIL_BYTES)
         after = os.fstat(stream.fileno())
@@ -151,7 +159,18 @@ def _read_lines(path: Path, uid: int) -> tuple[list[bytes] | None, int, str | No
     lines = data.splitlines(keepends=True)
     if offset:
         lines = lines[1:]  # the first line of a tail may be partial
+        lines = [line for line in head.splitlines(keepends=True) if _is_binding_record(line)] + lines
     return lines, offset, None
+
+
+def _is_binding_record(line: bytes) -> bool:
+    if not line.endswith(b"\n"):
+        return False
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(row, dict) and row.get("payload_type") in _BINDING_RECORDS
 
 
 def _session_path(session_id: str) -> Path | None:

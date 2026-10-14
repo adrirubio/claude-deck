@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from sqlalchemy import select, update
@@ -47,7 +48,7 @@ def _process_identity(slot, session, workspace):
             or registered > datetime.now(timezone.utc) + timedelta(seconds=5)):
         raise ValueError("owner_generation_unavailable")
     options = slot.launch_options or {}
-    if slot.provider in {"claude-code", "codex-cli"} and not activity._canonical_session_id(options.get("session_id")):
+    if slot.provider in {"claude-code", "codex-cli", "muse-cli"} and not activity._canonical_session_id(options.get("session_id")):
         raise ValueError("owner_native_identity_changed")
     if slot.provider == "claude-code":
         from app.services.claude_activity_service import _identity
@@ -58,6 +59,13 @@ def _process_identity(slot, session, workspace):
         native_id = activity._canonical_session_id(options.get("session_id"))
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         if not native_id or not explicit_resume(argv, native_id):
+            raise ValueError("owner_native_identity_changed")
+    elif slot.provider == "muse-cli":
+        from app.services.providers.muse_cli import is_muse_command
+        native_id = activity._canonical_session_id(options.get("session_id"))
+        argv = [os.fsdecode(part) for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
+        resumed = "resume" in argv and argv.index("resume") + 1 < len(argv) and argv[argv.index("resume") + 1] == native_id
+        if not native_id or not argv or not is_muse_command(argv[0]) or not resumed:
             raise ValueError("owner_native_identity_changed")
     elif slot.provider == "pi-cli":
         from app.services.pi_activity_service import _native_process
