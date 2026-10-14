@@ -39,6 +39,14 @@ def capability(state: str, label: str, reason: str | None = None) -> dict[str, s
 
 
 PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
+    "muse-cli": {
+        "spawn": capability("write_capable", "Spawn Sessions", "Deck can launch Muse Code on a Muse subscription or API key."),
+        "resume": capability("write_capable", "Resume Sessions", "Exact Muse Code sessions can be resumed by UUID."),
+        "sessions": capability("read_only", "Agent Bridge Sessions", "Discover running Muse Code panes and read their event logs."),
+        "mcp": capability("write_capable", "MCP Servers", "Agent Mail can install a Muse Code MCP server entry in the user settings."),
+        "hooks": capability("write_capable", "Hooks", "Agent Mail can install Muse Code SessionStart and UserPromptSubmit hooks."),
+        "permissions": capability("unsupported", "Permissions", "Questions are detected and escalated; a hook cannot block them."),
+    },
     "pi-cli": {
         "spawn": capability("write_capable", "Spawn Sessions", "Deck can launch Pi with its opt-in mail extension."),
         "resume": capability("write_capable", "Resume Sessions", "Exact project-local Pi sessions can be resumed."),
