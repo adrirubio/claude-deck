@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel as PydanticBaseModel, Field
+from app.models.api_model import ApiModel as BaseModel
 from mcp_shim.work_remaining_protocol import ReportContext
 
 
@@ -10,6 +11,9 @@ class GithubWorkRemainingView(BaseModel):
     state: Literal["current", "historical", "unavailable"] = "unavailable"
     remaining: str | None = None
     estimate: str | None = None
+    effort_low_minutes: int | None = Field(default=None, ge=0, le=43200)
+    effort_high_minutes: int | None = Field(default=None, ge=0, le=43200)
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
     next_action: str | None = None
     reported_at: datetime | None = None
     reported_by: str | None = None
@@ -21,7 +25,7 @@ class GithubWorkRemainingView(BaseModel):
     assumptions: str | None = None
 
 
-class GithubPublicationObservation(BaseModel):
+class GithubPublicationObservation(PydanticBaseModel):
     state: Literal["current", "historical", "unavailable"]
     observed_at: datetime | None = None
     local_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")

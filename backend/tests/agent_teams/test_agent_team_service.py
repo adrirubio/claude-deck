@@ -22,6 +22,98 @@ from app.models.schemas import MailAgentRegisterRequest
 from app.services.agent_team_service import PlanConflictError, agent_team_service
 
 
+@pytest.mark.parametrize("url", [
+    "https://github.com/example/repo/issues/506",
+    "https://github.com/example-org/repo.name/issues/1",
+])
+def test_parent_issue_url_accepts_github_issues(url):
+    from app.models.schemas import AgentTeamPresetUpdate
+    assert AgentTeamPresetCreate(name="Linked", parent_issue_url=url).parent_issue_url == url
+    assert AgentTeamPresetUpdate(parent_issue_url=url).parent_issue_url == url
+
+
+@pytest.mark.parametrize("url", [
+    "https://example.com/example/repo/issues/1",
+    "http://github.com/example/repo/issues/1",
+    "https://github.com/example/repo/pull/1",
+    "https://github.com/example/repo/issues/0",
+    "https://github.com/example/repo/issues/1?token=secret",
+    "https://user:secret@github.com/example/repo/issues/1",
+    "https://github.com/example/repo/issues/1#private",
+    "https://github.com/example/../issues/1",
+    "https://github.com/example/./issues/1",
+    "https://github.com/example/repo/issues/1\n",
+    "",
+])
+def test_parent_issue_url_rejects_other_urls(url):
+    from app.models.schemas import AgentTeamPresetUpdate
+    for model, kwargs in [(AgentTeamPresetCreate, {"name": "Linked"}), (AgentTeamPresetUpdate, {})]:
+        with pytest.raises(ValueError):
+            model(parent_issue_url=url, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_parent_issue_link_is_persisted_omitted_and_clearable(db):
+    url = "https://github.com/example/repo/issues/506"
+    preset = await agent_team_service.create_preset(
+        db, AgentTeamPresetCreate(name="Linked", description="Ship the release.", parent_issue_url=url))
+    assert preset.parent_issue_url == url
+    assert (await agent_team_service.get_preset(db, preset.id)).parent_issue_url == url
+    renamed = await agent_team_service.update_preset(db, preset.id, name="Renamed")
+    assert renamed.parent_issue_url == url
+    clone = await agent_team_service.duplicate_preset(db, preset.id)
+    assert clone.parent_issue_url == url
+    cleared = await agent_team_service.update_preset(db, preset.id, parent_issue_url=None)
+    assert cleared.parent_issue_url is None
+    assert cleared.description == "Ship the release."
+    with pytest.raises(ValueError):
+        await agent_team_service.update_preset(db, preset.id, parent_issue_url="https://example.test/issues/1")
+    assert (await agent_team_service.get_preset(db, preset.id)).parent_issue_url is None
+
+
+@pytest.mark.asyncio
+async def test_parent_issue_startup_migration_preserves_existing_data():
+    from app.database import _run_sqlite_compat_migrations
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            if "parent_issue_url" in columns:
+                await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN parent_issue_url"))
+            await conn.execute(text("INSERT INTO agent_team_presets (name, description, created_at, updated_at, autonomy_enabled) "
+                                    "VALUES ('Existing', 'Keep this outcome.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"))
+            await _run_sqlite_compat_migrations(conn)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            assert "parent_issue_url" in columns
+            row = (await conn.execute(text("SELECT description, parent_issue_url FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Keep this outcome.", None)
+            url = "https://github.com/example/repo/issues/506"
+            await conn.execute(text("UPDATE agent_team_presets SET parent_issue_url = :url"), {"url": url})
+            await _run_sqlite_compat_migrations(conn)
+            assert (await conn.execute(text("SELECT parent_issue_url FROM agent_team_presets"))).scalar_one() == url
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_campaign_fields_are_persisted_omitted_copied_and_cleared(db):
+    from app.models.schemas import AgentTeamPresetUpdate
+    decisions = [{"text": "Approve promotion to the main branch", "state": "later"}]
+    request = AgentTeamPresetCreate(name="Campaign", backlog_milestone="v3.1", planned_decisions=decisions)
+    assert request.backlog_milestone == "v3.1"
+    result = await agent_team_service.create_preset(db, request)
+    assert result.backlog_milestone == "v3.1"
+    assert result.planned_decisions[0].text == decisions[0]["text"]
+    renamed = await agent_team_service.update_preset(db, result.id, name="Renamed campaign")
+    assert renamed.backlog_milestone == "v3.1"
+    clone = await agent_team_service.duplicate_preset(db, result.id)
+    assert clone.backlog_milestone == "v3.1" and clone.planned_decisions == renamed.planned_decisions
+    clear = AgentTeamPresetUpdate(backlog_milestone=None, planned_decisions=None)
+    cleared = await agent_team_service.update_preset(db, result.id, **clear.model_dump(exclude_unset=True))
+    assert cleared.backlog_milestone is None and cleared.planned_decisions is None
+
+
 def _ready_install_status():
     return SimpleNamespace(
         claude_code_mcp_installed=True,
@@ -1517,12 +1609,11 @@ async def test_launch_uses_slot_prompt_override(db, tmp_path, monkeypatch):
         ),
     )
 
-    from app.services.team_communication_policy import team_communication_guidance
-
     expected_start = "Dispatch-specific issue brief."
     assert calls[0][1].prompt.startswith(expected_start)
     assert "Static team startup prompt." not in calls[0][1].prompt
-    assert calls[0][1].prompt.endswith(team_communication_guidance())
+    assert "Keep each safety condition" in calls[0][1].prompt
+    assert "These records grant no approval" in calls[0][1].prompt
 
 
 @pytest.mark.asyncio
@@ -2681,3 +2772,45 @@ async def test_v17_leader_mutation_races_separate_approval_and_revision_acquisit
                 assert injected[0]["approval_request_id"] is None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fresh_claude_launch_persists_identity_for_resume(db, tmp_path, monkeypatch):
+    from uuid import UUID
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Fresh Claude", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="claude-code", repo_path=str(repo))]))
+    calls = []
+    def spawn(provider_id, options, *, extra_env=None):
+        calls.append(options)
+        return {"session_name": "fixture", "tmux_target": "fixture:0.0", "workspace_trust_changed": True}
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", spawn)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    assert str(UUID(calls[0].session_id)) == calls[0].session_id
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert slot.launch_options["session_id"] == calls[0].session_id
+    assert slot.launch_mode == "resume"
+    assert result.items[0].workspace_trust_changed is True
+    assert "Workspace trust prepared" in result.items[0].message
+    assert agent_team_service._spawn_options_for_slot(slot, None).mode == "resume"
+
+
+@pytest.mark.asyncio
+async def test_failed_claude_spawn_does_not_save_new_identity(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Failed Claude", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="claude-code", repo_path=str(repo))]))
+    def refuse(*args, **kwargs):
+        raise ValueError("Workspace trust could not be prepared")
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", refuse)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    assert result.items[0].status == "failed"
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert not (slot.launch_options or {}).get("session_id")
+    assert slot.launch_mode == "plain"

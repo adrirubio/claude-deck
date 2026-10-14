@@ -18,6 +18,46 @@ from app.database import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [
+    ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
+     "supervisor_grace_seconds", "supervisor_observed_status"),
+    ("supervisor_grace_seconds", "supervisor_observed_status"),
+])
+async def test_supervisor_columns_migrate_legacy_rows_and_repeat_safely(missing):
+    columns = ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
+               "supervisor_grace_seconds", "supervisor_observed_status")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if "supervisor_actor_id" in missing:
+                await conn.execute(text("DROP TABLE agent_team_presets"))
+                await conn.execute(text("CREATE TABLE agent_team_presets ("
+                    "id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, description VARCHAR, created_by VARCHAR, "
+                    "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, autonomy_enabled BOOLEAN NOT NULL, "
+                    "leader_slot_id INTEGER, parent_issue_url VARCHAR, backlog_milestone VARCHAR, planned_decisions JSON)"))
+            else:
+                for column in missing:
+                    await conn.execute(text(f"ALTER TABLE agent_team_presets DROP COLUMN {column}"))
+            await conn.execute(text("INSERT INTO agent_team_presets "
+                "(name, description, created_at, updated_at, autonomy_enabled, leader_slot_id) "
+                "VALUES ('Existing', 'Keep this team.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 99)"))
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT * FROM agent_team_presets"))).mappings().one()
+            assert row["description"] == "Keep this team." and row["leader_slot_id"] == 99
+            assert row["autonomy_enabled"] == 0
+            assert all(row[column] is None for column in columns)
+            await conn.execute(text("UPDATE agent_team_presets SET supervisor_note='Safe note.', supervisor_grace_seconds=60"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT supervisor_note, supervisor_grace_seconds FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Safe note.", 60)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_coordination_revisions_migrate_without_resetting_quota_or_linkage():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
@@ -42,6 +82,60 @@ async def test_coordination_revisions_migrate_without_resetting_quota_or_linkage
             assert after["policy_revision"] == 1
             assert after["assessment_revision"] == 0
             assert after["last_assessment_token_hash"] is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_campaign_columns_migrate_existing_data_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            for name in ("backlog_milestone", "planned_decisions"):
+                if name in columns:
+                    await conn.execute(text(f"ALTER TABLE agent_team_presets DROP COLUMN {name}"))
+            await conn.execute(text("INSERT INTO agent_team_presets (name, description, created_at, updated_at, autonomy_enabled) "
+                                    "VALUES ('Existing', 'Preserve campaign data.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"))
+            await _run_sqlite_compat_migrations(conn)
+            columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+            assert {"backlog_milestone", "planned_decisions"} <= columns
+            row = (await conn.execute(text("SELECT description, backlog_milestone, planned_decisions FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Preserve campaign data.", None, None)
+            await conn.execute(text("UPDATE agent_team_presets SET backlog_milestone='v3.1', planned_decisions='[]'"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT backlog_milestone, planned_decisions FROM agent_team_presets"))).one()
+            assert tuple(row) == ("v3.1", "[]")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_ci_columns_preserve_existing_attempts_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for name in ("checks_unavailable_since", "checks_unavailable_reason"):
+                await conn.execute(text(f"ALTER TABLE github_work_items DROP COLUMN {name}"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
+                "dispatch_status, issue_type, retry_count, approval_round_count, active_scope_revision, "
+                "attempt_phase, diagnostic_retry_count, created_at, updated_at) VALUES "
+                "(1, 1, 5, 'Existing', 'url', CURRENT_TIMESTAMP, 'verifying', 'code', 7, 2, 1, "
+                "'diagnostic', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            await _run_sqlite_compat_migrations(conn)
+            after = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["checks_unavailable_since"] is None and after["checks_unavailable_reason"] is None
+            await conn.execute(text("UPDATE github_work_items SET checks_unavailable_since='2026-10-13 00:00:00', "
+                                    "checks_unavailable_reason='api_error' WHERE id=1"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT checks_unavailable_since, checks_unavailable_reason "
+                                           "FROM github_work_items WHERE id=1"))).one()
+            assert tuple(row) == ("2026-10-13 00:00:00", "api_error")
     finally:
         await engine.dispose()
 
@@ -372,15 +466,15 @@ async def test_compat_migration_adds_mail_audience_columns_without_changing_hist
                 await _run_sqlite_compat_migrations(conn)
 
             columns = await _sqlite_columns(conn, "mail_messages")
-            assert {"audience_type", "audience_id"} <= columns
+            assert {"audience_type", "audience_id", "sender_type"} <= columns
             assert (
                 await conn.execute(
                     text(
-                        "SELECT id, kind, body_markdown, audience_type, audience_id "
+                        "SELECT id, kind, body_markdown, audience_type, audience_id, sender_type "
                         "FROM mail_messages WHERE id = 7"
                     )
                 )
-            ).one() == (7, "message", "historical body", None, None)
+            ).one() == (7, "message", "historical body", None, None, None)
             assert (
                 await conn.execute(
                     text(
@@ -773,16 +867,16 @@ async def test_compat_migrations_add_pr2_github_auth_columns_idempotently():
             for _ in range(2):
                 await _run_sqlite_compat_migrations(conn)
                 columns = await _sqlite_columns(conn, "team_github_scopes")
-                assert {"github_auth_mode", "github_app_installation_id"} <= columns
+                assert {"github_auth_mode", "github_app_installation_id", "review_hold_label"} <= columns
             row = (
                 await conn.execute(
                     text(
-                        "SELECT github_auth_mode, github_app_installation_id "
+                        "SELECT github_auth_mode, github_app_installation_id, review_hold_label "
                         "FROM team_github_scopes"
                     )
                 )
             ).one()
-            assert row == ("unknown", None)
+            assert row == ("unknown", None, None)
     finally:
         await engine.dispose()
 
@@ -1505,5 +1599,82 @@ async def test_v17_migration_preserves_authority_identities_and_resolves_consume
             assert preset_one.leader_slot_id == 11
             preset_four = await agent_team_service.get_preset(session, 4)
             assert preset_four.leader_slot_id == 999999
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_adds_merge_wait_clock_without_changing_rows():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            columns = await _sqlite_columns(conn, "github_work_items")
+            for column in ("merge_wait_head_sha", "merge_wait_started_at"):
+                if column in columns:
+                    await conn.execute(text(f"ALTER TABLE github_work_items DROP COLUMN {column}"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, "
+                "issue_url, github_updated_at, dispatch_status, issue_type, retry_count, "
+                "approval_round_count, active_scope_revision, attempt_phase, diagnostic_retry_count, "
+                "created_at, updated_at) VALUES (1, 1, 5, 'guard', 'url', CURRENT_TIMESTAMP, "
+                "'ready_for_review', 'code', 2, 1, 0, 'implementation', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "github_work_items")
+                assert {"merge_wait_head_sha", "merge_wait_started_at"} <= columns
+                row = (await conn.execute(text(
+                    "SELECT dispatch_status, retry_count, merge_wait_head_sha, merge_wait_started_at "
+                    "FROM github_work_items WHERE id = 1"))).one()
+                assert tuple(row) == ("ready_for_review", 2, None, None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_input_wait_latch_migrates_without_changing_pane_identity():
+    columns = ("waiting_input_reason", "waiting_input_started_at", "waiting_input_observed_at", "waiting_input_notice_id")
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP TABLE agent_pane_bindings"))
+            await conn.execute(text("CREATE TABLE agent_pane_bindings (id INTEGER PRIMARY KEY, pane_pid INTEGER NOT NULL, "
+                "pane_proc_start VARCHAR NOT NULL, slot_id INTEGER, preset_id INTEGER, tmux_target VARCHAR, "
+                "created_at DATETIME NOT NULL, UNIQUE(pane_pid, pane_proc_start))"))
+            await conn.execute(text("INSERT INTO agent_pane_bindings (id, pane_pid, pane_proc_start, slot_id, preset_id, created_at) "
+                                    "VALUES (1, 41000, '27', NULL, NULL, CURRENT_TIMESTAMP)"))
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                assert set(columns) <= await _sqlite_columns(conn, "agent_pane_bindings")
+                row = (await conn.execute(text("SELECT pane_pid, pane_proc_start, waiting_input_reason, "
+                    "waiting_input_started_at, waiting_input_observed_at, waiting_input_notice_id FROM agent_pane_bindings WHERE id = 1"))).one()
+                assert tuple(row) == (41000, "27", None, None, None, None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for column in ("lease_release_reminder_count", "lease_release_reminder_started_at"):
+                await conn.execute(text(f"ALTER TABLE github_workspaces DROP COLUMN {column}"))
+            await conn.execute(text("INSERT INTO github_workspaces "
+                "(scope_id, path, kind, dispatchable, enabled, lease_token, lease_release_reminded_at, created_at, updated_at) "
+                "VALUES (1, '/private/lease', 'worktree', 1, 1, 'synthetic-lease', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = (await conn.execute(text("SELECT * FROM github_workspaces"))).mappings().one()
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            after = (await conn.execute(text("SELECT * FROM github_workspaces"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["lease_release_reminder_count"] == 0
+            assert after["lease_release_reminder_started_at"] is None
+            await conn.execute(text("UPDATE github_workspaces SET lease_release_reminder_count=4"))
+            await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text("SELECT lease_release_reminder_count FROM github_workspaces")) == 4
     finally:
         await engine.dispose()

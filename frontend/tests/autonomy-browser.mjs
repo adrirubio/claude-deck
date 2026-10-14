@@ -147,7 +147,7 @@ try {
       const rect = el => {if(!el)return null;const r=el.getBoundingClientRect();return {width:el.clientWidth,scrollWidth:el.scrollWidth,left:r.left,right:r.right};};
       const main=document.querySelector('main'),pane=document.querySelector('[role=tabpanel][data-state=active]'),dialog=document.querySelector('[role=dialog],[role=alertdialog]');
       const table=document.querySelector('table'),scroll=table?.parentElement;
-      const controls=[...document.querySelectorAll(dialog?'[role=dialog] button,[role=alertdialog] button':'[role=tabpanel][data-state=active] button')].filter(b=>/^(Save repo|Save policy|Cancel|Clear operator token|Refresh)$/.test(b.textContent.trim())).map(b=>({text:b.textContent.trim(),...rect(b)}));
+      const controls=[...document.querySelectorAll(dialog?'[role=dialog] button,[role=alertdialog] button':'[role=tabpanel][data-state=active] button')].filter(b=>/^(Save repo|Save policy|Cancel|Clear Director key|Refresh)$/.test(b.textContent.trim())).map(b=>({text:b.textContent.trim(),...rect(b)}));
       return {viewport:innerWidth,theme:document.documentElement.className,documentWidth:document.documentElement.scrollWidth,main:rect(main),pane:rect(pane),dialog:rect(dialog),tableScroll:rect(scroll),controls,
       overflowElements:[...document.querySelectorAll(dialog?'[role=dialog] *':'main *')].filter(el=>{const r=el.getBoundingClientRect();return r.width>0 && r.right>innerWidth+1 && !el.closest('table')}).slice(0,12).map(el=>({tag:el.tagName,text:el.textContent.slice(0,80),...rect(el)}))};})()`);
     observations.push({name,width,requestedTheme:theme,...layout});
@@ -186,7 +186,7 @@ try {
       const seen=[];
       for(let i=0;i<55;i++){seen.push(await evaluate(`({name:document.activeElement.getAttribute('aria-label')||document.activeElement.textContent.trim(),id:document.activeElement.id})`));await key('Tab');}
       keyboard.push({tabJourney:seen,theme,width});
-      for(const required of ['Clear operator token','Refresh','What do statuses, phases, and routes mean?','View issue #103 details'])assert(seen.some(e=>e.name===required),'Missing natural Tab target '+required);
+      for(const required of ['Clear Director key','Refresh','What do statuses, phases, and routes mean?','View issue #103 details'])assert(seen.some(e=>e.name===required),'Missing natural Tab target '+required);
       for(const id of ['activity-repo-filter','activity-status-filter'])assert(seen.some(e=>e.id===id),'Missing natural Tab target '+id);
     }
     const help='button[aria-controls=autonomy-activity-help]';

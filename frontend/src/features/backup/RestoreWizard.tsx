@@ -312,7 +312,7 @@ export function RestoreWizard({
                     </span>
                   </span>
                   {!plan.platform_compatible && (
-                    <Badge variant="outline" className="ml-auto bg-amber-50 text-amber-700 border-amber-200">
+                    <Badge variant="outline" className="ml-auto bg-amber-50 text-amber-700 dark:text-amber-300 border-amber-200">
                       <AlertTriangle className="h-3 w-3 mr-1" />
                       Different OS
                     </Badge>
@@ -359,7 +359,7 @@ export function RestoreWizard({
                     </Badge>
                   )}
                   {plan.has_dependencies && (
-                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 dark:text-blue-300 border-blue-200">
                       <Download className="h-3 w-3 mr-1" />
                       Has dependencies
                     </Badge>

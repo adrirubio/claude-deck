@@ -1,7 +1,18 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from typing import Annotated, Any, Dict, List, Literal, Optional
+from pydantic import AfterValidator, BaseModel as PydanticBaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from app.models.api_model import ApiModel as BaseModel, naive_utc_confirmation
+from app.config import settings
+
+
+class TerminalRevisionReconcileRequest(BaseModel):
+    """One explicit operator decision for an unchanged terminal revision."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    operation_id: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+    expected_context_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=1, max_length=240)
 
 
 class ConfigFile(BaseModel):
@@ -1392,7 +1403,7 @@ class BackupMCPServerInfo(BaseModel):
     requires_npm_install: bool = False
 
 
-class BackupManifestContents(BaseModel):
+class BackupManifestContents(PydanticBaseModel):
     """Contents tracked in backup manifest."""
 
     files: List[str] = []
@@ -1405,7 +1416,7 @@ class BackupManifestContents(BaseModel):
     backup_policy: Dict[str, Any] = {}
 
 
-class BackupManifest(BaseModel):
+class BackupManifest(PydanticBaseModel):
     """Full backup manifest stored in the backup zip."""
 
     version: str = "1.0"
@@ -1786,6 +1797,7 @@ class InstanceIdentity(BaseModel):
 
     id: str
     name: str
+    name_configured: bool = False
     hostname: str
     short_hostname: str
     accent: InstanceAccent
@@ -1808,6 +1820,27 @@ MAIL_MESSAGE_KINDS = ["message", "broadcast", "context_request", "handoff", "ans
 MAIL_REQUEST_KINDS = ["context_request", "handoff"]
 
 
+class NativeInputWait(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Literal["question", "trust", "sign_in"]
+    label: Literal["Waiting for input"] = "Waiting for input"
+    observed_at: datetime
+
+
+class AgentStatus(BaseModel):
+    """Read-only display facts. These facts grant no authority."""
+
+    session_state: Literal["online", "offline", "unknown"] = "unknown"
+    activity_state: Literal["working", "idle", "stopped", "unknown"] = "unknown"
+    activity_reason: str = "observation_unavailable"
+    wake_state: Literal["can_wake", "cannot_wake", "unknown"] = "unknown"
+    wake_reason: Optional[str] = "observation_unavailable"
+    idle_since: Optional[datetime] = None
+    waiting_input: NativeInputWait | None = None
+    checked_at: datetime
+    valid_until: datetime
+
+
 class MailSessionResponse(BaseModel):
     """One live/observed agent session attached to a member."""
 
@@ -1827,6 +1860,45 @@ class MailSessionResponse(BaseModel):
     last_seen_at: Optional[datetime] = None
 
 
+class SupervisorAddress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int = Field(gt=0)
+    address: str
+    display_name: str | None = None
+
+
+class SupervisorObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["none", "healthy", "late", "absent"]
+    actor_id: int | None
+    address: SupervisorAddress | None
+    checked_at: datetime | None
+    next_check_at: datetime | None
+    grace_seconds: int = Field(ge=1)
+    note: str | None
+    attention: Literal["Supervisor check-in overdue"] | None
+
+
+class SupervisorBindingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int | None = Field(..., gt=0)
+    grace_seconds: int | None = Field(default=None, ge=1)
+
+
+class SupervisorCheckinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preset_id: int = Field(gt=0)
+    next_check_at: datetime
+    note: str | None = None
+
+
+class SupervisorMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor_id: int = Field(gt=0)
+    subject: str | None = None
+    body_markdown: str = Field(min_length=1, max_length=12000)
+
+
 class MailMemberResponse(BaseModel):
     """Durable team member with derived status and inbox counts."""
 
@@ -1839,6 +1911,7 @@ class MailMemberResponse(BaseModel):
     participant_kind: str = "repo"
     team_preset_id: Optional[int] = None
     team_preset_name: Optional[str] = None
+    supervisor_address: SupervisorAddress | None = None
     team_slot_id: Optional[int] = None
     team_slot_name: Optional[str] = None
     controlled_language_enabled: Optional[bool] = None
@@ -1855,6 +1928,7 @@ class MailMemberResponse(BaseModel):
     wake_state: str = "delivered_waiting"
     last_inbox_checked_at: Optional[datetime] = None
     sessions: List[MailSessionResponse] = Field(default_factory=list)
+    agent_status: Optional[AgentStatus] = None
 
 
 class TeamListResponse(BaseModel):
@@ -2031,7 +2105,7 @@ class MailMessageResponse(BaseModel):
     kind: str
     sender_member_id: Optional[int] = None
     sender_actor_id: Optional[int] = None
-    sender_type: str = "director"
+    sender_type: str = "system"
     sender_actor_kind: Optional[str] = None
     approval_round: Optional[int] = None
     decision: Optional[str] = None
@@ -2155,11 +2229,13 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    mail_capability_tokens_required: bool = Field(default_factory=lambda: settings.mail_capability_tokens_required)
     pi_cli_available: bool = False
     pi_mail_ready: bool = False
     pi_mail_reason: Optional[str] = None
     claude_code_hooks: List[str]
     claude_code_hooks_missing: List[str]
+    claude_code_prompt_block_installed: bool = False
     claude_code_mcp_installed: bool
     codex_cli_available: bool
     codex_mcp_installed: bool
@@ -2276,24 +2352,67 @@ class AgentTeamSlotResponse(BaseModel):
     updated_at: datetime
 
 
-class AgentTeamPresetCreate(BaseModel):
+def _parent_issue_url(value: str) -> str:
+    if value.split("/")[4] in {".", ".."}:
+        raise ValueError("Use a GitHub issue URL with a repository name")
+    return value
+
+
+GithubParentIssueUrl = Annotated[str, Field(
+    max_length=240,
+    pattern=r"^https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}/issues/[1-9][0-9]*$",
+), AfterValidator(_parent_issue_url)]
+
+
+class PlannedCampaignDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=240)
+    state: Literal["later", "now", "done"] = "later"
+
+    @field_validator("text")
+    @classmethod
+    def plain_sentence(cls, value: str) -> str:
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("Use one plain sentence without control characters")
+        return value
+
+
+class CampaignPresetFields(BaseModel):
+    backlog_milestone: Optional[str] = Field(default=None, max_length=160)
+    planned_decisions: Optional[List[PlannedCampaignDecision]] = Field(default=None, max_length=12)
+
+    @field_validator("backlog_milestone")
+    @classmethod
+    def milestone_title(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("Use a milestone title without control characters")
+        return value.strip() or None
+
+
+class AgentTeamPresetCreate(CampaignPresetFields):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     created_by: Optional[str] = None
     autonomy_enabled: bool = False
     slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
 
 
-class AgentTeamPresetUpdate(BaseModel):
+class AgentTeamPresetUpdate(CampaignPresetFields):
     name: Optional[str] = None
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     autonomy_enabled: Optional[bool] = None
 
 
-class AgentTeamPresetResponse(BaseModel):
+class AgentTeamPresetResponse(CampaignPresetFields):
     id: int
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -2305,7 +2424,7 @@ class AgentTeamPresetResponse(BaseModel):
 class AgentTeamLeaderUpdateRequest(BaseModel):
     leader_slot_id: int
     expected_leader_slot_id: Optional[int] = None
-    expected_updated_at: datetime
+    expected_updated_at: Annotated[datetime, AfterValidator(naive_utc_confirmation)]
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -2341,16 +2460,18 @@ class AgentTeamPresetListResponse(BaseModel):
     presets: List[AgentTeamPresetResponse] = Field(default_factory=list)
 
 
-class AgentTeamCreateFromMailRequest(BaseModel):
+class AgentTeamCreateFromMailRequest(CampaignPresetFields):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
     member_ids: Optional[List[int]] = None
     include_offline: bool = True
 
 
-class AgentTeamCreateFromBridgeRequest(BaseModel):
+class AgentTeamCreateFromBridgeRequest(CampaignPresetFields):
     name: str
     description: Optional[str] = None
+    parent_issue_url: Optional[GithubParentIssueUrl] = None
 
 
 class AgentTeamSlotReorderRequest(BaseModel):
@@ -2418,6 +2539,7 @@ class TeamGithubScopeCreate(BaseModel):
     dispatch_label: str = "claude-deck-ready"
     design_label: str = "claude-deck-design"
     merge_policy: Literal["human", "auto"] = "human"
+    review_hold_label: Optional[str] = None
     max_approval_rounds: int = Field(default=3, ge=1)
     max_concurrent_dispatched: int = Field(default=3, ge=1)
     max_verification_retries: int = Field(default=2, ge=0)
@@ -2438,6 +2560,7 @@ class TeamGithubScopeUpdate(BaseModel):
     dispatch_label: Optional[str] = None
     design_label: Optional[str] = None
     merge_policy: Optional[Literal["human", "auto"]] = None
+    review_hold_label: Optional[str] = None
     max_approval_rounds: Optional[int] = Field(default=None, ge=1)
     max_concurrent_dispatched: Optional[int] = Field(default=None, ge=1)
     max_verification_retries: Optional[int] = Field(default=None, ge=0)
@@ -2460,6 +2583,7 @@ class TeamGithubScopeResponse(BaseModel):
     dispatch_label: str
     design_label: str
     merge_policy: str
+    review_hold_label: Optional[str] = None
     delivery_policy: FactoryDeliveryPolicy = Field(default_factory=FactoryDeliveryPolicy)
     delivery_policy_revision: int = 1
     github_auth_mode: str
@@ -2540,6 +2664,8 @@ class GithubWorkspaceResponse(BaseModel):
     released_at: Optional[datetime] = None
     lease_last_owner_contact_at: Optional[datetime] = None
     lease_release_reminded_at: Optional[datetime] = None
+    lease_release_reminder_count: int = 0
+    lease_release_reminder_started_at: Optional[datetime] = None
     lease_age_seconds: Optional[int] = None
     provision_error: Optional[str] = None
     enabled: bool
@@ -2549,7 +2675,7 @@ class GithubWorkspaceResponse(BaseModel):
 
 class GithubWorkspaceForceReleaseRequest(BaseModel):
     force: Literal[True]
-    expected_leased_at: datetime
+    expected_leased_at: Annotated[datetime, AfterValidator(naive_utc_confirmation)]
     reason: str
     requested_by: Optional[str] = None
 
@@ -2582,13 +2708,29 @@ class AgentActivityObservation(BaseModel):
     state: Literal["working", "idle", "stopped", "unknown"]
     reason: str
     observed_at: Optional[datetime] = None
+    waiting_input: NativeInputWait | None = None
+
+
+class AgentActivityDisplayObservation(AgentActivityObservation):
+    agent_status: Optional[AgentStatus] = None
 
 
 class AgentTeamActivityResponse(BaseModel):
     preset_id: int
     checked_at: datetime
     valid_until: datetime
-    slots: List[AgentActivityObservation] = Field(default_factory=list)
+    slots: List[AgentActivityDisplayObservation] = Field(default_factory=list)
+
+
+class RequiredCIUnreadableSignal(BaseModel):
+    code: Literal["required_ci_unreadable"] = "required_ci_unreadable"
+    label: Literal["Required CI cannot be read"] = "Required CI cannot be read"
+    since: datetime
+    reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"]
+    next_steps: List[str] = Field(default_factory=lambda: [
+        "Check GitHub access and the configured required workflows.",
+        "Deck will poll again. Unreadable checks do not grant verification or consume a retry.",
+    ])
 
 
 class GithubWorkItemResponse(BaseModel):
@@ -2623,6 +2765,9 @@ class GithubWorkItemResponse(BaseModel):
     retry_requested_at: Optional[datetime] = None
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
+    checks_unavailable_since: Optional[datetime] = None
+    checks_unavailable_reason: Optional[str] = None
+    required_ci_unreadable: Optional[RequiredCIUnreadableSignal] = None
     auto_merged_at: Optional[datetime] = None
     active_scope_revision: int
     active_scope_summary: Optional[str] = None
@@ -2753,6 +2898,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     block_code: Optional[str] = None
     error: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
+    workspace_trust_changed: bool = False
 
 
 class AgentTeamLaunchResult(BaseModel):

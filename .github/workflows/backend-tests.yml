@@ -2,10 +2,10 @@ name: Backend regression tests
 
 on:
   pull_request:
-    branches: [master, feature/software-delivery-product-reposition]
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1]
+    types: [opened, synchronize, reopened]
   push:
-    branches: [master, feature/software-delivery-product-reposition]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1]
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/backend
       DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -33,10 +33,22 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - run: python -m pip install -r backend/requirements.txt apscheduler
+      - run: python -m pip install -r backend/requirements.txt
       - name: Configure disposable Git fixtures
         run: |
           git config --global user.name 'Factory CI'
           git config --global user.email 'factory-ci@users.noreply.github.com'
+      - name: Configure synthetic installation settings
+        run: |
+          cat > backend/.env <<'EOF'
+          OPERATOR_TOKEN=synthetic-ci-operator
+          GITHUB_APP_ID=123
+          GITHUB_APP_PRIVATE_KEY_PATH=/synthetic/ci-private-key.pem
+          MAIL_CAPABILITY_TOKENS_REQUIRED=true
+          DEBUG=invalid
+          EOF
       - name: Run the full backend suite
-        run: python -m pytest backend/tests -q --tb=short --disable-warnings
+        working-directory: backend
+        run: python -m pytest tests -q --tb=short
+      - name: Check the active factory fixtures
+        run: python scripts/factory-fixtures.py --check

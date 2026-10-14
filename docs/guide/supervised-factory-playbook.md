@@ -31,6 +31,32 @@ Reading this playbook or loading its companion skill grants no execution authori
 
 The supervisor and Leader are separate roles. The supervisor can manage several campaigns. Each team has its own Leader, selected through `leader_slot_id`. A role name or pane title does not establish that authority.
 
+Register the optional supervisor as a local external Mail actor.
+The Director binds the actor with `PUT /api/v1/agent-teams/presets/{preset_id}/supervisor`.
+Set `actor_id` to the actor ID. Set it to `null` to remove the binding.
+One actor can supervise several teams. Binding grants no new permission.
+
+Members find `supervisor_address` in `deck_whoami` and the dispatch brief.
+Use `deck_send_message(to_supervisor_actor_id=..., body=...)` to contact the current bound supervisor.
+The external actor reads direct messages with `GET /api/v1/external/agent-mail/supervisor-inbox`.
+Foreign actors and unbound teams cannot use this route.
+
+Deck recognizes supported question, trust and sign-in screens in the current authenticated pane.
+It reads visible screen text locally. It never exports that text or sends keys.
+One fixed notice goes to the bound Supervisor per continuous wait.
+The Leader receives the notice only when no Supervisor is bound.
+A new pane starts with an empty latch. A known idle screen clears it. An unknown screen preserves it.
+The latch survives Mail session registration. Screen formats outside the captured fixtures remain unknown.
+A sign-in screen before authenticated Mail registration remains unknown.
+
+Write the escalation order into each charter:
+
+1. The Leader decides assignment, plans and sequencing.
+2. The supervisor handles incidents, gates, harness and workspace problems, stalls and maintenance.
+3. The operator decides only retained decisions, such as roster, models, budget, promotion and publication. Members request these decisions through an operator action record on the GitHub issue.
+
+A member without an address asks whoever is at the keyboard. In an unattended pane, nobody answers.
+
 The supervisor records when it acts under delegation. It must not describe an agent check as a human trial. Independent review, hosted CI, integration merge and human acceptance are separate facts.
 
 ### What supplies each part
@@ -47,6 +73,21 @@ The supervisor records when it acts under delegation. It must not describe an ag
 A goal tool records the objective and status. It does not, by itself, schedule a wake-up or keep a process alive. Confirm the actual continuation mechanism before promising unattended checks.
 
 ## 1. Record the campaign
+
+Link each saved team to its parent GitHub issue with `parent_issue_url`.
+Use the team's `description` for the outcome. Keep completion conditions in the parent issue.
+Read `/api/v1/agent-teams/presets/{preset_id}/summary` for the collected team signals.
+The summary uses existing attention, human-action, HOLD, observation-pause, and progress reads.
+It does not create new detection or execution authority.
+
+A known team effort total requires current numeric reports for every unfinished tracked item.
+An incomplete, stale, unknown, or changed-context read keeps the whole estimate Unknown.
+The read has an eight-second observation limit and a 64-item limit. Waiting time is excluded.
+Check observation expiry and next-actor coverage. Keep each separate approval, recovery, review, CI, and milestone gate.
+The original `supervisor` field stays `none` for older clients.
+Read optional `supervisor_observation` for the bound actor, clock health and overdue attention.
+Read optional `waiting_input` for verified slot waits. Its reasons are `question`, `trust` and `sign_in`.
+An unknown or changed read supplies no current wait claim.
 
 Keep a short campaign record. Use the parent GitHub issue for public scope and current status. Keep the machine record and sensitive runtime details in protected local storage.
 
@@ -108,6 +149,8 @@ Review existing issues before creating new ones. Give each implementation issue 
 
 Create an integration branch for a large campaign. Implementation PRs target that branch. A later promotion PR targets the project's main branch. Record both names; projects need not call the main branch `master`.
 
+Add the integration branch to the `pull_request` and `push` triggers of every required CI workflow in the same step that creates it. Open a small PR to confirm that the checks run. A PR without checks never satisfies the delivery policy, so automatic merge cannot succeed. Configure the delivery policy's required checks with the **job** names that GitHub reports, not the workflow file names. Make sure that each head runs CI once. For example, a `ready_for_review` trigger runs every check again on an unchanged head.
+
 Begin with human or delegated supervisor merges. Enable automatic integration only after the current-head checks and independent review have an enforceable gate. A review comment or label alone does not establish enforcement. Design-labelled work retains Deck's human-review pipeline.
 
 For several repositories, configure one watched scope per repository in the same team. Each scope has its own checkout, base branch, labels, checks and delivery policy. The team shares slot capacity. Cross-repository dependencies still need explicit evidence and Leader assessment.
@@ -143,9 +186,25 @@ campaign/
 private-state/              Installation record, receipts and backups
 ```
 
-These names are examples. Save the real paths. Check read and write access under the actual native session OS user. Separate directories alone do not isolate credentials or the operator token from same-user processes.
+These names are examples. Save the real paths. Check read and write access under the actual native session OS user.
+
+When the controller and the native sessions run as different OS users, git refuses a repository that another user owns. Add each checkout to that user's `safe.directory` list: the controller's list for the primary checkout and slot workspaces, and the native user's list for the dispatch workspaces. Then confirm that every slot reports the same repository identity as the scope. If the identities differ, dispatch cannot match the slots to the scope. After you correct the ownership, save each slot's repository path again so that Deck recomputes the identity.
+
+Register one dispatch workspace for each concurrent item with `POST /api/v1/agent-teams/github-scopes/{scope_id}/workspaces`. Use a path that is a direct sibling of the scope checkout. The controller provisions the worktree. A scope without dispatchable workspaces dispatches nothing, and its items stay `pending` without an error. Separate directories alone do not isolate credentials or the operator token from same-user processes.
 
 Schedule shared-file edits. Set host limits for heavy suites, builds and browser workloads. Agent count is not build concurrency. Use an enforceable shared lock where required; lightweight checks can remain parallel.
+
+Run `npm ci` in `frontend/` before `npm test`. This installs the locked frontend test dependencies.
+
+Install backend dependencies with `python -m pip install -r backend/requirements.txt`.
+The requirements file exports the reviewed `backend/uv.lock` dependency versions.
+Use `uv lock` in `backend/` for an intentional dependency update.
+Then run `uv export --locked --no-emit-project --no-hashes --output-file requirements.txt`.
+
+Run `python scripts/factory-fixtures.py --write` from the checkout root to regenerate active factory fixtures.
+Run `python scripts/factory-fixtures.py --check` to check their current responses and hashes.
+The generator updates both `v1-p04` copies. It preserves the archived `v1` contract and historical review provenance.
+CI runs the fixture check after the backend suite.
 
 ## 4. Complete machine and startup checks
 
@@ -159,12 +218,24 @@ Before enabling intake:
 - Prepare watched scopes and dispatch workspaces. Keep them disabled during setup.
 - Save the intended Leader and roster. Confirm the selected native CLI and model access.
 - Launch or reuse sessions through Deck. Reuse only sessions with valid intended slot bindings.
-- Check each member's authenticated Mail identity and one successful tool call. Complete first-use workspace confirmation.
+- Check each member's authenticated Mail identity and one successful tool call.
+- Install Agent Mail through Deck before team launch. Confirm that Claude Code install status includes the prompt block.
+- Check sign-in with one real model call as the native user. A sign-in status command reads saved state and does not prove token validity.
+- Check the launch result. Deck prepares Claude and Codex workspace trust before team spawn. It preserves other configuration entries.
+  Claude trust uses the primary checkout. Inaccessible native configuration stops launch.
+- Check native activity before admitting work. Deck assigns new Claude sessions a UUID and saves it for later resume.
+  Deck captures a new Codex rollout ID from its bound process. Until that process resumes the ID, activity reports `restart_needed_for_observation`.
+  Restart that Codex session through Deck after the ID is saved. If capture is unavailable, use the documented progress-report policy.
+  Do not admit work with `session_mismatch`. Unknown activity does not renew owner contact or prove that work stopped.
 - Check the conversation, native process lifetime, tmux pane, working directory and workspace ownership.
 - Configure supervision for the actual preset, slots and supported native event formats. Confirm that it survives the supervisor's interactive turn.
 - Record activation readiness for every scope. Keep other campaigns in their intended state.
 
 Do not treat a configured model card, live pane or HTTP 200 response as proof of the complete startup path. A simple authenticated Mail canary helps establish that the native member can use the controller.
+
+The installed Claude `PreToolUse` hook refuses `AskUserQuestion` only in Deck team sessions. It checks `CLAUDE_DECK_TEAM_SLOT_ID`.
+Its refusal sends questions to Agent Mail. The Leader handles plans. The Supervisor handles incidents. Retained operator decisions require operator action records.
+Removing Agent Mail also removes this managed hook. Other sessions of the same native user keep their question tool.
 
 The checked-in `scripts/product-factory/` supervisor is a historical campaign example. It contains fixed team identities and installation assumptions. It is not a generic team installer. Prepare and review the watcher for the new installation; copying its timer unchanged is insufficient.
 
@@ -193,15 +264,39 @@ The periodic supervisor loop should:
 3. Check issue, PR, CI, owner, Mail, lease and current assessment state.
 4. Check holds, native session evidence and the last meaningful published progress.
 5. Resolve an authorized routine blocker, or record the required actor and decision.
-6. Publish a short checkpoint when the state changes. Schedule the next real check.
+6. Publish a short checkpoint when the state changes.
+7. Schedule the next real check.
+8. Call `deck_supervisor_checkin(preset_id, next_check_at, note)` with the next promised check time.
 
-About ten minutes is a useful ordinary interval. Check more often during startup, cutover and recovery. A local watcher can inspect holds and session failures more often. Record its last successful tick. If the monitoring process ends, state that supervision stopped.
+About ten minutes is a useful ordinary interval. Check more often during startup, cutover and recovery.
+A local watcher can inspect holds and session failures more often.
+The check-in records the last successful check and replaces manual tick reporting.
+If the monitoring process ends, state that supervision stopped.
+
+The check-in requires the bound external actor credential in the MCP process environment.
+It accepts no credential argument. Member credentials cannot call it.
+Use an ISO 8601 next check time. It must be future time within 24 hours.
+Keep the optional note short. Deck removes credential-shaped text.
+
+Read `supervisor_observation` in `deck_get_team_summary` for controller-derived health.
+`healthy` means the promised time has not passed.
+`late` means the promised time passed, within the grace period.
+`absent` means no check was received, or the grace period ended.
+`none` means the team has no supervisor. It is optional.
+
+The default grace is the larger of 30 minutes and twice the last promised interval.
+The Director can set `grace_seconds` on the binding route. Set it to `null` for the default.
+Late and absent states expose “Supervisor check-in overdue”.
+The original `supervisor` literal remains `none` for older clients.
+Check-ins and clock observations grant no approval, retry, lease, merge, or milestone authority.
 
 The goal is complete only when its stated outcome and records are complete. A ready PR or preview is an intermediate state.
 
 ## 6. Deliver with visible checkpoints and bounded review
 
 The Leader uses authenticated Agent Mail for plans, approvals, handoffs, blocked work and decisions. GitHub holds durable work and review evidence. Do not require routine heartbeat messages when current supported native evidence supplies owner contact.
+
+An accepted reply is not a delivered message. A reply to a nested reply can be stored without reaching the member's inbox, and a member may have no tool to read a thread. Send anything a member must act on as a direct message to that member, and check that delivery reports a wake. Keep private findings in Mail, never in GitHub text. Watch every thread where you asked a member a question, not only the channel roots.
 
 Push a useful checkpoint after a coherent substep and before a handoff or long wait. Open draft PRs early. Mark an incomplete checkpoint as work in progress; it is not a request for final acceptance. Avoid empty commits or placeholder reviews to satisfy a timer.
 
@@ -232,6 +327,16 @@ Final hosted gates must still cover the actual PR head and current workflow exec
 Complete one bounded correction batch before final review. Keep one finding register with stable IDs, requirements, locations, decisive checks and state. Repair in-scope findings under valid existing authority. Use a new approved scope when the existing continuation no longer authorizes the change.
 
 The effective delivery policy belongs to each repository and attempt. New scope defaults do not silently update an active attempt. See the [Factory API](../api/factory.md) and the [delivery practices source](https://github.com/adrirubio/claude-deck/blob/master/docs/deploy/factory-delivery-practices.md).
+
+### Lane gates
+
+File the journey item for a lane when you admit the lane, so the journeys exist before its gate. A lane with merged issues and no journeys cannot pass its gate. When an item's journeys are written pending, its implementer activates them in the PR that makes them pass; check at the gate that none was left pending.
+
+Record each gate result in Mail with the exact candidate SHA, the journeys, the hosted checks and the reviewer's acceptance. Do not report a gate as passed without that record; audit the gate list against the records before a summary.
+
+A required job that runs only on pull requests never appears on an integration push. For a gate on the integration head, accept that job from each merged PR's exact head, and require the other jobs on the gate candidate itself.
+
+When two Done-when conditions conflict after both merge, such as a new panel that pushes a list below the fold, file one gate fix that keeps both. Do not drop either condition to pass.
 
 ## 7. Use external reviewers where they add evidence
 
@@ -268,11 +373,21 @@ A review does not grant retry, budget, roster, merge or deployment authority. Th
 
 ## 8. Detect and classify stalls
 
+A member that is compacting its context is working, even when it sends no report for a long time. Read its pane before you escalate silence. After compaction, check that the next push still carries the agreed decisions.
+
 Read evidence before taking a remedy. Native liveness, activity, progress and authorization are different facts.
+
+Use the [shared agent status](../api/agent-teams.md#shared-agent-status) for online, activity, and wake displays.
+This removes manual comparison of Agent Mail, Live sessions, Teams, and factory status rules.
+Read `idle_since` for idle duration.
+Do not infer idle duration from mailbox age.
+Unknown or expired observations require current evidence.
+Status grants no approval, lease renewal, wake delivery, or recovery permission.
 
 | Observation | Response |
 |---|---|
-| Required CI is pending or cannot be read | Check the actual execution and credential read access; keep the item unverified |
+| Required CI is pending | Check the actual execution; keep the item unverified |
+| Required CI cannot be read | Read `required_ci_unreadable` in the team summary or Work item response. Check GitHub access and configured workflows. Keep the item unverified |
 | Current bound native work is active | Let the supported observer supply contact; avoid interrupting reasoning with routine Mail |
 | Native observation is unknown, but the exact bound owner is live | Inspect the recorded observation pause and recovery window; use the supported remedy if eligible |
 | Owner, approval, ACK or workspace identity is stale | Hold the affected action; reconcile through the authorized workflow |
@@ -281,6 +396,18 @@ Read evidence before taking a remedy. Native liveness, activity, progress and au
 | Credits or access are exhausted | Hold affected work; after the operator resolves access, check actual readiness and notify the existing roster |
 | A real provider safety block or security HOLD exists | Stop affected autonomy and safely hold active execution; wait for operator instructions |
 | A CLI warning appears | Check its structured result and effect; do not classify the display text alone as a security block |
+| A member waits at an interactive screen (question form, trust prompt, sign-in) | Read the pane. Fix the cause in the harness configuration. Cancel a question form once, then send the decision through Mail. Do not answer an operator decision with keystrokes |
+| Automatic merge fell back to a human after `mergeable_state` `unstable` or `blocked` | Check that every required check passed on the exact verified head and that the merge tree is unchanged; then merge with the head SHA match. A check that is still running can cause this |
+| A test instance starts sessions in the team tmux server or registers in production Mail | Treat it as an incident. Remove the exact sessions through Deck. Require a private tmux socket and no real agent CLIs before the harness work continues |
+
+Deck records `checks_unavailable_since` at the first unreadable check observation.
+After 15 minutes, `required_ci_unreadable` supplies the signal, a safe reason code, and fixed next steps.
+This removes manual comparison of repeated status notes.
+A successful read clears the signal, including reads of pending or failed checks.
+Unreadable checks consume no retry or diagnostic budget.
+The signal grants no approval, retry, lease, merge, or milestone authority.
+
+Verify a claim before you act on it or relay it. An agent's description of an incident is a report, not evidence. Run a read-only check and state what you checked.
 
 A suspected false positive is still an incident until classified. Preserve the notice and exact session context in protected evidence. Do not automatically retry, rephrase the task, clear a genuine HOLD or switch models to bypass it.
 
@@ -298,6 +425,14 @@ Use `deck_prepare_operator_action_contexts` and the Leader's current assessment 
 4. Obtain independent source and runtime review. Check the exact target and backport heads. Reuse valid check evidence.
 5. Prepare a machine-specific maintenance profile and request. Bind the old and target versions, accepted PRs, reviewed files and proof receipts.
 6. Obtain a current maintenance checkpoint from each affected active owner. The owner confirms that no source operation is in flight and holds work until the outcome.
+
+Before you write the request, run a preflight on the target:
+
+- **Startup migrations.** Read the target's compatibility migrations. A column added at startup changes the retained-authority snapshot. Controllers before #654 then fail after cutover. For those, add nullable columns to the live database after a backup and before the operation, and measure the snapshot on a database copy.
+- **Owner checkpoints.** Controllers before #654 refuse a checkpoint from an owner whose session runs outside the dispatch workspace. For those, run the upgrade when no item is dispatched or verifying. Hold a pending item by removing its dispatch label; Deck resets it when the label returns.
+- **Accepted pulls.** Each accepted pull must be merged, with all of its head's checks complete and successful.
+- **Proof receipts.** Run the proof in a clean checkout that the checking user owns. A test may write into the tree. The receipt binds the commit and tree, not the path.
+- **Refusal codes.** Older CLIs print only the exception type. Call the operation's function directly to read the reason code.
 
 Turning off team autonomy or a watched scope stops intake. It does not stop an already executing owner. Prove the safe handoff before changing the controller or an owner's source.
 

@@ -50,7 +50,7 @@ def test_claude_main_turn_boundaries(native, count, expected):
     native["write"](native["records"][:count])
     result = native["observe"]()
     assert result.state == expected
-    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at"}
+    assert set(result.model_dump()) == {"slot_id", "state", "reason", "observed_at", "waiting_input"}
     assert str(native["cwd"]) not in result.model_dump_json()
 
 
@@ -319,3 +319,11 @@ def test_claude_latest_mismatched_prompt_does_not_reuse_prior_turn(native):
     metadata = {}
     assert native["observe"](provenance=metadata).reason == "session_mismatch"
     assert metadata.get("event_source") is None
+
+
+def test_claude_first_turn_with_launch_uuid_is_observed(native):
+    (native["proc"] / "50" / "cmdline").write_bytes(
+        b"claude\0--session-id\0" + native["session"].encode() + b"\0")
+    native["write"]([native["user"]])
+    result = native["observe"]()
+    assert (result.state, result.reason) == ("working", "native_turn_started")

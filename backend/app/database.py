@@ -728,6 +728,15 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             )
         )
 
+    binding_columns = await _sqlite_columns(conn, "agent_pane_bindings")
+    for column, definition in (
+        ("waiting_input_reason", "VARCHAR"), ("waiting_input_started_at", "DATETIME"),
+        ("waiting_input_observed_at", "DATETIME"),
+        ("waiting_input_notice_id", "INTEGER REFERENCES mail_messages(id) ON DELETE SET NULL"),
+    ):
+        if binding_columns and column not in binding_columns:
+            await conn.execute(text(f"ALTER TABLE agent_pane_bindings ADD COLUMN {column} {definition}"))
+
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}
     if slot_columns and await _sqlite_agent_team_slots_has_unique_preset_repo_index(conn):
@@ -750,12 +759,26 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_presets)"))
     preset_columns = {row[1] for row in result.fetchall()}
+    if preset_columns and "parent_issue_url" not in preset_columns:
+        await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN parent_issue_url VARCHAR"))
+    if preset_columns and "backlog_milestone" not in preset_columns:
+        await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN backlog_milestone VARCHAR"))
+    if preset_columns and "planned_decisions" not in preset_columns:
+        await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN planned_decisions JSON"))
     if preset_columns and "autonomy_enabled" not in preset_columns:
         await conn.execute(
             text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")
         )
     if preset_columns and "leader_slot_id" not in preset_columns:
         await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    for column, definition in (
+        ("supervisor_actor_id", "INTEGER REFERENCES mail_external_actors(id) ON DELETE SET NULL"),
+        ("supervisor_checked_at", "DATETIME"), ("supervisor_next_check_at", "DATETIME"),
+        ("supervisor_note", "VARCHAR"), ("supervisor_grace_seconds", "INTEGER"),
+        ("supervisor_observed_status", "VARCHAR"),
+    ):
+        if preset_columns and column not in preset_columns:
+            await conn.execute(text(f"ALTER TABLE agent_team_presets ADD COLUMN {column} {definition}"))
     if preset_columns:
         await conn.execute(text(
             "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("
@@ -781,6 +804,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
     scope_columns = {row[1] for row in result.fetchall()}
+    if scope_columns and "review_hold_label" not in scope_columns:
+        await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN review_hold_label VARCHAR"))
     if scope_columns and "delivery_policy" not in scope_columns:
         await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN delivery_policy JSON DEFAULT '{}' NOT NULL"))
     if scope_columns and "delivery_policy_revision" not in scope_columns:
@@ -872,6 +897,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
     work_item_columns = {row[1] for row in result.fetchall()}
     if work_item_columns and "status_note" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
+    if work_item_columns and "checks_unavailable_since" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN checks_unavailable_since DATETIME"))
+    if work_item_columns and "checks_unavailable_reason" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN checks_unavailable_reason VARCHAR"))
     if work_item_columns and "auto_merged_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
     if work_item_columns and "last_verified_sha" not in work_item_columns:
@@ -880,6 +909,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_head_sha VARCHAR"))
     if work_item_columns and "verification_started_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN verification_started_at DATETIME"))
+    if work_item_columns and "merge_wait_head_sha" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN merge_wait_head_sha VARCHAR"))
+    if work_item_columns and "merge_wait_started_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN merge_wait_started_at DATETIME"))
     if work_item_columns and "dispatched_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatched_at DATETIME"))
     if work_item_columns and "ack_received_at" not in work_item_columns:
@@ -978,6 +1011,13 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             text("ALTER TABLE github_workspaces ADD COLUMN lease_release_reminded_at DATETIME")
         )
 
+    for name, definition in (
+        ("lease_release_reminder_count", "INTEGER DEFAULT 0 NOT NULL"),
+        ("lease_release_reminder_started_at", "DATETIME"),
+    ):
+        if workspace_columns and name not in workspace_columns:
+            await conn.execute(text(f"ALTER TABLE github_workspaces ADD COLUMN {name} {definition}"))
+
     coordination_columns = await _sqlite_columns(conn, "github_backlog_coordination")
     for name, definition in (
         ("policy_revision", "INTEGER DEFAULT 1 NOT NULL"),
@@ -1000,6 +1040,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(mail_messages)"))
     message_columns = {row[1] for row in result.fetchall()}
+    if message_columns and "sender_type" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_type VARCHAR"))
     if message_columns and "sender_actor_id" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_actor_id INTEGER"))
     if message_columns and "approval_round" not in message_columns:

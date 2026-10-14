@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchAuditEvents, fetchMetricsWindow } from "@/features/factory/auditApi";
+import { fetchAuditEvents, fetchContextKeys, fetchMetricsWindow } from "@/features/factory/auditApi";
 import { ApiHttpError } from "@/lib/api";
 
 const realFetch = globalThis.fetch;
@@ -45,6 +45,26 @@ describe("audit browser clients at the HTTP boundary", () => {
     expect(auditHeaders["X-Deck-Operator-Token"]).toBe("synthetic-operator");
   });
 
+  it("reads the context keys with the Director key, and sends the time window when given", async () => {
+    const calls: Array<{ url: string; headers: HeadersInit | undefined }> = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: init?.headers });
+      return jsonResponse(String(url).includes("context-keys")
+        ? { teams: [], repositories: [] }
+        : { items: [], total: 0, page: 1, page_size: 25, snapshot_labels: [] });
+    }) as unknown as typeof fetch;
+
+    await fetchContextKeys("synthetic-operator");
+    await fetchAuditEvents({ operatorToken: "synthetic-operator", occurredAfter: "2026-10-06T00:00:00.000Z", occurredBefore: "2026-10-13T00:00:00.000Z" });
+    await fetchAuditEvents({ operatorToken: "synthetic-operator" });
+
+    expect(calls[0].url).toContain("/api/v1/factory/context-keys");
+    expect((calls[0].headers as Record<string, string>)["X-Deck-Operator-Token"]).toBe("synthetic-operator");
+    expect(calls[1].url).toContain("occurred_after=2026-10-06T00%3A00%3A00.000Z");
+    expect(calls[1].url).toContain("occurred_before=2026-10-13T00%3A00%3A00.000Z");
+    expect(calls[2].url).not.toContain("occurred_");
+  });
+
   it("keeps safe metrics usable after a refused audit read", async () => {
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url).includes("audit-events")) {
@@ -68,7 +88,7 @@ describe("audit browser clients at the HTTP boundary", () => {
     expect(refusal).toBeInstanceOf(ApiHttpError);
     expect((refusal as ApiHttpError).status).toBe(401);
     expect((refusal as ApiHttpError).message).toBe(
-      "The Deck operator token was rejected. Clear it and enter a valid token.");
+      "The Director key was rejected. Clear it and enter a valid key.");
   });
 
   it("surfaces the exact unconfigured-operator 503 refusal", async () => {
@@ -79,7 +99,7 @@ describe("audit browser clients at the HTTP boundary", () => {
       .then(() => null, (error: unknown) => error);
     expect((refusal as ApiHttpError).status).toBe(503);
     expect((refusal as ApiHttpError).message).toBe(
-      "The Deck operator token is not configured on the backend.");
+      "The Director key is not configured on the backend.");
   });
 
   // C13: both reads carry the same supported history filters.

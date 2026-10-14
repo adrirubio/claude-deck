@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { operatorWriteHeaders } from "@/lib/api";
 import type { MarketplacePlugin, PluginInstallResponse, PluginScope } from "@/types/plugins";
 import {
   Dialog,
@@ -78,7 +79,7 @@ export function PluginInstallWizard({
     try {
       const response = await fetch("/api/v1/plugins/install", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...operatorWriteHeaders("POST") },
         body: JSON.stringify({
           name: plugin.name,
           marketplace_name: marketplaceName,
@@ -151,7 +152,7 @@ export function PluginInstallWizard({
                   <FolderOpen className="h-4 w-4 text-muted-foreground" />
                   <Label>Installation Scope</Label>
                 </div>
-                <Select value={scope} onValueChange={(value: PluginScope) => setScope(value)}>
+                <Select value={scope} onValueChange={(value) => setScope(value as PluginScope)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
                       <div className="flex items-center gap-2">

@@ -38,7 +38,7 @@ export function CommandCard({ command, onViewDetail, onEdit, onDelete }: Command
     // Plugin scope
     const pluginName = command.scope.replace("plugin:", "");
     return (
-      <Badge variant="outline" className="text-emerald-600 border-emerald-300">
+      <Badge variant="outline" className="text-emerald-600 dark:text-emerald-300 border-emerald-300">
         {pluginName}
       </Badge>
     );

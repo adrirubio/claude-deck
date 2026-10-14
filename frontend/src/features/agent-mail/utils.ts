@@ -20,10 +20,37 @@ export function memberName(members: MailMemberResponse[], memberId?: number | nu
   return members.find((member) => member.id === memberId)?.display_name ?? `Member ${memberId}`
 }
 
+/** Who a message came from, read only from its sender_type (#527, #639). */
+export type SenderKind = 'deck' | 'director' | 'legacy' | 'external' | 'agent' | 'unknown'
+
+export function senderKind(message: MailMessageResponse): SenderKind {
+  switch (message.sender_type) {
+    case 'system': return 'deck'
+    case 'director': return 'director'
+    case 'legacy': return 'legacy'
+    case 'external_actor': return 'external'
+    case 'member': return 'agent'
+    default: return 'unknown'
+  }
+}
+
+export const LEGACY_SENDER_LABEL = 'Deck or Director (recorded before v3.1)'
+
+/**
+ * The sender label. Deck's own messages say Deck, never Director. A sender
+ * with no known type reads "Unknown sender". The label grants no authority.
+ */
 export function senderName(message: MailMessageResponse, members: MailMemberResponse[]): string {
-  if (message.sender_type === 'external_actor') return message.sender_name || 'External actor'
-  if (message.sender_member_id) return memberName(members, message.sender_member_id)
-  return message.sender_name || 'Director'
+  switch (senderKind(message)) {
+    case 'deck': return 'Deck'
+    case 'director': return 'Director'
+    case 'legacy': return message.sender_name || LEGACY_SENDER_LABEL
+    case 'external': return message.sender_name || 'External actor'
+    case 'agent': return message.sender_member_id
+      ? memberName(members, message.sender_member_id)
+      : message.sender_name || 'Unknown sender'
+    default: return 'Unknown sender'
+  }
 }
 
 export function senderTypeLabel(message: MailMessageResponse): string | null {
@@ -57,26 +84,6 @@ export function statusTitle(status: MailMemberStatus | string): string {
   if (status === 'observed') return 'Agent Bridge sees a tmux session, but Agent Mail has not received an MCP or hook check-in.'
   if (status === 'offline') return 'No recent Agent Mail check-in or live Agent Bridge observation.'
   return status
-}
-
-export function wakeStateLabel(state: string): string {
-  if (state === 'wakeable') return 'Wakeable'
-  if (state === 'delivered_waiting') return 'Not wakeable'
-  if (state === 'offline') return 'Offline'
-  return state
-}
-
-export function wakeStateTitle(state: string): string {
-  if (state === 'wakeable') return 'Claude Deck has a wake path for this member.'
-  if (state === 'delivered_waiting') return 'Messages are delivered, but Claude Deck cannot wake this visible agent session.'
-  if (state === 'offline') return 'No live session is available for this member.'
-  return state
-}
-
-export function wakeStateBadgeClass(state: string): string {
-  if (state === 'wakeable') return 'border-emerald-300 text-emerald-700 dark:text-emerald-300'
-  if (state === 'delivered_waiting') return 'border-amber-300 text-amber-700 dark:text-amber-300'
-  return 'border-muted-foreground/30 text-muted-foreground'
 }
 
 export function wakeMethodLabel(method: string): string {

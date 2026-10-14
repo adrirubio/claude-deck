@@ -39,15 +39,15 @@ describe('interactive terminal entry', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('keeps read-only access while asking for a masked operator token', async () => {
+  it('keeps read-only access while asking for a masked Director key', async () => {
     const user = userEvent.setup()
     render(<TerminalView target="deck:0.0" />)
 
     await user.click(screen.getByRole('button', { name: 'Interactive' }))
-    expect(screen.getByLabelText('Operator token')).toHaveAttribute('type', 'password')
+    expect(screen.getByLabelText('Director key')).toHaveAttribute('type', 'password')
     expect(terminal.setReadOnly).not.toHaveBeenCalled()
 
-    await user.type(screen.getByLabelText('Operator token'), 'operator-secret')
+    await user.type(screen.getByLabelText('Director key'), 'operator-secret')
     await user.click(screen.getByRole('button', { name: 'Enable interactive' }))
     await waitFor(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(false, 'operator-secret'))
     expect(getOperatorToken()).toBe('operator-secret')
@@ -61,7 +61,7 @@ describe('interactive terminal entry', () => {
 
     await user.click(screen.getByRole('button', { name: 'Interactive' }))
     await waitFor(() => expect(getOperatorToken()).toBeNull())
-    expect(screen.getByText(/operator token was rejected/i)).toBeInTheDocument()
-    expect(screen.getByLabelText('Operator token')).toHaveValue('')
+    expect(screen.getByText(/Director key was rejected/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Director key')).toHaveValue('')
   })
 })

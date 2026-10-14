@@ -225,9 +225,17 @@ async def test_representative_existing_mutations_persist_update_timestamp(factor
         item.updated_at = original_time
         item.pr_number = 77
         scope = await db.get(TeamGithubScope, item.scope_id)
+        item.dispatch_head_ref = "deck/factory/timestamp"
+        item.dispatch_base_ref = "feature/software-delivery-product-reposition"
+        repo = {"full_name": f"{scope.repo_owner}/{scope.repo_name}"}
+        pull = {
+            "number": 77, "draft": False, "state": "open", "merged_at": None,
+            "head": {"sha": "a" * 40, "ref": item.dispatch_head_ref, "repo": repo},
+            "base": {"ref": item.dispatch_base_ref, "repo": repo},
+        }
+        client = SimpleNamespace(get_pull=AsyncMock(return_value=pull))
         monkeypatch.setattr(github_verification_service, "_notify_code_pr_ready_for_review", AsyncMock())
         monkeypatch.setattr(github_verification_service, "_process_review_item", AsyncMock())
-        await github_verification_service._promote_verified_item(db, scope, item, SimpleNamespace(),
-                                                                {"draft": False}, "a" * 40)
+        await github_verification_service._promote_verified_item(db, scope, item, client, pull, "a" * 40)
         await db.refresh(item)
         assert item.updated_at > original_time and item.dispatch_status == "ready_for_review"

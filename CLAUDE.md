@@ -6,7 +6,7 @@ Web app for managing Claude Code configurations, MCP servers, commands, plugins,
 
 ```bash
 # Install
-./scripts/install.sh             # Setup venv, install deps, create dirs (requires Python 3.11+, Node 18+)
+./scripts/install.sh             # Setup venv, install deps, create dirs (requires Python 3.11+, Node 22.12+)
 
 # Development
 ./scripts/dev.sh                 # Start both backend + frontend servers
@@ -19,13 +19,14 @@ cd frontend && npm run build     # Same as above
 
 # Test
 cd backend && source venv/bin/activate && pytest tests/  # Python tests
+cd frontend && npm ci && npm test                       # Install and run frontend tests
 bash backend/test_commands_api.sh                         # Curl-based API tests
 
 # Lint
 cd frontend && npm run lint      # ESLint
 
 # Version
-./scripts/bump-version.sh <major|minor|patch>  # Sync version across VERSION, package.json, pyproject.toml
+./scripts/bump-version.sh <X.Y.Z>  # Set the version in VERSION, package.json, pyproject.toml and the lock files
 ```
 
 ## Architecture
@@ -63,7 +64,7 @@ All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hoo
 ## Key Decisions
 
 - **Backend**: FastAPI + async SQLAlchemy + aiosqlite + SQLite
-- **Frontend**: React 19 + Vite 7 + TypeScript + TailwindCSS + shadcn/ui
+- **Frontend**: React 19 + Vite 8 + TypeScript + Tailwind CSS 4 + shadcn/ui
 - **Database**: SQLite at `backend/claude_registry.db` (auto-created via `create_all`, no migrations)
 - **API**: RESTful `/api/v1/`, Vite proxies `/api` → `http://localhost:8000`
 - **CORS**: `localhost:5173`
@@ -91,5 +92,6 @@ GitHub Actions workflows in `.github/workflows/`:
 - No `.env` file needed — all config has defaults in `backend/app/config.py`
 - Database lives at `backend/claude_registry.db`, created automatically on first run
 - No database migration system — schema changes require deleting the db
-- Frontend tests not yet set up
+- Run `npm ci` in `frontend/` before `npm test`. This installs the locked test dependencies.
+- Backend dependencies are locked in `backend/uv.lock` and exported to `backend/requirements.txt`.
 - Backups stored in `~/.claude-registry/backups/`

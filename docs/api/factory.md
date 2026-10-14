@@ -86,6 +86,12 @@ An action has `name`, `state`, `block_code`, `reason` and `required_actor`. Retr
 
 Session state can be bound, offline, ambiguous or unknown. Only a verified association provides a concrete team/slot/member/MCP-session target. Nullable Mail or offline launch hints identify context, not an instruction to send, claim or launch.
 
+Owner and approver session associations include the [shared `agent_status`](agent-teams.md#shared-agent-status) when a member is known.
+Factory reads reuse their loaded records and add one bulk native identity read.
+These observations describe the read snapshot; concurrent changes can invalidate them.
+They send no input and save no native identity.
+The legacy association state and protected action predicates retain their separate meanings.
+
 ## Repository intake and overlap
 
 Each repository projection is one scope. Team automation and scope enablement determine configured enablement. Effective intake is eligible, blocked or unknown based on that configuration plus normal/recovery-only/unknown runtime mode, running/stopped/unknown scheduler state and whether its job is scheduled. Runtime has its own observation timestamp, distinct from response generation. Configuration alone does not prove intake is running.

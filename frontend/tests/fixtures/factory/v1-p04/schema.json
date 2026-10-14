@@ -1,5 +1,1017 @@
 {
   "models": {
+    "AgentTeamSummaryResponse": {
+      "$defs": {
+        "CampaignAreaGroup": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "title": "Area",
+              "type": "string"
+            },
+            "count": {
+              "minimum": 0,
+              "title": "Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "area",
+            "count"
+          ],
+          "title": "CampaignAreaGroup",
+          "type": "object"
+        },
+        "CampaignDecision": {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "later",
+                "now",
+                "done"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "state"
+          ],
+          "title": "CampaignDecision",
+          "type": "object"
+        },
+        "CampaignDoneItem": {
+          "additionalProperties": false,
+          "properties": {
+            "merged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merged At"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "merged_at"
+          ],
+          "title": "CampaignDoneItem",
+          "type": "object"
+        },
+        "CampaignQueuedItem": {
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "title": "CampaignQueuedItem",
+          "type": "object"
+        },
+        "CampaignUnderWayItem": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_short_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Short Name"
+            },
+            "state_phrase": {
+              "enum": [
+                "building it",
+                "reviewing it",
+                "waiting for checks",
+                "waiting for you"
+              ],
+              "title": "State Phrase",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "owner_short_name",
+            "state_phrase"
+          ],
+          "title": "CampaignUnderWayItem",
+          "type": "object"
+        },
+        "ReminderAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "elapsed_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Elapsed Seconds"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "issue_numbers": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Issue Numbers",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "workspace_release",
+                "backlog_reconcile"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "notification_budget_resets_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notification Budget Resets At"
+            },
+            "owner_name": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Name"
+            },
+            "owner_slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Slot Id"
+            },
+            "reminder_cap": {
+              "exclusiveMinimum": 0,
+              "title": "Reminder Cap",
+              "type": "integer"
+            },
+            "reminder_count": {
+              "minimum": 0,
+              "title": "Reminder Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "waiting_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Waiting Since"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "kind",
+            "scope_id",
+            "reminder_count",
+            "reminder_cap"
+          ],
+          "title": "ReminderAttention",
+          "type": "object"
+        },
+        "SupervisorAddress": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "exclusiveMinimum": 0,
+              "title": "Actor Id",
+              "type": "integer"
+            },
+            "address": {
+              "title": "Address",
+              "type": "string"
+            },
+            "display_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Display Name"
+            }
+          },
+          "required": [
+            "actor_id",
+            "address"
+          ],
+          "title": "SupervisorAddress",
+          "type": "object"
+        },
+        "SupervisorObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            },
+            "address": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SupervisorAddress"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attention": {
+              "anyOf": [
+                {
+                  "const": "Supervisor check-in overdue",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attention"
+            },
+            "checked_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Checked At"
+            },
+            "grace_seconds": {
+              "minimum": 1,
+              "title": "Grace Seconds",
+              "type": "integer"
+            },
+            "next_check_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Check At"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Note"
+            },
+            "status": {
+              "enum": [
+                "none",
+                "healthy",
+                "late",
+                "absent"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "actor_id",
+            "address",
+            "checked_at",
+            "next_check_at",
+            "grace_seconds",
+            "note",
+            "attention"
+          ],
+          "title": "SupervisorObservation",
+          "type": "object"
+        },
+        "TeamCampaignSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "backlog_state": {
+              "enum": [
+                "available",
+                "backlog unavailable"
+              ],
+              "title": "Backlog State",
+              "type": "string"
+            },
+            "decisions_ahead": {
+              "items": {
+                "$ref": "#/$defs/CampaignDecision"
+              },
+              "title": "Decisions Ahead",
+              "type": "array"
+            },
+            "done_count": {
+              "minimum": 0,
+              "title": "Done Count",
+              "type": "integer"
+            },
+            "latest_done": {
+              "items": {
+                "$ref": "#/$defs/CampaignDoneItem"
+              },
+              "title": "Latest Done",
+              "type": "array"
+            },
+            "not_started_count": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Not Started Count"
+            },
+            "not_started_groups": {
+              "items": {
+                "$ref": "#/$defs/CampaignAreaGroup"
+              },
+              "title": "Not Started Groups",
+              "type": "array"
+            },
+            "queued": {
+              "items": {
+                "$ref": "#/$defs/CampaignQueuedItem"
+              },
+              "title": "Queued",
+              "type": "array"
+            },
+            "queued_count": {
+              "minimum": 0,
+              "title": "Queued Count",
+              "type": "integer"
+            },
+            "under_way": {
+              "items": {
+                "$ref": "#/$defs/CampaignUnderWayItem"
+              },
+              "title": "Under Way",
+              "type": "array"
+            },
+            "under_way_count": {
+              "minimum": 0,
+              "title": "Under Way Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "backlog_state",
+            "done_count",
+            "latest_done",
+            "under_way_count",
+            "under_way",
+            "queued_count",
+            "queued",
+            "not_started_count",
+            "not_started_groups",
+            "decisions_ahead"
+          ],
+          "title": "TeamCampaignSummary",
+          "type": "object"
+        },
+        "TeamRemainingWork": {
+          "additionalProperties": false,
+          "properties": {
+            "confidence": {
+              "default": "unknown",
+              "enum": [
+                "unknown",
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "Confidence",
+              "type": "string"
+            },
+            "effort_high_minutes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort High Minutes"
+            },
+            "effort_low_minutes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effort Low Minutes"
+            },
+            "reason": {
+              "enum": [
+                "complete",
+                "report_unknown",
+                "observation_incomplete",
+                "context_changed"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "reported_items": {
+              "minimum": 0,
+              "title": "Reported Items",
+              "type": "integer"
+            },
+            "state": {
+              "enum": [
+                "known",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "unfinished_items": {
+              "minimum": 0,
+              "title": "Unfinished Items",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "unfinished_items",
+            "reported_items",
+            "reason"
+          ],
+          "title": "TeamRemainingWork",
+          "type": "object"
+        },
+        "TeamRequiredCIUnreadable": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            },
+            "work_item_id": {
+              "exclusiveMinimum": 0,
+              "title": "Work Item Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "since",
+            "reason",
+            "work_item_id",
+            "scope_id",
+            "issue_number"
+          ],
+          "title": "TeamRequiredCIUnreadable",
+          "type": "object"
+        },
+        "TeamSummaryAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "attempt_stopped",
+                "recovery_decision",
+                "human_review",
+                "owner_stalled",
+                "observation_pause",
+                "hold",
+                "recovery_only",
+                "hold_unavailable"
+              ],
+              "title": "Code",
+              "type": "string"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "observed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed At"
+            },
+            "pause_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pause Id"
+            },
+            "resume_deadline": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resume Deadline"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "title": "TeamSummaryAttention",
+          "type": "object"
+        },
+        "TeamSummaryHumanAction": {
+          "additionalProperties": false,
+          "properties": {
+            "assessment_current": {
+              "title": "Assessment Current",
+              "type": "boolean"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "review_pr",
+                "merge_pr",
+                "inspect_attempt",
+                "inspect_checkpoint",
+                "milestone_acceptance",
+                "pilot_decision",
+                "scope_clarification",
+                "provide_evidence"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "pull_request_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pull Request Number"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "source": {
+              "enum": [
+                "leader",
+                "dispatch",
+                "unknown"
+              ],
+              "title": "Source",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "requested",
+                "context_pending",
+                "waiting_for_prerequisites",
+                "historical",
+                "resolved",
+                "head_changed",
+                "pr_unavailable",
+                "pr_identity_unavailable"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "scope_id",
+            "issue_number",
+            "kind",
+            "state",
+            "source",
+            "assessment_current"
+          ],
+          "title": "TeamSummaryHumanAction",
+          "type": "object"
+        },
+        "TeamWaitingInput": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "slot_id": {
+              "exclusiveMinimum": 0,
+              "title": "Slot Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "slot_id",
+            "reason"
+          ],
+          "title": "TeamWaitingInput",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attention": {
+          "items": {
+            "$ref": "#/$defs/TeamSummaryAttention"
+          },
+          "title": "Attention",
+          "type": "array"
+        },
+        "campaign": {
+          "$ref": "#/$defs/TeamCampaignSummary"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "coverage_complete": {
+          "title": "Coverage Complete",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Description"
+        },
+        "hold_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "hold",
+                "recovery_only",
+                "hold_unavailable"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Hold Code"
+        },
+        "human_actions": {
+          "items": {
+            "$ref": "#/$defs/TeamSummaryHumanAction"
+          },
+          "title": "Human Actions",
+          "type": "array"
+        },
+        "next_actor_coverage_complete": {
+          "title": "Next Actor Coverage Complete",
+          "type": "boolean"
+        },
+        "next_actors": {
+          "items": {
+            "enum": [
+              "owner",
+              "leader",
+              "operator",
+              "controller"
+            ],
+            "type": "string"
+          },
+          "title": "Next Actors",
+          "type": "array"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Issue Url"
+        },
+        "preset_id": {
+          "exclusiveMinimum": 0,
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "remaining_work": {
+          "$ref": "#/$defs/TeamRemainingWork"
+        },
+        "reminder_attention": {
+          "items": {
+            "$ref": "#/$defs/ReminderAttention"
+          },
+          "title": "Reminder Attention",
+          "type": "array"
+        },
+        "reminder_attention_complete": {
+          "default": true,
+          "title": "Reminder Attention Complete",
+          "type": "boolean"
+        },
+        "required_ci_unreadable": {
+          "items": {
+            "$ref": "#/$defs/TeamRequiredCIUnreadable"
+          },
+          "title": "Required Ci Unreadable",
+          "type": "array"
+        },
+        "supervisor": {
+          "const": "none",
+          "default": "none",
+          "title": "Supervisor",
+          "type": "string"
+        },
+        "supervisor_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupervisorObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        },
+        "waiting_input": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/TeamWaitingInput"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Waiting Input"
+        }
+      },
+      "required": [
+        "preset_id",
+        "description",
+        "parent_issue_url",
+        "checked_at",
+        "valid_until",
+        "coverage_complete",
+        "hold_code",
+        "attention",
+        "human_actions",
+        "remaining_work",
+        "next_actors",
+        "next_actor_coverage_complete",
+        "campaign"
+      ],
+      "title": "AgentTeamSummaryResponse",
+      "type": "object"
+    },
     "FactoryErrorResponse": {
       "$defs": {
         "FactoryErrorDetail": {
@@ -182,6 +1194,141 @@
           "title": "FactoryFilters",
           "type": "object"
         },
+        "ReminderAttention": {
+          "additionalProperties": false,
+          "properties": {
+            "elapsed_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Elapsed Seconds"
+            },
+            "issue_number": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Issue Number"
+            },
+            "issue_numbers": {
+              "items": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "title": "Issue Numbers",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "workspace_release",
+                "backlog_reconcile"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "notification_budget_resets_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Notification Budget Resets At"
+            },
+            "owner_name": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Name"
+            },
+            "owner_slot_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Slot Id"
+            },
+            "reminder_cap": {
+              "exclusiveMinimum": 0,
+              "title": "Reminder Cap",
+              "type": "integer"
+            },
+            "reminder_count": {
+              "minimum": 0,
+              "title": "Reminder Count",
+              "type": "integer"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "waiting_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Waiting Since"
+            },
+            "work_item_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Item Id"
+            }
+          },
+          "required": [
+            "kind",
+            "scope_id",
+            "reminder_count",
+            "reminder_cap"
+          ],
+          "title": "ReminderAttention",
+          "type": "object"
+        },
         "RuntimeObservation": {
           "additionalProperties": false,
           "properties": {
@@ -252,6 +1399,18 @@
           "format": "date-time",
           "title": "Generated At",
           "type": "string"
+        },
+        "reminder_attention": {
+          "items": {
+            "$ref": "#/$defs/ReminderAttention"
+          },
+          "title": "Reminder Attention",
+          "type": "array"
+        },
+        "reminder_attention_complete": {
+          "default": true,
+          "title": "Reminder Attention Complete",
+          "type": "boolean"
         },
         "schema_version": {
           "const": 1,
@@ -770,6 +1929,99 @@
     },
     "WorkDetailResponse": {
       "$defs": {
+        "AgentStatus": {
+          "description": "Read-only display facts. These facts grant no authority.",
+          "properties": {
+            "activity_reason": {
+              "default": "observation_unavailable",
+              "title": "Activity Reason",
+              "type": "string"
+            },
+            "activity_state": {
+              "default": "unknown",
+              "enum": [
+                "working",
+                "idle",
+                "stopped",
+                "unknown"
+              ],
+              "title": "Activity State",
+              "type": "string"
+            },
+            "checked_at": {
+              "format": "date-time",
+              "title": "Checked At",
+              "type": "string"
+            },
+            "idle_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idle Since"
+            },
+            "session_state": {
+              "default": "unknown",
+              "enum": [
+                "online",
+                "offline",
+                "unknown"
+              ],
+              "title": "Session State",
+              "type": "string"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "waiting_input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NativeInputWait"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "wake_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "observation_unavailable",
+              "title": "Wake Reason"
+            },
+            "wake_state": {
+              "default": "unknown",
+              "enum": [
+                "can_wake",
+                "cannot_wake",
+                "unknown"
+              ],
+              "title": "Wake State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "checked_at",
+            "valid_until"
+          ],
+          "title": "AgentStatus",
+          "type": "object"
+        },
         "ApproverReference": {
           "additionalProperties": false,
           "properties": {
@@ -1015,6 +2267,37 @@
           "title": "MailHint",
           "type": "object"
         },
+        "NativeInputWait": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "observed_at"
+          ],
+          "title": "NativeInputWait",
+          "type": "object"
+        },
         "OwnerReference": {
           "additionalProperties": false,
           "properties": {
@@ -1072,6 +2355,50 @@
           "title": "OwnerReference",
           "type": "object"
         },
+        "RequiredCIUnreadableSignal": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          "required": [
+            "since",
+            "reason"
+          ],
+          "title": "RequiredCIUnreadableSignal",
+          "type": "object"
+        },
         "SafeWorkItem": {
           "additionalProperties": false,
           "properties": {
@@ -1097,6 +2424,37 @@
             "attempt_phase": {
               "title": "Attempt Phase",
               "type": "string"
+            },
+            "checks_unavailable_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "permission_missing",
+                    "workflow_missing",
+                    "api_error",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Reason"
+            },
+            "checks_unavailable_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Since"
             },
             "created_at": {
               "format": "date-time",
@@ -1179,6 +2537,17 @@
               ],
               "title": "Pr Number"
             },
+            "required_ci_unreadable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequiredCIUnreadableSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "retry_count": {
               "title": "Retry Count",
               "type": "integer"
@@ -1221,6 +2590,17 @@
         "SessionAssociation": {
           "additionalProperties": false,
           "properties": {
+            "agent_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "bridge_target": {
               "anyOf": [
                 {
@@ -1519,6 +2899,99 @@
     },
     "WorkListResponse": {
       "$defs": {
+        "AgentStatus": {
+          "description": "Read-only display facts. These facts grant no authority.",
+          "properties": {
+            "activity_reason": {
+              "default": "observation_unavailable",
+              "title": "Activity Reason",
+              "type": "string"
+            },
+            "activity_state": {
+              "default": "unknown",
+              "enum": [
+                "working",
+                "idle",
+                "stopped",
+                "unknown"
+              ],
+              "title": "Activity State",
+              "type": "string"
+            },
+            "checked_at": {
+              "format": "date-time",
+              "title": "Checked At",
+              "type": "string"
+            },
+            "idle_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Idle Since"
+            },
+            "session_state": {
+              "default": "unknown",
+              "enum": [
+                "online",
+                "offline",
+                "unknown"
+              ],
+              "title": "Session State",
+              "type": "string"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "waiting_input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NativeInputWait"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "wake_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "observation_unavailable",
+              "title": "Wake Reason"
+            },
+            "wake_state": {
+              "default": "unknown",
+              "enum": [
+                "can_wake",
+                "cannot_wake",
+                "unknown"
+              ],
+              "title": "Wake State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "checked_at",
+            "valid_until"
+          ],
+          "title": "AgentStatus",
+          "type": "object"
+        },
         "ApproverReference": {
           "additionalProperties": false,
           "properties": {
@@ -1806,6 +3279,37 @@
           "title": "MailHint",
           "type": "object"
         },
+        "NativeInputWait": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "const": "Waiting for input",
+              "default": "Waiting for input",
+              "title": "Label",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "question",
+                "trust",
+                "sign_in"
+              ],
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "observed_at"
+          ],
+          "title": "NativeInputWait",
+          "type": "object"
+        },
         "OwnerReference": {
           "additionalProperties": false,
           "properties": {
@@ -1863,6 +3367,50 @@
           "title": "OwnerReference",
           "type": "object"
         },
+        "RequiredCIUnreadableSignal": {
+          "properties": {
+            "code": {
+              "const": "required_ci_unreadable",
+              "default": "required_ci_unreadable",
+              "title": "Code",
+              "type": "string"
+            },
+            "label": {
+              "const": "Required CI cannot be read",
+              "default": "Required CI cannot be read",
+              "title": "Label",
+              "type": "string"
+            },
+            "next_steps": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Next Steps",
+              "type": "array"
+            },
+            "reason": {
+              "enum": [
+                "permission_missing",
+                "workflow_missing",
+                "api_error",
+                "unknown"
+              ],
+              "title": "Reason",
+              "type": "string"
+            },
+            "since": {
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          "required": [
+            "since",
+            "reason"
+          ],
+          "title": "RequiredCIUnreadableSignal",
+          "type": "object"
+        },
         "SafeWorkItem": {
           "additionalProperties": false,
           "properties": {
@@ -1888,6 +3436,37 @@
             "attempt_phase": {
               "title": "Attempt Phase",
               "type": "string"
+            },
+            "checks_unavailable_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "permission_missing",
+                    "workflow_missing",
+                    "api_error",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Reason"
+            },
+            "checks_unavailable_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Checks Unavailable Since"
             },
             "created_at": {
               "format": "date-time",
@@ -1970,6 +3549,17 @@
               ],
               "title": "Pr Number"
             },
+            "required_ci_unreadable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequiredCIUnreadableSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "retry_count": {
               "title": "Retry Count",
               "type": "integer"
@@ -2012,6 +3602,17 @@
         "SessionAssociation": {
           "additionalProperties": false,
           "properties": {
+            "agent_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AgentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "bridge_target": {
               "anyOf": [
                 {
@@ -2110,6 +3711,7 @@
               "default": "all",
               "enum": [
                 "all",
+                "open",
                 "queued",
                 "active",
                 "review",

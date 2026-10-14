@@ -171,6 +171,9 @@ def work_query(filters: wire.FactoryFilters):
     category = getattr(filters, "category", "all")
     if category == "unknown":
         query = query.where(GithubWorkItem.dispatch_status.not_in(tuple(STATUS_CATEGORY)))
+    elif category == "open":
+        # Every item that is not finished. Unknown future statuses stay in.
+        query = query.where(GithubWorkItem.dispatch_status.not_in(CATEGORY_STATUSES["finished"]))
     elif category != "all":
         query = query.where(GithubWorkItem.dispatch_status.in_(CATEGORY_STATUSES[category]))
     return query
@@ -273,7 +276,8 @@ async def actor_evidence(db, team_ids, authority):
     bindings = (await db.execute(select(AgentPaneBinding).where(AgentPaneBinding.preset_id.in_(team_ids)))).scalars().all()
     retired = (await db.execute(select(MailPaneLifecycle).where(
         MailPaneLifecycle.pane_pid.in_([b.pane_pid for b in bindings])))).scalars().all()
-    return slots, members, sessions, bindings, {(r.pane_pid, r.pane_proc_start) for r in retired}
+    return slots, members, sessions, bindings, {
+        (r.pane_pid, r.pane_proc_start): r.retired_at for r in retired}
 
 
 def association(slot, member, sessions, bindings, retired, now):
@@ -347,11 +351,14 @@ def actions(legacy):
 
 
 async def work_projections(db, rows, now):
+    from app.services.agent_status_service import agent_status_service
     if not rows:
         return []
     authority = await _load_work_item_authority(db, [item for item, _, _ in rows])
     team_ids = {team.id for _, _, team in rows}
     slots, members, sessions, bindings, retired = await actor_evidence(db, team_ids, authority)
+    display_statuses = await agent_status_service.for_snapshot(
+        db, members, slots, sessions, bindings, retired, now=now)
     slots_by_id = {s.id: s for s in slots}
     members_by_id = {m.id: m for m in members}
     members_by_slot = defaultdict(list)
@@ -401,6 +408,8 @@ async def work_projections(db, rows, now):
         if len(owner_members) > 1:
             owner_session = wire.SessionAssociation(state="ambiguous")
         leader_session = association(leader_slot, leader_member, sessions, bindings, retired, now)
+        owner_session.agent_status = display_statuses.get(member.id) if member else None
+        leader_session.agent_status = display_statuses.get(leader_member.id) if leader_member else None
         offline_slot = (slot if owner_session.state == "offline" else
                         leader_slot if leader_session.state == "offline" else None)
         safe = {name: getattr(legacy, name) for name in wire.SafeWorkItem.model_fields}
@@ -447,8 +456,12 @@ async def overview(db, filters):
         freshness = poll(scope, effective, now).freshness
         automation["never_polled_scopes"] += freshness == "never_polled"
         automation["stale_scopes"] += freshness == "stale"
+    from app.services.github_operator_attention_service import github_operator_attention_service
+    reminders = await github_operator_attention_service.reminder_snapshot(
+        db, [scope for scope, team in scopes], provider=filters.provider, now=now)
     return wire.OverviewResponse(generated_at=now, filters=filters, counts=selected_counts,
-                                 automation=wire.AutomationSummary(runtime=runtime.public, **automation))
+        automation=wire.AutomationSummary(runtime=runtime.public, **automation),
+        reminder_attention=reminders["rows"], reminder_attention_complete=reminders["complete"])
 
 
 async def work_list(db, filters, limit, cursor):

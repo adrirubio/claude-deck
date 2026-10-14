@@ -9,11 +9,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WorkPage,
-  OverviewPage,
-  WorkDetailPage,
-} from "../src/features/factory/FactoryPages";
+import { WorkPage } from "../src/features/factory/pages/WorkPage";
+import { RepositoryPage } from "../src/features/factory/pages/RepositoryPage";
+import { OverviewPage } from "../src/features/factory/pages/OverviewPage";
+import { WorkDetailPage } from "../src/features/factory/pages/WorkDetailPage";
+import { ReadStatus } from "../src/features/factory/components/ReadStatus";
 import {
   resetFactoryReads,
   useObservation,
@@ -92,9 +92,12 @@ describe("delivery read authority and filters", () => {
     const { requests } = fixtureFetch((path) => standard(path));
     renderRoute(<OverviewPage />, "/?team_id=1", "/");
     await settle();
-    expect(
-      screen.getByText("132 matching work items across the complete set."),
-    ).toBeInTheDocument();
+    // The Overview no longer states the complete count in a sentence; the tiles carry it.
+    expect(screen.queryByText(/matching work items/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Finished/ })).toHaveAttribute(
+      "href",
+      "/work?team_id=1&category=finished",
+    );
     expect(
       screen.getAllByRole("link", { name: /Needs attention/ })[0],
     ).toHaveAttribute("href", "/work?team_id=1&category=attention");
@@ -112,28 +115,20 @@ describe("delivery read authority and filters", () => {
       ),
     ).toBe(false);
   });
-  it("ignores an old filter response and retains actionable invalid-filter errors", async () => {
+  it("ignores an old filter response after a filter change", async () => {
     let release!: (response: Response) => void;
-    fixtureFetch((_path, q) =>
-      q.get("team_id") === "1"
-        ? new Promise((resolve) => {
-            release = resolve;
-          })
-        : q.get("team_id") === "bad"
-          ? jsonResponse(
-              {
-                detail: {
-                  code: "invalid_filter",
-                  message: "Team ID must be positive.",
-                },
-              },
-              422,
-            )
+    fixtureFetch((path, q) =>
+      path === "factory/repositories"
+        ? jsonResponse(repositories.normal.response)
+        : q.get("team_id") === "1"
+          ? new Promise((resolve) => {
+              release = resolve;
+            })
           : jsonResponse(last),
     );
     renderRoute(<WorkPage />, "/work?team_id=1");
     await settle();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "2" },
     });
     await settle();
@@ -143,16 +138,6 @@ describe("delivery read authority and filters", () => {
     expect(
       screen.queryByText(first.items[0].item.issue_title, { exact: false }),
     ).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
-      target: { value: "bad" },
-    });
-    await settle();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Team ID must be positive. (invalid_filter)",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
-    await settle();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("preserves last good observations after failure instead of showing an empty factory", async () => {
     vi.useFakeTimers();
@@ -174,7 +159,7 @@ describe("delivery read authority and filters", () => {
     await settle();
     fail = true;
     await act(async () => vi.advanceTimersByTimeAsync(5000));
-    expect(screen.getByRole("alert")).toHaveTextContent("Stale data");
+    expect(screen.getByRole("alert")).toHaveTextContent("Data may be out of date");
     expect(screen.getAllByText(/Fixture issue/)).toHaveLength(
       first.items.length,
     );
@@ -191,7 +176,7 @@ describe("delivery read authority and filters", () => {
       screen.getByText(/Recovery-only mode blocks normal intake/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Intake: 0 eligible · 2 blocked/),
+      screen.getByText(/Intake: 0 ready · 2 blocked/),
     ).toBeInTheDocument();
   });
   it("keeps configuration-only empty factories useful", async () => {
@@ -234,23 +219,25 @@ describe("delivery read authority and filters", () => {
 
 describe("cursor browsing V26/V27", () => {
   it("clears older-page browsing on a filter change, including return to a previous URL", async () => {
-    fixtureFetch((_path, query) =>
-      jsonResponse(query.has("cursor") ? work.next_page.response : first),
+    fixtureFetch((path, query) =>
+      path === "factory/repositories"
+        ? jsonResponse(repositories.normal.response)
+        : jsonResponse(query.has("cursor") ? work.next_page.response : first),
     );
     renderRoute(<WorkPage />, "/work?team_id=1");
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await settle();
-    expect(screen.getByText(/Live updates paused/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    expect(screen.getByText(/Updates are paused while you browse older results/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "2" },
     });
     await settle();
-    fireEvent.change(screen.getByLabelText("Team ID"), {
+    fireEvent.change(screen.getByLabelText("Team"), {
       target: { value: "1" },
     });
     await settle();
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Fixture issue/)).toHaveLength(2);
   });
   it("retains >100 paused rows, dirty state, return focus/scroll through real list/detail/action/Back routes", async () => {
@@ -324,7 +311,7 @@ describe("cursor browsing V26/V27", () => {
     await settle();
     expect(screen.getAllByText(/Navigation issue/)).toHaveLength(132);
     expect(
-      screen.getByText(/detail changed; refresh needed/),
+      screen.getByText(/The data changed\. Refresh to see it/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "No more results" }),
@@ -344,7 +331,7 @@ describe("cursor browsing V26/V27", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh from start" }));
     await settle();
     expect(screen.getAllByText(/Navigation issue/)).toHaveLength(50);
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(
       requests.filter((r) => r.path === "factory/work-items").length,
@@ -364,7 +351,9 @@ describe("cursor browsing V26/V27", () => {
     }));
     let old!: (response: Response) => void;
     let firstReads = 0;
-    const { requests } = fixtureFetch((_path, query) => {
+    const { requests } = fixtureFetch((path, query) => {
+      if (path === "factory/repositories")
+        return jsonResponse(repositories.normal.response);
       const cursor = query.get("cursor");
       if (!cursor && ++firstReads === 2)
         return new Promise((resolve) => {
@@ -400,7 +389,7 @@ describe("cursor browsing V26/V27", () => {
     await settle();
     expect(requests).toHaveLength(reads);
     expect(
-      screen.getByText(/detail changed; refresh needed/),
+      screen.getByText(/The data changed\. Refresh to see it/),
     ).toBeInTheDocument();
     expect(container.scrollTop).toBe(91);
     expect(document.activeElement).toBe(
@@ -409,7 +398,7 @@ describe("cursor browsing V26/V27", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh from start" }));
     await settle();
     expect(screen.getAllByText(/Derived issue/)).toHaveLength(50);
-    expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Updates are paused while you browse older results/)).not.toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(requests.length).toBeGreaterThan(reads);
   });
@@ -417,7 +406,19 @@ describe("cursor browsing V26/V27", () => {
 
 describe("work details and protected controls", () => {
   it("does not prompt for safe detail, distinguishes completed and preserves offline actor slot links", async () => {
-    const { requests } = fixtureFetch((path) => standard(path));
+    const record = detail.completed.response.work_item.item;
+    const { requests } = fixtureFetch((path) =>
+      path === `agent-teams/presets/${detail.completed.response.work_item.team.id}/github-work-items`
+        ? jsonResponse({
+            items: [{
+              id: record.id, scope_id: record.scope_id, repo_owner: "fixture", repo_name: "shared",
+              issue_number: record.issue_number, issue_title: record.issue_title, issue_url: "https://github.com/fixture/shared/issues/1",
+              github_updated_at: record.updated_at, issue_type: "code", dispatch_status: "completed", approval_round_count: 0,
+              retry_count: 0, active_scope_revision: 0, attempt_phase: "implementation", diagnostic_retry_count: 0,
+              retry_allowed: false, created_at: record.created_at, updated_at: record.updated_at,
+            }],
+          })
+        : standard(path));
     renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
     await settle();
     expect(
@@ -427,15 +428,22 @@ describe("work details and protected controls", () => {
       screen.getByRole("link", { name: "Review launch for Leader" }),
     ).toHaveAttribute("href", "/teams/1?slot_id=1&review_launch=1");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(requests).toHaveLength(1);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Inspect protected revision history",
-      }),
-    );
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET factory/work-items/9",
+      "GET agent-teams/github-work-items/9/progress",
+    ]);
+    // Recovery history is on the same page now. It asks for the Director key
+    // only when the person asks to load it.
+    expect(
+      await screen.findByText("Enter the Director key to load recovery history."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading history" }));
     await settle();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(requests).toHaveLength(1);
+    expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET factory/work-items/9",
+      "GET agent-teams/github-work-items/9/progress",
+    ]);
   });
   it("uses the existing operator header, preserves denial and refreshes detail without browser agent approval", async () => {
     const eligible = structuredClone(detail.escalated.response);
@@ -466,7 +474,7 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
     const dialog = screen.getByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Operator token"), {
+    fireEvent.change(within(dialog).getByLabelText("Director key"), {
       target: { value: "test-operator" },
     });
     fireEvent.submit(
@@ -494,11 +502,11 @@ describe("work details and protected controls", () => {
     expect(within(warning).getByText(/discard prior PR, handoff, and attempt markers/)).toBeInTheDocument();
     expect(within(warning).getByText(/until the current owner releases it/)).toBeInTheDocument();
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     fireEvent.click(within(warning).getByRole("button", { name: "Cancel" }));
     await settle();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(requests).toHaveLength(1);
   });
 
@@ -527,11 +535,11 @@ describe("work details and protected controls", () => {
     expect(credentials).toEqual(["synthetic-operator"]);
     expect(requests.filter((r) => r.path.startsWith("factory/"))).toHaveLength(2);
     const message = screen.getByRole("status");
-    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "A new dispatch has not been observed");
+    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Deck has not yet seen a new dispatch");
     if (status === "pending") expect(message).toHaveTextContent("reset this work item to pending");
     if (status === "retained") expect(message).toHaveTextContent("Retry response status: escalated");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
   });
 
   it("requires a fresh confirmation after 401 before using a replacement credential", async () => {
@@ -551,7 +559,7 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
     const auth = screen.getByRole("dialog");
-    fireEvent.change(within(auth).getByLabelText("Operator token"), { target: { value: "synthetic-replacement" } });
+    fireEvent.change(within(auth).getByLabelText("Director key"), { target: { value: "synthetic-replacement" } });
     fireEvent.click(within(auth).getByRole("button", { name: "Authorize retry" }));
     await settle();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -583,11 +591,11 @@ describe("work details and protected controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry issue" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
     await settle();
-    expect(screen.getByLabelText("Operator token")).toBeInTheDocument();
+    expect(screen.getByLabelText("Director key")).toBeInTheDocument();
     // Browser history navigation remains possible while modal focus is trapped.
     await act(async () => navigateAway());
     await settle();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
   });
@@ -616,10 +624,309 @@ describe("work details and protected controls", () => {
     await act(async () => finish(jsonResponse({ detail: "Old denial" }, 401)));
     await settle();
     expect(getOperatorToken()).toBe("synthetic-new-context");
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Director key")).not.toBeInTheDocument();
     expect(screen.queryByText("Old denial")).not.toBeInTheDocument();
     expect(requests.filter((r) => r.path === "factory/work-items/6")).toHaveLength(1);
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(1);
   });
 
+});
+
+describe("polling after errors", () => {
+  const unprocessable = () =>
+    jsonResponse({ detail: { code: "invalid_id", message: "Bad ID." } }, 422);
+  const steps = async (ms: number) =>
+    act(async () => vi.advanceTimersByTimeAsync(ms));
+
+  it("stops an observation after a 422 and keeps a link back", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(unprocessable);
+    renderRoute(<RepositoryPage />, "/repositories/abc", "/repositories/:scopeId");
+    await settle();
+    expect(screen.getByRole("alert")).toHaveTextContent("This repository does not exist.");
+    expect(screen.getByRole("link", { name: "Back to Repositories" })).toHaveAttribute(
+      "href",
+      "/repositories",
+    );
+    expect(screen.queryByText("Retrying…")).not.toBeInTheDocument();
+    await steps(120000);
+    await visibility("hidden");
+    await visibility("visible");
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("stops after a 404 or a 401 and sends no further request", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(() =>
+      jsonResponse({ detail: "Work item not found" }, 404),
+    );
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    expect(screen.getByRole("link", { name: "Back to Work" })).toBeInTheDocument();
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+    cleanup();
+    resetFactoryReads();
+    const denied = fixtureFetch(() => jsonResponse({ detail: "Denied" }, 401));
+    renderRoute(<OverviewPage />, "/", "/");
+    await settle();
+    await steps(120000);
+    expect(denied.requests).toHaveLength(1);
+  });
+
+  it("stops a list after a 422", async () => {
+    vi.useFakeTimers();
+    const { requests } = fixtureFetch(unprocessable);
+    renderRoute(<WorkPage />, "/work?team_id=bad");
+    await settle();
+    await steps(120000);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("resumes after a manual refresh that succeeds", async () => {
+    vi.useFakeTimers();
+    let broken = true;
+    const { requests } = fixtureFetch((path) =>
+      broken ? unprocessable() : standard(path),
+    );
+    renderRoute(<OverviewPage />, "/", "/");
+    await settle();
+    await steps(60000);
+    expect(requests).toHaveLength(1);
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await settle();
+    const reads = requests.length;
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await steps(5000);
+    expect(requests.length).toBeGreaterThan(reads);
+  });
+
+  it("backs off 5, 10, 30 and 60 seconds after a transient error, then resets", async () => {
+    vi.useFakeTimers();
+    let broken = true;
+    const { requests } = fixtureFetch((path) =>
+      broken ? jsonResponse({ detail: "Unavailable" }, 503) : standard(path),
+    );
+    function Observer() {
+      const state = useObservation<unknown>("factory/overview");
+      return <ReadStatus state={state} />;
+    }
+    renderRoute(<Observer />);
+    await settle();
+    expect(screen.getByText("Retrying…")).toBeInTheDocument();
+    for (const [wait, total] of [
+      [5000, 2],
+      [10000, 3],
+      [30000, 4],
+      [60000, 5],
+      [60000, 6],
+    ]) {
+      await steps(wait - 1);
+      expect(requests).toHaveLength(total - 1);
+      await steps(1);
+      expect(requests).toHaveLength(total);
+    }
+    broken = false;
+    await steps(60000);
+    expect(requests).toHaveLength(7);
+    expect(screen.queryByText("Retrying…")).not.toBeInTheDocument();
+    await steps(5000);
+    expect(requests).toHaveLength(8);
+  });
+});
+
+describe("name filters", () => {
+  const withNames = (path: string, query: URLSearchParams) =>
+    path === "factory/repositories" && query.get("limit") === "100"
+      ? jsonResponse(repositories.normal.response)
+      : path === "factory/overview"
+        ? jsonResponse(overview.normal.response)
+        : jsonResponse(first);
+  const sent = (requests: { query: URLSearchParams }[], key: string) =>
+    requests.map((r) => r.query.get(key)).filter((v) => v !== null);
+
+  it("filters by team and repository name, with no ID inputs", async () => {
+    const { requests } = fixtureFetch(withNames);
+    renderRoute(<WorkPage />, "/work");
+    await settle();
+    expect(screen.queryByLabelText(/ID/)).not.toBeInTheDocument();
+    const team = screen.getByLabelText("Team") as HTMLSelectElement;
+    expect([...team.options].map((o) => o.text)).toEqual([
+      "All teams",
+      "Fixture team 1",
+      "Fixture team 2",
+    ]);
+    const repository = screen.getByLabelText("Repository") as HTMLSelectElement;
+    // One repository name in two scopes also shows the team.
+    expect([...repository.options].map((o) => o.text)).toEqual([
+      "All repositories",
+      "fixture/paused",
+      "fixture/shared · Fixture team 1",
+      "fixture/shared · Fixture team 2",
+    ]);
+    fireEvent.change(team, { target: { value: "2" } });
+    await settle();
+    fireEvent.change(repository, { target: { value: "3" } });
+    await settle();
+    expect(sent(requests, "team_id")).toContain("2");
+    expect(sent(requests, "scope_id")).toContain("3");
+  });
+
+  it("hides a select that has one option, and shows Reset only while a filter is active", async () => {
+    fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? jsonResponse(repositories.last_page.response)
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work");
+    await settle();
+    expect(screen.queryByLabelText("Team")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Reset filters" })).not.toBeInTheDocument();
+    cleanup();
+    renderRoute(<WorkPage />, "/work?provider=codex-cli");
+    await settle();
+    expect(screen.getByRole("link", { name: "Reset filters" })).toHaveAttribute("href", "/work");
+  });
+
+  for (const value of ["abc", "999", "0", "1e3"]) {
+    for (const key of ["team_id", "scope_id"]) {
+      it(`keeps the page and sends nothing for an unknown ${key}=${value}`, async () => {
+        const { requests } = fixtureFetch(withNames);
+        renderRoute(<WorkPage />, `/work?${key}=${value}`);
+        await settle();
+        expect(screen.getByRole("status")).toHaveTextContent("was not found");
+        expect(screen.getAllByRole("link", { name: "Reset filters" })).toHaveLength(1);
+        expect(screen.getAllByText(/Fixture issue/).length).toBeGreaterThan(0);
+        expect(sent(requests, key)).toEqual([]);
+        cleanup();
+        resetFactoryReads();
+        const overviewReads = fixtureFetch(withNames);
+        renderRoute(<OverviewPage />, `/?${key}=${value}`, "/");
+        await settle();
+        expect(screen.getByRole("status")).toHaveTextContent("was not found");
+        expect(screen.getByRole("link", { name: /Needs attention/ })).toBeInTheDocument();
+        expect(sent(overviewReads.requests, key)).toEqual([]);
+      });
+    }
+  }
+
+  it("holds a numeric filter until the names are known", async () => {
+    let release!: (response: Response) => void;
+    const { requests } = fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work?team_id=999");
+    await settle();
+    expect(requests).toHaveLength(0);
+    await act(async () => release(jsonResponse(repositories.normal.response)));
+    await settle();
+    expect(sent(requests, "team_id")).toEqual([]);
+    expect(requests.length).toBeGreaterThan(0);
+  });
+
+  it("sends a valid-looking value when the names cannot be read, and still drops text", async () => {
+    const { requests } = fixtureFetch((path, query) =>
+      path === "factory/repositories" && query.get("limit") === "100"
+        ? jsonResponse({ detail: "Unavailable" }, 500)
+        : jsonResponse(first),
+    );
+    renderRoute(<WorkPage />, "/work?team_id=1&scope_id=abc");
+    await settle();
+    expect(sent(requests, "team_id")).toContain("1");
+    expect(sent(requests, "scope_id")).toEqual([]);
+  });
+});
+
+describe("work item page", () => {
+  const itemFor = (response: unknown) => fixtureFetch(() => jsonResponse(response));
+
+  it("links back to Work from a breadcrumb and titles the page with the issue", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumbs).getByRole("link", { name: "Work" })).toHaveAttribute("href", "/work");
+    const title = `#${detail.completed.response.work_item.item.issue_number} ${detail.completed.response.work_item.item.issue_title}`;
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(title);
+    expect(within(crumbs).getByText(title)).toBeInTheDocument();
+  });
+
+  it("shows a merged item with an outcome, no recovery, and unknowns only in Technical details", async () => {
+    itemFor(detail.merged.response);
+    const { container } = renderRoute(<WorkDetailPage />, "/work/4", "/work/:workItemId");
+    await settle();
+    expect(screen.getByText("Merged", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Outcome" })).toBeInTheDocument();
+    expect(screen.queryByText("Protected recovery")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry issue|protected revision history/ })).not.toBeInTheDocument();
+    const details = container.querySelector("details")!;
+    expect(details.querySelector("summary")).toHaveTextContent("Technical details");
+    const outside = container.cloneNode(true) as HTMLElement;
+    outside.querySelector("details")!.remove();
+    expect(outside.textContent).not.toMatch(/unknown|Unconfirmed|raw status|Approver slot/i);
+    expect(details.textContent).toContain("Status merged");
+  });
+
+  it("keeps recovery for work that is not merged, with no doubled full stop", async () => {
+    const retryable = structuredClone(detail.escalated.response);
+    retryable.work_item.actions[0].reason = "Only escalated work can be retried.";
+    itemFor(retryable);
+    renderRoute(<WorkDetailPage />, "/work/6", "/work/:workItemId");
+    await settle();
+    expect(screen.getByText("Protected recovery")).toBeInTheDocument();
+    expect(screen.getByText(/Only escalated work can be retried\. Retrying may reset/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("..");
+  });
+
+  it("shows the two update times as separate labels", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const record = screen.getByText(/Deck record updated:/);
+    const observed = screen.getByText(/Details updated:/);
+    expect(record).not.toBe(observed);
+    expect(record.textContent).not.toMatch(/Details updated/);
+  });
+
+  it("uses one style for every context link", async () => {
+    itemFor(detail.completed.response);
+    renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
+    await settle();
+    const links = within(screen.getByRole("navigation", { name: "Work context" })).getAllByRole("link");
+    expect(links.length).toBeGreaterThan(3);
+    for (const link of links) expect(link.className).toContain("underline");
+    expect(screen.queryByRole("link", { name: /Back to Work/ })).not.toBeInTheDocument();
+  });
+
+  for (const [id, status, code] of [
+    ["abc", 422, "invalid_filter"],
+    ["99999", 404, "resource_not_found"],
+  ] as const) {
+    it(`/work/${id} shows one plain message and a link back, with no ID in the heading`, async () => {
+      fixtureFetch(() => jsonResponse({ detail: { code, message: "Select valid compatible filters." } }, status));
+      renderRoute(<WorkDetailPage />, `/work/${id}`, "/work/:workItemId");
+      await settle();
+      expect(screen.getByRole("alert")).toHaveTextContent("This work item does not exist.");
+      expect(document.body.textContent).not.toMatch(/invalid_filter|resource_not_found|compatible filters/);
+      expect(screen.getByRole("link", { name: "Back to Work" })).toHaveAttribute("href", "/work");
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/^Work item$/);
+    });
+
+    it(`/repositories/${id} shows one plain message and a link back, with no ID in the heading`, async () => {
+      fixtureFetch(() => jsonResponse({ detail: { code, message: "Select valid compatible filters." } }, status));
+      renderRoute(<RepositoryPage />, `/repositories/${id}`, "/repositories/:scopeId");
+      await settle();
+      expect(screen.getByRole("alert")).toHaveTextContent("This repository does not exist.");
+      expect(document.body.textContent).not.toMatch(/invalid_filter|resource_not_found|compatible filters/);
+      expect(screen.getByRole("link", { name: "Back to Repositories" })).toHaveAttribute("href", "/repositories");
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/^Repository$/);
+    });
+  }
 });

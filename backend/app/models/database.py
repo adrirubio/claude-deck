@@ -146,6 +146,17 @@ class AgentTeamPreset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     leader_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parent_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    backlog_milestone: Mapped[str | None] = mapped_column(String, nullable=True)
+    planned_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    supervisor_actor_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
+    )
+    supervisor_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    supervisor_next_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    supervisor_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    supervisor_grace_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supervisor_observed_status: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AgentTeamSlot(Base):
@@ -235,6 +246,7 @@ class TeamGithubScope(Base):
     dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
     design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
     merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
+    review_hold_label: Mapped[str | None] = mapped_column(String, nullable=True)
     delivery_policy: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
     delivery_policy_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
@@ -371,6 +383,8 @@ class GithubWorkItem(Base):
     last_verified_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     verification_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     verification_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    merge_wait_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    merge_wait_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ack_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -387,6 +401,8 @@ class GithubWorkItem(Base):
     dispatch_base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    checks_unavailable_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checks_unavailable_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active_scope_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempt_phase: Mapped[str] = mapped_column(
@@ -508,6 +524,8 @@ class GithubWorkspace(Base):
     leased_owner_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
     lease_last_owner_contact_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_release_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_release_reminder_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    lease_release_reminder_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     provision_error: Mapped[str | None] = mapped_column(String, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -540,6 +558,12 @@ class AgentPaneBinding(Base):
         Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
     )
     tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    waiting_input_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    waiting_input_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_input_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_input_notice_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_messages.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
@@ -688,6 +712,8 @@ class MailMessage(Base):
     sender_actor_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
+    # New ORM notices come from Deck. The migration leaves historical rows null.
+    sender_type: Mapped[str | None] = mapped_column(String, default="system", nullable=True)
     approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)
     audience_type: Mapped[str | None] = mapped_column(String, nullable=True)

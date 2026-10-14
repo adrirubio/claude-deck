@@ -418,7 +418,7 @@ export function StatusLinePage() {
                   id="script"
                   value={customScript}
                   onChange={(e) => setCustomScript(e.target.value)}
-                  className="w-full h-64 p-4 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-primary bg-muted/50"
+                  className="w-full h-64 p-4 font-mono text-sm border rounded-md resize-y focus:outline-hidden focus:ring-2 focus:ring-primary bg-muted/50"
                   placeholder="#!/bin/bash&#10;input=$(cat)&#10;# Your script here..."
                 />
                 <p className="text-xs text-muted-foreground">

@@ -5,6 +5,7 @@ import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
 import { TerminalView } from './TerminalView'
 import { TeamLanesView } from './TeamLanesView'
+import { LANE_COUNT, clampStart, shiftStart, startToShow } from './teamLanesWindow'
 import { LeaderHintOverlay } from './LeaderHintOverlay'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
@@ -22,7 +23,7 @@ type TeamFilter = 'all' | number
 type LayoutMode =
   | { kind: 'grid' }
   | { kind: 'single'; target: string }
-  | { kind: 'lanes'; teamId: number }
+  | { kind: 'lanes'; teamId: number; start: number; zoomed?: string }
 
 interface TeamFilterOption {
   id: number
@@ -63,6 +64,7 @@ function compareTeamLaneSessions(a: CCSession, b: CCSession): number {
 export function CCBridgePage() {
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>(() => { const provider = new URLSearchParams(window.location.search).get('provider'); return PROVIDER_FILTERS.some(p => p.value === provider) ? provider as ProviderFilter : 'all' })
   const [teamFilter, setTeamFilter] = useState<TeamFilter>('all')
+  const [lanesMenuOpen, setLanesMenuOpen] = useState(false)
   const { providers, selectedProviderId } = useProviderContext()
   const status = useSystemStatus()
   const instance = status?.instance ?? null
@@ -120,22 +122,25 @@ export function CCBridgePage() {
     ? null
     : teamOptions.find((team) => team.id === laneTeamId)?.name ?? `Team ${laneTeamId}`
 
-  const teamLanes = useMemo(() => {
-    if (laneTeamId === null) return { sessions: [], overflowCount: 0 }
-    const teamSessions = sessions
+  // Every member of the lanes team, in slot order. The lanes show a window of four.
+  const laneMembers = useMemo(() => {
+    if (laneTeamId === null) return []
+    return sessions
       .filter((session) => session.team_preset_id === laneTeamId)
       .sort(compareTeamLaneSessions)
-    return {
-      sessions: teamSessions.slice(0, MAX_GRID_PANES),
-      overflowCount: Math.max(0, teamSessions.length - MAX_GRID_PANES),
-    }
   }, [laneTeamId, sessions])
+  const laneStart = layoutMode.kind === 'lanes' ? clampStart(layoutMode.start, laneMembers.length) : 0
+  const laneVisible = useMemo(() => laneMembers.slice(laneStart, laneStart + LANE_COUNT), [laneMembers, laneStart])
+  const laneZoomed = layoutMode.kind === 'lanes' && layoutMode.zoomed
+    && laneVisible.some((session) => session.tmux_target === layoutMode.zoomed)
+    ? layoutMode.zoomed
+    : null
 
   const displayedTargets = useMemo(() => {
-    if (layoutMode.kind === 'lanes') return teamLanes.sessions.map((session) => session.tmux_target)
+    if (layoutMode.kind === 'lanes') return laneZoomed ? [laneZoomed] : laneVisible.map((session) => session.tmux_target)
     if (layoutMode.kind === 'single') return [layoutMode.target]
     return activeTargets
-  }, [activeTargets, layoutMode, teamLanes.sessions])
+  }, [activeTargets, layoutMode, laneVisible, laneZoomed])
 
   const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
     Boolean(provider?.installed)
@@ -193,11 +198,38 @@ export function CCBridgePage() {
     setFocusedTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
   }, [sessionsByTarget])
 
-  const openTeamLanes = useCallback(() => {
-    if (effectiveTeamFilter === 'all') return
-    setLayoutMode({ kind: 'lanes', teamId: effectiveTeamFilter })
+  const openTeamLanes = useCallback((teamId?: number) => {
+    const target = teamId ?? effectiveTeamFilter
+    if (target === 'all') return
+    if (teamId !== undefined) applyTeamFilter(teamId)
+    setLayoutMode({ kind: 'lanes', teamId: target, start: 0 })
     setFocusedTarget(null)
-  }, [effectiveTeamFilter])
+  }, [effectiveTeamFilter, applyTeamFilter])
+
+  const shiftLanes = useCallback((delta: number) => {
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes' && !cur.zoomed
+        ? { ...cur, start: shiftStart(cur.start, laneMembers.length, delta) }
+        : cur
+    ))
+  }, [laneMembers.length])
+
+  // Brings a member into the window. While a lane is zoomed, it zooms that member instead.
+  const showLaneMember = useCallback((target: string) => {
+    const index = laneMembers.findIndex((session) => session.tmux_target === target)
+    if (index === -1) return
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes'
+        ? { ...cur, start: startToShow(cur.start, laneMembers.length, index), zoomed: cur.zoomed ? target : undefined }
+        : cur
+    ))
+  }, [laneMembers])
+
+  const toggleLaneZoom = useCallback((target: string) => {
+    setLayoutMode((cur) => (
+      cur.kind === 'lanes' ? { ...cur, zoomed: cur.zoomed === target ? undefined : target } : cur
+    ))
+  }, [])
 
   const exitFullscreen = useCallback(() => {
     setLayoutMode({ kind: 'grid' })
@@ -232,13 +264,22 @@ export function CCBridgePage() {
   useEffect(() => {
     if (!isFullscreen) return
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') exitFullscreen()
+      if (e.key === 'Escape') {
+        // In lanes, the first Escape restores the four lanes. The second one exits.
+        if (layoutMode.kind === 'lanes' && layoutMode.zoomed) setLayoutMode({ ...layoutMode, zoomed: undefined })
+        else exitFullscreen()
+        return
+      }
+      if (layoutMode.kind === 'lanes' && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        shiftLanes(e.key === 'ArrowLeft' ? -1 : 1)
+      }
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [exitFullscreen, isFullscreen])
+  }, [exitFullscreen, isFullscreen, layoutMode, shiftLanes])
 
-  const shouldExitEmptyLanes = layoutMode.kind === 'lanes' && teamLanes.sessions.length === 0
+  const shouldExitEmptyLanes = layoutMode.kind === 'lanes' && laneMembers.length === 0
 
   useEffect(() => {
     if (!shouldExitEmptyLanes) return
@@ -291,9 +332,9 @@ export function CCBridgePage() {
           <div className="flex items-center gap-3 px-4 py-3">
             <MonitorPlay className="h-5 w-5 shrink-0" />
             <div className="flex items-baseline gap-2 flex-wrap min-w-0">
-              <h1 className="text-base font-semibold">Agent Bridge</h1>
+              <h1 className="text-base font-semibold">Live sessions</h1>
               <span className="text-xs text-muted-foreground">
-                Discover and observe agent CLI sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
+                Watch your agents work. Up to 4 at a time.
               </span>
             </div>
             <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
@@ -309,7 +350,7 @@ export function CCBridgePage() {
                   )}
                   onClick={() => setProviderFilter(value)}
                 >
-                  {label} <span className="opacity-70">({filterCounts[value]})</span>
+                  {label} <span className="font-normal">({filterCounts[value]})</span>
                 </button>
               ))}
             </div>
@@ -329,7 +370,7 @@ export function CCBridgePage() {
                     )}
                     onClick={() => applyTeamFilter('all')}
                   >
-                    All teams <span className="opacity-70">({sessions.length})</span>
+                    All teams <span className="font-normal">({sessions.length})</span>
                   </button>
                   {teamOptions.map((team) => (
                     <button
@@ -343,24 +384,38 @@ export function CCBridgePage() {
                       )}
                       onClick={() => applyTeamFilter(team.id)}
                     >
-                      {team.name} <span className="opacity-70">({team.count})</span>
+                      {team.name} <span className="font-normal">({team.count})</span>
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className={cn(
-                    'px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap shrink-0',
-                    effectiveTeamFilter === 'all'
-                      ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-60'
-                      : 'bg-background text-foreground hover:bg-muted'
+                <div className="relative shrink-0">
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 text-xs rounded-md border bg-background text-foreground hover:bg-muted transition-colors whitespace-nowrap"
+                    aria-haspopup={effectiveTeamFilter === 'all' ? 'menu' : undefined}
+                    aria-expanded={effectiveTeamFilter === 'all' ? lanesMenuOpen : undefined}
+                    onClick={() => (effectiveTeamFilter === 'all' ? setLanesMenuOpen((open) => !open) : openTeamLanes())}
+                    title={selectedTeamLabel ? `Show ${selectedTeamLabel} in fullscreen lanes` : undefined}
+                  >
+                    Team lanes
+                  </button>
+                  {effectiveTeamFilter === 'all' && lanesMenuOpen && (
+                    <div role="menu" aria-label="Choose a team for team lanes" className="absolute left-0 z-20 mt-1 min-w-48 rounded-md border bg-popover p-1 shadow-md">
+                      <p className="px-2 py-1 text-xs text-muted-foreground">Choose a team</p>
+                      {teamOptions.map((team) => (
+                        <button
+                          key={team.id}
+                          type="button"
+                          role="menuitem"
+                          className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => { setLanesMenuOpen(false); openTeamLanes(team.id) }}
+                        >
+                          {team.name} <span className="text-muted-foreground">({team.count})</span>
+                        </button>
+                      ))}
+                    </div>
                   )}
-                  disabled={effectiveTeamFilter === 'all'}
-                  onClick={openTeamLanes}
-                  title={selectedTeamLabel ? `Show ${selectedTeamLabel} in fullscreen lanes` : 'Select a team to open team lanes'}
-                >
-                  Team lanes
-                </button>
+                </div>
               </div>
             </div>
           )}
@@ -380,7 +435,7 @@ export function CCBridgePage() {
 
       <div className="flex flex-1 min-h-0">
         {!isFullscreen && (
-          <div className="w-52 border-r shrink-0">
+          <div className="w-72 border-r shrink-0">
             <SessionList
               sessions={visibleSessions}
               loading={loading}
@@ -402,13 +457,17 @@ export function CCBridgePage() {
         <div className="flex-1 min-w-0 relative">
           {layoutMode.kind === 'lanes' ? (
             <TeamLanesView
-              sessions={teamLanes.sessions}
-              overflowCount={teamLanes.overflowCount}
+              sessions={laneMembers}
+              start={laneStart}
+              zoomed={laneZoomed}
               teamLabel={laneTeamLabel}
               focusedTarget={focusedTarget}
               onFocusTarget={setFocusedTarget}
               onLeaderNavigate={handleLeaderNavigate}
               onLeaderStateChange={handleLeaderStateChange}
+              onShift={shiftLanes}
+              onShowMember={showLaneMember}
+              onToggleZoom={toggleLaneZoom}
               onExit={exitFullscreen}
               instance={instance}
             />

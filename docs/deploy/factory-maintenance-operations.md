@@ -74,6 +74,10 @@ Use `integration_update` for a source update. The owner checks that no operation
 
 The request names the actual Mail message ID. The operation checks actual approval and ACK, the attempt, workspace lease, current authenticated generation, process binding, source head and a maximum checkpoint age of 900 seconds. Live competing generations are refused. A checkpoint binds one operation and is consumed once before source mutation. Its private claim survives database rollback and process failure. A checkpoint is a handoff claim, not proof that a hidden background process cannot exist.
 
+The owner's session can use its slot folder while it works in a separate leased dispatch folder.
+Process identity and pane binding remain required.
+A changed or competing live generation refuses the checkpoint.
+
 The final authority checks and source operation share a SQLite write reservation. Acquisition has a two-second timeout. The operation limits external calls to a 75-second reservation window. Contention or an expired window is refused. All database authority writers wait during this short boundary. This also briefly delays unrelated teams' database writes. The owner hold covers native file operations, which SQLite cannot stop. A Git timeout settles the actual child group before releasing the reservation. Any unproved settlement remains uncertain; keep the owner hold until inspection.
 
 ### Controller upgrade
@@ -81,6 +85,22 @@ The final authority checks and source operation share a SQLite write reservation
 The request binds the old and target heads, clean candidate, accepted PRs and configured successful checks. It names every reviewed changed file and its SHA256. It also binds the runtime review file and a successful clean-source check receipt with its actual log hash. The runtime review must begin with `ACCEPT` and include the target head and canonical reviewed-file-map digest.
 
 The operation records complete policy, roster, coordination and database identity before the first control change. It pauses autonomy, removes the arming marker and waits for the active supervisor to observe the pause. It backs up the database, then rechecks current CI and every owner checkpoint. It proves controller termination before changing its source. It preserves native sessions, owner sources, recorded authority and protected files. It changes only declared version fields. After start, it checks health and retained state. Success reports `deployed_paused`; activation remains a separate operation.
+
+A column manifest records each baseline column and its schema properties.
+The manifest includes generated columns and their storage kind.
+Generated column values also remain part of recorded authority.
+The operation captures this manifest and the authority rows in one read transaction.
+Before start, schema checks remain strict.
+After start, new nullable columns are allowed only when every retained row contains `NULL` in them.
+`NULL` means an empty database value.
+Baseline columns, retained values, row identities, and database identity must remain unchanged.
+
+Removed columns, changed column properties, and new nonempty columns stop the upgrade.
+New columns with non-null constraints also stop it.
+Such migrations need separate preparation before the upgrade.
+
+CLI failures include `reason_code` for known public errors, such as `owner_generation_unavailable` or `deployed_context_changed`.
+The CLI hides arbitrary exception messages and private values.
 
 A failure records each independent cleanup result and version certainty. A failure before cutover can report `failed_paused_needs_inspection` only when removal of the arming marker and all OFF states are proved. Any uncertain cleanup or a failure after cutover requires controller stop and positive termination proof. That reports `failed_stopped_needs_inspection`; unproved termination reports `failed_termination_unknown`. Cleanup does not restart the controller. A failed evidence write does not skip cleanup. The command does not infer success from a live PID or timeout. The supervisor stays active. An existing HOLD prevents execution. This source upgrade does not install dependencies or publish a new UI bundle; those changes need their normal accepted artifact procedure.
 

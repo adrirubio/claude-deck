@@ -37,6 +37,10 @@ from app.services.github_client import (
     github_client,
 )
 from app.services.github_check_observation import GithubCheckObservationError
+from app.services import required_ci_attention
+from app.services.github_terminal_revision_service import (
+    TerminalRevisionContextChanged, complete_current_revision, lock_terminal_transition,
+)
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_recovery_gate import (
     GithubRecoveryOnlyAttempt,
@@ -54,6 +58,7 @@ _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
 _STATUS_FAILURE_STATES = {"failure", "error"}
 _TRANSIENT_MERGE_STATES = {"unstable", "blocked"}
+_MERGE_CHECK_WAIT_LIMIT = timedelta(minutes=60)
 _HUMAN_MERGE_NOTE_PREFIXES = (
     "Auto-merge blocked",
     "Auto-merge budget exhausted",
@@ -984,9 +989,9 @@ class GithubVerificationService:
         await self._repair_exhausted_diagnostic_notifications(
             db, scope, recovery_only_attempt=recovery_only_attempt
         )
-        items = (
+        item_ids = (
             await db.execute(
-                select(GithubWorkItem).where(
+                select(GithubWorkItem.id).where(
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.pr_number.is_not(None),
                     GithubWorkItem.dispatch_status.in_(
@@ -1002,7 +1007,13 @@ class GithubVerificationService:
             )
         ).scalars().all()
 
-        for item in items:
+        for item_id in item_ids:
+            # A rejected terminal claim rolls back and expires ORM objects.
+            # Read each next item explicitly, with its current state.
+            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+            if item is None or item.dispatch_status not in (
+                    "dispatched", "verifying", "ready_for_review", "awaiting_human_review"):
+                continue
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
                     revision = await self._active_scope_revision(db, item)
@@ -1044,9 +1055,20 @@ class GithubVerificationService:
                     )
                 else:
                     await self._process_review_item(db, scope, item, client)
+                # Repeated failed-head reads can return without another state write.
+                # Persist the successful read even when that path uses no retry.
+                if any(inspect(item).attrs[name].history.has_changes() for name in (
+                    "checks_unavailable_since", "checks_unavailable_reason"
+                )):
+                    await db.commit()
+            except TerminalRevisionContextChanged:
+                await db.rollback()
+                await db.refresh(scope)
+                logger.info("Terminal attempt changed; no merge transition recorded")
             except GithubCheckObservationError as exc:
                 # Missing or ambiguous CI evidence must not consume a retry or
                 # diagnostic budget. Continue polling the other work items.
+                required_ci_attention.note_unreadable(item, required_ci_attention.error_reason(exc))
                 self._set_failure_note(
                     item, f"GitHub checks are unavailable; will poll again: {exc}"
                 )
@@ -1435,6 +1457,7 @@ class GithubVerificationService:
         if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
             return
 
+        required_ci_attention.note_readable(item)
         envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
         observations = dict(envelope.get("diagnostic_observations") or {})
         observation = {
@@ -1762,6 +1785,7 @@ class GithubVerificationService:
         )
         if not await claim_policy_context(db, item, policy_guard):
             return
+        required_ci_attention.note_readable(item)
         blockers = required_check_blockers(policy, checks, head_sha)
         if not checks and not policy.required_checks:
             if await self._process_combined_status(
@@ -1958,6 +1982,14 @@ class GithubVerificationService:
             return
         if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
             return
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        hold_note = await self._review_hold_note(scope, item, client, pull)
+        if hold_note is not None:
+            await self._record_readiness_hold(db, item, hold_note)
+            return
         approval_reason = await self._approval_gate_reason(db, scope, item)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
@@ -1974,6 +2006,15 @@ class GithubVerificationService:
                 "Auto-merge budget exhausted; PR is ready for human merge.",
             )
             return
+        current_head = self._head_sha(pull)
+        if not current_head or current_head != item.last_verified_sha:
+            item.dispatch_status = "verifying"
+            item.status_note = "Head changed since promotion; re-verifying before auto-merge."
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
+        if await self._wait_for_merge_checks(db, scope, item, client, current_head):
+            return
         merge_state = pull.get("mergeable_state")
         if merge_state in _TRANSIENT_MERGE_STATES:
             await self._record_transient_merge_failure(
@@ -1983,10 +2024,10 @@ class GithubVerificationService:
                 f"mergeable_state={merge_state}",
             )
             return
-        current_head = self._head_sha(pull)
-        if current_head != item.last_verified_sha or not await self._head_is_green(
-            scope, client, current_head, item=item
-        ):
+        if not await self._head_is_green(scope, client, current_head, item=item):
+            # Preserve the wait bound if another check started during this read.
+            if await self._wait_for_merge_checks(db, scope, item, client, current_head):
+                return
             item.dispatch_status = "verifying"
             item.status_note = (
                 "Head changed or is no longer green since promotion; re-verifying "
@@ -1994,6 +2035,39 @@ class GithubVerificationService:
             )
             item.updated_at = datetime.utcnow()
             await db.commit()
+            return
+        # Owner readiness and labels can change while checks are read.
+        try:
+            fresh_pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        except (httpx.HTTPError, GithubClientResponseError):
+            await self._record_readiness_hold(
+                db, item, "PR readiness could not be read; automatic merge is blocked.")
+            return
+        if not await self._validate_polled_pull_identity(
+            db, scope, item, client, fresh_pull, retry_status=item.dispatch_status,
+        ):
+            return
+        if self._classify_pull(fresh_pull) != "open":
+            await self._process_review_item(db, scope, item, client, pull=fresh_pull)
+            return
+        if self._head_sha(fresh_pull) != current_head:
+            item.dispatch_status = "verifying"
+            await self._record_readiness_hold(
+                db, item, "Head changed before auto-merge; verifying the current head.")
+            return
+        readiness_note = self._draft_readiness_note(item, fresh_pull)
+        if readiness_note is not None:
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        hold_note = await self._review_hold_note(scope, item, client, fresh_pull)
+        if hold_note is not None:
+            await self._record_readiness_hold(db, item, hold_note)
+            return
+        approval_reason = await self._approval_gate_reason(db, scope, item)
+        if approval_reason is not None:
+            await self._fallback_to_human_merge(
+                db, item, "Auto-merge blocked: distinct current-round leader approval is "
+                f"required ({approval_reason}).")
             return
         try:
             await client.merge_pull(
@@ -2005,7 +2079,9 @@ class GithubVerificationService:
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code in _MERGE_TRANSIENT_STATUS_CODES or status_code >= 500:
-                await self._record_transient_merge_failure(db, scope, item, str(exc))
+                # Checks can start after the green read and before the merge.
+                if not await self._wait_for_merge_checks(db, scope, item, client, current_head):
+                    await self._record_transient_merge_failure(db, scope, item, str(exc))
             elif status_code == 403:
                 await self._fallback_to_human_merge(
                     db,
@@ -2028,6 +2104,46 @@ class GithubVerificationService:
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
+
+    @staticmethod
+    def _draft_readiness_note(item: GithubWorkItem, pull: dict) -> str | None:
+        if type(pull.get("draft")) is not bool:
+            return "PR draft state could not be read; automatic merge is blocked."
+        if pull["draft"]:
+            return f"PR #{item.pr_number} is draft. The owner must mark it ready."
+        return None
+
+    @staticmethod
+    async def _record_readiness_hold(db: AsyncSession, item: GithubWorkItem, note: str) -> None:
+        item.status_note = note
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def _review_hold_note(
+        self, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient, pull: dict,
+    ) -> str | None:
+        label = scope.review_hold_label
+        if label is None:
+            return None
+        unknown = "Review hold labels could not be read; automatic merge is blocked."
+        if not isinstance(label, str) or not label.strip():
+            return "Review hold label is invalid; automatic merge is blocked."
+        try:
+            issue = await client.get_issue(scope.repo_owner, scope.repo_name, item.issue_number)
+        except (httpx.HTTPError, GithubClientResponseError):
+            return unknown
+        if not isinstance(issue, dict) or type(issue.get("number")) is not int or issue["number"] != item.issue_number:
+            return unknown
+        for record in (pull, issue):
+            labels = record.get("labels")
+            if not isinstance(labels, list) or any(
+                not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+                for entry in labels
+            ):
+                return unknown
+        if any(entry["name"] == label for record in (pull, issue) for entry in record["labels"]):
+            return f"PR #{item.pr_number} is held for independent review. Hold label: {label}."
+        return None
 
     async def _validate_polled_pull_identity(
         self,
@@ -2111,6 +2227,63 @@ class GithubVerificationService:
             return "owner and approver are not distinct"
         return None
 
+    async def _wait_for_merge_checks(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        head_sha: str,
+    ) -> bool:
+        """Wait for head checks without charging implementation retries."""
+        checks = await client.list_check_runs_for_ref(
+            scope.repo_owner, scope.repo_name, head_sha,
+        )
+        status = await client.get_combined_status_for_ref(
+            scope.repo_owner, scope.repo_name, head_sha,
+        )
+        required_ci_attention.note_readable(item)
+        pending = [
+            str(check.get("name") or check.get("id") or "unnamed check")
+            for check in checks
+            if check.get("head_sha") in (None, head_sha)
+            and (check.get("status") != "completed" or check.get("conclusion") is None)
+        ]
+        contexts = status.get("statuses") or []
+        pending_contexts = [
+            str(context.get("context") or "unnamed commit status")
+            for context in contexts
+            if context.get("state") == "pending"
+        ]
+        pending.extend(pending_contexts)
+        # Combined success covers every context, including paged-out contexts.
+        # Failure can hide pending contexts. Incomplete evidence cannot charge
+        # a retry. An empty aggregate pending response means no status exists.
+        total_contexts = status.get("total_count", len(contexts))
+        if status.get("state") == "pending" and total_contexts and not pending_contexts:
+            pending.append("pending commit status contexts")
+        elif total_contexts > len(contexts) and status.get("state") != "success":
+            pending.append("unobserved commit status contexts")
+        if not pending:
+            return False
+        now = datetime.utcnow()
+        if item.merge_wait_head_sha != head_sha or item.merge_wait_started_at is None:
+            item.merge_wait_head_sha = head_sha
+            item.merge_wait_started_at = now
+        names = ", ".join(pending)
+        if now - item.merge_wait_started_at >= _MERGE_CHECK_WAIT_LIMIT:
+            await self._fallback_to_human_merge(
+                db,
+                item,
+                f"Auto-merge blocked: GitHub checks stalled for 60 minutes on head {head_sha}. "
+                f"Pending checks: {names}.",
+            )
+        else:
+            item.status_note = f"Auto-merge waiting for checks on head {head_sha}: {names}."
+            item.updated_at = now
+        await db.commit()
+        return True
+
     async def _record_transient_merge_failure(
         self,
         db: AsyncSession,
@@ -2159,6 +2332,7 @@ class GithubVerificationService:
         )
         if not await claim_policy_context(db, item, policy_guard):
             return True
+        required_ci_attention.note_readable(item)
         contexts = status.get("statuses") or []
         if not contexts:
             return False
@@ -2266,16 +2440,30 @@ class GithubVerificationService:
         policy_guard = policy_guard if policy_guard is not None else policy_context(item)
         if not await claim_policy_context(db, item, policy_guard):
             return
-        was_draft = bool(pull.get("draft") and pull.get("node_id"))
-        if was_draft:
-            await client.mark_pull_ready_for_review(str(pull["node_id"]))
-        if was_draft or revision is not None:
-            pull = await client.get_pull(
-                scope.repo_owner,
-                scope.repo_name,
-                int(item.pr_number),
-            )
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            item.last_verified_sha = head_sha
+            await self._record_readiness_hold(db, item, readiness_note)
+            return
+        pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         if not await claim_policy_context(db, item, policy_guard):
+            return
+        if not await self._validate_polled_pull_identity(
+            db, scope, item, client, pull, retry_status=item.dispatch_status, revision=revision,
+        ):
+            return
+        if revision is not None and not await self._submitted_head_is_current(
+            db, item, revision, self._head_sha(pull),
+        ):
+            return
+        if self._head_sha(pull) != head_sha:
+            await self._record_readiness_hold(
+                db, item, "Head changed before readiness; verifying the current head.")
+            return
+        readiness_note = self._draft_readiness_note(item, pull)
+        if readiness_note is not None:
+            item.last_verified_sha = head_sha
+            await self._record_readiness_hold(db, item, readiness_note)
             return
         if revision is not None:
             if not await self._submitted_head_is_current(
@@ -2373,8 +2561,10 @@ class GithubVerificationService:
         # R02: the sourced merge outcome is recorded in the merge transaction,
         # bound to the attempt, revision and PR artifact.
         from app.services import factory_audit_service as _audit
+        await lock_terminal_transition(db, item)
         await _audit.record_merged_delivery(db, item, pull, source=source)
         self._mark_merged(item)
+        await complete_current_revision(db, item, source=source, terminal_status="merged")
 
     async def _record_revision_outcome(
         self,

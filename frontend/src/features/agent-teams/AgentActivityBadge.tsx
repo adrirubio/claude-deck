@@ -22,6 +22,7 @@ const reasons: Record<string, string> = {
   no_native_event: 'No supported native turn event is available.',
   observation_incomplete: 'The latest native activity record is incomplete.',
   observation_invalid: 'The native activity observation could not be validated.',
+  restart_needed_for_observation: 'This session cannot be observed yet. Restart it in resume mode through Deck to see its activity. Unknown activity grants no authority.',
   observation_unavailable: 'The controller cannot read or validate this activity observation.',
 }
 

@@ -235,7 +235,7 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                   {backup.has_dependencies ? (
                     <Badge
                       variant="outline"
-                      className="bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1"
+                      className="bg-blue-50 text-blue-700 dark:text-blue-300 border-blue-200 flex items-center gap-1"
                     >
                       <Package className="h-3 w-3" />
                       Has dependencies
@@ -243,7 +243,7 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                   ) : (
                     <Badge
                       variant="outline"
-                      className="bg-gray-50 text-gray-600 border-gray-200 flex items-center gap-1"
+                      className="bg-gray-50 text-gray-600 dark:text-gray-300 border-gray-200 flex items-center gap-1"
                     >
                       <FileCode className="h-3 w-3" />
                       Config only
@@ -302,7 +302,7 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                 {!plan.platform_compatible && (
                   <Badge
                     variant="outline"
-                    className="ml-auto bg-amber-50 text-amber-700 border-amber-200"
+                    className="ml-auto bg-amber-50 text-amber-700 dark:text-amber-300 border-amber-200"
                   >
                     <AlertTriangle className="h-3 w-3 mr-1" />
                     Different OS
@@ -316,8 +316,8 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                   key={i}
                   className={`p-3 rounded-lg text-sm ${
                     warning.severity === "error"
-                      ? "bg-red-50 text-red-700 border border-red-200"
-                      : "bg-amber-50 text-amber-700 border border-amber-200"
+                      ? "bg-red-50 text-red-700 dark:text-red-300 border border-red-200"
+                      : "bg-amber-50 text-amber-700 dark:text-amber-300 border border-amber-200"
                   }`}
                 >
                   <AlertTriangle className="h-4 w-4 inline mr-2" />

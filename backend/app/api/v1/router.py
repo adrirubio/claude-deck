@@ -1,5 +1,5 @@
 """Main API router for v1 endpoints."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from .config import router as config_router
 from .projects import router as projects_router
 from .cli import router as cli_router
@@ -29,6 +29,11 @@ from .providers import router as providers_router
 from .codex_config import router as codex_config_router
 from .status import router as status_router
 from .factory_maintenance import router as factory_maintenance_router
+from .deps import require_operator_for_writes
+
+# Routers that change the controller's own harness settings: writes need the
+# Director key when one is configured (see require_operator_for_writes).
+SETTINGS_WRITES = [Depends(require_operator_for_writes)]
 
 router = APIRouter()
 
@@ -45,21 +50,21 @@ async def health_check():
 
 
 # Include sub-routers
-router.include_router(config_router)
-router.include_router(projects_router)
-router.include_router(cli_router)
-router.include_router(mcp_router, prefix="/mcp", tags=["MCP Servers"])
-router.include_router(commands_router)
-router.include_router(plugins_router, tags=["Plugins"])
-router.include_router(hooks_router, tags=["Hooks"])
-router.include_router(permissions_router, tags=["Permissions"])
-router.include_router(agents_router, tags=["Agents"])
-router.include_router(backup_router, tags=["Backup"])
-router.include_router(output_styles_router, tags=["Output Styles"])
-router.include_router(statusline_router, tags=["Status Line"])
+router.include_router(config_router, dependencies=SETTINGS_WRITES)
+router.include_router(projects_router, dependencies=SETTINGS_WRITES)
+router.include_router(cli_router, dependencies=SETTINGS_WRITES)
+router.include_router(mcp_router, prefix="/mcp", tags=["MCP Servers"], dependencies=SETTINGS_WRITES)
+router.include_router(commands_router, dependencies=SETTINGS_WRITES)
+router.include_router(plugins_router, tags=["Plugins"], dependencies=SETTINGS_WRITES)
+router.include_router(hooks_router, tags=["Hooks"], dependencies=SETTINGS_WRITES)
+router.include_router(permissions_router, tags=["Permissions"], dependencies=SETTINGS_WRITES)
+router.include_router(agents_router, tags=["Agents"], dependencies=SETTINGS_WRITES)
+router.include_router(backup_router, tags=["Backup"], dependencies=SETTINGS_WRITES)
+router.include_router(output_styles_router, tags=["Output Styles"], dependencies=SETTINGS_WRITES)
+router.include_router(statusline_router, tags=["Status Line"], dependencies=SETTINGS_WRITES)
 router.include_router(sessions_router, tags=["Sessions"])
-router.include_router(usage_router, tags=["Usage"])
-router.include_router(memory_router, tags=["Memory"])
+router.include_router(usage_router, tags=["Usage"], dependencies=SETTINGS_WRITES)
+router.include_router(memory_router, tags=["Memory"], dependencies=SETTINGS_WRITES)
 router.include_router(context_router, tags=["Context"])
 router.include_router(plans_router, tags=["Plans"])
 router.include_router(agent_mail_router, prefix="/agent-mail", tags=["Agent Mail"])
@@ -70,7 +75,7 @@ router.include_router(github_work_progress_router, prefix="/agent-teams", tags=[
 router.include_router(external_agent_mail_router, prefix="/external/agent-mail", tags=["External Agent Mail"])
 router.include_router(cc_bridge_router, prefix="/cc-bridge", tags=["CC Bridge"])
 router.include_router(agent_bridge_router, prefix="/agent-bridge", tags=["Agent Bridge"])
-router.include_router(providers_router, tags=["Providers"])
-router.include_router(codex_config_router, tags=["Codex Config"])
+router.include_router(providers_router, tags=["Providers"], dependencies=SETTINGS_WRITES)
+router.include_router(codex_config_router, tags=["Codex Config"], dependencies=SETTINGS_WRITES)
 router.include_router(status_router, tags=["Status"])
 router.include_router(factory_maintenance_router, prefix="/agent-teams", tags=["Agent Teams"])

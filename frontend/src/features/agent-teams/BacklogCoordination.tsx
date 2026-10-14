@@ -5,7 +5,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { apiClient } from '@/lib/api'
+import { relativeAge } from '@/lib/relativeAge'
 import { formatServerTime, parseServerTime } from '@/lib/serverTime'
+
+// A relative age with the exact time on hover and for a screen reader.
+function AgeText({ value, now }: { value: string | null | undefined; now: number }) {
+  if (!value) return <>never</>
+  // The relative age is in parentheses. The exact time is the hover text and a hidden text for a screen reader.
+  return <>(<time dateTime={value} title={formatServerTime(value)}>{relativeAge(value, now)}</time>)<span className="sr-only"> {formatServerTime(value)}</span></>
+}
 
 type Entry = {
   issue_number: number
@@ -63,7 +71,7 @@ type Policy = Pick<Summary, 'enabled' | 'issue_numbers' | 'fallback_seconds' | '
 
 const reasons: Record<string, string> = {
   admission: 'Leader must verify and admit this work', dependency: 'Prerequisite work must be accepted',
-  m1a_acceptance: 'M1a acceptance is required', pilot_decision: 'An operator pilot decision is required',
+  m1a_acceptance: 'M1a acceptance is required', pilot_decision: 'A Director pilot decision is required',
   m1b_acceptance: 'M1b acceptance is required', authority_prerequisite: 'Authority prerequisites must be integrated',
   human_merge: 'Human review or merge is required', review_evidence: 'Review evidence is required',
   resource: 'Workspace or build capacity is unavailable', owner: 'The required owner is unavailable',
@@ -72,13 +80,13 @@ const reasons: Record<string, string> = {
 }
 const statuses: Record<string, string> = {
   disabled: 'Leader backlog coordination is disabled', paused: 'Coordination is paused with autonomy off',
-  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Backlog has not been observed yet',
-  stale: 'Backlog observations are stale', backlog_unavailable: 'Backlog observations are unavailable',
+  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Deck has not read the backlog yet',
+  stale: 'Backlog data is out of date', backlog_unavailable: 'Backlog data is unavailable',
   leader_unavailable: 'The current Leader is unavailable', leader_identity_unavailable: 'Leader identity cannot be confirmed',
   coordination_capped: 'Coordination notification limit reached', hold: 'Coordination is paused by a safety hold',
   hold_unavailable: 'Safety hold status cannot be confirmed', recovery_only: 'Coordination is paused during scoped recovery',
   single_scope_required: 'Coordination requires one enabled repository scope',
-  coordination_context_limit: 'Coordination context exceeds its supported limit. The operator must review the assignment and resources.',
+  coordination_context_limit: 'Coordination context exceeds its supported limit. The Director must review the assignment and resources.',
 }
 function policy(data: Summary): Policy {
   return { enabled: data.enabled, issue_numbers: data.issue_numbers,
@@ -213,8 +221,6 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
   }
   const expired = !Number.isFinite(expiresAt) || clock >= expiresAt
   const current = Boolean(data?.assessment_current && !error && !expired && data.scope_id === scopeId)
-  const assessedAt = timestamp(data?.last_assessed_at)
-  const assessmentAge = Number.isFinite(assessedAt) ? Math.max(0, Math.floor((clock - assessedAt) / 60000)) : null
   const observations = data?.observations ?? []
   const followups = data?.owner_followups ?? []
   const followupsFresh = Boolean(data && data.scope_id === scopeId && !error && !expired
@@ -232,14 +238,13 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       </div>
       <Button variant="outline" size="sm" disabled={!data} onClick={configure}>Configure backlog</Button>
     </div>
-    {error && <p role="alert" className="mt-2 text-amber-500">{error}</p>}
+    {error && <p role="alert" className="mt-2 text-amber-700 dark:text-amber-500">{error}</p>}
     {data && <>
       <p className="mt-2 text-muted-foreground">
-        Last observed: {date(data.last_polled_at)} · Last Leader assessment: {date(data.last_assessed_at)}
-        {assessmentAge !== null && ` (${assessmentAge < 1 ? 'less than a minute' : `${assessmentAge} minutes`} ago)`}
+        Last checked: <AgeText value={data.last_polled_at} now={clock} /> · Last Leader assessment: <AgeText value={data.last_assessed_at} now={clock} />
       </p>
       <p className="mt-1 text-muted-foreground">
-        Last observed execution: {data.active_implementations ?? 'unknown'}/{data.execution_limit} · Available workspaces: {data.available_workspaces ?? 'unknown'} · Leased: {data.leased_workspaces ?? 'unknown'}
+        Running when last checked: {data.active_implementations ?? 'unknown'}/{data.execution_limit} · Available workspaces: {data.available_workspaces ?? 'unknown'} · Leased: {data.leased_workspaces ?? 'unknown'}
       </p>
       <p className="mt-1 text-muted-foreground">Coordination notifications today: {data.requests_today}/{data.max_daily_requests} · Remaining: {data.notifications_remaining ?? Math.max(0, data.max_daily_requests - data.requests_today)}. Limits do not change implementation or retry budgets.</p>
       {data.notification_cap_reason && <div role="status" className="mt-2 rounded border p-2">
@@ -254,6 +259,8 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
         {!current && <p className="mt-1 text-muted-foreground">The retained assessment is historical. A notification limit alone does not require a human decision.</p>}
         {followupsFresh && !current && <p className="mt-1">Next actor: Team Leader. Refresh the assessment through the existing team channel. The budget reset time is not a promised assessment time.</p>}
       </div>}
+      {(followups.length > 0 || observations.length > 0 || data.entries.length > 0) && <details className="mt-3 rounded border p-3">
+        <summary className="cursor-pointer font-medium">History</summary>
       {followups.length > 0 && <section aria-label="Owner follow-ups" className="mt-3 rounded border p-3">
         <h5 className="font-medium">{needsLeader ? 'Owner completion needs Leader disposition' : 'Owner follow-ups'}</h5>
         <p className="mt-1 text-muted-foreground">These records are separate from backlog eligibility. They do not establish that an agent is idle or that its work is accepted.</p>
@@ -280,8 +287,8 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       </section>}
       {observations.length > 0 && <div className="mt-3">
         <p className="font-medium">{expired || error || !['assessed', 'awaiting_assessment', 'coordination_capped'].includes(data.status)
-          ? 'Previous observed states' : 'Latest observed issue and tracking states'}</p>
-        <p className="text-muted-foreground">Observed state does not establish eligibility or milestone acceptance.</p>
+          ? 'Previous states' : 'Latest issue and tracking states'}</p>
+        <p className="text-muted-foreground">This state does not establish eligibility or milestone acceptance.</p>
         <ul className="mt-2 space-y-1">{observations.map((observation) => <li key={observation.issue_number}>
           <a className="underline" href={`https://github.com/${data.repo}/issues/${observation.issue_number}`} target="_blank" rel="noreferrer">#{observation.issue_number}</a>
           {' · GitHub: '}{observation.github_state}{' · Tracking: '}{observation.work_status ?? 'no tracked attempt'}
@@ -298,6 +305,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
           <span className="ml-2 text-muted-foreground">Evidence: {entry.evidence_issue_numbers.map((n) => `#${n}`).join(', ')}</span>
         </li>)}</ul>
       </div>}
+      </details>}
     </>}
     <Dialog open={open} onOpenChange={(next) => { if (!saving) setOpen(next) }}>
       <DialogContent><DialogHeader><DialogTitle>Leader backlog coordination</DialogTitle>

@@ -27,7 +27,6 @@ interface TerminalViewProps {
   forceReadOnly?: boolean
   target: string | null
   fullscreen?: boolean
-  inLanes?: boolean
   focused?: boolean
   onToggleFullscreen?: () => void
   onClose?: () => void
@@ -74,7 +73,6 @@ export function TerminalView({
   forceReadOnly = false,
   target,
   fullscreen,
-  inLanes,
   focused,
   onToggleFullscreen,
   onClose,
@@ -146,7 +144,7 @@ export function TerminalView({
   async function enableInteractive(candidate?: string) {
     if (forceReadOnly) return
     if (candidate !== undefined && !candidate.trim()) {
-      setInteractiveTokenError('Enter the Deck operator token to continue.')
+      setInteractiveTokenError('Enter the Director key to continue.')
       return
     }
     const operatorToken = candidate?.trim() || getOperatorToken()
@@ -164,7 +162,7 @@ export function TerminalView({
       if (error instanceof ApiHttpError && error.status === 401) {
         clearOperatorToken()
         setInteractiveTokenInput('')
-        setInteractiveTokenError('The Deck operator token was rejected. Enter a valid token.')
+        setInteractiveTokenError('The Director key was rejected. Enter a valid key.')
         setInteractiveTokenOpen(true)
       } else {
         setInteractiveTokenError(error instanceof Error ? error.message : 'Failed to enable interactive mode')
@@ -255,8 +253,8 @@ export function TerminalView({
       if (!getOperatorToken() || (error instanceof ApiHttpError && error.status === 401)) {
         clearOperatorToken()
         setInteractiveTokenError(error instanceof ApiHttpError
-          ? 'The Deck operator token was rejected. Enter a valid token.'
-          : 'Enter the Deck operator token to paste into this session.')
+          ? 'The Director key was rejected. Enter a valid key.'
+          : 'Enter the Director key to paste into this session.')
         setInteractiveTokenOpen(true)
       }
       setImageAttachment((current) => current
@@ -329,13 +327,13 @@ export function TerminalView({
             </div>
             <span className={cn(
               'text-xs shrink-0',
-              connected ? 'text-green-500' : 'text-foreground/70'
+              connected ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'
             )}>
               {connected ? 'Connected' : 'Disconnected'}
             </span>
             <button
               type="button"
-              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1"
               aria-label="Keyboard shortcuts"
               title={`Keyboard shortcuts (${LEADER_PREFIX_LABEL})`}
               onMouseDown={stopShortcutButtonPropagation}
@@ -352,7 +350,7 @@ export function TerminalView({
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onToggleFullscreen && !inLanes && (
+            {onToggleFullscreen && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
                 {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
               </Button>
@@ -410,10 +408,10 @@ export function TerminalView({
           <DialogHeader>
             <DialogTitle>Enable interactive terminal</DialogTitle>
             <DialogDescription>
-              Enter the Deck operator token to send input to this session. Agent session tokens cannot enable interactive mode.
+              Enter the Director key to send input to this session. Agent session tokens cannot enable interactive mode.
             </DialogDescription>
           </DialogHeader>
-          <Label htmlFor="interactive-terminal-token">Operator token</Label>
+          <Label htmlFor="interactive-terminal-token">Director key</Label>
           <Input
             id="interactive-terminal-token"
             type="password"

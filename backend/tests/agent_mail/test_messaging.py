@@ -1,8 +1,9 @@
 """Messaging: receipts, broadcast, request lifecycle, stale flag, counts."""
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models.database import (
     AgentTeamPreset,
@@ -59,6 +60,7 @@ async def test_direct_message_lands_in_recipient_inbox_only(db, svc):
     assert inbox_a.messages == []
     stored = await db.get(MailMessage, msg.id)
     assert (stored.audience_type, stored.audience_id) == ("member", str(b.id))
+    assert (stored.sender_type, msg.sender_type) == ("member", "member")
 
 
 @pytest.mark.asyncio
@@ -88,9 +90,132 @@ async def test_human_director_message_has_director_sender_name(db, svc):
     await svc.send_message(
         db,
         MailMessageCreate(recipient_member_id=b.id, body_markdown="please review"),
+        sender_type="director",
+        operator_authorized=True,
     )
     inbox = await svc.get_inbox(db, b.id)
     assert inbox.messages[0].sender_name == "Director"
+    assert inbox.messages[0].sender_type == "director"
+
+
+@pytest.mark.asyncio
+async def test_service_and_director_messages_have_distinct_senders(db, svc):
+    recipient = await _member(db, "recipient", "Recipient")
+    system = await svc.send_direct_message(
+        db, recipient_member_id=recipient.id, subject="Service notice",
+        body_markdown="Check the backlog.", auto_nudge=False,
+    )
+    director = await svc.send_message(
+        db, MailMessageCreate(recipient_member_id=recipient.id,
+                              subject="Director note", body_markdown="Keep the change small."),
+        sender_type="director", operator_authorized=True, auto_nudge=False,
+    )
+    assert (system.sender_name, system.sender_type) == ("Deck", "system")
+    assert (director.sender_name, director.sender_type) == ("Director", "director")
+    inbox = await svc.get_inbox(db, recipient.id)
+    assert {(row.sender_name, row.sender_type) for row in inbox.messages} == {
+        ("Deck", "system"), ("Director", "director"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_system_broadcast_and_directly_created_notice_show_deck(db, svc):
+    preset = AgentTeamPreset(name="System sender team")
+    db.add(preset)
+    await db.commit()
+    await _member(db, "recipient", "Recipient", team_preset_id=preset.id)
+    broadcast = await svc.send_broadcast(
+        db, subject="Service broadcast", body_markdown="Check the backlog.",
+        audience_type="team_preset", audience_id=str(preset.id), auto_nudge=False,
+    )
+    notice = MailMessage(kind="message", subject="Waiting for input",
+                         body_markdown="The slot waits for input.",
+                         payload={"notice": "native_input_wait"})
+    db.add(notice)
+    await db.commit()
+    response = await svc._message_response(db, notice, for_member_id=None)
+    assert (broadcast.sender_name, broadcast.sender_type) == ("Deck", "system")
+    assert (response.sender_name, response.sender_type) == ("Deck", "system")
+    assert notice.sender_type == "system"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subject,payload,delivery_key,expected", [
+    ("A notice", {"kind": "github_dispatch_idle_nudge"}, None, "Deck"),
+    ("Reconcile assigned backlog and independent work", None, None, "Deck"),
+    ("Release needed: issue #5", None, None, "Deck"),
+    ("Code PR ready for review", None, None, "Deck"),
+    ("Continuation progress check: issue #2", None, None, "Deck"),
+    ("An old notice", None, "backlog:1:2:3", "Deck"),
+    ("Waiting for input", {"notice": "native_input_wait"}, None, "Deck"),
+    ("An old note", None, None, "Deck or Director (recorded before v3.1)"),
+    ("An old note", {"sender_type": "director"}, None, "Deck or Director (recorded before v3.1)"),
+    ("An old note", {"kind": []}, None, "Deck or Director (recorded before v3.1)"),
+    ("Progress check: unrelated text", None, None, "Deck or Director (recorded before v3.1)"),
+])
+async def test_legacy_senderless_rows_use_reliable_or_uncertain_attribution(
+    db, svc, subject, payload, delivery_key, expected,
+):
+    row = MailMessage(subject=subject, body_markdown="Historical message.",
+                      payload=payload, delivery_key=delivery_key)
+    db.add(row)
+    await db.commit()
+    await db.execute(text("UPDATE mail_messages SET sender_type = NULL WHERE id = :id"),
+                     {"id": row.id})
+    await db.commit()
+    await db.refresh(row)
+    response = await svc._message_response(db, row, for_member_id=None)
+    assert response.sender_name == expected
+    assert response.sender_type == ("system" if expected == "Deck" else "legacy")
+    assert row.sender_type is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_brief_is_attributed_to_deck(db, svc, monkeypatch):
+    from app.services.agent_mail_service import agent_mail_service
+    from app.services.github_dispatch_service import github_dispatch_service
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", AsyncMock())
+    preset = AgentTeamPreset(name="Dispatch sender team")
+    db.add(preset)
+    await db.commit()
+    slot = AgentTeamSlot(preset_id=preset.id, display_name="Backend owner",
+                         provider="codex-cli", repo_id="repo", repo_name="repo", repo_path="/tmp/repo")
+    db.add(slot)
+    await db.commit()
+    item = GithubWorkItem(id=55, issue_number=527, scope_id=1)
+    await github_dispatch_service._send_dispatch_brief_to_slot(
+        db, item, preset_slots=[slot], owner_slot_id=slot.id, brief="Read the assigned issue.",
+    )
+    member = await agent_mail_service.get_or_create_slot_member(db, slot)
+    inbox = await svc.get_inbox(db, member.id)
+    assert len(inbox.messages) == 1
+    assert (inbox.messages[0].sender_name, inbox.messages[0].sender_type) == ("Deck", "system")
+    assert inbox.messages[0].id == item.brief_message_id
+
+
+@pytest.mark.asyncio
+async def test_director_sender_requires_operator_authorization(db, svc):
+    recipient = await _member(db, "recipient", "Recipient")
+    with pytest.raises(ValueError, match="Director sender requires operator authorization"):
+        await svc.send_message(
+            db, MailMessageCreate(recipient_member_id=recipient.id, body_markdown="Spoofed note."),
+            sender_type="director", auto_nudge=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_delivery_key_cannot_change_system_sender_to_director(db, svc):
+    recipient = await _member(db, "recipient", "Recipient")
+    request = MailMessageCreate(recipient_member_id=recipient.id, body_markdown="Same body.")
+    first = await svc.send_message(db, request, auto_nudge=False, delivery_key="sender-test")
+    retry = await svc.send_message(db, request, auto_nudge=False, delivery_key="sender-test")
+    assert first.id == retry.id
+    with pytest.raises(MailDeliveryIntegrityError):
+        await svc.send_message(
+            db, request, auto_nudge=False, delivery_key="sender-test",
+            sender_type="director", operator_authorized=True,
+        )
 
 
 @pytest.mark.asyncio

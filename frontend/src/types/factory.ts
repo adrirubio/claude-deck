@@ -1,4 +1,5 @@
 // Generated from accepted P01 schema1; provenance: tests/fixtures/factory/PROVENANCE.md.
+import type { RequiredCIUnreadableSignal } from './agentTeams';
 export type FactoryErrorDetail = {
   code:
     | "invalid_filter"
@@ -176,6 +177,9 @@ export type SafeWorkItem = {
   issue_title: string;
   issue_type: string;
   last_verified_sha: string | null;
+  checks_unavailable_since?: string | null;
+  checks_unavailable_reason?: RequiredCIUnreadableSignal['reason'] | null;
+  required_ci_unreadable?: RequiredCIUnreadableSignal | null;
   pending_approval_kind: string | null;
   pending_approval_status: string | null;
   pr_number: number | null;
@@ -240,6 +244,7 @@ export type WorkDetailResponse = {
 export type WorkFilters = {
   category:
     | "all"
+    | "open"
     | "queued"
     | "active"
     | "review"

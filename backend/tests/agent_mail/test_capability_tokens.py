@@ -161,17 +161,10 @@ async def _slot_session(db, slot, token, *, pane_pid=3000, pane_start="111"):
     return session
 
 
-def test_capability_token_settings_default_to_grace_mode():
-    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before.
-
-    Assert the DECLARED defaults, not the resolved singleton. `Settings` reads
-    `backend/.env`, so any developer or deploy that configures `operator_token`
-    -- which Tasks 8-11 require -- makes the resolved value non-empty. Asserting
-    the singleton made this test fail on exactly the machines that had followed
-    the rollout, and printed the operator token into the pytest failure output.
-    """
+def test_capability_token_settings_default_to_strict_mode():
+    """Use declared defaults without loading private installation values."""
     fields = Settings.model_fields
-    assert fields["mail_capability_tokens_required"].default is False
+    assert fields["mail_capability_tokens_required"].default is True
     assert fields["operator_token"].default == ""
 
 
@@ -192,7 +185,14 @@ def test_pane_binding_table_is_unique_on_pid_and_proc_start():
         "preset_id",
         "tmux_target",
         "created_at",
+        "waiting_input_reason",
+        "waiting_input_started_at",
+        "waiting_input_observed_at",
+        "waiting_input_notice_id",
     }
+    for name in ("waiting_input_reason", "waiting_input_started_at",
+                 "waiting_input_observed_at", "waiting_input_notice_id"):
+        assert AgentPaneBinding.__table__.columns[name].nullable is True
     unique = {
         tuple(sorted(column.name for column in constraint.columns))
         for constraint in AgentPaneBinding.__table__.constraints
@@ -487,8 +487,9 @@ async def test_the_refusal_does_not_repoint_the_row(client, db, tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_a_hashless_row_in_grace_mode_neither_mints_nor_refuses(client, db, tmp_path):
+async def test_a_hashless_row_in_grace_mode_neither_mints_nor_refuses(client, db, tmp_path, monkeypatch):
     """The same row shape, enforcement off: 200 with no token, hash still NULL."""
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     assert settings.mail_capability_tokens_required is False
     body = {
         "source": "mcp",
@@ -885,7 +886,8 @@ async def test_unresolvable_peer_refuses_under_enforcement(
 
 
 @pytest.mark.asyncio
-async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, pane_resolver):
+async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, pane_resolver, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     assert settings.mail_capability_tokens_required is False
     pane_resolver(None)
     response = await client.post(
@@ -941,6 +943,7 @@ async def test_write_with_no_token_is_401_under_enforcement(client, db, tmp_path
 
 @pytest.mark.asyncio
 async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     assert settings.mail_capability_tokens_required is False
     recipient = await _member(db, "other-repo", "other")
     response = await client.post(
@@ -959,7 +962,8 @@ async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_agent_mail_write_requires_a_session_even_in_grace_mode(client, db, tmp_path):
+async def test_agent_mail_write_requires_a_session_even_in_grace_mode(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     assert settings.mail_capability_tokens_required is False
     sender = await _member(db, "sender-repo", "sender")
     recipient = await _member(db, "other-repo", "other")

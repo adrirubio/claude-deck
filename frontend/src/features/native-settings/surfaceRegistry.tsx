@@ -184,8 +184,10 @@ export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
     throw new Error("Operating catalog permits only a known provider GET.");
   }
   const route = window.location.pathname.split("/").filter(Boolean);
-  const canonical = route[0] === "harnesses" && route.length >= 3;
-  const surface = canonical ? route[2] : route[0];
+  // The harness page (/harnesses/:id) shows the counts of the summary data sources.
+  const harnessPage = route[0] === "harnesses" && route.length === 2 && Object.hasOwn(surfaceRegistry, route[1]);
+  const canonical = route[0] === "harnesses" && (route.length >= 3 || harnessPage);
+  const surface = harnessPage ? "summary" : canonical ? route[2] : route[0];
   if (!surface || !Object.keys(claude).includes(surface)) return;
   const provider = canonical
     ? route[1]

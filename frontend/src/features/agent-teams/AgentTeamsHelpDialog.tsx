@@ -38,14 +38,14 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={MODAL_SIZES.MD}>
         <DialogHeader>
-          <DialogTitle>Agent Teams guide</DialogTitle>
+          <DialogTitle>Teams guide</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <HelpSection icon={UsersRound} title="What a team slot is">
             <p>
               A team is a saved roster of named slots. Each slot stores a provider, repository,
-              role, charter, UI color, and optional bootstrap prompt. When launched from Agent Teams, each
+              role, charter, UI color, and optional bootstrap prompt. When launched from Teams, each
               slot receives its own Agent Mail identity.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -65,7 +65,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
             </p>
             <p>
               Manually started same-repo sessions can collapse into one repo-level participant.
-              Launching through Agent Teams gives Agent Mail a durable slot identity for each role.
+              Launching through Teams gives Agent Mail a durable slot identity for each role.
             </p>
           </HelpSection>
 
@@ -73,9 +73,9 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
             <ol className="list-decimal space-y-1 pl-5">
               <li>Create the slots with distinct names and role prompts.</li>
               <li>Use Plan launch to confirm what will spawn or reuse.</li>
-              <li>Launch from Agent Teams so MCP, hooks, and tmux observation attach to the slot.</li>
+              <li>Launch from Teams so MCP, hooks, and tmux monitoring attach to the slot.</li>
               <li>Use reuse only when the existing sessions already belong to the intended slots.</li>
-              <li>An unbound pane blocks the normal plan. Only an operator can review its target and PID, then explicitly adopt it; do not adopt an unknown pane as Leader.</li>
+              <li>An unbound pane blocks the normal plan. Only the Director can review its target and PID, then explicitly adopt it; do not adopt an unknown pane as Leader.</li>
             </ol>
           </HelpSection>
 
@@ -93,11 +93,11 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               <li>Add a watched repo with an existing primary checkout under your home directory.</li>
               <li>Assign and launch the Leader slot before enabling autonomy. Reordering and Role text do not change the assignment.</li>
               <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
-              <li>Watch Activity. The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</li>
+              <li>Watch Activity. The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and Director remedies. It is separate from the GitHub polling token and stays in this browser tab.</li>
             </ol>
             <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
             <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
-            <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy operator guide</a>.</p>
+            <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy guide</a>.</p>
           </HelpSection>
         </div>
       </DialogContent>

@@ -102,7 +102,7 @@ function MailThread({ id }: { id: number }) {
             <p>
               {m.sender_name} · {m.kind} · {m.request_status ?? "message"}
             </p>
-            <p className="whitespace-pre-wrap break-words text-sm">
+            <p className="whitespace-pre-wrap wrap-break-word text-sm">
               {m.body_markdown}
             </p>
           </article>

@@ -128,7 +128,6 @@ async def bound_authority(db, scope, item):
     session = sessions[0]
     if (session.provider != slot.provider or session.bound_pane_pid != workspace.leased_owner_pid
             or session.bound_pane_proc_start != workspace.leased_owner_proc_start or not session.cwd
-            or Path(session.cwd).resolve() != Path(workspace.path).resolve()
             or not session.last_seen_at or not 0 <= (datetime.utcnow() - session.last_seen_at).total_seconds() <= MCP_HEARTBEAT_TTL_SECONDS):
         raise ValueError("owner_generation_unavailable")
     bindings = list((await db.scalars(select(AgentPaneBinding).where(

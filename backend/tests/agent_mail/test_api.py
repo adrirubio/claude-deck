@@ -1,6 +1,7 @@
 """HTTP surface for team and messages."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ from sqlalchemy.sql.dml import Update
 
 from app.database import get_db
 from app.main import app, spa_not_found_exception_handler
-from app.config import settings
+from app.config import Settings, settings
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
@@ -21,6 +22,7 @@ from app.models.database import (
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
+    MailExternalActor,
     MailMessage,
     MailReceipt,
     MailTeamMember,
@@ -34,6 +36,7 @@ from app.services.agent_mail_service import (
     MailWakeError,
     agent_mail_service,
 )
+from app.services.external_agent_mail_service import external_agent_mail_service
 from app.services.github_approval_service import (
     GithubApprovalError,
     github_approval_service,
@@ -44,7 +47,8 @@ from app.utils import peer_process
 
 
 @pytest_asyncio.fixture
-async def client(db):
+async def client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "test-director-key")
     async def _override():
         yield db
 
@@ -90,6 +94,39 @@ async def _session_headers(db, member, key):
     )
     await db.commit()
     return {"X-Deck-Session-Token": token}
+
+
+@pytest.mark.asyncio
+async def test_message_http_timestamp_names_utc_without_changing_storage(client, db):
+    stored = MailMessage(kind="message",
+                         body_markdown="UTC fixture", created_at=datetime(2026, 10, 9, 6, 20, 53, 83886))
+    db.add(stored)
+    await db.commit()
+    response = await client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Operator-Token": "test-director-key"})
+    assert response.status_code == 200
+    data = next(row for row in response.json() if row["id"] == stored.id)
+    stamp = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    assert stamp.tzinfo is not None
+    assert stamp == stored.created_at.replace(tzinfo=timezone.utc)
+    assert stored.created_at.tzinfo is None
+
+
+@pytest.mark.asyncio
+async def test_wake_attempt_http_timestamp_names_utc_without_changing_storage(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "utc-fixture")
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    attempt = MailWakeAttempt(actor_type="operator", source="fixture", correlation_id="utc-fixture",
+                              result="refused", created_at=stamp)
+    db.add(attempt)
+    await db.commit()
+    response = await client.get("/api/v1/agent-mail/wake-attempts", headers={"X-Deck-Operator-Token": "utc-fixture"})
+    assert response.status_code == 200
+    data = response.json()["attempts"][0]
+    parsed = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+    assert parsed == stamp.replace(tzinfo=timezone.utc)
+    await db.refresh(attempt)
+    assert attempt.created_at == stamp
+    assert attempt.result == "refused"
 
 
 @pytest.mark.asyncio
@@ -153,6 +190,7 @@ async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
     anonymous = await client.post(endpoint, json=payload)
     actor = await client.post(
         "/api/v1/external/agent-mail/actors",
+        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
         json={"actor_key": "broadcast-actor", "display_name": "Broadcast actor"},
     )
     actor_token = actor.json()["token"]
@@ -186,6 +224,9 @@ async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
         "operator_global_audience_required",
     )
     assert sent.status_code == 200
+    assert (sent.json()["sender_name"], sent.json()["sender_type"]) == ("Director", "director")
+    stored = await db.get(MailMessage, sent.json()["id"])
+    assert stored.sender_type == "director"
     assert sent.json()["audience_type"] == "operator_global"
     receipts = await agent_mail_service.recipient_ids_for_message(
         db, sent.json()["id"]
@@ -2778,7 +2819,7 @@ async def test_spa_404_handler_preserves_api_error_details():
 
 @pytest.mark.asyncio
 async def test_team_empty(client):
-    resp = await client.get("/api/v1/agent-mail/team?sync=false")
+    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Deck-Operator-Token": "test-director-key"})
     assert resp.status_code == 200
     assert resp.json() == {"members": []}
 
@@ -2788,6 +2829,7 @@ async def test_patch_member_sets_role_and_charter(client, db):
     member = await _member(db, "ra", "alpha")
     resp = await client.patch(
         f"/api/v1/agent-mail/members/{member.id}",
+        headers={"X-Deck-Operator-Token": "test-director-key"},
         json={
             "display_name": "Backend",
             "role": "backend expert",
@@ -2802,7 +2844,7 @@ async def test_patch_member_sets_role_and_charter(client, db):
 
 @pytest.mark.asyncio
 async def test_patch_unknown_member_404(client):
-    resp = await client.patch("/api/v1/agent-mail/members/999", json={"role": "x"})
+    resp = await client.patch("/api/v1/agent-mail/members/999", headers={"X-Deck-Operator-Token": "test-director-key"}, json={"role": "x"})
     assert resp.status_code == 404
 
 
@@ -2821,9 +2863,11 @@ async def test_send_and_thread_roundtrip(client, db):
             "recipient_member_id": b.id,
             "subject": "q",
             "body_markdown": "?",
+            "sender_type": "director",
         },
     )
     assert resp.status_code == 200
+    assert (resp.json()["sender_type"], resp.json()["sender_name"]) == ("member", "alpha")
     root_id = resp.json()["id"]
 
     resp = await client.post(
@@ -2838,7 +2882,7 @@ async def test_send_and_thread_roundtrip(client, db):
     )
     assert resp.status_code == 200
 
-    resp = await client.get(f"/api/v1/agent-mail/messages/{root_id}/thread")
+    resp = await client.get(f"/api/v1/agent-mail/messages/{root_id}/thread", headers=a_headers)
     assert resp.status_code == 200
     assert resp.json()["root"]["request_status"] == "answered"
     assert len(resp.json()["replies"]) == 1
@@ -2889,7 +2933,8 @@ async def test_inbox_read_ack_endpoints(client, db):
 
 
 @pytest.mark.asyncio
-async def test_agent_inbox_refreshes_stale_mcp_session(client, db):
+async def test_explicit_opt_out_inbox_refreshes_stale_mcp_session(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     member = await _member(db, "ra", "alpha")
     stale_seen_at = datetime.utcnow() - timedelta(hours=3)
     session = MailAgentSession(
@@ -2916,7 +2961,473 @@ async def test_agent_inbox_refreshes_stale_mcp_session(client, db):
     assert session.mailbox_status == "connected"
     assert session.last_seen_at > stale_seen_at
 
-    resp = await client.get("/api/v1/agent-mail/team?sync=false")
+    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Deck-Operator-Token": "test-director-key"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["members"][0]["status"] == "connected"
+
+
+DIRECTOR_HEADERS = {"X-Deck-Operator-Token": "test-director-key"}
+
+
+@pytest_asyncio.fixture
+async def auth_client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "test-director-key")
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
+    external_agent_mail_service._send_windows.clear()
+
+    async def override():
+        yield db
+
+    app.dependency_overrides[get_db] = override
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as auth_client:
+        yield auth_client
+    app.dependency_overrides.clear()
+
+
+async def member(db, name):
+    row = MailTeamMember(identity_key=f"repo:{name}", repo_id=name, repo_path=f"/tmp/{name}",
+                         repo_name=name, display_name=name)
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def session_headers(db, owner, *, status="connected"):
+    token = f"test-session-{owner.id}"
+    db.add(MailAgentSession(member_id=owner.id, provider="codex-cli", source="mcp",
+                           session_key=f"mcp:{owner.id}", cwd=owner.repo_path,
+                           mailbox_status=status, last_seen_at=datetime.utcnow(),
+                           capability_token_hash=agent_mail_service.hash_capability_token(token)))
+    await db.commit()
+    return {"X-Deck-Session-Token": token}
+
+
+async def request_thread(db):
+    sender, recipient, outsider = [await member(db, name) for name in ("sender", "recipient", "outsider")]
+    root = MailMessage(kind="context_request", sender_member_id=sender.id, recipient_member_id=recipient.id,
+                       request_status="answered", body_markdown="Participant request")
+    db.add(root)
+    await db.flush()
+    answer = MailMessage(kind="answer", sender_member_id=recipient.id, thread_root_id=root.id,
+                         body_markdown="Participant answer")
+    db.add(answer)
+    await db.flush()
+    db.add_all([MailReceipt(message_id=root.id, member_id=recipient.id),
+                MailReceipt(message_id=answer.id, member_id=sender.id)])
+    await db.commit()
+    return sender, recipient, outsider, root, answer
+
+
+def test_mail_authentication_defaults_to_strict():
+    assert Settings.model_fields["mail_capability_tokens_required"].default is True
+    assert Settings(mail_capability_tokens_required=False).mail_capability_tokens_required is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["team?sync=false", "messages", "messages/1/thread"])
+@pytest.mark.parametrize("headers", [{}, {"X-Deck-Operator-Token": "wrong"},
+                                     {"X-Deck-Session-Token": "wrong"}])
+async def test_mail_reads_refuse_missing_or_wrong_credentials(auth_client, endpoint, headers):
+    response = await auth_client.get(f"/api/v1/agent-mail/{endpoint}", headers=headers)
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_director_reads_team_messages_and_threads(auth_client, db):
+    _, _, _, root, _ = await request_thread(db)
+    for endpoint in ("team?sync=false", "messages", f"messages/{root.id}/thread"):
+        assert (await auth_client.get(f"/api/v1/agent-mail/{endpoint}", headers=DIRECTOR_HEADERS)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_session_reads_only_its_participant_threads(auth_client, db):
+    sender, recipient, outsider, root, answer = await request_thread(db)
+    own = await session_headers(db, sender)
+    foreign = await session_headers(db, outsider)
+    assert (await auth_client.get("/api/v1/agent-mail/team?sync=false", headers=own)).status_code == 200
+    roots = await auth_client.get("/api/v1/agent-mail/messages", headers=own)
+    assert [row["id"] for row in roots.json()] == [root.id]
+    thread = await auth_client.get(f"/api/v1/agent-mail/messages/{root.id}/thread", headers=own)
+    assert thread.status_code == 200
+    assert [row["id"] for row in thread.json()["replies"]] == [answer.id]
+    roots = await auth_client.get("/api/v1/agent-mail/messages", headers=foreign)
+    assert roots.status_code == 200
+    assert roots.json() == []
+    for suffix in ("", f"?member_id={recipient.id}"):
+        refused = await auth_client.get(f"/api/v1/agent-mail/messages/{root.id}/thread{suffix}", headers=foreign)
+        assert refused.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_stale_session_and_mixed_invalid_session_are_refused(auth_client, db):
+    sender, _, _, root, _ = await request_thread(db)
+    stale = await session_headers(db, sender, status="offline")
+    for headers in (stale, {**DIRECTOR_HEADERS, "X-Deck-Session-Token": "wrong"}):
+        response = await auth_client.get(f"/api/v1/agent-mail/messages/{root.id}/thread", headers=headers)
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["read", "ack"])
+async def test_receipt_mutation_requires_a_participant(auth_client, db, action):
+    _, recipient, outsider, root, _ = await request_thread(db)
+    foreign = await session_headers(db, outsider)
+    endpoint = f"/api/v1/agent-mail/messages/{root.id}/{action}"
+    refused = await auth_client.post(endpoint, headers=foreign)
+    assert refused.status_code == 403
+    receipt = await db.scalar(select(MailReceipt).where(MailReceipt.message_id == root.id))
+    assert receipt.read_at is None
+    assert receipt.acked_at is None
+    own = await session_headers(db, recipient)
+    accepted = await auth_client.post(endpoint, headers=own)
+    assert accepted.status_code == 200
+    await db.refresh(receipt)
+    assert receipt.read_at is not None
+    if action == "ack":
+        assert receipt.acked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_explicit_session_opt_out_keeps_legacy_reads(auth_client, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    assert (await auth_client.get("/api/v1/agent-mail/team?sync=false")).status_code == 200
+    assert (await auth_client.get("/api/v1/agent-mail/messages")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_actor_creation_requires_director_key(auth_client, db):
+    payload = {"actor_key": "test-actor", "display_name": "Test actor"}
+    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}):
+        response = await auth_client.post("/api/v1/external/agent-mail/actors", headers=headers, json=payload)
+        assert response.status_code == 401
+        assert await db.scalar(select(MailExternalActor.id)) is None
+    created = await auth_client.post("/api/v1/external/agent-mail/actors", headers=DIRECTOR_HEADERS, json=payload)
+    assert created.status_code == 200
+    auth = {"Authorization": f"Bearer {created.json()['token']}"}
+    assert (await auth_client.get("/api/v1/external/agent-mail/actors/me", headers=auth)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_director_key_allows_actor_creation(auth_client, db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "")
+    response = await auth_client.post("/api/v1/external/agent-mail/actors",
+                                 json={"actor_key": "test-actor", "display_name": "Test actor"})
+    assert response.status_code == 200
+    assert await db.scalar(select(MailExternalActor.id)) == response.json()["actor"]["id"]
+    actor_auth = {"Authorization": f"Bearer {response.json()['token']}"}
+    assert (await auth_client.get("/api/v1/external/agent-mail/actors/me", headers=actor_auth)).status_code == 200
+    assert (await auth_client.get("/api/v1/external/agent-mail/actors/me", headers={"Authorization": "Bearer wrong"})).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_actor_ack_obeys_its_thread_access_and_preserves_receipts(auth_client, db):
+    _, recipient, _, root, answer = await request_thread(db)
+    created = await auth_client.post("/api/v1/external/agent-mail/actors", headers=DIRECTOR_HEADERS,
+                                json={"actor_key": "test-actor", "display_name": "Test actor"})
+    auth = {"Authorization": f"Bearer {created.json()['token']}"}
+    refused = await auth_client.post(f"/api/v1/external/agent-mail/requests/{root.id}/actor-ack", headers=auth)
+    assert refused.status_code == 403
+    await db.refresh(root)
+    assert root.request_status == "answered"
+    assert root.body_markdown not in refused.text
+    assert answer.body_markdown not in refused.text
+    own = await auth_client.post("/api/v1/external/agent-mail/context-requests", headers=auth,
+                            json={"recipient_member_id": recipient.id, "body_markdown": "Own request"})
+    own_id = own.json()["message"]["id"]
+    accepted = await auth_client.post(f"/api/v1/external/agent-mail/requests/{own_id}/actor-ack", headers=auth)
+    assert accepted.status_code == 200
+    assert accepted.json()["request_status"] == "acknowledged"
+    receipt = await db.scalar(select(MailReceipt).where(MailReceipt.message_id == own_id))
+    assert receipt.read_at is None
+    assert receipt.acked_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+async def test_install_status_reports_the_actual_authentication_mode(monkeypatch, required):
+    from app.services import agent_mail_install_service as install
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
+    monkeypatch.setattr("app.services.pi_mail_readiness.pi_mail_readiness", lambda: (False, "test"))
+    monkeypatch.setattr(install.mcp_service, "get_server", AsyncMock(return_value=None))
+    for name in ("_installed_mail_hooks", "installed_codex_hooks", "installed_copilot_hooks",
+                 "installed_opencode_plugin_events"):
+        monkeypatch.setattr(install, name, lambda: [])
+    for name in ("codex_cli_available", "codex_mcp_installed", "copilot_cli_available",
+                 "copilot_mcp_installed", "opencode_cli_available", "opencode_mcp_installed"):
+        monkeypatch.setattr(install, name, lambda: False)
+    status = await install.get_install_status()
+    assert status.mail_capability_tokens_required is required
+
+
+@pytest.mark.asyncio
+async def test_session_reads_work_without_a_configured_director_key(auth_client, db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "")
+    sender, _, _, root, _ = await request_thread(db)
+    headers = await session_headers(db, sender)
+    for endpoint in ("team?sync=false", "messages", f"messages/{root.id}/thread"):
+        response = await auth_client.get(f"/api/v1/agent-mail/{endpoint}", headers=headers)
+        assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headers", [{"X-Deck-Operator-Token": "wrong"}, {"X-Deck-Session-Token": "wrong"},
+                                     {"X-Deck-Operator-Token": ""}, {"X-Deck-Session-Token": ""}])
+async def test_opt_out_still_refuses_supplied_invalid_credentials(auth_client, monkeypatch, headers):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    for endpoint in ("team?sync=false", "messages", "messages/1/thread"):
+        response = await auth_client.get(f"/api/v1/agent-mail/{endpoint}", headers=headers)
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_broadcast_receipt_grants_thread_access_only_to_its_recipient(auth_client, db):
+    recipient = await member(db, "broadcast-recipient")
+    outsider = await member(db, "broadcast-outsider")
+    root = MailMessage(kind="broadcast", body_markdown="Scoped broadcast", audience_type="repository",
+                       audience_id=recipient.repo_id)
+    db.add(root)
+    await db.flush()
+    db.add(MailReceipt(message_id=root.id, member_id=recipient.id))
+    await db.commit()
+    own = await session_headers(db, recipient)
+    foreign = await session_headers(db, outsider)
+    endpoint = f"/api/v1/agent-mail/messages/{root.id}/thread"
+    assert (await auth_client.get(endpoint, headers=own)).status_code == 200
+    assert (await auth_client.get(endpoint, headers=foreign)).status_code == 403
+    assert (await auth_client.get("/api/v1/agent-mail/messages", headers=foreign)).json() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+async def test_member_metadata_changes_require_the_director(auth_client, db, monkeypatch, required):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
+    owner = await member(db, "metadata-owner")
+    session = await session_headers(db, owner)
+    endpoint = f"/api/v1/agent-mail/members/{owner.id}"
+    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}, session):
+        response = await auth_client.patch(endpoint, headers=headers, json={"display_name": "Updated owner"})
+        assert response.status_code == 401
+        await db.refresh(owner)
+        assert owner.display_name == "metadata-owner"
+    response = await auth_client.patch(endpoint, headers=DIRECTOR_HEADERS, json={"display_name": "Updated owner"})
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "Updated owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["status", "snippets"])
+async def test_install_reads_use_the_director_key_in_strict_mode(auth_client, db, monkeypatch, path):
+    from app.models.schemas import AgentMailInstallStatus, AgentMailSnippets
+    from app.services import agent_mail_install_service as install
+
+    status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
+        claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
+        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+    monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(install, "get_snippets", lambda: AgentMailSnippets(codex_config_toml="", codex_agents_md=""))
+    owner = await member(db, "install-reader")
+    session = await session_headers(db, owner)
+    endpoint = f"/api/v1/agent-mail/install/{path}"
+    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}, session):
+        response = await auth_client.get(endpoint, headers=headers)
+        assert response.status_code == 401
+    assert (await auth_client.get(endpoint, headers=DIRECTOR_HEADERS)).status_code == 200
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    assert (await auth_client.get(endpoint)).status_code == 200
+    assert (await auth_client.get(endpoint, headers={"X-Deck-Operator-Token": "wrong"})).status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,event,builder", [
+    ("session-start", "SessionStart", "build_session_start_context"),
+    ("user-prompt-submit", "UserPromptSubmit", "build_prompt_submit_context"),
+])
+async def test_content_hooks_use_the_authenticated_member_or_a_fixed_reminder(auth_client, db, monkeypatch, path, event, builder):
+    _, recipient, outsider, _, _ = await request_thread(db)
+    own = await session_headers(db, recipient)
+    build = AsyncMock(return_value="Authenticated member context")
+    monkeypatch.setattr(agent_mail_service, builder, build)
+    endpoint = f"/api/v1/agent-mail/hooks/{path}"
+    payload = {"session_id": "untrusted-session", "cwd": outsider.repo_path, "team_slot_id": outsider.id}
+    for headers in ({}, {"X-Deck-Session-Token": "wrong"}, DIRECTOR_HEADERS):
+        response = await auth_client.post(endpoint, headers=headers, json=payload)
+        assert response.status_code == 200
+        assert response.json() == {"hookSpecificOutput": {
+            "hookEventName": event, "additionalContext": "Check your Deck inbox."}}
+        build.assert_not_awaited()
+    response = await auth_client.post(endpoint, headers=own, json=payload)
+    assert response.status_code == 200
+    assert response.json()["hookSpecificOutput"]["additionalContext"] == "Authenticated member context"
+    assert build.await_args.args[1] == recipient.id
+
+
+@pytest.mark.asyncio
+async def test_actor_replies_apply_the_same_thread_gate_as_reads(auth_client, db):
+    from app.models.database import AgentTeamPreset
+
+    sender, _, _, root, _ = await request_thread(db)
+    created = await auth_client.post("/api/v1/external/agent-mail/actors", headers=DIRECTOR_HEADERS,
+                                json={"actor_key": "addressed-actor", "display_name": "Addressed actor"})
+    actor_id = created.json()["actor"]["id"]
+    auth = {"Authorization": f"Bearer {created.json()['token']}"}
+    refused = await auth_client.post(f"/api/v1/external/agent-mail/threads/{root.id}/replies", headers=auth,
+                                json={"body_markdown": "Reply"})
+    assert refused.status_code == 403
+    assert await db.scalar(select(MailMessage.id).where(MailMessage.thread_root_id == root.id,
+                                                      MailMessage.sender_actor_id == actor_id)) is None
+    preset = AgentTeamPreset(name="Addressed team", supervisor_actor_id=actor_id)
+    db.add(preset)
+    await db.flush()
+    addressed = MailMessage(kind="message", sender_member_id=sender.id, audience_type="team_preset",
+        audience_id=str(preset.id), payload={"supervisor_actor_id": actor_id}, body_markdown="Addressed thread")
+    db.add(addressed)
+    await db.commit()
+    assert (await auth_client.get(f"/api/v1/external/agent-mail/threads/{addressed.id}", headers=auth)).status_code == 200
+    response = await auth_client.post(f"/api/v1/external/agent-mail/threads/{addressed.id}/replies", headers=auth,
+                                 json={"body_markdown": "Addressed reply"})
+    assert response.status_code == 200
+    assert response.json()["message"]["sender_actor_id"] == actor_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["offline", "unbound-pane", "dead-pane"])
+async def test_opt_out_preserves_legacy_session_liveness(auth_client, db, monkeypatch, state):
+    from app.models.database import AgentTeamPreset, AgentTeamSlot
+    from app.utils import peer_process
+
+    preset = AgentTeamPreset(name="Liveness team")
+    db.add(preset)
+    await db.flush()
+    slot = AgentTeamSlot(preset_id=preset.id, position=0, display_name="Liveness member", provider="codex-cli",
+                         repo_id="liveness-owner", repo_path="/tmp/liveness-owner", repo_name="liveness-owner")
+    db.add(slot)
+    owner = await member(db, "liveness-owner")
+    headers = await session_headers(db, owner, status="offline" if state == "offline" else "connected")
+    session = await db.scalar(select(MailAgentSession).where(MailAgentSession.member_id == owner.id))
+    session.team_slot_id = slot.id
+    session.team_preset_id = preset.id
+    if state == "dead-pane":
+        session.bound_pane_pid = 321
+        session.bound_pane_proc_start = "test-start"
+    await db.commit()
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda *_: False)
+    assert (await auth_client.get("/api/v1/agent-mail/agent/inbox", headers=headers)).status_code == 401
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    response = await auth_client.get("/api/v1/agent-mail/agent/inbox", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["member_id"] == owner.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["session-end", "post-tool-use"])
+async def test_no_content_hooks_keep_the_native_fail_soft_exception(auth_client, path):
+    response = await auth_client.post(f"/api/v1/agent-mail/hooks/{path}", json={})
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+async def test_mail_reads_validate_every_supplied_credential(auth_client, db, monkeypatch, required):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
+    owner = await member(db, "combined-credentials")
+    session = await session_headers(db, owner)
+    for headers in ({**session, "X-Deck-Operator-Token": "wrong"},
+                    {**DIRECTOR_HEADERS, "X-Deck-Session-Token": ""}):
+        response = await auth_client.get("/api/v1/agent-mail/messages", headers=headers)
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("path", ["http", "service"])
+@pytest.mark.parametrize("kind", ["message", "context_request", "handoff"])
+async def test_member_thread_writes_require_participation(auth_client, db, monkeypatch, required, path, kind):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
+    sender, _, outsider, root, _ = await request_thread(db)
+    headers = await session_headers(db, outsider)
+    before_messages = (await db.execute(select(MailMessage.id, MailMessage.request_status))).all()
+    before_receipts = (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+        MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all()
+    payload = {"kind": kind, "thread_root_id": root.id, "recipient_member_id": sender.id,
+               "body_markdown": "Participant reply"}
+    if path == "http":
+        refused = await auth_client.post("/api/v1/agent-mail/messages", headers=headers, json=payload)
+        assert refused.status_code == 403
+    else:
+        with pytest.raises(PermissionError, match="thread_not_authorized"):
+            await agent_mail_service.send_message(db, MailMessageCreate(sender_member_id=outsider.id, **payload),
+                authenticated_sender_member_id=outsider.id, auto_nudge=False)
+    assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
+    assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+        MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
+    accepted = await auth_client.post("/api/v1/agent-mail/messages", headers=await session_headers(db, sender), json=payload)
+    assert accepted.status_code == 200
+    assert accepted.json()["thread_root_id"] == root.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("harness,action,service", [
+    ("claude-code", "apply", "apply_claude_code_install"),
+    ("claude-code", "uninstall", "uninstall_claude_code"),
+    ("codex", "apply", "apply_codex_install"),
+    ("codex", "uninstall", "uninstall_codex"),
+    ("copilot", "apply", "apply_copilot_install"),
+    ("copilot", "uninstall", "uninstall_copilot"),
+    ("opencode", "apply", "apply_opencode_install"),
+    ("opencode", "uninstall", "uninstall_opencode"),
+])
+async def test_install_writes_require_a_configured_director_key(auth_client, monkeypatch, required, harness, action, service):
+    from app.models.schemas import AgentMailInstallStatus
+    from app.services import agent_mail_install_service as install
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
+    status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
+        claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
+        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+    mutation = AsyncMock(return_value=status)
+    monkeypatch.setattr(install, service, mutation)
+    endpoint = f"/api/v1/agent-mail/install/{harness}/{action}"
+    monkeypatch.setattr(settings, "operator_token", "")
+    for headers in ({}, DIRECTOR_HEADERS):
+        refused = await auth_client.post(endpoint, headers=headers, json={"confirmed": True})
+        assert refused.status_code == 200
+    assert mutation.await_count == 2
+    mutation.reset_mock()
+    monkeypatch.setattr(settings, "operator_token", "test-director-key")
+    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}):
+        refused = await auth_client.post(endpoint, headers=headers, json={"confirmed": True})
+        assert refused.status_code == 401
+        mutation.assert_not_awaited()
+    accepted = await auth_client.post(endpoint, headers=DIRECTOR_HEADERS, json={"confirmed": True})
+    assert accepted.status_code == 200
+    mutation.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_director_mode_keeps_local_reads_and_edits_available(auth_client, db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "")
+    owner, _, _, root, _ = await request_thread(db)
+    for endpoint in ("team?sync=false", "messages", f"messages/{root.id}/thread"):
+        assert (await auth_client.get(f"/api/v1/agent-mail/{endpoint}")).status_code == 200
+    edited = await auth_client.patch(f"/api/v1/agent-mail/members/{owner.id}", json={"display_name": "Updated owner"})
+    assert edited.status_code == 200
+    assert edited.json()["display_name"] == "Updated owner"
+    invalid = await auth_client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Session-Token": "wrong"})
+    assert invalid.status_code == 401
+    assert (await auth_client.get("/api/v1/agent-mail/agent/inbox")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_public_authentication_status_is_one_live_boolean(auth_client, monkeypatch):
+    for key in ("", "synthetic-mode-key", ""):
+        monkeypatch.setattr(settings, "operator_token", key)
+        for headers in ({}, {"X-Deck-Operator-Token": "wrong"},
+                        {"X-Deck-Session-Token": "wrong"}, {"Authorization": "Bearer wrong"}):
+            response = await auth_client.get("/api/v1/agent-mail/authentication-status", headers=headers)
+            assert response.status_code == 200
+            assert response.json() == {"director_key_configured": bool(key)}

@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, RefreshCw, Terminal, Users } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { BookOpen, Inbox, Mail, MessageSquarePlus, Plug, Terminal, Users } from 'lucide-react'
 import { toast } from 'sonner'
+import { ApiHttpError } from '@/lib/api'
+import { clearOperatorToken, getOperatorToken } from '@/features/agent-teams/operatorAuth'
+import { useAgentMailAuthenticationStatus } from './useAgentMailSetup'
+import { useOperatorTokenFlow } from '@/features/agent-teams/useOperatorTokenFlow'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Button, buttonVariants } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type {
   AgentMailInstallStatus,
-  AgentMailSnippets,
   MailMemberResponse,
   MailMemberUpdate,
   MailMessageCreate,
@@ -17,45 +27,76 @@ import type {
   MailMessageResponse,
 } from '@/types/agentMail'
 import {
-  applyClaudeCodeAgentMailInstall,
-  applyCodexAgentMailInstall,
-  applyCopilotAgentMailInstall,
-  applyOpenCodeAgentMailInstall,
   fetchAgentMailInstallStatus,
   fetchAgentMailMessages,
-  fetchAgentMailSnippets,
   fetchAgentMailTeam,
   queueAgentMailInboxCheck,
   sendAgentMailMessage,
-  uninstallClaudeCodeAgentMail,
-  uninstallCodexAgentMail,
-  uninstallCopilotAgentMail,
-  uninstallOpenCodeAgentMail,
   updateAgentMailMember,
 } from './api'
 import { AgentMailHelpDialog } from './AgentMailHelpDialog'
 import { ComposeDialog, type ComposePreset } from './ComposeDialog'
-import { InstallTab } from './InstallTab'
+import { ConversationsTab } from './ConversationsTab'
+import {
+  ALL_TEAMS,
+  buildConversations,
+  membersInTeam,
+  teamNames,
+  type ChipId,
+} from './conversations'
+import { connectedHarnessNames, joinNames } from './mailSetup'
 import { MemberEditDialog } from './MemberEditDialog'
-import { RequestsTab, type RequestKindFilter, type RequestStatusFilter } from './RequestsTab'
 import { TeamTab, type TeamStatusFilter } from './TeamTab'
 import { ThreadDialog } from './ThreadDialog'
+import { WaitingPanel } from './WaitingPanel'
+
+const ALL_TEAMS_VALUE = '__all_teams__'
 
 const OPERATIONAL_POLL_INTERVAL_MS = 5000
 
+/** A count in the totals line. It jumps to the panel that lists what the count counts. */
+function CountLink({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={`${label}. Go to Waiting on someone`}
+      className="rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
 export function AgentMailPage() {
+  const { directorKeyConfigured, requiresDirectorKey, readAuthenticationStatus } = useAgentMailAuthenticationStatus()
+  const { requestToken, tokenDialog } = useOperatorTokenFlow('Agent Mail requires the Director key.')
+  const protectedReadsBlocked = useRef(false)
+  const pollingEnabled = useRef(false)
+
+  const stopRefusedReads = useCallback(async (error: unknown) => {
+    if (error instanceof ApiHttpError && (error.status === 503 || (error.status >= 400 && error.status < 500))) {
+      protectedReadsBlocked.current = true
+      pollingEnabled.current = false
+      if (error.status === 401) {
+        clearOperatorToken()
+        try { await readAuthenticationStatus(true) } catch { /* Keep protected reads stopped. */ }
+      }
+    }
+  }, [readAuthenticationStatus])
   const [members, setMembers] = useState<MailMemberResponse[]>([])
   const [messages, setMessages] = useState<MailMessageResponse[]>([])
   const [installStatus, setInstallStatus] = useState<AgentMailInstallStatus | null>(null)
-  const [snippets, setSnippets] = useState<AgentMailSnippets | null>(null)
   const [loading, setLoading] = useState(true)
   const [installLoading, setInstallLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('team')
   const [teamSearch, setTeamSearch] = useState('')
   const [teamStatus, setTeamStatus] = useState<TeamStatusFilter>('all')
-  const [requestSearch, setRequestSearch] = useState('')
-  const [requestKind, setRequestKind] = useState<RequestKindFilter>('all')
-  const [requestStatus, setRequestStatus] = useState<RequestStatusFilter>('all')
+  const [conversationSearch, setConversationSearch] = useState('')
+  const [chip, setChip] = useState<ChipId>('all')
+  const [team, setTeam] = useState(ALL_TEAMS)
+  const [recipientMemberId, setRecipientMemberId] = useState<number | null>(null)
+  const waitingRef = useRef<HTMLElement>(null)
   const [editingMember, setEditingMember] = useState<MailMemberResponse | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composePreset, setComposePreset] = useState<ComposePreset | null>(null)
@@ -64,6 +105,7 @@ export function AgentMailPage() {
   const [nudgingMemberId, setNudgingMemberId] = useState<number | null>(null)
 
   const loadOperationalData = useCallback(async (showLoading = true) => {
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
     if (showLoading) {
       setLoading(true)
     }
@@ -74,34 +116,51 @@ export function AgentMailPage() {
       ])
       setMembers(team.members)
       setMessages(roots)
+      pollingEnabled.current = true
     } catch (error) {
+      await stopRefusedReads(error)
       toast.error(error instanceof Error ? error.message : 'Failed to load Agent Mail')
     } finally {
       if (showLoading) {
         setLoading(false)
       }
     }
-  }, [])
+  }, [stopRefusedReads, requiresDirectorKey])
 
   const loadInstallData = useCallback(async () => {
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
     setInstallLoading(true)
     try {
-      const [status, snippetData] = await Promise.all([
-        fetchAgentMailInstallStatus(),
-        fetchAgentMailSnippets(),
-      ])
-      setInstallStatus(status)
-      setSnippets(snippetData)
+      setInstallStatus(await fetchAgentMailInstallStatus())
     } catch (error) {
+      await stopRefusedReads(error)
       toast.error(error instanceof Error ? error.message : 'Failed to load install status')
     } finally {
       setInstallLoading(false)
     }
-  }, [])
+  }, [stopRefusedReads, requiresDirectorKey])
 
   const refreshAll = useCallback(async () => {
+    pollingEnabled.current = false
+    let configured: boolean
+    try {
+      configured = await readAuthenticationStatus()
+    } catch (error) {
+      setLoading(false)
+      setInstallLoading(false)
+      toast.error(error instanceof Error ? error.message : 'Mail authentication status is unavailable.')
+      return
+    }
+    if (configured && !await requestToken()) {
+      protectedReadsBlocked.current = true
+      setLoading(false)
+      setInstallLoading(false)
+      return
+    }
+    protectedReadsBlocked.current = false
+    pollingEnabled.current = true
     await Promise.all([loadOperationalData(), loadInstallData()])
-  }, [loadInstallData, loadOperationalData])
+  }, [loadInstallData, loadOperationalData, requestToken, readAuthenticationStatus])
 
   useEffect(() => {
     let cancelled = false
@@ -115,20 +174,40 @@ export function AgentMailPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void loadOperationalData(false)
+      if (pollingEnabled.current && !protectedReadsBlocked.current) void loadOperationalData(false)
     }, OPERATIONAL_POLL_INTERVAL_MS)
     return () => window.clearInterval(timer)
   }, [loadOperationalData])
 
+  const teams = useMemo(() => teamNames(members), [members])
+  // A team that no member has any more (for example after a delete) shows all teams.
+  const activeTeam = teams.includes(team) ? team : ALL_TEAMS
+  const teamMembers = useMemo(() => membersInTeam(members, activeTeam), [members, activeTeam])
+  const conversations = useMemo(() => buildConversations(messages, members), [messages, members])
+
+  const showWaiting = (memberId: number | null) => {
+    setRecipientMemberId(memberId)
+    setChip('all')
+    setActiveTab('conversations')
+  }
+
+  // The count badges point at the panel that lists what they count.
+  const goToWaiting = () => {
+    const panel = waitingRef.current
+    if (!panel) return
+    panel.scrollIntoView?.({ block: 'start' })
+    panel.focus({ preventScroll: true })
+  }
+
   const stats = useMemo(() => {
-    const connected = members.filter((member) => member.status === 'connected').length
-    const observed = members.filter((member) => member.status === 'observed').length
-    const unread = members.reduce((total, member) => total + member.unread_count, 0)
-    const pending = members.reduce((total, member) => total + member.pending_count, 0)
-    const unseenPending = members.reduce((total, member) => total + member.unseen_pending_count, 0)
-    const stalePending = members.reduce((total, member) => total + member.stale_pending_count, 0)
+    const connected = teamMembers.filter((member) => member.status === 'connected').length
+    const observed = teamMembers.filter((member) => member.status === 'observed').length
+    const unread = teamMembers.reduce((total, member) => total + member.unread_count, 0)
+    const pending = teamMembers.reduce((total, member) => total + member.pending_count, 0)
+    const unseenPending = teamMembers.reduce((total, member) => total + member.unseen_pending_count, 0)
+    const stalePending = teamMembers.reduce((total, member) => total + member.stale_pending_count, 0)
     return { connected, observed, unread, pending, unseenPending, stalePending }
-  }, [members])
+  }, [teamMembers])
 
   const claudeReady = Boolean(
     installStatus
@@ -143,8 +222,10 @@ export function AgentMailPage() {
     installStatus?.opencode_mcp_installed && installStatus.opencode_plugin_events_missing.length === 0
   )
   const hasConfiguredIntegration = claudeReady || codexReady || copilotReady || opencodeReady
+  const setUpNames = connectedHarnessNames(installStatus)
   const showSetupNotice = !installLoading && (!hasConfiguredIntegration || members.length === 0)
-  const showCodexRegistrationNotice = !installLoading && codexReady && stats.connected === 0 && stats.observed > 0
+  const showCodexRegistrationNotice = !installLoading && codexReady
+    && !members.some((member) => member.status === 'connected') && members.some((member) => member.status === 'observed')
 
   const openCompose = (
     kind: Exclude<MailMessageKind, 'answer'> = 'message',
@@ -194,21 +275,22 @@ export function AgentMailPage() {
     }
   }
 
-  const runInstallAction = async (action: () => Promise<AgentMailInstallStatus>, label: string) => {
-    try {
-      const status = await action()
-      setInstallStatus(status)
-      await loadInstallData()
-      await loadOperationalData(false)
-      toast.success(label)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Install action failed')
-      throw error
-    }
-  }
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {tokenDialog}
+      {directorKeyConfigured === false && (
+        <Alert>
+          <AlertTitle>Set a Director key</AlertTitle>
+          <AlertDescription>Set a Director key to protect Director actions. Mail is available without it.</AlertDescription>
+        </Alert>
+      )}
+      {installStatus?.mail_capability_tokens_required === false && (
+        <Alert variant="destructive">
+          <AlertTitle>Agent Mail uses legacy authentication.</AlertTitle>
+          <AlertDescription>The opt-out allows unauthenticated reads and legacy registration.
+            Member writes need a session key. Director writes need the Director key when configured.</AlertDescription>
+        </Alert>
+      )}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-3xl font-bold">
@@ -216,18 +298,30 @@ export function AgentMailPage() {
             Agent Mail
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Coordinate local agent sessions through structured context requests and handoffs.
+            Messages between your agents, and between you and them.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={activeTeam === ALL_TEAMS ? ALL_TEAMS_VALUE : activeTeam}
+            onValueChange={(value) => setTeam(value === ALL_TEAMS_VALUE ? ALL_TEAMS : value)}
+          >
+            <SelectTrigger aria-label="Team" className="w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_TEAMS_VALUE}>All teams</SelectItem>
+              {teams.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <RefreshButton onClick={refreshAll} loading={loading || installLoading} />
           <Button variant="outline" onClick={() => setHelpOpen(true)}>
             <BookOpen className="mr-2 h-4 w-4" />
             How it works
           </Button>
-          <Button onClick={() => openCompose('context_request')}>
+          <Button onClick={() => openCompose('message')}>
             <MessageSquarePlus className="mr-2 h-4 w-4" />
-            New request
+            Write a message
           </Button>
         </div>
       </div>
@@ -251,10 +345,10 @@ export function AgentMailPage() {
                   Setup notes
                 </Button>
                 {!hasConfiguredIntegration && (
-                  <Button size="sm" onClick={() => setActiveTab('install')}>
+                  <Link to="/harnesses" className={buttonVariants({ size: 'sm' })}>
                     <Plug className="mr-2 h-4 w-4" />
-                    Open Install
-                  </Button>
+                    Set up in Harnesses
+                  </Link>
                 )}
               </div>
             </div>
@@ -272,69 +366,62 @@ export function AgentMailPage() {
         </Alert>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Participants</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-3xl">
-              <Users className="h-5 w-5 text-muted-foreground" />
-              {members.length}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Connected</CardDescription>
-            <CardTitle className="text-3xl">{stats.connected}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Observed only</CardDescription>
-            <CardTitle className="text-3xl">{stats.observed}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="rounded-lg">
-          <CardHeader className="pb-3">
-            <CardDescription>Inbox load</CardDescription>
-            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-              <Badge variant="secondary">{stats.unread} unread</Badge>
-              <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700' : ''}>
-                {stats.pending} pending
+      <div
+        role="group"
+        aria-label="Agent Mail totals"
+        className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2 text-sm"
+      >
+        <span><span className="font-semibold">{teamMembers.length}</span> participants</span>
+        <span><span className="font-semibold">{stats.connected}</span> connected</span>
+        <span><span className="font-semibold">{stats.observed}</span> observed only</span>
+        <span className="flex flex-wrap items-center gap-2">
+          <CountLink label={`${stats.unread} unread`} onClick={goToWaiting}>
+            <Badge variant="secondary">{stats.unread} unread</Badge>
+          </CountLink>
+          <CountLink label={`${stats.pending} pending`} onClick={goToWaiting}>
+            <Badge variant="outline" className={stats.pending ? 'border-amber-300 text-amber-700 dark:text-amber-300' : ''}>
+              {stats.pending} pending
+            </Badge>
+          </CountLink>
+          {stats.unseenPending > 0 && (
+            <CountLink label={`${stats.unseenPending} unseen`} onClick={goToWaiting}>
+              <Badge variant="outline" className="border-blue-300 text-blue-700 dark:text-blue-300">
+                {stats.unseenPending} unseen
               </Badge>
-              {stats.unseenPending > 0 && (
-                <Badge variant="outline" className="border-blue-300 text-blue-700">
-                  {stats.unseenPending} unseen
-                </Badge>
-              )}
-              {stats.stalePending > 0 && (
-                <Badge variant="outline" className="border-amber-300 text-amber-700">
-                  {stats.stalePending} stale
-                </Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+            </CountLink>
+          )}
+          {stats.stalePending > 0 && (
+            <CountLink label={`${stats.stalePending} stale`} onClick={goToWaiting}>
+              <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-300">
+                {stats.stalePending} stale
+              </Badge>
+            </CountLink>
+          )}
+        </span>
       </div>
 
+      <WaitingPanel
+        ref={waitingRef}
+        members={teamMembers}
+        loading={loading}
+        recipientMemberId={recipientMemberId}
+        onShowRecipient={showWaiting}
+      />
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid h-auto w-full grid-cols-3 md:w-[520px]">
+        <TabsList className="grid h-auto w-full grid-cols-2 md:w-[360px]">
           <TabsTrigger value="team" className="gap-2">
             <Users className="h-4 w-4" />
             Team
           </TabsTrigger>
-          <TabsTrigger value="requests" className="gap-2">
+          <TabsTrigger value="conversations" className="gap-2">
             <Inbox className="h-4 w-4" />
-            Requests
-          </TabsTrigger>
-          <TabsTrigger value="install" className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Install
+            Conversations
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="team" className="mt-4">
+        <TabsContent value="team" className="mt-3">
           <TeamTab
-            members={members}
+            members={teamMembers}
             loading={loading}
             repoSearch={teamSearch}
             statusFilter={teamStatus}
@@ -346,38 +433,30 @@ export function AgentMailPage() {
             nudgingMemberId={nudgingMemberId}
           />
         </TabsContent>
-        <TabsContent value="requests" className="mt-4">
-          <RequestsTab
-            messages={messages}
+        <TabsContent value="conversations" className="mt-3">
+          <ConversationsTab
+            conversations={conversations}
             members={members}
             loading={loading}
-            search={requestSearch}
-            kindFilter={requestKind}
-            statusFilter={requestStatus}
-            onSearchChange={setRequestSearch}
-            onKindFilterChange={setRequestKind}
-            onStatusFilterChange={setRequestStatus}
+            search={conversationSearch}
+            chip={chip}
+            team={activeTeam}
+            recipientMemberId={recipientMemberId}
+            messageCount={messages.length}
+            onSearchChange={setConversationSearch}
+            onChipChange={setChip}
+            onClearRecipient={() => setRecipientMemberId(null)}
             onOpenThread={setThreadMessage}
-            onCompose={openCompose}
-          />
-        </TabsContent>
-        <TabsContent value="install" className="mt-4">
-          <InstallTab
-            status={installStatus}
-            snippets={snippets}
-            loading={installLoading}
-            onRefresh={loadInstallData}
-            onApplyClaudeCode={() => runInstallAction(applyClaudeCodeAgentMailInstall, 'Claude Code install updated')}
-            onUninstallClaudeCode={() => runInstallAction(uninstallClaudeCodeAgentMail, 'Claude Code install removed')}
-            onApplyCodex={() => runInstallAction(applyCodexAgentMailInstall, 'Codex MCP install updated')}
-            onUninstallCodex={() => runInstallAction(uninstallCodexAgentMail, 'Codex MCP install removed')}
-            onApplyCopilot={() => runInstallAction(applyCopilotAgentMailInstall, 'GitHub Copilot CLI install updated')}
-            onUninstallCopilot={() => runInstallAction(uninstallCopilotAgentMail, 'GitHub Copilot CLI install removed')}
-            onApplyOpenCode={() => runInstallAction(applyOpenCodeAgentMailInstall, 'OpenCode CLI install updated')}
-            onUninstallOpenCode={() => runInstallAction(uninstallOpenCodeAgentMail, 'OpenCode CLI install removed')}
           />
         </TabsContent>
       </Tabs>
+
+      {setUpNames.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Mail is set up for {joinNames(setUpNames)} ·{' '}
+          <Link to="/harnesses" className="text-primary underline">Manage in Harnesses</Link>
+        </p>
+      )}
 
       <MemberEditDialog
         member={editingMember}

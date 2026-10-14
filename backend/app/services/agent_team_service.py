@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from dataclasses import fields
 from datetime import datetime, timedelta
 from typing import Any
@@ -36,6 +37,7 @@ from app.models.schemas import (
     AgentTeamLaunchResult,
     AgentTeamLaunchResultItem,
     AgentTeamPresetCreate,
+    AgentTeamPresetUpdate,
     AgentTeamPresetResponse,
     AgentTeamSlotCreate,
     AgentTeamSlotResponse,
@@ -91,6 +93,7 @@ class TeamDeletionConflictError(ValueError):
         self.blockers = blockers
 
 
+_UNSET = object()
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
 _PROVIDER_IDS = {provider.id for provider in get_providers()}
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$")
@@ -126,6 +129,10 @@ class AgentTeamService:
         preset = AgentTeamPreset(
             name=name,
             description=self._clean_optional(request.description),
+            parent_issue_url=request.parent_issue_url,
+            backlog_milestone=request.backlog_milestone,
+            planned_decisions=([decision.model_dump() for decision in request.planned_decisions]
+                               if request.planned_decisions is not None else None),
             created_by=self._clean_optional(request.created_by),
             autonomy_enabled=False,
         )
@@ -242,8 +249,26 @@ class AgentTeamService:
         name: str | None = None,
         description: str | None = None,
         autonomy_enabled: bool | None = None,
+        parent_issue_url: str | None | object = _UNSET,
+        backlog_milestone: str | None | object = _UNSET,
+        planned_decisions: list | None | object = _UNSET,
     ) -> AgentTeamPresetResponse:
+        campaign_changes = {}
+        if backlog_milestone is not _UNSET:
+            campaign_changes["backlog_milestone"] = backlog_milestone
+        if planned_decisions is not _UNSET:
+            campaign_changes["planned_decisions"] = planned_decisions
+        validated_campaign = AgentTeamPresetUpdate(**campaign_changes)
+        if parent_issue_url is not _UNSET:
+            parent_issue_url = AgentTeamPresetUpdate(parent_issue_url=parent_issue_url).parent_issue_url
         preset = await self._require_preset(db, preset_id)
+        if parent_issue_url is not _UNSET:
+            preset.parent_issue_url = parent_issue_url
+        if backlog_milestone is not _UNSET:
+            preset.backlog_milestone = validated_campaign.backlog_milestone
+        if planned_decisions is not _UNSET:
+            preset.planned_decisions = ([decision.model_dump() for decision in validated_campaign.planned_decisions]
+                                        if validated_campaign.planned_decisions is not None else None)
         if name is not None:
             cleaned_name = self._clean_required(name, "Team name")
             await self._ensure_preset_name_is_unique(db, cleaned_name, exclude_preset_id=preset.id)
@@ -440,6 +465,10 @@ class AgentTeamService:
         clone = AgentTeamPreset(
             name=self._clean_required(name or f"{source.name} copy", "Team name"),
             description=source.description,
+            parent_issue_url=source.parent_issue_url,
+            backlog_milestone=source.backlog_milestone,
+            planned_decisions=([dict(decision) for decision in source.planned_decisions]
+                               if source.planned_decisions is not None else None),
             created_by=source.created_by,
         )
         await self._ensure_preset_name_is_unique(db, clone.name)
@@ -531,6 +560,9 @@ class AgentTeamService:
                 name=request.name,
                 description=request.description,
                 created_by="agent-mail",
+                parent_issue_url=request.parent_issue_url,
+                backlog_milestone=request.backlog_milestone,
+                planned_decisions=request.planned_decisions,
                 slots=slot_requests,
             ),
         )
@@ -577,6 +609,9 @@ class AgentTeamService:
                 name=request.name,
                 description=request.description,
                 created_by="agent-bridge",
+                parent_issue_url=request.parent_issue_url,
+                backlog_milestone=request.backlog_milestone,
+                planned_decisions=request.planned_decisions,
                 slots=slot_requests,
             ),
         )
@@ -957,6 +992,8 @@ class AgentTeamService:
                 bootstrap_prompt,
                 repo_path_override,
             )
+            if slot.provider == "claude-code" and options.mode != "resume":
+                options = SpawnCommandOptions(**{**options.__dict__, "session_id": str(uuid.uuid4())})
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -969,6 +1006,20 @@ class AgentTeamService:
                     **({"CLAUDE_DECK_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
+            if slot.provider == "claude-code" and options.session_id:
+                slot.launch_options = {**(slot.launch_options or {}), "session_id": options.session_id}
+                slot.launch_mode = "resume"
+            elif slot.provider == "codex-cli" and options.mode != "resume":
+                slot.launch_options = {key: value for key, value in (slot.launch_options or {}).items()
+                                       if key not in {"session_id", "use_last"}}
+                slot.launch_mode = "plain"
+            trust_changed = bool(spawned.get("workspace_trust_changed"))
+            observation_message = ""
+            if slot.provider == "codex-cli" and options.mode != "resume":
+                observation_message = (
+                    ". Codex: restart needed for observation. "
+                    "Resume the saved rollout ID through Deck after capture"
+                )
             result = AgentTeamLaunchResultItem(
                 slot_id=slot.id,
                 slot_name=slot.display_name,
@@ -979,7 +1030,9 @@ class AgentTeamService:
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
                 pane_pid=spawned.get("pane_pid"),
-                message="Session spawned; waiting for Agent Mail registration",
+                message=("Workspace trust prepared. " if trust_changed else "")
+                        + "Session spawned; waiting for Agent Mail registration" + observation_message,
+                workspace_trust_changed=trust_changed,
                 warnings=plan_item.warnings,
             )
             await self._write_pane_binding(
@@ -998,6 +1051,9 @@ class AgentTeamService:
                 provider=slot.provider,
                 repo_path=repo_path_override or slot.repo_path,
                 error=str(exc),
+                workspace_trust_changed=bool(getattr(exc, "workspace_trust_changed", False)),
+                message=("Workspace trust prepared. Session spawn failed."
+                         if getattr(exc, "workspace_trust_changed", False) else None),
                 warnings=plan_item.warnings,
             )
         self._record_launch_item(db, launch_id, result)
@@ -1713,6 +1769,9 @@ class AgentTeamService:
             id=preset.id,
             name=preset.name,
             description=preset.description,
+            parent_issue_url=preset.parent_issue_url,
+            backlog_milestone=preset.backlog_milestone,
+            planned_decisions=preset.planned_decisions,
             created_by=preset.created_by,
             created_at=preset.created_at,
             updated_at=preset.updated_at,

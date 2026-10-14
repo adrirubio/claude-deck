@@ -191,7 +191,7 @@ export const manifest = [
   },
   {
     "name": "deck_create_team",
-    "description": "Create an Agent Team preset.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use deck_plan_team_launch before launch.\n    ",
+    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use deck_plan_team_launch before launch.\n    ",
     "inputSchema": {
       "properties": {
         "name": {
@@ -218,6 +218,18 @@ export const manifest = [
           ],
           "default": null,
           "title": "Slots"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Issue Url"
         }
       },
       "required": [
@@ -295,6 +307,23 @@ export const manifest = [
         "preset_id"
       ],
       "title": "deck_get_operator_action_contextsArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_get_team_summary",
+    "description": "Read a team's outcome, parent link, existing attention signals, effort total and next actors.\n\n    Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "preset_id"
+      ],
+      "title": "deck_get_team_summaryArguments",
       "type": "object"
     }
   },
@@ -1105,14 +1134,23 @@ export const manifest = [
   },
   {
     "name": "deck_send_message",
-    "description": "Send a plain message to another team member. For answerable questions use\n    deck_request_context; for handing work over use deck_create_handoff.",
+    "description": "Send a plain message to a team member or the current bound Supervisor.\n    Set exactly one target. For context requests use deck_request_context.\n    For handoffs use deck_create_handoff. Supervisor messages grant no authority.",
     "inputSchema": {
       "properties": {
         "to_member_id": {
-          "title": "To Member Id",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Member Id"
         },
         "body": {
+          "default": "",
           "title": "Body",
           "type": "string"
         },
@@ -1120,13 +1158,141 @@ export const manifest = [
           "default": "",
           "title": "Subject",
           "type": "string"
+        },
+        "to_supervisor_actor_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Supervisor Actor Id"
+        }
+      },
+      "title": "deck_send_messageArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_supervisor_checkin",
+    "description": "Promise the next supervisor check with an ISO 8601 UTC time.\n    Only the bound external actor can call this tool. The promise grants no authority.\n    The controller derives health. The next check must be within 24 hours.",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "next_check_at": {
+          "title": "Next Check At",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
         }
       },
       "required": [
-        "to_member_id",
-        "body"
+        "preset_id",
+        "next_check_at"
       ],
-      "title": "deck_send_messageArguments",
+      "title": "deck_supervisor_checkinArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_update_team_campaign",
+    "description": "Replace campaign metadata. Use null to clear either field.\n\n    backlog_milestone is an exact GitHub milestone title.\n    Each planned decision has text and state: later, now, or done.\n    The caller supplies the Director key for this call.\n    The tool never loads, stores, logs, returns, or publishes the key.\n    A session key grants no authority for this write.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "backlog_milestone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Backlog Milestone"
+        },
+        "planned_decisions": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Planned Decisions"
+        },
+        "director_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Director Key"
+        }
+      },
+      "required": [
+        "preset_id",
+        "backlog_milestone",
+        "planned_decisions"
+      ],
+      "title": "deck_update_team_campaignArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_update_team_parent_issue",
+    "description": "Set a team's GitHub parent issue link. Use null to clear the link.\n\n    This operation changes only the parent link. It grants no execution authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        },
+        "parent_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Issue Url"
+        }
+      },
+      "required": [
+        "preset_id",
+        "parent_issue_url"
+      ],
+      "title": "deck_update_team_parent_issueArguments",
       "type": "object"
     }
   },

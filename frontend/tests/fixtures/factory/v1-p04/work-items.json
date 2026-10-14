@@ -77,6 +77,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -87,6 +98,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "dispatched",
@@ -99,6 +112,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 3,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -142,6 +156,17 @@
             "scope_id": 3
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -246,6 +271,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -256,6 +292,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "failed",
@@ -268,6 +306,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -296,6 +335,7 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": null,
             "bridge_target": null,
             "observed_provider": null,
             "state": "unknown"
@@ -427,6 +467,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -437,6 +488,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "completed",
@@ -449,6 +502,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -492,6 +546,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -591,6 +656,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -601,6 +677,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "dispatched",
@@ -613,6 +691,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 3,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -656,6 +735,17 @@
             "scope_id": 3
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -727,6 +817,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -737,6 +838,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "pending",
@@ -749,6 +852,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -792,6 +896,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -896,6 +1011,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -906,6 +1032,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "future_status",
@@ -918,6 +1046,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 2,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -961,6 +1090,17 @@
             "scope_id": 2
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 4,
               "session_id": 4,
@@ -1032,6 +1172,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1042,6 +1193,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "completed",
@@ -1054,6 +1207,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1097,6 +1251,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -1197,6 +1362,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1207,6 +1383,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "dispatched",
@@ -1219,6 +1397,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 3,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1262,6 +1441,17 @@
             "scope_id": 3
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -1333,6 +1523,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1343,6 +1544,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "pending",
@@ -1355,6 +1558,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1398,6 +1602,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -1502,6 +1717,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1512,6 +1738,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "pending",
@@ -1524,6 +1752,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1567,6 +1796,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -1671,6 +1911,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1681,6 +1932,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "ready_for_review",
@@ -1693,6 +1946,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 1,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1736,6 +1990,17 @@
             "scope_id": 1
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 2,
               "session_id": 2,
@@ -1840,6 +2105,17 @@
             "source": "explicit_assignment"
           },
           "approver_session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "offline",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": null,
             "observed_provider": null,
             "state": "offline"
@@ -1850,6 +2126,8 @@
             "active_scope_status": null,
             "approval_round_count": 0,
             "attempt_phase": "implementation",
+            "checks_unavailable_reason": null,
+            "checks_unavailable_since": null,
             "created_at": "2026-09-30T12:00:00Z",
             "diagnostic_retry_count": 0,
             "dispatch_status": "future_status",
@@ -1862,6 +2140,7 @@
             "pending_approval_kind": null,
             "pending_approval_status": null,
             "pr_number": null,
+            "required_ci_unreadable": null,
             "retry_count": 0,
             "scope_id": 2,
             "updated_at": "2026-09-30T12:00:00Z"
@@ -1905,6 +2184,17 @@
             "scope_id": 2
           },
           "session": {
+            "agent_status": {
+              "activity_reason": "no_current_binding",
+              "activity_state": "unknown",
+              "checked_at": "2026-09-30T12:00:00Z",
+              "idle_since": null,
+              "session_state": "online",
+              "valid_until": "2026-09-30T12:00:15Z",
+              "waiting_input": null,
+              "wake_reason": "wake_target_unbound",
+              "wake_state": "cannot_wake"
+            },
             "bridge_target": {
               "member_id": 4,
               "session_id": 4,

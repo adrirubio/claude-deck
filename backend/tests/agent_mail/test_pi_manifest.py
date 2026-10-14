@@ -30,6 +30,8 @@ def test_manifest_matches_real_mcp_tools_without_registration(sync_module, monke
         "deck_report_owner_followup",
         "deck_get_operator_action_contexts", "deck_prepare_operator_action_contexts",
         "deck_prepare_work_remaining_summary", "deck_render_github_summary",
+        "deck_get_team_summary", "deck_update_team_parent_issue",
+        "deck_supervisor_checkin",
     ):
         assert f'"name": "{name}"' in expected
     public, private = expected.split("export const privateTools = ")

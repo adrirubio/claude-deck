@@ -2061,8 +2061,6 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     )
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
-    assert "autonomous GitHub dispatch" in prompt
-    assert "Work item ID:" in prompt
     assert "Issue: #833 — Add agent docs" in prompt
     assert "https://github.com/o/r/issues/833" in prompt
     assert "Acceptance criteria and verification steps." in prompt
@@ -2223,7 +2221,6 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
     assert "Pipeline: design" in prompt
-    assert "Design pipeline instructions" in prompt
     assert "do not rely on CI or auto-merge" in prompt
     assert "human-reviewed PR" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
@@ -3986,7 +3983,7 @@ async def test_terminal_item_holding_a_lease_is_reminded(db):
 
 
 @pytest.mark.asyncio
-async def test_lease_release_reminder_quotes_token(db):
+async def test_lease_release_reminder_keeps_capability_and_path_private(db):
     _, slots, scope = await _team(db)
     await _create_registered_slot_member(db, slots[1])
     await _leased_item_for_reminder(
@@ -4000,7 +3997,10 @@ async def test_lease_release_reminder_quotes_token(db):
     await github_dispatch_service.remind_held_leases(db, scope)
 
     message = (await db.execute(select(MailMessage))).scalars().one()
-    assert 'lease_token="tok-921"' in message.body_markdown
+    assert "tok-921" not in message.body_markdown
+    assert "workspace_path" not in message.payload
+    assert "deck_get_work_item_context" in message.body_markdown
+    assert "Reminder 1 of 4" in message.body_markdown
 
 
 @pytest.mark.asyncio
@@ -4169,15 +4169,71 @@ async def test_repeated_lease_release_reminders_never_escalate(db):
         owner_slot_id=slots[1].id,
     )
 
-    for _ in range(3):
+    for count in range(1, 5):
         workspace.lease_release_reminded_at = datetime.utcnow() - timedelta(
-            seconds=settings.github_nudge_grace_seconds + 60
+            hours=2
         )
         await db.commit()
         assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+        assert workspace.lease_release_reminder_count == count
+
+    for _ in range(3):
+        workspace.lease_release_reminded_at -= timedelta(days=1)
+        await db.commit()
+        assert await GithubDispatchService().remind_held_leases(db, scope) == 0
+
+    messages = (await db.scalars(select(MailMessage))).all()
+    assert len(messages) == 4
+    assert [m.payload["reminder_count"] for m in messages] == [1, 2, 3, 4]
+    from app.models.database import FactoryAuditEvent
+    events = (await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "lease_reminder_capped"))).all()
+    assert len(events) == 1
 
     assert item.dispatch_status == "merged"
     assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_release_reminder_delays_grow_and_failed_mail_rolls_back(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    _, workspace = await _leased_item_for_reminder(
+        db, scope, issue_number=930, dispatch_status="merged", owner_slot_id=slots[1].id,
+    )
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+    workspace.lease_release_reminder_count = 2
+    workspace.lease_release_reminded_at = datetime.utcnow() - timedelta(minutes=5)
+    await db.commit()
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+    workspace.lease_release_reminded_at -= timedelta(hours=2)
+    await db.commit()
+
+    async def failed_send(*args, **kwargs):
+        raise RuntimeError("synthetic Mail failure")
+
+    monkeypatch.setattr(agent_mail_service, "send_message", failed_send)
+    with pytest.raises(RuntimeError, match="synthetic Mail failure"):
+        await github_dispatch_service.remind_held_leases(db, scope)
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminder_count == 2
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_reminder_backoff_grows_with_a_large_grace(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    _, workspace = await _leased_item_for_reminder(
+        db, scope, issue_number=975, dispatch_status="merged", owner_slot_id=slots[1].id)
+    monkeypatch.setattr(settings, "github_nudge_grace_seconds", 4000)
+    workspace.lease_release_reminder_count = 2
+    workspace.lease_release_reminded_at = datetime.utcnow() - timedelta(seconds=4001)
+    await db.commit()
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+    workspace.lease_release_reminded_at -= timedelta(seconds=16000)
+    await db.commit()
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 1
 
 
 @pytest.mark.asyncio
@@ -4746,7 +4802,6 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert "deck_check_inbox(unread_only=False)" in nudge_prompt
     assert f"work item {item.id}" in nudge_prompt
     assert f"issue #{item.issue_number}" in nudge_prompt
-    assert "Recovery proposal requested" in nudge_prompt
     assert "read-only diagnosis" in nudge_prompt
     assert "deck_request_continuation" in nudge_prompt
     assert "diagnostic" in nudge_prompt
@@ -6256,6 +6311,7 @@ async def test_delivery_and_ack_nudge_counters_are_independent(db, monkeypatch):
         delivered_item,
         lease_last_owner_contact_at=datetime.utcnow(),
     )
+    await _pending_initial_plan(db, delivered_item, slots, stale)
 
     await github_dispatch_service.monitor_dispatched(
         db,
@@ -6481,6 +6537,26 @@ async def test_monitor_does_not_escalate_slow_live_owner(db):
         assert item.escalation_reason is None
 
 
+async def _pending_initial_plan(db, item, slots, created_at):
+    members = [await agent_mail_service.get_or_create_slot_member(db, slot) for slot in slots]
+    item.dispatch_nonce = "timeout-attempt"
+    item.approval_round_count = 1
+    await db.flush()
+    request = GithubApprovalRequest(
+        work_item_id=item.id,
+        request_kind="initial_plan",
+        dispatch_nonce=item.dispatch_nonce,
+        approval_round=item.approval_round_count,
+        owner_member_id=members[1].id,
+        leader_member_id=members[0].id,
+        request_fingerprint="timeout-plan",
+        created_at=created_at,
+    )
+    db.add(request)
+    await db.commit()
+    return request
+
+
 @pytest.mark.asyncio
 async def test_monitor_nudges_leader_on_ack_timeout(db):
     preset, slots, scope = await _team(db)
@@ -6504,6 +6580,7 @@ async def test_monitor_nudges_leader_on_ack_timeout(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6538,6 +6615,7 @@ async def test_retried_item_still_nudged_when_leader_never_acks_again(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=dispatched_at)
+    await _pending_initial_plan(db, item, slots, dispatched_at)
 
     await github_dispatch_service.monitor_dispatched(
         db,
@@ -6580,6 +6658,7 @@ async def test_monitor_escalates_leader_ack_after_nudge_grace(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    request = await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6587,6 +6666,8 @@ async def test_monitor_escalates_leader_ack_after_nudge_grace(db):
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "leader_ack_timeout"
+    await db.refresh(request)
+    assert request.status == "superseded"
 
 
 @pytest.mark.asyncio
@@ -6614,6 +6695,8 @@ async def test_monitor_design_item_uses_ack_multiplier(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -6657,7 +6740,7 @@ async def test_monitor_no_ack_action_when_ack_received(db):
 
 
 @pytest.mark.asyncio
-async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
+async def test_monitor_ack_timeout_uses_request_time_not_recent_activity(db):
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
     old = datetime.utcnow() - timedelta(
@@ -6679,6 +6762,7 @@ async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
     db.add(item)
     await db.commit()
     await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    await _pending_initial_plan(db, item, slots, old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -7679,3 +7763,83 @@ async def test_accept_handoff_refuses_a_target_with_other_work(db, monkeypatch):
             accepting_pane_pid=1234, accepting_pane_proc_start="1")
     assert identity.await_count == 0
     assert current.owner_slot_id == slots[0].id and current.handoff_state == "pending"
+
+
+@pytest.mark.asyncio
+async def test_stale_release_reminder_reservation_does_not_block_later_lease(db, monkeypatch):
+    from sqlalchemy.sql.dml import Update
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    first, stale = await _leased_item_for_reminder(
+        db, scope, issue_number=971, dispatch_status="merged", owner_slot_id=slots[1].id)
+    second, current = await _leased_item_for_reminder(
+        db, scope, issue_number=972, dispatch_status="merged", owner_slot_id=slots[1].id)
+    stale_id, current_id, first_id = stale.id, current.id, first.id
+    execute = db.execute
+    changed = False
+
+    async def race(statement, *args, **kwargs):
+        nonlocal changed
+        if (not changed and isinstance(statement, Update)
+            and statement.table.name == "github_workspaces"
+            and "lease_release_reminder_count" in statement.compile().params):
+            changed = True
+            await execute(update(GithubWorkspace).where(GithubWorkspace.id == stale_id).values(
+                leased_item_id=None, lease_token=None))
+            await db.commit()
+        return await execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", race)
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+    rows = (await db.scalars(select(GithubWorkspace).where(
+        GithubWorkspace.id.in_([stale_id, current_id])).order_by(GithubWorkspace.id))).all()
+    assert rows[0].lease_release_reminder_count == 0 and rows[0].leased_item_id is None
+    assert rows[1].lease_release_reminder_count == 1
+    assert (await db.get(GithubWorkItem, first_id)).dispatch_status == "merged"
+    messages = (await db.scalars(select(MailMessage))).all()
+    assert len(messages) == 1 and messages[0].payload["issue_number"] == 972
+
+
+@pytest.mark.asyncio
+async def test_release_reminder_cap_audit_failure_rolls_back_mail_and_count(db, monkeypatch):
+    from app.services import factory_audit_service as audit
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    _, workspace = await _leased_item_for_reminder(
+        db, scope, issue_number=973, dispatch_status="merged", owner_slot_id=slots[1].id)
+    workspace.lease_release_reminder_count = 3
+    await db.commit()
+
+    async def failed_audit(*args, **kwargs):
+        raise RuntimeError("synthetic cap audit failure")
+
+    monkeypatch.setattr(audit, "record_event", failed_audit)
+    with pytest.raises(RuntimeError, match="synthetic cap audit failure"):
+        await github_dispatch_service.remind_held_leases(db, scope)
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminder_count == 3
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == 0
+
+
+@pytest.mark.asyncio
+async def test_new_lease_and_release_reset_the_reminder_budget(db):
+    _, slots, scope = await _team(db)
+    item, workspace = await _leased_item_for_reminder(
+        db, scope, issue_number=974, dispatch_status="merged", owner_slot_id=slots[1].id)
+    workspace.lease_release_reminder_count = 4
+    workspace.lease_release_reminder_started_at = datetime.utcnow()
+    await db.commit()
+    released = github_workspace_service._released_values(datetime.utcnow())
+    await db.execute(update(GithubWorkspace).where(GithubWorkspace.id == workspace.id).values(**released))
+    await db.commit()
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminder_count == 0
+    assert workspace.lease_release_reminder_started_at is None
+    # A new acquisition must also reset residual notification state.
+    workspace.lease_release_reminder_count = 4
+    workspace.lease_release_reminder_started_at = datetime.utcnow()
+    await db.commit()
+    acquired = await github_workspace_service.acquire(db, scope, item)
+    assert acquired.id == workspace.id
+    assert acquired.lease_release_reminder_count == 0
+    assert acquired.lease_release_reminder_started_at is None

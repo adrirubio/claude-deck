@@ -1,5 +1,18 @@
 import { assertBrowserNativeRequest } from '@/features/native-settings/surfaceRegistry'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { API_BASE_URL } from './constants'
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/**
+ * The stored Director key for a write request, so settings writes pass the
+ * backend's guard when a key is configured. Reads never carry it.
+ */
+export function operatorWriteHeaders(method = 'GET'): Record<string, string> {
+  if (READ_METHODS.has(method.toUpperCase())) return {}
+  const token = getOperatorToken()
+  return token ? { 'X-Deck-Operator-Token': token } : {}
+}
 
 /**
  * Build an API endpoint URL with optional query parameters.
@@ -28,9 +41,9 @@ export interface ApiError {
 }
 
 const operatorErrorMessages: Record<string, string> = {
-  operator_token_required: 'Enter the Deck operator token to continue.',
-  operator_token_invalid: 'The Deck operator token was rejected. Clear it and enter a valid token.',
-  operator_token_unconfigured: 'The Deck operator token is not configured on the backend.',
+  operator_token_required: 'Enter the Director key to continue.',
+  operator_token_invalid: 'The Director key was rejected. Clear it and enter a valid key.',
+  operator_token_unconfigured: 'The Director key is not configured on the backend.',
   scope_identity_in_use: 'This repo has active work. Change its identity or base ref only after that work is finished.',
 }
 
@@ -85,6 +98,7 @@ export class ApiClient {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          ...operatorWriteHeaders(options?.method),
           ...options?.headers,
         },
       })
@@ -140,6 +154,7 @@ export async function apiClient<T>(endpoint: string, options?: RequestInit): Pro
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        ...operatorWriteHeaders(options?.method),
         ...options?.headers,
       },
     })

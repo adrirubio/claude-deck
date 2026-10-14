@@ -12,6 +12,15 @@ GET /api/v1/agent-mail/team?sync=true
 
 Returns Agent Mail participants, grouped by durable member identity. Set `sync=false` to skip the Agent Bridge observation pass.
 
+Each member includes the [shared `agent_status`](agent-teams.md#shared-agent-status).
+External member reads and `deck_list_team` include this object.
+Use it for online, activity, wake, and idle-duration displays.
+
+Legacy `status`, `can_nudge`, `wake_methods`, and `wake_state` remain available.
+Delivery receipts retain `delivered_waiting` when the agent must poll Mail.
+That receipt does not mean the agent can be woken.
+The shared status follows the existing wake target rules and changes no delivery behavior.
+
 ### Update Member
 
 ```http

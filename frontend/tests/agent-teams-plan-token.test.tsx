@@ -45,6 +45,8 @@ vi.mock("../src/features/agent-teams/api", async (importOriginal) => {
 });
 
 vi.mock("../src/features/agent-teams/BacklogCoordination", () => ({ BacklogCoordination: () => null }));
+// The summary card has its own tests. Its network read would change the timing of these route tests.
+vi.mock("../src/features/agent-teams/TeamSummaryCard", () => ({ TeamSummaryCard: () => null, TeamSummaries: () => null }));
 
 vi.mock("../src/hooks/useProviders", async (importOriginal) => {
   const actual =
@@ -150,7 +152,7 @@ describe("Autonomy refresh and recurring polling", () => {
   const renderAutonomy = () => render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
   const panel = () => within(screen.getByRole("tabpanel"));
   const refresh = () => panel().getByRole("button", { name: "Refresh", exact: true });
-  const freshness = () => panel().getByText(/Table (updated|not refreshed yet)/).textContent;
+  const freshness = () => panel().getByText(/Summary (updated|not refreshed yet)/).textContent;
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-04T12:00:00Z"));
@@ -166,10 +168,10 @@ describe("Autonomy refresh and recurring polling", () => {
     let initial!: (value: { items: GithubWorkItem[] }) => void;
     vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { initial = resolve; }));
     renderAutonomy(); await flush();
-    expect(freshness()).toContain("Table not refreshed yet");
+    expect(freshness()).toContain("Summary not refreshed yet");
     await act(async () => initial({ items: [retained] }));
     const loaded = freshness();
-    expect(loaded).toContain("Table updated");
+    expect(loaded).toContain("Summary updated");
     let background!: (value: { items: GithubWorkItem[] }) => void;
     vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { background = resolve; }));
     await advance(5000);
@@ -183,7 +185,7 @@ describe("Autonomy refresh and recurring polling", () => {
     await advance(5000);
     expect(freshness()).toBe(updated);
     expect(panel().getByRole("alert")).toHaveTextContent("Synthetic failed refresh");
-    expect(panel().getByRole("row", { name: /Retained synthetic issue/ })).toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
   });
 
   it("spins only an explicit manual Refresh while its request is pending", async () => {
@@ -211,7 +213,7 @@ describe("Autonomy refresh and recurring polling", () => {
     expect(refresh().querySelector("svg")).not.toHaveClass("animate-spin");
   });
 
-  it("stops recurring scope/work-item polls on hidden document, Roster, and unmount", async () => {
+  it("stops recurring scope/work-item polls on hidden document, Members, and unmount", async () => {
     const view = renderAutonomy(); await flush();
     const counts = () => [vi.mocked(fetchTeamGithubScopes).mock.calls.length, vi.mocked(fetchGithubWorkItems).mock.calls.length];
     const initial = counts();
@@ -220,8 +222,8 @@ describe("Autonomy refresh and recurring polling", () => {
     const hidden = counts(); await advance(10000); expect(counts()).toEqual(hidden);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     await advance(5000); expect(counts()).toEqual(hidden.map(n => n + 1));
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Roster" }), { button: 0, ctrlKey: false }); await flush();
-    expect(screen.getByRole("tab", { name: "Roster" })).toHaveAttribute("data-state", "active");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Members" }), { button: 0, ctrlKey: false }); await flush();
+    expect(screen.getByRole("tab", { name: "Members" })).toHaveAttribute("data-state", "active");
     const roster = counts(); await advance(15000); expect(counts()).toEqual(roster);
     view.unmount(); await advance(15000); expect(counts()).toEqual(roster);
   });
@@ -240,11 +242,11 @@ describe("Autonomy refresh and recurring polling", () => {
     render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Navigation /><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Open second autonomy team" })); await flush();
-    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
     const currentFreshness = freshness();
-    await act(async () => oldTeam({ items: [retained] }));
-    expect(panel().queryByRole("row", { name: /Retained synthetic issue/ })).not.toBeInTheDocument();
-    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    await act(async () => oldTeam({ items: [retained, { ...retained, id: 93, issue_number: 93 }] }));
+    expect(panel().queryByText(/^2 items ·/)).not.toBeInTheDocument();
+    expect(panel().getByText(/^1 item ·/)).toBeInTheDocument();
     expect(freshness()).toBe(currentFreshness);
   });
 });
@@ -262,14 +264,14 @@ describe("AgentTeamsPage launch authorization", () => {
       await screen.findByRole("button", { name: "Plan launch" }),
     );
     const tokenDialog = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
     expect(planAgentTeamLaunch).not.toHaveBeenCalled();
 
-    const input = within(tokenDialog).getByLabelText(/Operator token/);
+    const input = within(tokenDialog).getByLabelText(/Director key/);
     await user.click(input);
     expect(input).toHaveFocus();
     await user.type(input, "test-token{Enter}");
@@ -285,7 +287,7 @@ describe("AgentTeamsPage launch authorization", () => {
       await screen.findByRole("dialog", { name: "Launch Plan" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("dialog", { name: "Operator token" }),
+      screen.queryByRole("dialog", { name: "Director key" }),
     ).not.toBeInTheDocument();
   });
 
@@ -312,12 +314,12 @@ describe("AgentTeamsPage launch authorization", () => {
     await user.click(screen.getByRole("button", { name: "Launch" }));
 
     const tokenDialog = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
-    const input = within(tokenDialog).getByLabelText(/Operator token/);
+    const input = within(tokenDialog).getByLabelText(/Director key/);
     await user.click(input);
     await user.type(input, "new-token{Enter}");
 
@@ -330,6 +332,46 @@ describe("AgentTeamsPage launch authorization", () => {
     );
     expect(
       await screen.findByRole("dialog", { name: "Launch Plan" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the launch result message and the workspace trust change", async () => {
+    setOperatorToken("test-token");
+    vi.mocked(launchAgentTeam).mockResolvedValueOnce({
+      ...result,
+      items: [
+        {
+          slot_id: 2,
+          slot_name: "Codex slot",
+          action: "spawn",
+          status: "spawned",
+          provider: "codex-cli",
+          repo_path: "/tmp/repo",
+          session_name: "codex-slot",
+          message:
+            "Workspace trust prepared. Session spawned; waiting for Agent Mail registration. Codex: restart needed for observation.",
+          workspace_trust_changed: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <AgentTeamsPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Plan launch" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Launch Plan" });
+    await user.click(within(dialog).getByRole("button", { name: "Launch" }));
+
+    expect(
+      await within(dialog).findByText(/Codex: restart needed for observation/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Workspace trust changed"),
     ).toBeInTheDocument();
   });
 });
@@ -374,10 +416,10 @@ describe("Teams current route and stale reads", () => {
     await waitFor(() => expect(fetchAgentTeamPresets).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () => release({ presets: [{ ...preset, name: "Team1" }] }));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
     setOperatorToken("synthetic-route-operator");
     fireEvent.click(
       screen.getByRole("button", {
@@ -405,13 +447,13 @@ describe("Teams current route and stale reads", () => {
       );
     renderTeams();
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team1"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team1" })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() => expect(fetchAgentTeamPresets).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
     await act(async () => release(teams));
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
   });
   it("does not expose an old pending launch plan after navigating to another team", async () => {
     let release!: (value: AgentTeamLaunchPlan) => void;
@@ -434,7 +476,7 @@ describe("Teams current route and stale reads", () => {
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () => release(plan));
     expect(
@@ -462,16 +504,16 @@ describe("Teams current route and stale reads", () => {
     );
     const launch = await screen.findByRole("dialog", { name: "Launch Plan" });
     await user.click(within(launch).getByRole("button", { name: "Launch" }));
-    await screen.findByRole("dialog", { name: "Operator token" });
+    await screen.findByRole("dialog", { name: "Director key" });
     expect(launchAgentTeam).toHaveBeenCalledTimes(1);
     fireEvent.click(
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     expect(
-      screen.queryByRole("dialog", { name: "Operator token" }),
+      screen.queryByRole("dialog", { name: "Director key" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
@@ -483,10 +525,10 @@ describe("Teams current route and stale reads", () => {
       }),
     );
     const current = await screen.findByRole("dialog", {
-      name: "Operator token",
+      name: "Director key",
     });
     await user.type(
-      within(current).getByLabelText(/Operator token/),
+      within(current).getByLabelText(/Director key/),
       "synthetic-current-token{Enter}",
     );
     await waitFor(() =>
@@ -527,7 +569,7 @@ describe("Teams current route and stale reads", () => {
       screen.getByRole("button", { name: "Open Team2 context", hidden: true }),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     const reads = vi.mocked(fetchAgentTeamPresets).mock.calls.length;
     await act(async () => release(result));
@@ -535,7 +577,7 @@ describe("Teams current route and stale reads", () => {
     expect(
       screen.queryByRole("dialog", { name: "Launch Plan" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
   });
   it("retires an old initial scope response before it can switch the current roster tab", async () => {
     let release!: (
@@ -554,7 +596,7 @@ describe("Teams current route and stale reads", () => {
     await waitFor(() => expect(fetchTeamGithubScopes).toHaveBeenCalledWith(1));
     fireEvent.click(screen.getByRole("button", { name: "Open Team2 context" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("Name")).toHaveValue("Team2"),
+      expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument(),
     );
     await act(async () =>
       release({
@@ -563,8 +605,8 @@ describe("Teams current route and stale reads", () => {
         >["scopes"],
       }),
     );
-    expect(screen.getByLabelText("Name")).toHaveValue("Team2");
-    expect(screen.getByLabelText("Name")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Team2" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Plan launch" })).toBeVisible();
     expect(fetchTeamGithubScopes).toHaveBeenCalledTimes(1);
   });

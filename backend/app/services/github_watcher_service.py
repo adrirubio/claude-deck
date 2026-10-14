@@ -16,6 +16,7 @@ from app.models.database import (
 )
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.agent_team_campaign_service import agent_team_campaign_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
 _RECOVERABLE_STATUSES = ("failed", "escalated")
@@ -190,6 +191,15 @@ class GithubWatcherService:
             # results stay unresolved until a later poll.
             logger.info("Later-result reconciliation unavailable for scope %s", scope.id,
                         exc_info=True)
+            await db.rollback()
+            await db.refresh(scope)
+
+        # This cached read changes no dispatch, retry, eligibility or merge decision.
+        scope_id = scope.id
+        try:
+            await agent_team_campaign_service.refresh_scope(db, scope, client)
+        except Exception:
+            logger.info("Campaign backlog unavailable for scope %s", scope_id)
             await db.rollback()
             await db.refresh(scope)
 
@@ -736,6 +746,8 @@ class GithubWatcherService:
         )
         # The claim already wrote the transition; the fact and the claim
         # commit together, and an audit failure rolls both back.
+        from app.services.github_terminal_revision_service import complete_current_revision
+        await complete_current_revision(db, item, source=fact_source, terminal_status="completed")
         await db.commit()
         await db.refresh(item)
         try:

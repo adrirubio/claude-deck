@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { operatorWriteHeaders } from "@/lib/api";
 import type { MarketplaceResponse } from "@/types/plugins";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
     try {
       const response = await fetch("/api/v1/plugins/marketplaces", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...operatorWriteHeaders("POST") },
         body: JSON.stringify({ input: marketplaceInput }),
       });
 
@@ -57,6 +58,7 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
     try {
       const response = await fetch(`/api/v1/plugins/marketplaces/${name}`, {
         method: "DELETE",
+        headers: operatorWriteHeaders("DELETE"),
       });
 
       if (!response.ok) {
@@ -76,6 +78,7 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
     try {
       const response = await fetch(`/api/v1/plugins/marketplace/${name}/update`, {
         method: "POST",
+        headers: operatorWriteHeaders("POST"),
       });
 
       if (!response.ok) {
@@ -98,7 +101,7 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
     try {
       const response = await fetch(`/api/v1/plugins/marketplace/${name}/auto-update`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...operatorWriteHeaders("PUT") },
         body: JSON.stringify({ enabled }),
       });
 

@@ -6,12 +6,13 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import time
 from uuid import uuid4
 from datetime import datetime, timedelta
-from typing import Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -59,6 +60,29 @@ STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
 TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
+LEGACY_SYSTEM_PAYLOAD_KINDS = {
+    "github_backlog_reconcile", "github_owner_followup",
+    "github_dispatch_assignment", "github_dispatch_handoff",
+    "github_dispatch_continuation_idle_nudge", "github_dispatch_recovery_proposal_requested",
+    "github_lease_release_reminder", "github_dispatch_ack_nudge",
+    "github_dispatch_brief_nudge", "github_dispatch_idle_nudge",
+    "github_dispatch_escalation", "github_dispatch_label_removed",
+    "github_dispatch_blocker_merged", "github_continuation_cancelled",
+    "github_dispatch_code_pr_ready", "github_dispatch_design_pr_ready",
+    "github_owner_observation_pause",
+}
+LEGACY_SYSTEM_SUBJECTS = {
+    "Reconcile assigned backlog and independent work", "Code PR ready for review",
+    "Design PR ready for review", "Dispatch label removed",
+}
+LEGACY_SYSTEM_SUBJECT_PATTERN = re.compile(
+    r"(?:Autonomous dispatch|Continuation progress check|Recovery proposal requested|"
+    r"Release needed|Ack needed|Unread dispatch brief|Progress check|Blocker merged|Observation pause): issue #[0-9]+"
+    r"|GitHub dispatch handoff: work item [0-9]+"
+    r"|Owner turn completed: inspect remaining issue #[0-9]+"
+    r"|Approved continuation revision [0-9]+ for work item [0-9]+"
+    r"|Continuation revision [0-9]+ cancelled for work item [0-9]+"
+)
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: call `deck_check_inbox(unread_only=False)` now. "
     "Read task and review messages. Then answer pending context requests and handoffs. "
@@ -958,13 +982,20 @@ class AgentMailService:
                     await db.execute(select(AgentTeamPreset).where(AgentTeamPreset.id.in_(preset_ids)))
                 ).scalars().all()
             }
-        context: dict[int, dict[str, str | int | None]] = {}
+        from app.services.agent_team_supervisor_service import supervisor_address
+        supervisor_ids = {preset.supervisor_actor_id for preset in presets.values()
+                          if preset.supervisor_actor_id is not None}
+        supervisors = {actor.id: actor for actor in (await db.scalars(
+            select(MailExternalActor).where(MailExternalActor.id.in_(supervisor_ids)))).all()}
+        context: dict[int, dict[str, Any]] = {}
         for member in members:
             slot = slots.get(member.team_slot_id) if member.team_slot_id is not None else None
             preset_id = slot.preset_id if slot is not None else member.team_preset_id
             preset = presets.get(preset_id) if preset_id is not None else None
             context[member.id] = {
                 "team_preset_name": preset.name if preset is not None else None,
+                "supervisor_address": supervisor_address(supervisors.get(preset.supervisor_actor_id))
+                    if preset is not None else None,
                 "team_slot_name": slot.display_name if slot is not None else None,
                 "controlled_language_enabled": (slot.controlled_language_enabled is not False) if slot is not None else None,
                 "communication_instructions": team_communication_guidance(slot.controlled_language_enabled is not False) if slot is not None else None,
@@ -972,8 +1003,11 @@ class AgentMailService:
         return context
 
     async def list_team(self, db: AsyncSession) -> List[MailMemberResponse]:
+        from app.services.agent_status_service import agent_status_service
+
         now = datetime.utcnow()
         members = (await db.execute(select(MailTeamMember))).scalars().all()
+        display_statuses = await agent_status_service.for_members(db, members)
         sessions = (await db.execute(select(MailAgentSession))).scalars().all()
         team_context = await self._team_context_by_session(db, sessions)
         member_team_context = await self._team_context_by_member(db, members)
@@ -1023,6 +1057,7 @@ class AgentMailService:
                     participant_kind=member.participant_kind,
                     team_preset_id=member.team_preset_id,
                     team_preset_name=member_context.get("team_preset_name"),
+                    supervisor_address=member_context.get("supervisor_address"),
                     team_slot_id=member.team_slot_id,
                     team_slot_name=member_context.get("team_slot_name"),
                     controlled_language_enabled=member_context.get("controlled_language_enabled"),
@@ -1039,6 +1074,7 @@ class AgentMailService:
                     wake_state=wake_state,
                     last_inbox_checked_at=member.last_inbox_checked_at,
                     sessions=session_responses,
+                    agent_status=display_statuses.get(member.id),
                 )
             )
         responses.sort(key=lambda member: (member.status != "connected", member.display_name.lower()))
@@ -1056,6 +1092,7 @@ class AgentMailService:
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
         operator_authorized: bool = False,
+        sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
         if request.decision is not None:
@@ -1070,6 +1107,7 @@ class AgentMailService:
             authenticated_sender_member_id=authenticated_sender_member_id,
             delivery_key=delivery_key,
             operator_authorized=operator_authorized,
+            sender_type=sender_type,
             commit=commit,
         )
 
@@ -1111,8 +1149,24 @@ class AgentMailService:
         delivery_key: Optional[str] = None,
         authoritative_approval_round: int | None = None,
         operator_authorized: bool = False,
+        sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if request.thread_root_id is not None and request.sender_member_id is not None:
+            await self.require_member_thread(db, request.thread_root_id, request.sender_member_id)
+        if sender_type not in {None, "system", "director"}:
+            raise ValueError("Invalid sender type")
+        if sender_type is not None and (
+            request.sender_member_id is not None or sender_actor_id is not None
+        ):
+            raise ValueError("sender_type cannot override a member or external actor")
+        if sender_type == "director" and not operator_authorized:
+            raise ValueError("Director sender requires operator authorization")
+        sender_type = (
+            "external_actor" if sender_actor_id is not None
+            else "member" if request.sender_member_id is not None
+            else sender_type or "system"
+        )
         if delivery_key is not None and request.kind == "broadcast":
             existing = (
                 await db.execute(
@@ -1125,6 +1179,7 @@ class AgentMailService:
                     existing,
                     request,
                     sender_actor_id=sender_actor_id,
+                    sender_type=sender_type,
                     operator_authorized=operator_authorized,
                 ):
                     raise MailDeliveryIntegrityError(
@@ -1137,6 +1192,7 @@ class AgentMailService:
                 db,
                 request,
                 sender_actor_id=sender_actor_id,
+                sender_type=sender_type,
                 authenticated_sender_member_id=authenticated_sender_member_id,
                 authoritative_approval_round=authoritative_approval_round,
                 operator_authorized=operator_authorized,
@@ -1148,6 +1204,7 @@ class AgentMailService:
                         db,
                         request,
                         sender_actor_id=sender_actor_id,
+                        sender_type=sender_type,
                         authenticated_sender_member_id=authenticated_sender_member_id,
                         delivery_key=delivery_key,
                         authoritative_approval_round=authoritative_approval_round,
@@ -1167,6 +1224,7 @@ class AgentMailService:
                     message,
                     request,
                     sender_actor_id=sender_actor_id,
+                    sender_type=sender_type,
                     operator_authorized=operator_authorized,
                 ):
                     raise MailDeliveryIntegrityError(
@@ -1202,6 +1260,7 @@ class AgentMailService:
         request: MailMessageCreate,
         *,
         sender_actor_id: int | None,
+        sender_type: str,
         operator_authorized: bool,
     ) -> bool:
         if request.recipient_member_id is not None or request.thread_root_id is not None:
@@ -1223,6 +1282,7 @@ class AgentMailService:
             "payload": request.payload or None,
             "recipient_member_id": request.recipient_member_id,
             "sender_actor_id": sender_actor_id,
+            "sender_type": sender_type,
             "sender_member_id": request.sender_member_id,
             "subject": request.subject,
             "thread_root_id": request.thread_root_id,
@@ -1236,6 +1296,7 @@ class AgentMailService:
             "payload": message.payload or None,
             "recipient_member_id": message.recipient_member_id,
             "sender_actor_id": message.sender_actor_id,
+            "sender_type": self._stored_sender_type(message),
             "sender_member_id": message.sender_member_id,
             "subject": message.subject,
             "thread_root_id": message.thread_root_id,
@@ -1387,6 +1448,7 @@ class AgentMailService:
         db: AsyncSession,
         request: MailMessageCreate,
         *,
+        sender_type: str,
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
@@ -1453,6 +1515,7 @@ class AgentMailService:
             kind=request.kind,
             sender_member_id=request.sender_member_id,
             sender_actor_id=sender_actor_id,
+            sender_type=sender_type,
             recipient_member_id=request.recipient_member_id,
             subject=request.subject,
             body_markdown=request.body_markdown,
@@ -1653,6 +1716,7 @@ class AgentMailService:
         db: AsyncSession,
         sender_member_id: Optional[int],
         sender_actor_id: Optional[int],
+        sender_type: str,
     ) -> tuple[str, str, str | None]:
         if sender_actor_id is not None:
             actor = await db.get(MailExternalActor, sender_actor_id)
@@ -1660,9 +1724,34 @@ class AgentMailService:
                 return actor.display_name, "external_actor", actor.kind
             return "unknown external actor", "external_actor", None
         if sender_member_id is None:
-            return "Director", "director", None
+            if sender_type == "system":
+                return "Deck", "system", None
+            if sender_type == "director":
+                return "Director", "director", None
+            return "Deck or Director (recorded before v3.1)", "legacy", None
         member = await db.get(MailTeamMember, sender_member_id)
         return (member.display_name if member else "unknown", "member", None)
+
+    @staticmethod
+    def _stored_sender_type(message: MailMessage) -> str:
+        """Resolve old attribution in one place without changing historical rows."""
+        if message.sender_actor_id is not None:
+            return "external_actor"
+        if message.sender_member_id is not None:
+            return "member"
+        if message.sender_type is not None:
+            return message.sender_type
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        kind = payload.get("kind")
+        if ((isinstance(kind, str) and kind in LEGACY_SYSTEM_PAYLOAD_KINDS)
+                or payload.get("notice") == "native_input_wait"
+                or (message.delivery_key or "").startswith(
+                    ("backlog:", "owner-followup:", "github-approval:", "github-recovery:")
+                )
+                or message.subject in LEGACY_SYSTEM_SUBJECTS
+                or LEGACY_SYSTEM_SUBJECT_PATTERN.fullmatch(message.subject or "")):
+            return "system"
+        return "legacy"
 
     async def _message_response(
         self, db: AsyncSession, message: MailMessage, for_member_id: Optional[int]
@@ -1687,6 +1776,7 @@ class AgentMailService:
             db,
             message.sender_member_id,
             message.sender_actor_id,
+            self._stored_sender_type(message),
         )
         return MailMessageResponse(
             id=message.id,
@@ -1887,6 +1977,11 @@ class AgentMailService:
         if member is None:
             raise MailWakeError("wake_target_unbound")
 
+        return self._nudge_from_sessions(observed, registered, member, now)
+
+    def _nudge_from_sessions(self, observed, registered, member, now):
+        """Apply the unchanged wake rules to an already loaded read snapshot."""
+        member_id = member.id
         def matching_bindings(pane: MailAgentSession) -> list[MailAgentSession]:
             if (
                 pane.mailbox_status != "observed"
@@ -2436,9 +2531,32 @@ class AgentMailService:
                 root.request_status = "acknowledged"
         await db.commit()
 
+    @staticmethod
+    def _member_root_access(member_id: int):
+        """A root belongs to its sender, recipient or delivery receipt holder."""
+        receipt = select(MailReceipt.id).where(
+            MailReceipt.message_id == MailMessage.id,
+            MailReceipt.member_id == member_id,
+        ).exists()
+        return ((MailMessage.sender_member_id == member_id)
+                | (MailMessage.recipient_member_id == member_id) | receipt)
+
+    async def require_member_thread(self, db: AsyncSession, message_id: int, member_id: int) -> None:
+        message = await db.get(MailMessage, message_id)
+        if message is None:
+            raise ValueError(f"Message {message_id} not found")
+        root_id = message.thread_root_id or message.id
+        permitted = await db.scalar(select(MailMessage.id).where(
+            MailMessage.id == root_id, self._member_root_access(member_id),
+        ))
+        if permitted is None:
+            raise PermissionError("thread_not_authorized")
+
     async def get_thread(
         self, db: AsyncSession, root_id: int, for_member_id: Optional[int] = None
     ) -> MailThreadResponse:
+        if for_member_id is not None:
+            await self.require_member_thread(db, root_id, for_member_id)
         root = await db.get(MailMessage, root_id)
         if root is None:
             raise ValueError(f"Message {root_id} not found")
@@ -2459,21 +2577,13 @@ class AgentMailService:
         )
 
     async def list_root_messages(
-        self, db: AsyncSession, limit: int = 100
+        self, db: AsyncSession, limit: int = 100, for_member_id: Optional[int] = None
     ) -> List[MailMessageResponse]:
-        roots = (
-            (
-                await db.execute(
-                    select(MailMessage)
-                    .where(MailMessage.thread_root_id.is_(None))
-                    .order_by(MailMessage.created_at.desc())
-                    .limit(limit)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [await self._message_response(db, root, for_member_id=None) for root in roots]
+        query = select(MailMessage).where(MailMessage.thread_root_id.is_(None))
+        if for_member_id is not None:
+            query = query.where(self._member_root_access(for_member_id))
+        roots = (await db.scalars(query.order_by(MailMessage.created_at.desc()).limit(limit))).all()
+        return [await self._message_response(db, root, for_member_id) for root in roots]
 
     async def _session_team_context(
         self,

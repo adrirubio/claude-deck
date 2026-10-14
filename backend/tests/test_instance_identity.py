@@ -17,6 +17,7 @@ def test_instance_identity_uses_env_overrides(monkeypatch):
     identity = service.get_instance_identity()
 
     assert identity.name == "Studio Mac"
+    assert identity.name_configured is True
     assert identity.accent == "blue"
     assert identity.id == "studio-mac"
     assert identity.hostname == "studio-mac.local"
@@ -32,7 +33,8 @@ def test_instance_identity_defaults_are_stable_and_non_sensitive(monkeypatch):
 
     identity = service.get_instance_identity()
 
-    assert identity.name == "linux-box"
+    assert identity.name == "This machine"
+    assert identity.name_configured is False
     assert identity.hostname == "linux-box.local"
     assert identity.short_hostname == "linux-box"
     assert identity.accent in service.ALLOWED_ACCENTS
@@ -84,3 +86,48 @@ def test_status_response_can_serialize_instance(monkeypatch):
     assert dumped["instance"]["name"] == "Studio Mac"
     assert dumped["instance"]["hostname"] == "studio-mac.local"
     assert dumped["instance"]["started_at"]
+
+
+def test_automatic_accent_never_uses_a_status_colour(monkeypatch):
+    service = _service()
+    monkeypatch.delenv("CLAUDE_DECK_INSTANCE_ACCENT", raising=False)
+
+    seen = set()
+    for number in range(1000):
+        accent = service._accent_from_hostname(f"host-{number}.local")
+        assert accent not in {"red", "orange", "green"}
+        seen.add(accent)
+
+    assert seen == set(service.AUTO_ACCENTS)
+
+
+def test_default_identity_never_shows_a_status_colour(monkeypatch):
+    service = _service()
+    monkeypatch.delenv("CLAUDE_DECK_INSTANCE_NAME", raising=False)
+    monkeypatch.delenv("CLAUDE_DECK_INSTANCE_ACCENT", raising=False)
+
+    for number in range(200):
+        monkeypatch.setattr(service.socket, "gethostname", lambda n=number: f"box-{n}")
+        service.get_instance_identity.cache_clear()
+        assert service.get_instance_identity().accent not in {"red", "orange", "green"}
+
+
+def test_explicit_accent_still_accepts_every_allowed_colour(monkeypatch):
+    service = _service()
+    monkeypatch.setattr(service.socket, "gethostname", lambda: "garage-mini")
+
+    for accent in service.ALLOWED_ACCENTS:
+        monkeypatch.setenv("CLAUDE_DECK_INSTANCE_ACCENT", accent)
+        service.get_instance_identity.cache_clear()
+        assert service.get_instance_identity().accent == accent
+
+
+def test_blank_name_counts_as_not_configured(monkeypatch):
+    service = _service()
+    monkeypatch.setattr(service.socket, "gethostname", lambda: "linux-box.local")
+    monkeypatch.setenv("CLAUDE_DECK_INSTANCE_NAME", "  \t ")
+
+    identity = service.get_instance_identity()
+
+    assert identity.name == "This machine"
+    assert identity.name_configured is False

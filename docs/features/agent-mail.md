@@ -4,6 +4,51 @@ Agent Mail lets local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, 
 
 Broadcasts require an explicit audience: an Agent Team preset, repository, or GitHub work item. Deck stores that audience with the message and creates receipts only for members in it. Direct messages and replies retain their addressed recipients. An all-member maintenance broadcast requires the operator credential and explicit global intent; a missing audience never means “everyone.” Historical messages keep their original receipts.
 
+## Authentication and upgrades
+
+Agent Mail uses strict authentication by default on new and upgraded installs.
+With a configured Director key, Mail reads require a current Mail session or the key.
+The browser uses the shared Director key from Teams.
+External actor creation requires a loopback connection and the Director key when configured.
+External actor tokens permit only their own or explicitly addressed Mail threads.
+A Director key does not grant a member identity or plan approval authority.
+
+Existing authenticated agents keep their current session credentials.
+A session with a Team slot must have its current live pane binding.
+Restart an older agent integration if it has no authenticated session credential.
+Registration verifies the local process binding before it grants a Team slot identity.
+Generic registration can create an unbound session. It grants no Team slot authority.
+
+An installation can explicitly set `MAIL_CAPABILITY_TOKENS_REQUIRED=false` before starting the backend.
+The opt-out allows unauthenticated reads and legacy registration.
+Member writes require a Mail session. Director writes require the Director key when configured.
+It permits generic Mail reads, install information reads and content hooks.
+It preserves legacy registration and session liveness behavior.
+It also disables pane and offline session checks for existing capability credentials.
+Closed sessions remain refused.
+Invalid supplied credentials still fail.
+Member writes require a Mail session.
+Member metadata changes and external actor creation require the configured Director key in every mode.
+Agent Mail shows a warning when the opt-out is active.
+Remove the explicit opt-out or set `MAIL_CAPABILITY_TOKENS_REQUIRED=true` to restore strict authentication.
+No database deletion or schema reset is required.
+
+Strict mode protects install information when a Director key is configured.
+Member metadata changes and Mail install writes require the configured Director key in every mode.
+With no configured key, local Director actions and UI Mail reads work as before.
+The UI recommends setting a Director key.
+`GET /api/v1/agent-mail/authentication-status` is public by design.
+It returns exactly `{ "director_key_configured": <bool> }`.
+This response contains no credential, Mail, path or launch data.
+The UI reads it before protected reads and after a 401 response.
+Agent tools still require Mail session credentials. Actor reads still require actor credentials.
+Content hooks require a member capability credential before they return Mail context.
+A hook without a valid credential returns only `Check your Deck inbox.`
+This fixed reminder contains no message, member or launch data.
+Native hooks can use this reminder with the authenticated MCP inbox tools.
+Activity and session-end hooks remain available because they return no Mail data.
+The explicit opt-out also leaves install information readable without a Director key.
+
 ## What It Is For
 
 - Ask the agent that knows one repository to explain a local API, component, convention, or failure mode to another agent.

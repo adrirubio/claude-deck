@@ -2,7 +2,9 @@
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, ConfigDict, Field
+from app.models.api_model import ApiModel as BaseModel
+from app.models.schemas import AgentStatus, RequiredCIUnreadableSignal, SupervisorObservation
 
 
 def _utc(value: datetime) -> datetime:
@@ -26,7 +28,7 @@ class FactoryFilters(FactoryModel):
 
 
 class WorkFilters(FactoryFilters):
-    category: Literal["all", "queued", "active", "review", "attention", "finished", "unknown"] = "all"
+    category: Literal["all", "open", "queued", "active", "review", "attention", "finished", "unknown"] = "all"
 
 
 class FactoryCounts(FactoryModel):
@@ -99,6 +101,7 @@ class SessionAssociation(FactoryModel):
     state: Literal["bound", "offline", "ambiguous", "unknown"]
     observed_provider: str | None = None
     bridge_target: BridgeTarget | None = None
+    agent_status: AgentStatus | None = None
 
 
 class MailHint(FactoryModel):
@@ -165,6 +168,9 @@ class SafeWorkItem(FactoryModel):
     updated_at: Timestamp
     github_updated_at: Timestamp
     last_verified_sha: str | None
+    checks_unavailable_since: Timestamp | None = None
+    checks_unavailable_reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"] | None = None
+    required_ci_unreadable: RequiredCIUnreadableSignal | None = None
 
 
 class WorkProjection(FactoryModel):
@@ -217,10 +223,27 @@ class FactoryEnvelope(FactoryModel):
     generated_at: Timestamp
 
 
+class ReminderAttention(FactoryModel):
+    kind: Literal["workspace_release", "backlog_reconcile"]
+    scope_id: PositiveId
+    work_item_id: PositiveId | None = None
+    issue_number: PositiveId | None = None
+    issue_numbers: list[PositiveId] = Field(default_factory=list)
+    owner_slot_id: PositiveId | None = None
+    owner_name: str | None = Field(default=None, max_length=160)
+    reminder_count: int = Field(ge=0)
+    reminder_cap: int = Field(gt=0)
+    waiting_since: Timestamp | None = None
+    elapsed_seconds: int | None = Field(default=None, ge=0)
+    notification_budget_resets_at: Timestamp | None = None
+
+
 class OverviewResponse(FactoryEnvelope):
     filters: FactoryFilters
     counts: FactoryCounts
     automation: AutomationSummary
+    reminder_attention: list[ReminderAttention] = Field(default_factory=list)
+    reminder_attention_complete: bool = True
 
 
 class WorkListResponse(FactoryEnvelope):
@@ -255,3 +278,109 @@ class FactoryErrorDetail(FactoryModel):
 
 class FactoryErrorResponse(FactoryModel):
     detail: FactoryErrorDetail
+
+
+class TeamSummaryAttention(FactoryModel):
+    code: Literal["attempt_stopped", "recovery_decision", "human_review", "owner_stalled",
+                  "observation_pause", "hold", "recovery_only", "hold_unavailable"]
+    work_item_id: PositiveId | None = None
+    scope_id: PositiveId | None = None
+    issue_number: PositiveId | None = None
+    pause_id: PositiveId | None = None
+    observed_at: Timestamp | None = None
+    resume_deadline: Timestamp | None = None
+
+
+class TeamSummaryHumanAction(FactoryModel):
+    scope_id: PositiveId
+    issue_number: PositiveId
+    work_item_id: PositiveId | None = None
+    kind: Literal["review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
+                  "pilot_decision", "scope_clarification", "provide_evidence"]
+    state: Literal["requested", "context_pending", "waiting_for_prerequisites", "historical", "resolved",
+                   "head_changed", "pr_unavailable", "pr_identity_unavailable"]
+    source: Literal["leader", "dispatch", "unknown"]
+    assessment_current: bool
+    pull_request_number: PositiveId | None = None
+
+
+class TeamRemainingWork(FactoryModel):
+    state: Literal["known", "unknown"]
+    unfinished_items: int = Field(ge=0)
+    reported_items: int = Field(ge=0)
+    effort_low_minutes: int | None = Field(default=None, ge=0)
+    effort_high_minutes: int | None = Field(default=None, ge=0)
+    confidence: Literal["unknown", "low", "medium", "high"] = "unknown"
+    reason: Literal["complete", "report_unknown", "observation_incomplete", "context_changed"]
+
+
+class CampaignDoneItem(FactoryModel):
+    title: str
+    merged_at: Timestamp | None
+
+
+class CampaignUnderWayItem(FactoryModel):
+    title: str
+    owner_short_name: str | None
+    state_phrase: Literal["building it", "reviewing it", "waiting for checks", "waiting for you"]
+
+
+class CampaignQueuedItem(FactoryModel):
+    title: str
+
+
+class CampaignAreaGroup(FactoryModel):
+    area: str
+    count: int = Field(ge=0)
+
+
+class CampaignDecision(FactoryModel):
+    text: str
+    state: Literal["later", "now", "done"]
+
+
+class TeamCampaignSummary(FactoryModel):
+    backlog_state: Literal["available", "backlog unavailable"]
+    done_count: int = Field(ge=0)
+    latest_done: list[CampaignDoneItem]
+    under_way_count: int = Field(ge=0)
+    under_way: list[CampaignUnderWayItem]
+    queued_count: int = Field(ge=0)
+    queued: list[CampaignQueuedItem]
+    not_started_count: int | None = Field(ge=0)
+    not_started_groups: list[CampaignAreaGroup]
+    decisions_ahead: list[CampaignDecision]
+
+
+class TeamRequiredCIUnreadable(RequiredCIUnreadableSignal):
+    work_item_id: PositiveId
+    scope_id: PositiveId
+    issue_number: PositiveId
+
+
+class TeamWaitingInput(FactoryModel):
+    slot_id: PositiveId
+    reason: Literal["question", "trust", "sign_in"]
+    label: Literal["Waiting for input"] = "Waiting for input"
+
+
+class AgentTeamSummaryResponse(FactoryModel):
+    preset_id: PositiveId
+    description: str | None
+    parent_issue_url: str | None
+    supervisor: Literal["none"] = "none"
+    supervisor_observation: SupervisorObservation | None = None
+    waiting_input: list[TeamWaitingInput] | None = None
+    checked_at: Timestamp
+    valid_until: Timestamp
+    coverage_complete: bool
+    hold_code: Literal["hold", "recovery_only", "hold_unavailable"] | None
+    attention: list[TeamSummaryAttention]
+    required_ci_unreadable: list[TeamRequiredCIUnreadable] = Field(default_factory=list)
+    reminder_attention: list[ReminderAttention] = Field(default_factory=list)
+    reminder_attention_complete: bool = True
+    human_actions: list[TeamSummaryHumanAction]
+    remaining_work: TeamRemainingWork
+    next_actors: list[Literal["owner", "leader", "operator", "controller"]]
+    next_actor_coverage_complete: bool
+    campaign: TeamCampaignSummary

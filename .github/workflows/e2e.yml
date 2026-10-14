@@ -1,0 +1,114 @@
+name: E2E
+
+on:
+  pull_request:
+    branches: [master, release/v3.1]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master, release/v3.1]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Required check. Runs the @active journeys against one isolated instance.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install the backend
+        run: |
+          python -m venv backend/venv
+          backend/venv/bin/pip install -r backend/requirements.txt apscheduler
+      - name: Install the frontend and Chromium
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install tmux
+        run: sudo apt-get install -y --no-install-recommends tmux
+      - name: Type-check the journeys
+        working-directory: frontend
+        run: npm run e2e:typecheck
+      - name: Run the active journeys
+        working-directory: frontend
+        run: npm run e2e
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7
+
+  # Not required. Runs the @pending journeys and reports lane progress.
+  e2e-pending:
+    name: e2e-pending
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install the backend
+        run: |
+          python -m venv backend/venv
+          backend/venv/bin/pip install -r backend/requirements.txt apscheduler
+      - name: Install the frontend and Chromium
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install tmux
+        run: sudo apt-get install -y --no-install-recommends tmux
+      - name: Run the pending journeys
+        id: pending
+        working-directory: frontend
+        run: npm run e2e:pending
+        continue-on-error: true
+      - name: Report progress
+        if: always()
+        working-directory: frontend
+        run: node e2e/support/report-progress.mjs test-results/results.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload traces and screenshots
+        if: steps.pending.outcome == 'failure'
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-pending-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7

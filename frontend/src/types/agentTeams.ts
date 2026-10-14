@@ -1,3 +1,5 @@
+import type { AgentStatus } from './agentStatus'
+
 export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
 export type AgentTeamLaunchAction = 'reuse' | 'adopt' | 'spawn' | 'skip' | 'blocked'
 export type AgentTeamLaunchStatus =
@@ -67,12 +69,145 @@ export interface AgentTeamPreset {
   id: number
   name: string
   description?: string | null
+  parent_issue_url?: string | null
   created_by?: string | null
   created_at: string
   updated_at: string
   autonomy_enabled: boolean
   leader_slot_id?: number | null
   slots: AgentTeamSlot[]
+}
+
+export type TeamSummaryAttentionCode =
+  | 'attempt_stopped' | 'recovery_decision' | 'human_review' | 'owner_stalled'
+  | 'observation_pause' | 'hold' | 'recovery_only' | 'hold_unavailable'
+
+export interface TeamSummaryAttention {
+  code: TeamSummaryAttentionCode
+  work_item_id?: number | null
+  scope_id?: number | null
+  issue_number?: number | null
+  pause_id?: number | null
+  observed_at?: string | null
+  resume_deadline?: string | null
+}
+
+export interface TeamSummaryHumanAction {
+  scope_id: number
+  issue_number: number
+  work_item_id?: number | null
+  kind: 'review_pr' | 'merge_pr' | 'inspect_attempt' | 'inspect_checkpoint' | 'milestone_acceptance'
+    | 'pilot_decision' | 'scope_clarification' | 'provide_evidence'
+  state: 'requested' | 'context_pending' | 'waiting_for_prerequisites' | 'historical' | 'resolved'
+    | 'head_changed' | 'pr_unavailable' | 'pr_identity_unavailable'
+  source: 'leader' | 'dispatch' | 'unknown'
+  assessment_current: boolean
+  pull_request_number?: number | null
+}
+
+export interface RequiredCIUnreadableSignal {
+  code: 'required_ci_unreadable'
+  label: 'Required CI cannot be read'
+  since: string
+  reason: 'permission_missing' | 'workflow_missing' | 'api_error' | 'unknown'
+  next_steps: string[]
+}
+
+export interface TeamRequiredCIUnreadable extends RequiredCIUnreadableSignal {
+  work_item_id: number
+  scope_id: number
+  issue_number: number
+}
+
+export interface TeamRemainingWork {
+  state: 'known' | 'unknown'
+  unfinished_items: number
+  reported_items: number
+  effort_low_minutes?: number | null
+  effort_high_minutes?: number | null
+  confidence: 'unknown' | 'low' | 'medium' | 'high'
+  reason: 'complete' | 'report_unknown' | 'observation_incomplete' | 'context_changed'
+}
+
+export interface CampaignDoneItem { title: string; merged_at: string | null }
+export interface CampaignUnderWayItem {
+  title: string
+  owner_short_name: string | null
+  state_phrase: 'building it' | 'reviewing it' | 'waiting for checks' | 'waiting for you'
+}
+export interface CampaignDecision { text: string; state: 'later' | 'now' | 'done' }
+
+// The progress of one team's campaign (#548, #587). Counts come from the server.
+export interface TeamCampaignSummary {
+  backlog_state: 'available' | 'backlog unavailable'
+  done_count: number
+  latest_done: CampaignDoneItem[]
+  under_way_count: number
+  under_way: CampaignUnderWayItem[]
+  queued_count: number
+  queued: { title: string }[]
+  not_started_count: number | null
+  not_started_groups: { area: string; count: number }[]
+  decisions_ahead: CampaignDecision[]
+}
+
+// The status that the controller derives from the clock and the stored promise (#549).
+export interface SupervisorObservation {
+  status: 'none' | 'healthy' | 'late' | 'absent'
+  actor_id: number | null
+  checked_at: string | null
+  next_check_at: string | null
+  grace_seconds: number
+  note: string | null
+  attention: 'Supervisor check-in overdue' | null
+}
+
+// A member waits at an interactive screen. Only the fixed reason is on the wire.
+export interface TeamWaitingInput {
+  slot_id: number
+  reason: 'question' | 'trust' | 'sign_in'
+  label: 'Waiting for input'
+}
+
+// One unanswered-reminder signal (#528). Read it through parseReminders: the wire is not trusted.
+export interface ReminderAttention {
+  kind: 'workspace_release' | 'backlog_reconcile'
+  scope_id: number
+  work_item_id?: number | null
+  issue_number?: number | null
+  issue_numbers?: number[]
+  owner_slot_id?: number | null
+  owner_name?: string | null
+  reminder_count: number
+  reminder_cap: number
+  waiting_since?: string | null
+  elapsed_seconds?: number | null
+  notification_budget_resets_at?: string | null
+}
+
+// GET agent-teams/presets/{id}/summary. A display-only read: it grants no action.
+export interface AgentTeamSummary {
+  preset_id: number
+  description: string | null
+  parent_issue_url: string | null
+  supervisor: 'none'
+  // Missing on an older server. Null means Deck could not read it.
+  supervisor_observation?: SupervisorObservation | null
+  waiting_input?: TeamWaitingInput[] | null
+  // Missing on an older server. A row that cannot be read is ignored.
+  reminder_attention?: ReminderAttention[]
+  reminder_attention_complete?: boolean
+  checked_at: string
+  valid_until: string
+  coverage_complete: boolean
+  hold_code: 'hold' | 'recovery_only' | 'hold_unavailable' | null
+  attention: TeamSummaryAttention[]
+  required_ci_unreadable?: TeamRequiredCIUnreadable[]
+  human_actions: TeamSummaryHumanAction[]
+  remaining_work: TeamRemainingWork
+  next_actors: ('owner' | 'leader' | 'operator' | 'controller')[]
+  next_actor_coverage_complete: boolean
+  campaign?: TeamCampaignSummary
 }
 
 export interface AgentTeamPresetListResponse {
@@ -321,6 +456,7 @@ export interface AgentActivityObservation {
   state: 'working' | 'idle' | 'stopped' | 'unknown'
   reason: string
   observed_at: string | null
+  agent_status?: AgentStatus | null
 }
 
 export interface AgentTeamActivityResponse {
@@ -357,6 +493,9 @@ export interface GithubWorkItem {
   retry_requested_at?: string | null
   escalation_reason?: string | null
   status_note?: string | null
+  checks_unavailable_since?: string | null
+  checks_unavailable_reason?: RequiredCIUnreadableSignal['reason'] | null
+  required_ci_unreadable?: RequiredCIUnreadableSignal | null
   auto_merged_at?: string | null
   active_scope_revision: number
   active_scope_summary?: string | null
@@ -452,6 +591,7 @@ export interface AgentTeamLaunchResultItem {
   block_code?: string | null
   error?: string | null
   warnings?: string[]
+  workspace_trust_changed?: boolean
 }
 
 export interface AgentTeamLaunchResult {

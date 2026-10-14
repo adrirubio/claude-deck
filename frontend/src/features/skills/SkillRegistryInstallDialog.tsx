@@ -5,11 +5,11 @@ import {
   CheckCircle2,
   XCircle,
   ExternalLink,
-  Github,
   Terminal,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { GithubMark } from "@/components/shared/GithubMark";
 import {
   Dialog,
   DialogContent,
@@ -159,7 +159,7 @@ export function SkillRegistryInstallDialog({
                     window.open(skill.github_url, "_blank", "noopener")
                   }
                 >
-                  <Github className="h-3 w-3 mr-1" />
+                  <GithubMark className="h-3 w-3 mr-1" />
                   GitHub
                 </Button>
               </div>

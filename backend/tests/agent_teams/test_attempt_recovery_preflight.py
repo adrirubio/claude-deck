@@ -42,6 +42,10 @@ def _bridge_session(slot_id: int, target: str) -> dict[str, object]:
         "mail_wake_state": "wakeable",
         "mail_wake_enabled": True,
         "mail_wake_target": target,
+        "agent_status": {
+            "session_state": "online", "activity_state": "idle",
+            "wake_state": "can_wake", "wake_reason": None,
+        },
     }
 
 
@@ -251,6 +255,8 @@ def test_preflight_refuses_non_wakeable_owner_pane(tmp_path: Path, wake_state: s
     _, team = _fixtures(tmp_path / "source")
     bridge_sessions = _bridge_sessions()
     bridge_sessions["sessions"][1]["mail_wake_state"] = wake_state
+    # Shared display facts cannot authorize recovery or replace the delivery guard.
+    assert bridge_sessions["sessions"][1]["agent_status"]["wake_state"] == "can_wake"
 
     result = _run_preflight(tmp_path / "run", team, bridge_sessions)
 

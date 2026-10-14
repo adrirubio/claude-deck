@@ -1,27 +1,19 @@
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDown,
-  ArrowUp,
   BookOpen,
   ChevronDown,
-  Copy,
-  Edit,
   GitBranch,
   MonitorPlay,
   Plus,
-  Play,
   RefreshCw,
   Rocket,
-  Save,
-  Trash2,
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatServerTime } from '@/lib/serverTime'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -43,10 +35,18 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
+import { TEAM_SLOT_COLOR_OPTIONS } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
 import { ApiHttpError } from '@/lib/api'
 import { autonomousLeaderSlotId } from './leaderSlot'
+import { fetchCCSessions } from '@/features/cc-bridge/api'
+import type { AgentSession } from '@/features/cc-bridge/types'
+import { TeamMemberPicker } from './TeamMemberPicker'
+import { TeamHeader } from './TeamHeader'
+import { EditTeamPanel } from './EditTeamPanel'
+import { TeamMemberRow } from './TeamMemberRow'
+import { TeamProgress } from './TeamProgress'
+import { PROVIDER_IDS, isHiddenByDefault, memberItems, sessionItems, sessionKey, sessionsToSlots, usableSessions } from './teamSources'
 import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchPlanItem,
@@ -58,44 +58,33 @@ import type {
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
-  TeamGithubContinuationPolicyUpdate,
-  TeamGithubScopeInput,
-  TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
-  cancelGithubContinuationRequest,
-  createTeamGithubScope,
-  createAgentTeamFromBridge,
   createAgentTeamFromMail,
   createAgentTeamPreset,
   deleteAgentTeamPreset,
   deleteAgentTeamSlot,
-  deleteTeamGithubScope,
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
   fetchGithubWorkItems,
-  fetchGithubScopeRevisions,
   fetchTeamGithubScopes,
   launchAgentTeam,
   planAgentTeamLaunch,
-  retryGithubWorkItem,
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
   updateAgentTeamLeader,
   updateAgentTeamSlot,
-  updateTeamGithubContinuationPolicy,
-  updateTeamGithubScope,
 } from './api'
-import { fetchAgentMailTeam } from '@/features/agent-mail/api'
+import { fetchAgentMailAuthenticationStatus, fetchAgentMailTeam } from '@/features/agent-mail/api'
 import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
 import { HumanActionSummary } from './HumanActionSummary'
-import { AgentActivityBadge } from './AgentActivityBadge'
+import { TeamSummaryCard } from './TeamSummaryCard'
 import { useAgentActivity } from './useAgentActivity'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
@@ -103,7 +92,6 @@ type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
 type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
 
-const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli']
 const DEFAULT_SLOT_COLOR_VALUE = 'default'
 
 const emptySlot: AgentTeamSlotInput = {
@@ -132,9 +120,9 @@ function formatDate(value: string) {
 }
 
 function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {
-  if (action === 'spawn') return 'border-emerald-500/70 text-emerald-400'
-  if (action === 'reuse') return 'border-sky-500/70 text-sky-400'
-  if (action === 'adopt') return 'border-amber-500/70 text-amber-400'
+  if (action === 'spawn') return 'border-emerald-500/70 text-emerald-700 dark:text-emerald-400'
+  if (action === 'reuse') return 'border-sky-500/70 text-sky-700 dark:text-sky-400'
+  if (action === 'adopt') return 'border-amber-500/70 text-amber-700 dark:text-amber-400'
   if (action === 'blocked') return 'border-destructive/70 text-destructive'
   return 'border-muted-foreground/50 text-muted-foreground'
 }
@@ -224,13 +212,17 @@ function NewPresetDialog({
     description: string
     includeOffline?: boolean
     memberIds?: number[]
+    sessions?: AgentSession[]
   }) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [includeOffline, setIncludeOffline] = useState(true)
+  // Offline and temporary members stay hidden until the person asks for them.
+  const [showHidden, setShowHidden] = useState(false)
   const [mailMembers, setMailMembers] = useState<MailMemberResponse[]>([])
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([])
+  const [bridgeSessions, setBridgeSessions] = useState<AgentSession[]>([])
+  const [selectedSessionKeys, setSelectedSessionKeys] = useState<string[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
   const [saving, setSaving] = useState(false)
   const open = mode !== null
@@ -246,9 +238,11 @@ function NewPresetDialog({
               : ''
         )
         setDescription('')
-        setIncludeOffline(true)
+        setShowHidden(false)
         setMailMembers([])
         setSelectedMemberIds([])
+        setBridgeSessions([])
+        setSelectedSessionKeys([])
       })
     }
   }, [mode, open])
@@ -263,9 +257,11 @@ function NewPresetDialog({
       .then((response) => {
         if (cancelled) return
         const members = response.members
-        const preferred = members.filter((member) => member.status !== 'offline')
         setMailMembers(members)
-        setSelectedMemberIds((preferred.length ? preferred : members).map((member) => member.id))
+        // Preselect only members that are shown and not in a team.
+        setSelectedMemberIds(
+          members.filter((member) => member.team_preset_id == null && !isHiddenByDefault(member)).map((member) => member.id),
+        )
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : 'Failed to load Agent Mail members')
@@ -277,6 +273,35 @@ function NewPresetDialog({
       cancelled = true
     }
   }, [mode, open])
+
+  useEffect(() => {
+    if (!open || mode !== 'from-bridge') return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setLoadingMembers(true)
+    })
+    fetchCCSessions()
+      .then((response) => {
+        if (cancelled) return
+        const usable = usableSessions(response.sessions)
+        setBridgeSessions(usable)
+        // Preselect only live sessions that are not in a team.
+        setSelectedSessionKeys(usable.filter((session) => !session.team_preset_name).map(sessionKey))
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : 'Failed to load live sessions')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMembers(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, open])
+
+  const visibleMembers = mailMembers.filter((member) => showHidden || !isHiddenByDefault(member))
+  const selectedCount = mode === 'from-bridge' ? selectedSessionKeys.length : selectedMemberIds.length
+  const countLabel = `Create team with ${selectedCount} ${selectedCount === 1 ? 'member' : 'members'}`
 
   const title = mode === 'from-mail'
     ? 'Create From Agent Mail'
@@ -290,10 +315,16 @@ function NewPresetDialog({
       await onCreate({
         name,
         description,
-        includeOffline,
+        // The person saw and selected each member, offline ones included.
+        includeOffline: true,
         memberIds: mode === 'from-mail' ? selectedMemberIds : undefined,
+        sessions: mode === 'from-bridge'
+          ? bridgeSessions.filter((session) => selectedSessionKeys.includes(sessionKey(session)))
+          : undefined,
       })
       onOpenChange(null)
+    } catch {
+      // createPreset already showed the error. The dialog stays open so the person can fix it.
     } finally {
       setSaving(false)
     }
@@ -322,69 +353,50 @@ function NewPresetDialog({
             <div className="grid gap-3">
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox
-                  checked={includeOffline}
+                  checked={showHidden}
                   onCheckedChange={(checked) => {
                     const next = checked === true
-                    setIncludeOffline(next)
+                    setShowHidden(next)
                     if (!next) {
-                      setSelectedMemberIds((current) =>
-                        current.filter((memberId) =>
-                          mailMembers.some((member) => member.id === memberId && member.status !== 'offline')
-                        )
-                      )
+                      const shown = new Set(mailMembers.filter((member) => !isHiddenByDefault(member)).map((member) => member.id))
+                      setSelectedMemberIds((current) => current.filter((memberId) => shown.has(memberId)))
                     }
                   }}
                 />
-                Include offline members
+                Show offline and temporary
               </label>
-              <div className="max-h-56 overflow-y-auto rounded-md border p-2">
-                {loadingMembers && (
-                  <div className="p-3 text-sm text-muted-foreground">Loading members...</div>
-                )}
-                {!loadingMembers && mailMembers.length === 0 && (
-                  <div className="p-3 text-sm text-muted-foreground">No Agent Mail members found.</div>
-                )}
-                {!loadingMembers && mailMembers.map((member) => {
-                  const disabled = !includeOffline && member.status === 'offline'
-                  return (
-                    <label
-                      key={member.id}
-                      className={cn(
-                        'flex items-center gap-3 rounded-md px-2 py-2 text-sm',
-                        disabled && 'text-muted-foreground'
-                      )}
-                    >
-                      <Checkbox
-                        checked={selectedMemberIds.includes(member.id)}
-                        disabled={disabled}
-                        onCheckedChange={(checked) => {
-                          setSelectedMemberIds((current) => {
-                            if (checked === true) return [...new Set([...current, member.id])]
-                            return current.filter((memberId) => memberId !== member.id)
-                          })
-                        }}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{member.display_name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{member.repo_path}</span>
-                      </span>
-                      <Badge variant={member.status === 'offline' ? 'secondary' : 'outline'}>
-                        {member.status}
-                      </Badge>
-                    </label>
-                  )
-                })}
-              </div>
+              <TeamMemberPicker
+                items={memberItems(visibleMembers)}
+                selected={selectedMemberIds.map(String)}
+                loading={loadingMembers}
+                emptyText="No Agent Mail members to show."
+                onToggle={(id, checked) => {
+                  const memberId = Number(id)
+                  setSelectedMemberIds((current) =>
+                    checked ? [...new Set([...current, memberId])] : current.filter((value) => value !== memberId))
+                }}
+              />
             </div>
+          )}
+          {mode === 'from-bridge' && (
+            <TeamMemberPicker
+              items={sessionItems(bridgeSessions)}
+              selected={selectedSessionKeys}
+              loading={loadingMembers}
+              emptyText="No live sessions found."
+              onToggle={(id, checked) =>
+                setSelectedSessionKeys((current) =>
+                  checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))}
+            />
           )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(null)}>Cancel</Button>
           <Button
             onClick={submit}
-            disabled={saving || !name.trim() || (mode === 'from-mail' && selectedMemberIds.length === 0)}
+            disabled={saving || !name.trim() || (mode !== 'new' && mode !== null && selectedCount === 0)}
           >
-            {saving ? 'Creating' : 'Create'}
+            {saving ? 'Creating' : mode === 'from-mail' || mode === 'from-bridge' ? countLabel : 'Create'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -716,13 +728,13 @@ function LaunchPlanDialog({
                   <p className="mt-3 text-sm text-muted-foreground">{item.reasons.join('; ')}</p>
                 )}
                 {(item.action === 'adopt' || item.block_code === 'unbound_pane_requires_operator_adoption') && (
-                  <p className="mt-2 text-sm text-amber-300">
+                  <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">
                     Unbound pane: {String(item.matching_session?.tmux_target ?? 'unknown')} (PID {String(item.matching_session?.pid ?? 'unknown')}).
                     Its current prompt and authority were not created by this roster.
                   </p>
                 )}
                 {item.warnings && item.warnings.length > 0 && (
-                  <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
+                  <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-800 dark:text-amber-300">
                     {item.warnings.join('; ')}
                   </div>
                 )}
@@ -740,10 +752,14 @@ function LaunchPlanDialog({
                   <p className="text-sm text-muted-foreground">
                     {item.tmux_target ?? item.session_name ?? item.error ?? item.repo_path}
                   </p>
+                  {item.message && <p className="mt-1 text-sm">{item.message}</p>}
                 </div>
-                <Badge variant={item.status === 'failed' ? 'destructive' : 'outline'}>
-                  {item.status}
-                </Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  {item.workspace_trust_changed && <Badge variant="secondary">Workspace trust changed</Badge>}
+                  <Badge variant={item.status === 'failed' ? 'destructive' : 'outline'}>
+                    {item.status}
+                  </Badge>
+                </div>
               </div>
             ))}
           </div>
@@ -772,17 +788,21 @@ function LaunchPlanDialog({
   )
 }
 
+const DEFAULT_TOKEN_REASON = 'to change the team roster or launch the team'
+
 export function AgentTeamsPage() {
   const { teamId } = useParams()
   const [contextParams] = useSearchParams()
   const navigate = useNavigate()
   const requestedTeamId = teamId && /^\d+$/.test(teamId) ? Number(teamId) : null
+  // A team part that is not a number names no team. It must not fall back to another team.
+  const hasTeamParam = Boolean(teamId)
   const requestedSlotId = Number(contextParams.get('slot_id')) || null
   const requestedTab = contextParams.get('tab')
 
   const [presets, setPresets] = useState<AgentTeamPreset[]>([])
   const [selectedPresetIdState, setSelectedPresetId] = useState<number | null>(requestedTeamId)
-  const selectedPresetId = requestedTeamId ?? selectedPresetIdState
+  const selectedPresetId = requestedTeamId ?? (hasTeamParam ? null : selectedPresetIdState)
   const presetRequestIdRef = useRef(0)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -796,6 +816,7 @@ export function AgentTeamsPage() {
   const [adoptUnboundSessions, setAdoptUnboundSessions] = useState(false)
   const [reuseExistingSessions, setReuseExistingSessions] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [editTeamOpen, setEditTeamOpen] = useState(false)
   const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
   const [githubScopes, setGithubScopes] = useState<TeamGithubScope[]>([])
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
@@ -811,6 +832,7 @@ export function AgentTeamsPage() {
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
+  const [tokenReason, setTokenReason] = useState(DEFAULT_TOKEN_REASON)
   const tokenResolverRef = useRef<((token: string | null) => void) | null>(null)
   const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
   const teamContextGenerationRef = useRef(0)
@@ -833,11 +855,12 @@ export function AgentTeamsPage() {
     tokenPromiseRef.current = null
   }, [])
 
-  const requestOperatorToken = (error: string | null = null): Promise<string | null> => {
+  const requestOperatorToken = (error: string | null = null, reason = DEFAULT_TOKEN_REASON): Promise<string | null> => {
     const stored = getOperatorToken()
     if (stored) return Promise.resolve(stored)
     if (tokenPromiseRef.current) return tokenPromiseRef.current
     setTokenError(error)
+    setTokenReason(reason)
     setTokenDialogOpen(true)
     const pending = new Promise<string | null>((resolve) => { tokenResolverRef.current = resolve })
     tokenPromiseRef.current = pending
@@ -853,7 +876,7 @@ export function AgentTeamsPage() {
     setTokenError(null)
   }
 
-  const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>): Promise<Result> => {
+  const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>, reason = DEFAULT_TOKEN_REASON): Promise<Result> => {
     const generation = teamContextGenerationRef.current
     const targetId = currentTeamIdRef.current
     const assertCurrentContext = () => {
@@ -863,9 +886,9 @@ export function AgentTeamsPage() {
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       assertCurrentContext()
-      const token = await requestOperatorToken(attempt ? 'The operator token was rejected. Enter a valid token to retry.' : null)
+      const token = await requestOperatorToken(attempt ? 'The Director key was rejected. Enter a valid key to retry.' : null, reason)
       assertCurrentContext()
-      if (!token) throw new Error('Operator token is required for this action.')
+      if (!token) throw new Error('The Director key is required for this action.')
       try {
         const result = await action(token)
         assertCurrentContext()
@@ -877,7 +900,7 @@ export function AgentTeamsPage() {
         if (attempt === 1) throw error
       }
     }
-    throw new Error('Operator token was rejected.')
+    throw new Error('The Director key was rejected.')
   }
 
   const selectedPreset = useMemo(
@@ -885,7 +908,9 @@ export function AgentTeamsPage() {
     [presets, selectedPresetId]
   )
   const { name, setName, description, setDescription } = usePresetForm(selectedPreset)
-  const agentActivity = useAgentActivity(selectedPresetId)
+  // Per-team reads start only for a team in the loaded list.
+  const knownPresetId = selectedPreset ? selectedPresetId : null
+  const agentActivity = useAgentActivity(knownPresetId)
 
   const loadPresets = useCallback(async () => {
     const requestId = ++presetRequestIdRef.current
@@ -895,12 +920,15 @@ export function AgentTeamsPage() {
       if (requestId !== presetRequestIdRef.current) return
       setPresets(response.presets)
       setSelectedPresetId((current) => {
-        if (requestedTeamId) return requestedTeamId
+        if (hasTeamParam) return requestedTeamId
         if (current && response.presets.some((preset) => preset.id === current)) return current
         return requestedTeamId ?? response.presets[0]?.id ?? null
       })
       if (!requestedTab && !contextParams.has('review_launch')) {
-        const initial = requestedTeamId ?? response.presets[0]?.id
+        // An unknown team id gets no per-team request.
+        const initial = hasTeamParam
+          ? (response.presets.some((preset) => preset.id === requestedTeamId) ? requestedTeamId : null)
+          : response.presets[0]?.id
         if (initial) {
           try {
             const scopes = await fetchTeamGithubScopes(initial)
@@ -910,11 +938,11 @@ export function AgentTeamsPage() {
       }
 
     } catch (error) {
-      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to load Agent Teams')
+      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to load teams')
     } finally {
       if (requestId === presetRequestIdRef.current) setLoading(false)
     }
-  }, [requestedTeamId, requestedTab, contextParams])
+  }, [hasTeamParam, requestedTeamId, requestedTab, contextParams])
 
   const loadProviderLaunchOptions = useCallback(async () => {
     try {
@@ -1003,7 +1031,7 @@ export function AgentTeamsPage() {
   }, [loadPresets, loadProviderLaunchOptions])
 
   useEffect(() => {
-    if (!selectedPresetId) {
+    if (!knownPresetId) {
       autonomyRequestIdRef.current += 1
       autonomyDataPresetIdRef.current = null
       queueMicrotask(() => {
@@ -1019,9 +1047,9 @@ export function AgentTeamsPage() {
     }
     if (autonomyTab !== 'autonomy') return
     let cancelled = false
-    queueMicrotask(() => { if (!cancelled) void loadAutonomy(selectedPresetId, true) })
+    queueMicrotask(() => { if (!cancelled) void loadAutonomy(knownPresetId, true) })
     const interval = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void loadAutonomy(selectedPresetId)
+      if (document.visibilityState === 'visible') void loadAutonomy(knownPresetId)
     }, 5000)
     return () => {
       cancelled = true
@@ -1029,24 +1057,15 @@ export function AgentTeamsPage() {
       autonomyRequestIdRef.current += 1
       autonomyManualRequestIdRef.current = null
     }
-  }, [autonomyTab, loadAutonomy, selectedPresetId])
-
-  const stats = useMemo(() => {
-    const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
-    const enabled = presets.reduce(
-      (count, preset) => count + preset.slots.filter((slot) => slot.enabled).length,
-      0
-    )
-    return { slots, enabled }
-  }, [presets])
+  }, [autonomyTab, loadAutonomy, knownPresetId])
 
   const replacePreset = (preset: AgentTeamPreset) => {
     setPresets((current) => current.map((item) => (item.id === preset.id ? preset : item)))
     setSelectedPresetId(preset.id)
   }
 
-  const savePreset = async () => {
-    if (!selectedPreset) return
+  const savePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     setSaving(true)
     try {
       const updated = await withOperatorToken((token) => updateAgentTeamPreset(selectedPreset.id, {
@@ -1055,8 +1074,10 @@ export function AgentTeamsPage() {
       }, token))
       replacePreset(updated)
       toast.success('Team saved')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save team')
+      return false
     } finally {
       setSaving(false)
     }
@@ -1067,6 +1088,7 @@ export function AgentTeamsPage() {
     description: string
     includeOffline?: boolean
     memberIds?: number[]
+    sessions?: AgentSession[]
   }) => {
     try {
       const created = await withOperatorToken((token) => presetDialog === 'from-mail'
@@ -1077,9 +1099,12 @@ export function AgentTeamsPage() {
           include_offline: input.includeOffline,
         }, token)
         : presetDialog === 'from-bridge'
-          ? createAgentTeamFromBridge({
+          // The backend route would take every live session. This creates exactly the selected ones.
+          ? createAgentTeamPreset({
             name: input.name,
             description: input.description,
+            created_by: 'deck-ui',
+            slots: sessionsToSlots(input.sessions ?? []),
           }, token)
           : createAgentTeamPreset({
             name: input.name,
@@ -1096,8 +1121,8 @@ export function AgentTeamsPage() {
     }
   }
 
-  const duplicatePreset = async () => {
-    if (!selectedPreset) return
+  const duplicatePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     try {
       const created = await withOperatorToken((token) => duplicateAgentTeamPreset(selectedPreset.id, {
         name: `${selectedPreset.name} copy`,
@@ -1105,13 +1130,15 @@ export function AgentTeamsPage() {
       setPresets((current) => [created, ...current])
       setSelectedPresetId(created.id)
       toast.success('Team duplicated')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to duplicate team')
+      return false
     }
   }
 
-  const removePreset = async () => {
-    if (!selectedPreset) return
+  const removePreset = async (): Promise<boolean> => {
+    if (!selectedPreset) return false
     try {
       await withOperatorToken((token) => deleteAgentTeamPreset(selectedPreset.id, token))
       setPresets((current) => current.filter((preset) => preset.id !== selectedPreset.id))
@@ -1120,8 +1147,10 @@ export function AgentTeamsPage() {
         return remaining[0]?.id ?? null
       })
       toast.success('Team deleted')
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to delete team')
+      return false
     }
   }
 
@@ -1136,6 +1165,12 @@ export function AgentTeamsPage() {
       : addAgentTeamSlot(selectedPreset.id, normalizedInput, token))
     replacePreset(saved)
     toast.success('Slot saved')
+  }
+
+  // The switch, its confirmation and the Director key stay in the Autonomy tab. The header button opens it there.
+  const openAutonomySwitch = () => {
+    setAutonomyTab('autonomy')
+    window.setTimeout(() => document.getElementById('autonomy-enabled')?.focus(), 50)
   }
 
   const refreshAutonomy = async () => {
@@ -1153,88 +1188,6 @@ export function AgentTeamsPage() {
       toast.success(enabled ? 'Autonomy enabled' : 'Autonomy disabled')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to update autonomy')
-      throw error
-    }
-  }
-
-  const createGithubScope = async (input: TeamGithubScopeInput, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await createTeamGithubScope(selectedPreset.id, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo added')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to add watched repo')
-      throw error
-    }
-  }
-
-  const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await updateTeamGithubScope(scopeId, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo saved')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save watched repo')
-      throw error
-    }
-  }
-
-  const updateGithubContinuationPolicy = async (
-    scopeId: number,
-    input: TeamGithubContinuationPolicyUpdate,
-    operatorToken: string
-  ) => {
-    if (!selectedPreset) return
-    try {
-      await updateTeamGithubContinuationPolicy(scopeId, input, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Attempt recovery policy saved')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save recovery policy')
-      throw error
-    }
-  }
-
-  const cancelGithubContinuation = async (
-    item: GithubWorkItem,
-    requestId: number,
-    operatorToken: string
-  ) => {
-    if (!selectedPreset) return
-    try {
-      await cancelGithubContinuationRequest(item.id, requestId, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success(`Continuation request #${requestId} cancelled`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to cancel continuation')
-      throw error
-    }
-  }
-
-  const removeGithubScope = async (scope: TeamGithubScope, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      await deleteTeamGithubScope(scope.id, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success('Watched repo removed')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to remove watched repo')
-      throw error
-    }
-  }
-
-  const retryWorkItem = async (item: GithubWorkItem, operatorToken: string) => {
-    if (!selectedPreset) return
-    try {
-      const updated = await retryGithubWorkItem(item.id, operatorToken)
-      await loadAutonomy(selectedPreset.id)
-      toast.success(updated.dispatch_status === 'pending'
-        ? `Issue #${item.issue_number} reset to pending`
-        : updated.status_note || `Retry requested for issue #${item.issue_number}; awaiting workspace release`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
       throw error
     }
   }
@@ -1308,7 +1261,7 @@ export function AgentTeamsPage() {
       const nextPlan = await withOperatorToken((token) => {
         if (requestId !== presetRequestIdRef.current) throw new Error('Team context changed. Review the current team again.')
         return planAgentTeamLaunch(selectedPreset.id, request, token)
-      })
+      }, 'to plan a launch')
       if (requestId === presetRequestIdRef.current) setPlan(nextPlan)
     } catch (error) {
       if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
@@ -1352,10 +1305,10 @@ export function AgentTeamsPage() {
         <div>
           <h1 className="flex items-center gap-2 text-3xl font-bold">
             <UsersRound className="h-8 w-8" />
-            Agent Teams
+            Teams
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Saved agent rosters with launch plans for local Claude Code, Codex, and Copilot sessions.
+            Teams of agents that work on your repositories.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1367,7 +1320,22 @@ export function AgentTeamsPage() {
             <BookOpen className="mr-2 h-4 w-4" />
             How it works
           </Button>
-          <Button variant="outline" onClick={() => setPresetDialog('from-mail')}>
+          <Button variant="outline" onClick={async () => {
+            try {
+              if (!getOperatorToken()) {
+                const mode = await fetchAgentMailAuthenticationStatus()
+                if (!mode.director_key_configured) {
+                  toast.info('Set a Director key to protect Director actions.')
+                  setPresetDialog('from-mail')
+                  return
+                }
+              }
+              const token = await requestOperatorToken()
+              if (token) setPresetDialog('from-mail')
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'Mail authentication status is unavailable.')
+            }
+          }}>
             <GitBranch className="mr-2 h-4 w-4" />
             From Mail
           </Button>
@@ -1382,254 +1350,118 @@ export function AgentTeamsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Teams</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{presets.length}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Slots</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{stats.slots}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Enabled</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{stats.enabled}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="min-w-0 rounded-lg border">
-          <div className="border-b p-3 text-sm font-medium">Saved Teams</div>
-          <div className="max-h-[620px] overflow-y-auto p-2">
-            {presets.length === 0 && (
-              <div className="p-4 text-sm text-muted-foreground">No teams saved.</div>
-            )}
-            {presets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
-                className={cn(
-                  'mb-2 w-full rounded-md border p-3 text-left transition-colors hover:bg-accent',
-                  selectedPresetId === preset.id && 'border-primary bg-accent'
-                )}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-medium">{preset.name}</p>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {preset.autonomy_enabled && (
-                      <Badge variant="outline" className="border-primary text-primary">⚡ Autonomy</Badge>
-                    )}
-                    <Badge variant="secondary">{preset.slots.length}</Badge>
-                  </div>
-                </div>
-                <p className="mt-1 truncate text-xs text-muted-foreground">
-                  Updated {formatDate(preset.updated_at)}
-                </p>
-              </button>
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <nav aria-label="Saved teams" className="flex flex-wrap items-center gap-2">
+          {presets.length === 0 && <span className="text-sm text-muted-foreground">No teams saved.</span>}
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => { setEditTeamOpen(false); setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
+              aria-current={selectedPresetId === preset.id ? 'page' : undefined}
+              title={`Updated ${formatDate(preset.updated_at)}`}
+              className={cn(
+                'flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-colors hover:bg-accent',
+                selectedPresetId === preset.id && 'border-primary bg-accent font-medium'
+              )}
+            >
+              {preset.name}
+              <Badge variant="secondary">{preset.slots.length}</Badge>
+              {preset.autonomy_enabled && <span className="text-xs text-primary">⚡ Autonomy</span>}
+            </button>
+          ))}
+        </nav>
 
         <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
             <div className="p-8 text-sm text-muted-foreground">
-              {teamId ? `Team ${teamId} not found. Select an available team.` : 'Select or create a team.'}
+              {teamId ? 'This team does not exist. Select a team from the list.' : 'Select or create a team.'}
             </div>
           ) : (
             <div className="space-y-6 p-5">
               {contextParams.get('review_launch') === '1' && <section className="space-y-2 rounded border p-3"><h3 className="font-semibold">Review selected slot launch</h3><p>{selectedPreset.slots.find(slot => slot.id === requestedSlotId)?.display_name ?? 'Selected slot not found'} · slot {requestedSlotId ?? 'unknown'}. Opening this page does not launch or approve work.</p><Button className="h-auto whitespace-normal text-left" variant="outline" disabled={!selectedPreset.slots.some(slot => slot.id === requestedSlotId)} onClick={() => void openPlan(requestedSlotId ? [requestedSlotId] : null)}>Review current authenticated launch plan</Button></section>}
 
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="grid flex-1 gap-3">
-                  <div className="grid gap-2">
-                    <Label htmlFor="preset-name">Name</Label>
-                    <Input id="preset-name" value={name} onChange={(event) => setName(event.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="preset-description">Description</Label>
-                    <Textarea
-                      id="preset-description"
-                      value={description}
-                      onChange={(event) => setDescription(event.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={savePreset} disabled={saving || !name.trim()}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save
-                  </Button>
-                  <Button variant="outline" onClick={duplicatePreset}>
-                    <Copy className="mr-2 h-4 w-4" />
-                    Duplicate
-                  </Button>
-                  <Button variant="destructive" onClick={removePreset}>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete
-                  </Button>
-                </div>
-              </div>
+              <TeamHeader
+                key={`header-${selectedPreset.id}`}
+                preset={selectedPreset}
+                onEdit={() => setEditTeamOpen(true)}
+                onPlan={() => void openPlan(null)}
+                planDisabled={selectedPreset.slots.every((slot) => !slot.enabled) || planLoading}
+                onAutonomy={openAutonomySwitch}
+              />
+              <EditTeamPanel
+                open={editTeamOpen}
+                onOpenChange={setEditTeamOpen}
+                name={name}
+                onNameChange={setName}
+                description={description}
+                onDescriptionChange={setDescription}
+                saving={saving}
+                onSave={savePreset}
+                onDuplicate={duplicatePreset}
+                onDelete={removePreset}
+              />
 
               <HumanActionSummary key={selectedPreset.id} presetId={selectedPreset.id} onInspectAutonomy={() => setAutonomyTab('autonomy')} />
               <Tabs value={autonomyTab} onValueChange={(value) => setAutonomyTab(value as 'roster' | 'autonomy')} className="border-t pt-5">
                 <TabsList>
-                  <TabsTrigger value="roster">Roster</TabsTrigger>
+                  <TabsTrigger value="roster">Members</TabsTrigger>
                   <TabsTrigger value="autonomy">Autonomy</TabsTrigger>
                 </TabsList>
-                <TabsContent value="roster" className="space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">Roster</h2>
-                  <p className="text-sm text-muted-foreground">{selectedPreset.slots.length} slots</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setSlotDialog({ mode: 'add' })}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add slot
-                  </Button>
-                  <Button
-                    onClick={() => openPlan(null)}
-                    disabled={selectedPreset.slots.every((slot) => !slot.enabled) || planLoading}
-                  >
-                    <Play className="mr-2 h-4 w-4" />
-                    Plan launch
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground">
-                <p>
-                  For same-repo planner/reviewer workflows, create separate slots with distinct
-                  names and launch them from this team. That gives Agent Mail separate inboxes and
-                  reliable routing for each role.
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                {selectedPreset.slots.length === 0 && (
-                  <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-                    No slots in this team.
+                <TabsContent value="roster" className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-lg font-semibold">
+                      Members <span className="text-sm font-normal text-muted-foreground">{selectedPreset.slots.length}</span>
+                    </h3>
+                    <Button variant="outline" onClick={() => setSlotDialog({ mode: 'add' })}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add member
+                    </Button>
                   </div>
-                )}
-                {selectedPreset.slots.map((slot, index) => {
-                  const colorClasses = getTeamSlotColorClasses(slot.ui_color)
-                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.leader_slot_id ?? null, selectedPreset.slots)
-                  return (
-                    <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
-                      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold">{slot.display_name}</p>
-                            <AgentActivityBadge activity={agentActivity.get(slot.id)} />
-                            {isLeader && <Badge variant="outline" title="This slot has the explicit Leader assignment.">Leader for autonomous dispatch</Badge>}
-                            {!isLeader && slot.enabled && !selectedPreset.autonomy_enabled && (
-                              <Button size="sm" variant="outline" onClick={() => void assignLeader(slot)}>Set Leader</Button>
-                            )}
-                            <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
-                              {slot.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
-                            <Badge variant="secondary">{slot.provider}</Badge>
-                            <Badge variant="secondary">{slot.launch_mode}</Badge>
-                            <Badge variant="outline">
-                              {slot.controlled_language_enabled === false ? 'Own writing style' : 'ASD-STE100'}
-                            </Badge>
-                            {slot.ui_color && (
-                              <Badge variant="outline" className={colorClasses.badge}>
-                                {slot.ui_color}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="mt-1 truncate text-sm text-muted-foreground">{slot.repo_path}</p>
-                          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
-                            <div>
-                              <p className="text-xs uppercase text-muted-foreground">Repo</p>
-                              <p>{slot.repo_name}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs uppercase text-muted-foreground">Role</p>
-                              <p>{slot.role || 'Unassigned'}</p>
-                            </div>
-                          </div>
-                          {(slot.area_labels?.length || slot.expertise) && (
-                            <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
-                              <p className="text-xs uppercase text-muted-foreground">GitHub dispatch routing</p>
-                              {slot.area_labels && slot.area_labels.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {slot.area_labels.map((label) => (
-                                    <Badge key={label} variant="secondary">{label}</Badge>
-                                  ))}
-                                </div>
-                              )}
-                              {slot.expertise && (
-                                <p className="mt-2 text-muted-foreground">{slot.expertise}</p>
-                              )}
-                            </div>
-                          )}
-                          {slot.warnings && slot.warnings.length > 0 && (
-                            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
-                              {slot.warnings.join('; ')}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => moveSlot(slot, -1)}
-                            disabled={index === 0}
-                          >
-                            <ArrowUp className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => moveSlot(slot, 1)}
-                            disabled={index === selectedPreset.slots.length - 1}
-                          >
-                            <ArrowDown className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openPlan([slot.id])}
-                            disabled={!slot.enabled}
-                          >
-                            <Play className="mr-2 h-4 w-4" />
-                            Launch
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => setSlotDialog({ mode: 'edit', slot })}>
-                            <Edit className="mr-2 h-4 w-4" />
-                            Edit
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => removeSlot(slot)}>
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </Button>
-                        </div>
+                  <p className="text-xs text-muted-foreground">
+                    For a planner and a reviewer in the same repository, add separate members with different names. Each gets its own Agent Mail inbox.
+                  </p>
+                  {selectedPreset.slots.length === 0 && (
+                    <div className="rounded-lg border p-5 text-sm text-muted-foreground">No members in this team.</div>
+                  )}
+                  <ul className="space-y-2">
+                    {selectedPreset.slots.map((slot, index) => {
+                      const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.leader_slot_id ?? null, selectedPreset.slots)
+                      return (
+                        <TeamMemberRow
+                          key={slot.id}
+                          slot={slot}
+                          isLeader={isLeader}
+                          first={index === 0}
+                          last={index === selectedPreset.slots.length - 1}
+                          status={agentActivity.get(slot.id)?.agent_status}
+                          actions={{
+                            onLaunch: () => void openPlan([slot.id]),
+                            onEdit: () => setSlotDialog({ mode: 'edit', slot }),
+                            onSetLeader: !isLeader && slot.enabled && !selectedPreset.autonomy_enabled ? () => void assignLeader(slot) : null,
+                            onMove: (direction) => void moveSlot(slot, direction),
+                            onDelete: () => void removeSlot(slot),
+                          }}
+                        />
+                      )
+                    })}
+                  </ul>
+                    <TeamProgress key={`progress-${selectedPreset.id}`} preset={selectedPreset} />
+                    <details className="rounded-lg border">
+                      <summary className="cursor-pointer px-4 py-2 text-sm font-medium">Team status</summary>
+                      <div className="p-3">
+                        <TeamSummaryCard
+                          key={`summary-${selectedPreset.id}`}
+                          presetId={selectedPreset.id}
+                          slotNames={Object.fromEntries(selectedPreset.slots.map((slot) => [slot.id, slot.display_name]))}
+                        />
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
+                    </details>
                 </TabsContent>
                 <TabsContent value="autonomy" className="mt-5">
                   <AutonomyPanel
                     key={selectedPreset.id}
                     preset={selectedPreset}
-                    agentActivity={agentActivity}
                     scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
                     workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}
                     loading={autonomyLoading || autonomyDataPresetId !== selectedPreset.id}
@@ -1638,13 +1470,6 @@ export function AgentTeamsPage() {
                     loadError={autonomyDataPresetId === selectedPreset.id ? autonomyLoadError : null}
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
-                    onCreateScope={createGithubScope}
-                    onUpdateScope={updateGithubScope}
-                    onUpdateContinuationPolicy={updateGithubContinuationPolicy}
-                    onDeleteScope={removeGithubScope}
-                    onRetryWorkItem={retryWorkItem}
-                    onFetchScopeRevisions={fetchGithubScopeRevisions}
-                    onCancelContinuationRequest={cancelGithubContinuation}
                   />
                 </TabsContent>
               </Tabs>
@@ -1665,6 +1490,7 @@ export function AgentTeamsPage() {
         open={tokenDialogOpen}
         value={tokenInput}
         error={tokenError}
+        reason={tokenReason}
         onValueChange={setTokenInput}
         onSubmit={() => {
           const token = tokenInput.trim()

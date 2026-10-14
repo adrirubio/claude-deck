@@ -16,6 +16,7 @@ import httpx
 
 from app.config import settings
 from app.services.github_check_observation import observe_checks
+from app.services.github_offline import github_http_client
 
 _GITHUB_API = "https://api.github.com"
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -59,7 +60,7 @@ class GithubClient:
     def _client(self) -> httpx.AsyncClient:
         if self._http is not None:
             return self._http
-        return httpx.AsyncClient(base_url=_GITHUB_API, timeout=30.0)
+        return github_http_client(_GITHUB_API, settings)
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github+json"}
@@ -232,6 +233,74 @@ class GithubClient:
         finally:
             if self._http is None:
                 await client.aclose()
+
+    async def _campaign_list(self, endpoint: str, params: dict[str, str]) -> list[dict]:
+        """Read complete campaign pages. Reject changed queries and unsafe links."""
+        client = self._client()
+        values, seen_urls = [], set()
+        next_url, first = endpoint, True
+        try:
+            for _ in range(MAX_LIST_PAGES):
+                response = await client.get(next_url, params=params if first else None, headers=self._headers())
+                first = False
+                response.raise_for_status()
+                self._require_expected_response(response, endpoint=endpoint, label="campaign list")
+                current_url = str(response.request.url)
+                if current_url in seen_urls:
+                    raise GithubClientResponseError("GitHub campaign pagination cycle detected")
+                seen_urls.add(current_url)
+                body = self._json_list(response, "campaign list")
+                if not all(isinstance(value, dict) for value in body):
+                    raise GithubClientResponseError("GitHub campaign list contained an invalid object")
+                values.extend(body)
+                link = response.links.get("next", {}).get("url")
+                if not link:
+                    return values
+                candidate = response.request.url.join(link)
+                parsed = urlsplit(str(candidate))
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                page = query.get("page", [])
+                if (parsed.scheme != "https" or parsed.hostname != "api.github.com"
+                        or parsed.port is not None or parsed.username is not None or parsed.password is not None
+                        or parsed.path != endpoint or parsed.fragment
+                        or any(query.get(key) != [value] for key, value in params.items())
+                        or set(query) != set(params) | {"page"}
+                        or len(page) != 1 or not page[0].isdigit() or int(page[0]) < 1):
+                    raise GithubClientResponseError("Unsafe GitHub campaign pagination link")
+                next_url = str(candidate)
+                if next_url in seen_urls:
+                    raise GithubClientResponseError("GitHub campaign pagination cycle detected")
+            raise GithubClientResponseError("GitHub campaign pagination bound exceeded")
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def list_milestones(self, owner: str, repo: str) -> list[dict]:
+        values = await self._campaign_list(f"/repos/{owner}/{repo}/milestones",
+                                           {"state": "all", "per_page": "100"})
+        if not all(type(value.get("number")) is int and value["number"] > 0
+                   and isinstance(value.get("title"), str) for value in values):
+            raise GithubClientResponseError("GitHub milestone identity was invalid")
+        if len({value["number"] for value in values}) != len(values):
+            raise GithubClientResponseError("GitHub milestone pagination was inconsistent")
+        return values
+
+    async def list_milestone_issues(self, owner: str, repo: str, milestone: int) -> list[dict]:
+        values = await self._campaign_list(f"/repos/{owner}/{repo}/issues",
+            {"milestone": str(milestone), "state": "all", "per_page": "100"})
+        issues = [value for value in values if "pull_request" not in value]
+        for issue in issues:
+            number, milestone_data, labels = issue.get("number"), issue.get("milestone"), issue.get("labels")
+            if (type(number) is not int or number <= 0 or not isinstance(issue.get("title"), str)
+                    or issue.get("state") not in {"open", "closed"}
+                    or issue.get("html_url") != f"https://github.com/{owner}/{repo}/issues/{number}"
+                    or not isinstance(milestone_data, dict) or milestone_data.get("number") != milestone
+                    or not isinstance(labels, list)
+                    or not all(isinstance(label, dict) and isinstance(label.get("name"), str) for label in labels)):
+                raise GithubClientResponseError("GitHub campaign issue identity was invalid")
+        if len({issue["number"] for issue in issues}) != len(issues):
+            raise GithubClientResponseError("GitHub campaign pagination was inconsistent")
+        return issues
 
     async def get_issue(
         self, owner: str, repo: str, number: int, *, token: str | None = None,

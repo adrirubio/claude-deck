@@ -1,25 +1,31 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { ProjectProvider } from './contexts/ProjectContext'
 import { ProviderProvider } from './contexts/ProviderContext'
 import { MainLayout } from './components/layout/MainLayout'
 import { ProjectsPage } from './features/projects/ProjectsPage'
 import { NativeRoute } from './features/native-settings/NativeRoute'
+import { LegacyNativeRedirect } from './features/native-settings/LegacyNativeRedirect'
 import { HarnessesPage } from './features/harnesses/HarnessesPage'
-import { OverviewPage, WorkPage, WorkDetailPage, RepositoriesPage, RepositoryPage } from './features/factory/FactoryPages'
+import { OverviewPage } from './features/factory/pages/OverviewPage'
+import { WorkPage } from './features/factory/pages/WorkPage'
+import { WorkDetailPage } from './features/factory/pages/WorkDetailPage'
+import { RepositoriesPage } from './features/factory/pages/RepositoriesPage'
+import { RepositoryPage } from './features/factory/pages/RepositoryPage'
 import { BridgeEntry, MailEntry } from './features/factory/ContextPages'
 import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
 import { RepositorySetupPage } from './features/factory/RepositorySetupPage'
 import { AuditMetricsPage } from './features/factory/AuditMetricsPanel'
 
+function HarnessSummaryAlias() { const { providerId } = useParams(); const { search, hash } = useLocation(); return <Navigate replace to={`/harnesses/${encodeURIComponent(providerId ?? '')}${search}${hash}`} /> }
 function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate replace to={`/teams${search}${hash}`} /> }
 
 function App() {
   return (
-    <ProjectProvider>
-      <ProviderProvider>
+    <BrowserRouter>
+      <ProjectProvider>
+        <ProviderProvider>
 
-          <BrowserRouter>
             <Toaster richColors position="top-right" />
             <Routes>
               <Route path="/" element={<MainLayout />}>
@@ -32,40 +38,42 @@ function App() {
                 <Route path="repositories/:scopeId" element={<RepositoryPage />} />
                 <Route path="harnesses" element={<HarnessesPage />} />
                 <Route path="harnesses/:providerId" element={<HarnessesPage />} />
+                <Route path="harnesses/:providerId/summary" element={<HarnessSummaryAlias />} />
                 <Route path="harnesses/:providerId/:surface" element={<NativeRoute />} />
                 <Route path="harnesses/:providerId/plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
                 <Route path="harnesses/:providerId/sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
                 <Route path="teams" element={<AgentTeamsPage />} />
                 <Route path="teams/:teamId" element={<AgentTeamsPage />} />
-                <Route path="config" element={<NativeRoute surface="config" />} />
-                <Route path="mcp" element={<NativeRoute surface="mcp" />} />
-                <Route path="commands" element={<NativeRoute surface="commands" />} />
-                <Route path="plugins" element={<NativeRoute surface="plugins" />} />
-                <Route path="hooks" element={<NativeRoute surface="hooks" />} />
-                <Route path="permissions" element={<NativeRoute surface="permissions" />} />
-                <Route path="agents" element={<NativeRoute surface="agents" />} />
-                <Route path="skills" element={<NativeRoute surface="skills" />} />
-                <Route path="memory" element={<NativeRoute surface="memory" />} />
-                <Route path="projects" element={<ProjectsPage />} />
-                <Route path="backup" element={<NativeRoute surface="backup" />} />
-                <Route path="output-styles" element={<NativeRoute surface="output-styles" />} />
-                <Route path="statusline" element={<NativeRoute surface="statusline" />} />
-                <Route path="sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
-                <Route path="sessions" element={<NativeRoute surface="sessions" />} />
+                <Route path="config" element={<LegacyNativeRedirect />} />
+                <Route path="mcp" element={<LegacyNativeRedirect />} />
+                <Route path="commands" element={<LegacyNativeRedirect />} />
+                <Route path="plugins" element={<LegacyNativeRedirect />} />
+                <Route path="hooks" element={<LegacyNativeRedirect />} />
+                <Route path="permissions" element={<LegacyNativeRedirect />} />
+                <Route path="agents" element={<LegacyNativeRedirect />} />
+                <Route path="skills" element={<LegacyNativeRedirect />} />
+                <Route path="memory" element={<LegacyNativeRedirect />} />
+                <Route path="projects" element={<Navigate replace to="/harnesses/folders" />} />
+                <Route path="harnesses/folders" element={<ProjectsPage />} />
+                <Route path="backup" element={<LegacyNativeRedirect />} />
+                <Route path="output-styles" element={<LegacyNativeRedirect />} />
+                <Route path="statusline" element={<LegacyNativeRedirect />} />
+                <Route path="sessions/:projectFolder/:sessionId" element={<LegacyNativeRedirect />} />
+                <Route path="sessions" element={<LegacyNativeRedirect />} />
                 <Route path="agent-bridge" element={<BridgeEntry />} />
                 <Route path="cc-bridge" element={<BridgeEntry />} />
                 <Route path="agent-mail" element={<MailEntry />} />
                 <Route path="agent-teams" element={<TeamsAlias />} />
-                <Route path="plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
-                <Route path="plans" element={<NativeRoute surface="plans" />} />
-                <Route path="context" element={<NativeRoute surface="context" />} />
-                <Route path="usage" element={<NativeRoute surface="usage" />} />
+                <Route path="plans/:filename" element={<LegacyNativeRedirect />} />
+                <Route path="plans" element={<LegacyNativeRedirect />} />
+                <Route path="context" element={<LegacyNativeRedirect />} />
+                <Route path="usage" element={<LegacyNativeRedirect />} />
               </Route>
             </Routes>
-          </BrowserRouter>
 
-      </ProviderProvider>
-    </ProjectProvider>
+        </ProviderProvider>
+      </ProjectProvider>
+    </BrowserRouter>
   )
 }
 

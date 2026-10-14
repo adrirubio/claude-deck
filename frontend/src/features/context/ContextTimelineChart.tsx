@@ -59,7 +59,7 @@ export function ContextTimelineChart({ snapshots, maxTokens, showHelp }: Context
         )}
       </CardHeader>
       <CardContent>
-        <ChartContainer config={chartConfig} className="aspect-[2/1] w-full">
+        <ChartContainer config={chartConfig} className="aspect-2/1 w-full">
           <AreaChart data={snapshots} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis

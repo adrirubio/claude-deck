@@ -6,7 +6,9 @@ import { Sidebar } from '../src/components/layout/Sidebar'
 import { SidebarContext } from '../src/contexts/SidebarContext'
 import { ProviderProvider } from '../src/contexts/ProviderContext'
 import { HarnessesPage } from '../src/features/harnesses/HarnessesPage'
-import { OverviewPage, WorkPage, WorkDetailPage } from '../src/features/factory/FactoryPages'
+import { OverviewPage } from '../src/features/factory/pages/OverviewPage'
+import { WorkPage } from '../src/features/factory/pages/WorkPage'
+import { WorkDetailPage } from '../src/features/factory/pages/WorkDetailPage'
 import { resetFactoryReads } from '../src/features/factory/reads'
 import { resetProviderOperations } from '../src/hooks/useProviders'
 import { clearNativeCatalogs, updateNativeMetadata } from '../src/features/native-settings/surfaceRegistry'
@@ -16,7 +18,6 @@ import detail from './fixtures/factory/v1/work-item.json'
 import overview from './fixtures/factory/v1/overview.json'
 import catalogs from './fixtures/provider-operations/v1/catalog.json'
 
-vi.mock('../src/features/projects/ProjectSwitcher', () => ({ ProjectSwitcher: () => <span>Project chooser</span> }))
 const providers = Object.entries(catalogs.providers).map(([id, catalog]) => ({
   id, display_name: id, installed: true, version: 'fixture', config_paths: {},
   capabilities: { config: true, plugins: true, usage: true },
@@ -28,25 +29,24 @@ beforeEach(() => { resetFactoryReads(); resetProviderOperations(); updateNativeM
 afterEach(() => { cleanup(); resetFactoryReads(); resetProviderOperations(); clearNativeCatalogs(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('navigation hierarchy preserves destinations and actions', () => {
-  it('keeps harness destinations as links, unavailable adapters absent, refresh as a button and navigation GET-only', async () => {
+  it('keeps harness cards as links to the harness page, no code names outside Technical details, refresh as a button and navigation GET-only', async () => {
     localStorage.setItem('claude-deck:selected-provider', 'pi-cli')
     const { requests } = fixtureFetch(standard)
     renderRoute(<ProviderProvider><Location/><HarnessesPage/></ProviderProvider>, '/harnesses', '*'); await settle()
-    const surfaces = screen.getByRole('navigation', { name: 'Claude Code native surfaces' })
-    expect(within(surfaces).getByRole('link', { name: /config \(write capable\)/ })).toHaveAttribute('href', '/harnesses/claude-code/config')
-    expect(within(screen.getByRole('navigation', { name: 'OpenCode native surfaces' })).queryByRole('link')).toBeNull()
-    expect(screen.getAllByRole('button', { name: 'Refresh observations' })).toHaveLength(5)
-    expect(screen.queryByRole('button', { name: 'Teams and launch planning' })).toBeNull()
+    expect(screen.getAllByRole('link', { name: /^Open/ })[0]).toHaveAttribute('href', '/harnesses/claude-code')
+    expect(screen.queryByRole('navigation', { name: /native surfaces/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Refresh observations' })).toBeNull()
+    expect(screen.getAllByRole('article')).toHaveLength(5)
     const before = requests.length
-    fireEvent.click(screen.getAllByRole('link', { name: 'Teams and launch planning' })[0]); await settle()
-    expect(screen.getByLabelText('Current route')).toHaveTextContent('/teams')
+    fireEvent.click(screen.getAllByRole('link', { name: /^Open/ })[0]); await settle()
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses/claude-code')
     expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
     expect(requests).toHaveLength(before); expect(requests.every(r => r.method === 'GET')).toBe(true)
   })
-  it('does not intercept modified or middle clicks on Open details and still permits ordinary router navigation', async () => {
+  it('does not intercept modified or middle clicks on the item link and still permits ordinary router navigation', async () => {
     vi.useFakeTimers(); const { requests } = fixtureFetch(standard)
     renderRoute(<><Location/><WorkPage/></>, '/work', '*'); await settle()
-    const link = screen.getAllByRole('link', { name: 'Open details' })[0]
+    const link = within(document.querySelector('[data-work-table]') as HTMLElement).getAllByRole('link', { name: /^#\d+ / })[0]
     const href = link.getAttribute('href')
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { button: 1 }]) {
       const event = new MouseEvent('click', { bubbles: true, cancelable: true, ...options })
@@ -66,7 +66,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(url.pathname).toBe('/agent-bridge'); expect(Object.fromEntries(url.searchParams)).toEqual({ team_id: '1', slot_id: '2', member_id: '2', session_id: '2', context: 'readonly' })
     expect(within(context).getByRole('link', { name: 'Review launch for Leader' })).toHaveAttribute('href', '/teams/1?slot_id=1&review_launch=1')
     expect(within(context).getByRole('link', { name: 'Team' })).toHaveAttribute('href', '/teams/1')
-    expect(within(context).getByRole('link', { name: 'Repository scope' })).toHaveAttribute('href', '/repositories/1')
+    expect(within(context).getByRole('link', { name: 'Repository' })).toHaveAttribute('href', '/repositories/1')
     expect(within(context).getByRole('link', { name: 'Mail context' })).toHaveAttribute('href', '/agent-mail?team_id=1&slot_id=2&member_id=2')
     expect(screen.getByRole('link', { name: 'Open issue' })).toHaveAttribute('target', '_blank')
     expect(screen.getByRole('link', { name: 'Open issue' })).toHaveAttribute('rel', 'noreferrer')
@@ -91,11 +91,13 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(within(nav).getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
-    expect(within(nav).getAllByRole('link')).toHaveLength(9)
+    expect(within(nav).getAllByRole('link')).toHaveLength(8)
+    expect(within(nav).queryByRole('link', { name: 'Local projects' })).not.toBeInTheDocument()
     for (const link of within(nav).getAllByRole('link')) expect(link).toHaveAttribute('title', link.getAttribute('aria-label'))
     fireEvent.click(within(nav).getByRole('link', { name: 'Harnesses' })); await settle()
     expect(within(nav).getByRole('link', { name: 'Harnesses' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses')
+    expect(screen.queryByLabelText('Saved native harness preference')).not.toBeInTheDocument()
     expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
   })
   it('keeps the empty-factory Open Harnesses destination as a link without launching or requesting native data', async () => {

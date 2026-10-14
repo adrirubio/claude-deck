@@ -163,6 +163,44 @@ def _team_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-teams", path, **kwargs)
 
 
+def _redact_actor_credential(value: Any, credential: str) -> Any:
+    if isinstance(value, str):
+        return value.replace(credential, "[redacted]")
+    if isinstance(value, dict):
+        return {_redact_actor_credential(key, credential): _redact_actor_credential(item, credential)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_actor_credential(item, credential) for item in value]
+    return value
+
+
+@mcp.tool()
+def deck_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[str] = None) -> dict:
+    """Promise the next supervisor check with an ISO 8601 UTC time.
+    Only the bound external actor can call this tool. The promise grants no authority.
+    The controller derives health. The next check must be within 24 hours."""
+    credential = os.environ.get("CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN")
+    if not credential:
+        return {"ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
+    try:
+        response = httpx.request("POST", f"{DECK_API}/external/agent-mail/supervisor-checkin",
+            headers={"Authorization": f"Bearer {credential}"}, timeout=DECK_HTTP_TIMEOUT,
+            json={"preset_id": preset_id, "next_check_at": next_check_at, "note": note})
+        if not response.is_success:
+            return {"ok": False, "error": {"code": "supervisor_checkin_refused",
+                                            "status_code": response.status_code}}
+        data = response.json()
+        if not isinstance(data, dict):
+            return {"ok": False, "error": {"code": "supervisor_response_invalid"}}
+        return {"ok": True, "data": _redact_actor_credential(data, credential)}
+    except (httpx.HTTPError, TimeoutError):
+        return {"ok": False, "error": {"code": "supervisor_transport_unavailable"},
+                "outcome": "unknown",
+                "suggestion": "Read the supervisor observation before repeating this check-in."}
+    except ValueError:
+        return {"ok": False, "error": {"code": "supervisor_response_invalid"}, "outcome": "unknown"}
+
+
 def _bridge_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-bridge", path, **kwargs)
 
@@ -363,6 +401,7 @@ def deck_list_team() -> dict:
                 "role",
                 "repo_name",
                 "status",
+                "agent_status",
                 "charter",
                 "team_preset_name",
                 "team_slot_name",
@@ -392,12 +431,22 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-def deck_send_message(to_member_id: int, body: str, subject: str = "") -> dict:
-    """Send a plain message to another team member. For answerable questions use
-    deck_request_context; for handing work over use deck_create_handoff."""
+def deck_send_message(to_member_id: Optional[int] = None, body: str = "", subject: str = "",
+                      to_supervisor_actor_id: Optional[int] = None) -> dict:
+    """Send a plain message to a team member or the current bound Supervisor.
+    Set exactly one target. For context requests use deck_request_context.
+    For handoffs use deck_create_handoff. Supervisor messages grant no authority."""
+    if (to_member_id is None) == (to_supervisor_actor_id is None):
+        return {"ok": False, "error": {"code": "mail_target_required"}}
     err = _guard()
     if err:
         return err
+    if to_supervisor_actor_id is not None:
+        result = _request("POST", "/supervisor/messages", json={"actor_id": to_supervisor_actor_id,
+            "subject": subject or None, "body_markdown": body})
+        if not result["ok"]:
+            return result
+        return {"ok": True, "message_id": result["data"]["id"], **_counts()}
     result = _request(
         "POST",
         "/messages",
@@ -846,8 +895,11 @@ def deck_create_team(
     name: str,
     description: str = "",
     slots: Optional[list[dict[str, Any]]] = None,
+    parent_issue_url: Optional[str] = None,
 ) -> dict:
     """Create an Agent Team preset.
+
+    parent_issue_url is an HTTPS GitHub issue URL.
 
     Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.
     Common slot fields: display_name, provider, repo_path, role, charter,
@@ -876,12 +928,73 @@ def deck_create_team(
         "name": name,
         "description": description or None,
         "created_by": "mcp",
+        "parent_issue_url": parent_issue_url,
         "slots": slots or [],
     }
     result = _team_request("POST", "/presets", json=payload)
     if not result["ok"]:
         return result
     return {"ok": True, "preset": result["data"]}
+
+
+@mcp.tool()
+def deck_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str]) -> dict:
+    """Set a team's GitHub parent issue link. Use null to clear the link.
+
+    This operation changes only the parent link. It grants no execution authority.
+    """
+    result = _team_request("PATCH", f"/presets/{preset_id}", json={"parent_issue_url": parent_issue_url})
+    if not result["ok"]:
+        return result
+    return {"ok": True, "preset": result["data"]}
+
+
+@mcp.tool()
+def deck_update_team_campaign(
+    preset_id: int,
+    backlog_milestone: Optional[str],
+    planned_decisions: Optional[list[dict[str, Any]]],
+    director_key: Optional[str] = None,
+) -> dict:
+    """Replace campaign metadata. Use null to clear either field.
+
+    backlog_milestone is an exact GitHub milestone title.
+    Each planned decision has text and state: later, now, or done.
+    The caller supplies the Director key for this call.
+    The tool never loads, stores, logs, returns, or publishes the key.
+    A session key grants no authority for this write.
+    """
+    if not director_key:
+        return {"ok": False, "error": {"code": "operator_token_required"}}
+    result = _team_request("PATCH", f"/presets/{preset_id}",
+        headers={"X-Deck-Operator-Token": director_key},
+        json={"backlog_milestone": backlog_milestone, "planned_decisions": planned_decisions})
+    if not result["ok"]:
+        # Keep credential-bearing request details out of the returned error.
+        error = result.get("error")
+        allowed = {"operator_token_required", "operator_token_invalid", "operator_token_unconfigured",
+                   "deck_http_error", "deck_unreachable", "mail_generation_closing", "mail_startup_expired"}
+        code = error.get("code") if isinstance(error, dict) else None
+        failure = {"ok": False, "error": {"code": code if code in allowed else "campaign_update_failed"}}
+        if result.get("outcome") == "unknown":
+            failure.update(outcome="unknown",
+                suggestion="Do not repeat this mutation blindly; reconcile its outcome first.")
+        return failure
+    value = result["data"]
+    return {"ok": True, "preset": {field: value.get(field) for field in
+        ("id", "backlog_milestone", "planned_decisions")}}
+
+
+@mcp.tool()
+def deck_get_team_summary(preset_id: int) -> dict:
+    """Read a team's outcome, parent link, existing attention signals, effort total and next actors.
+
+    Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.
+    """
+    result = _team_request("GET", f"/presets/{preset_id}/summary")
+    if not result["ok"]:
+        return result
+    return {"ok": True, "summary": result["data"]}
 
 
 @mcp.tool()

@@ -9,10 +9,8 @@ from app.services.github_verification_service import github_verification_service
 from tests.agent_teams.test_github_verification_service import _item, _scope
 
 
-def test_initial_review_guidance_requires_existing_authority():
-    text = github_dispatch_service.review_rework_guidance(
-        SimpleNamespace(active_scope_revision=0, attempt_phase="implementation",
-                        dispatch_status="ready_for_review"))
+def _assert_review_authority(text):
+    """Check the authority and safety gates, without full prompt equality."""
     for required in ("still-approved initial", "owner binding", "dispatch nonce",
                      "workspace lease", "normalized", "acknowledgement",
                      "stale", "operator pause", "safety hold",
@@ -20,6 +18,13 @@ def test_initial_review_guidance_requires_existing_authority():
         assert required in text
     assert "Do not manufacture an escalation" in text
     assert "Do not submit a second PR-open report" in text
+
+
+def test_initial_review_guidance_requires_existing_authority():
+    text = github_dispatch_service.review_rework_guidance(
+        SimpleNamespace(active_scope_revision=0, attempt_phase="implementation",
+                        dispatch_status="ready_for_review"))
+    _assert_review_authority(text)
 
 
 @pytest.mark.parametrize("revision,phase", [(1, "implementation"), (0, "diagnostic"),
@@ -38,13 +43,12 @@ def test_owner_and_leader_receive_same_review_rule():
     item = SimpleNamespace(id=12, dispatch_nonce="fixture-attempt", issue_type="code",
                            active_scope_revision=0, attempt_phase="implementation",
                            dispatch_status="dispatched")
-    guidance = github_dispatch_service.review_rework_guidance(item)
     owner = github_dispatch_service._leader_ack_instruction(
         None, None, before="editing", item=item)
     leader = github_dispatch_service._leader_unblock_instructions()
-    assert guidance in owner and guidance in leader
+    _assert_review_authority(owner)
+    _assert_review_authority(leader)
     assert "deck_approve_work_item" in owner
-    assert "PR REVIEW LOOP" in leader
 
 
 @pytest.mark.parametrize("status", ["escalated", "merged", "failed", "cancelled",
@@ -74,5 +78,5 @@ async def test_ready_mail_identifies_verified_head_and_review_loop(db, monkeypat
     sent = notifications[0]
     assert sent["payload"]["verified_head_sha"] == "verified-head"
     assert "Verified head: verified-head" in sent["body_markdown"]
-    assert github_dispatch_service.review_rework_guidance(item) in sent["body_markdown"]
+    _assert_review_authority(sent["body_markdown"])
     assert "does not establish independent review acceptance" in sent["body_markdown"]

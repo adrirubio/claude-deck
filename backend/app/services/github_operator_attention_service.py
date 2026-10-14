@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from app.models.coordination import CoordinationDisposition
-from app.models.database import AgentTeamPreset, GithubApprovalRequest, GithubAttemptScopeRevision, GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubApprovalRequest, GithubAttemptScopeRevision, GithubBacklogCoordination, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.github_client import github_client
 from app.services.github_operator_context_service import (
     SECTION_START, SECTION_END, bind_attempt, check as check_context, covered_by_leader,
@@ -68,6 +68,77 @@ class GithubOperatorAttentionService:
                 or (action.kind == "merge_pr" and pull["draft"])):
                 raise CoordinationError("human_action_pr_changed")
         return observed
+
+    async def reminder_snapshot(self, db, scopes, *, provider=None, now=None):
+        """One current notification-limit row per lease or backlog scope."""
+        from app.models.factory_schemas import ReminderAttention
+        from app.services.factory_audit_service import sanitize_text
+        from app.services.github_dispatch_service import github_dispatch_service, LEASE_RELEASE_REMINDER_CAP
+        from app.services.github_workspace_service import _RELEASABLE_STATUSES
+        from app.services.github_coordination_service import _MAX_SNAPSHOT_REQUESTS
+        from datetime import timezone
+
+        now = now or datetime.utcnow()
+        if now.tzinfo is not None:
+            now = now.astimezone(timezone.utc).replace(tzinfo=None)
+        scope_ids = [scope.id for scope in scopes[:32]]
+        if not scope_ids:
+            return {"rows": [], "complete": len(scopes) <= 32}
+        query = select(GithubWorkspace, GithubWorkItem, TeamGithubScope, AgentTeamSlot).join(
+            GithubWorkItem, GithubWorkItem.id == GithubWorkspace.leased_item_id,
+        ).join(TeamGithubScope, TeamGithubScope.id == GithubWorkspace.scope_id).outerjoin(
+            AgentTeamSlot, AgentTeamSlot.id == GithubWorkItem.owner_slot_id,
+        ).where(GithubWorkspace.scope_id.in_(scope_ids),
+            GithubWorkItem.scope_id == GithubWorkspace.scope_id,
+            GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+            GithubWorkspace.lease_release_reminder_count >= LEASE_RELEASE_REMINDER_CAP,
+        ).order_by(GithubWorkspace.id).limit(65)
+        if provider is not None:
+            query = query.where(AgentTeamSlot.provider == provider)
+        held = (await db.execute(query)).all()
+        rows = []
+        for workspace, item, scope, slot in held[:64]:
+            if not github_dispatch_service.release_reminder_needed(scope, item):
+                continue
+            started = workspace.leased_at or workspace.lease_release_reminder_started_at
+            rows.append(ReminderAttention(kind="workspace_release", scope_id=scope.id,
+                work_item_id=item.id, issue_number=item.issue_number,
+                owner_slot_id=item.owner_slot_id,
+                owner_name=sanitize_text(slot.display_name, limit=160) if slot else None,
+                reminder_count=workspace.lease_release_reminder_count,
+                reminder_cap=LEASE_RELEASE_REMINDER_CAP, waiting_since=started,
+                elapsed_seconds=max(0, int((now - started).total_seconds())) if started else None))
+        backlog_query = select(GithubBacklogCoordination, AgentTeamSlot).join(
+            TeamGithubScope, TeamGithubScope.id == GithubBacklogCoordination.scope_id,
+        ).join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id).outerjoin(
+            AgentTeamSlot, AgentTeamSlot.id == AgentTeamPreset.leader_slot_id,
+        ).where(GithubBacklogCoordination.scope_id.in_(scope_ids),
+            GithubBacklogCoordination.enabled.is_(True),
+        ).order_by(GithubBacklogCoordination.scope_id).limit(33)
+        if provider is not None:
+            backlog_query = backlog_query.where(AgentTeamSlot.provider == provider)
+        backlog = (await db.execute(backlog_query)).all()
+        for state, slot in backlog[:32]:
+            daily = state.daily_requests if state.budget_day == now.strftime("%Y-%m-%d") else 0
+            daily_capped = daily >= state.max_daily_requests
+            snapshot_capped = state.snapshot_requests >= _MAX_SNAPSHOT_REQUESTS
+            # A current signed assessment is not an unanswered notification.
+            assessed = (state.last_assessed_at is not None and state.assessed_generation == state.generation
+                        and state.assessed_sequence == state.request_sequence
+                        and state.error_code != "coordination_capped")
+            if assessed or not (daily_capped or snapshot_capped):
+                continue
+            rows.append(ReminderAttention(kind="backlog_reconcile", scope_id=state.scope_id,
+                issue_numbers=state.issue_numbers, owner_slot_id=slot.id if slot else None,
+                owner_name=sanitize_text(slot.display_name, limit=160) if slot else None,
+                reminder_count=daily if daily_capped else state.snapshot_requests,
+                reminder_cap=state.max_daily_requests if daily_capped else _MAX_SNAPSHOT_REQUESTS,
+                waiting_since=state.last_requested_at,
+                elapsed_seconds=max(0, int((now - state.last_requested_at).total_seconds()))
+                    if state.last_requested_at else None,
+                notification_budget_resets_at=now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    + timedelta(days=1) if daily_capped else None))
+        return {"rows": rows, "complete": len(scopes) <= 32 and len(held) <= 64 and len(backlog) <= 32}
 
     async def dispatch_snapshot(self, db, scopes):
         actions, complete = [], True

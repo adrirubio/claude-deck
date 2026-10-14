@@ -11,8 +11,10 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import sqlite3
 import stat
+import subprocess
 import threading
 import time
 from contextlib import closing
@@ -21,13 +23,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import JSON, and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
-    AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailPaneLifecycle, MailTeamMember,
+    AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailMessage, MailReceipt, MailPaneLifecycle, MailTeamMember,
 )
-from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
+from app.models.schemas import (
+    AgentActivityDisplayObservation, AgentActivityObservation, AgentTeamActivityResponse,
+    NativeInputWait,
+)
 from app.services.pi_activity_service import observe_pi
 from app.services.claude_activity_service import observe_claude
 
@@ -36,6 +41,38 @@ _MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
 _BOUNDED_PRIVATE_WORKERS = threading.BoundedSemaphore(1)
+_PROC = Path("/proc")
+
+
+def recognize_native_input_wait(provider: str, screen: str) -> str | None:
+    """Recognize captured active prompts. None means the screen is unknown."""
+    if provider not in {"claude-code", "codex-cli"} or len(screen) > 65536:
+        return None
+    plain = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", screen)
+    plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", plain)
+    lines = [line.strip() for line in plain.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    active = "\n".join(lines[-40:])
+    footer = " ".join(lines[-3:])
+    if provider == "claude-code":
+        if (re.search(r"Enter to select\s*·\s*(?:↑/↓|Tab/Arrow keys) to navigate\s*·\s*Esc to\s+cancel$", footer)
+                and re.search(r"(?m)^❯\s*\d+\.", active) and "☐" in active):
+            return "question"
+        if (footer.endswith("Enter to confirm · Esc to cancel") and "Accessing workspace:" in active
+                and "Quick safety check:" in active and "Yes, I trust this folder" in active
+                and re.search(r"(?m)^❯\s*(?:No,|Yes,)", active)):
+            return "trust"
+        if any(re.fullmatch(r"❯\s*", line) for line in lines[-4:]):
+            return "clear"
+    else:
+        if (footer.endswith("Press enter to continue") and "Welcome to Codex" in active
+                and "Sign in with ChatGPT" in active and "Provide your own API key" in active
+                and re.search(r"(?m)^>\s*1\. Sign in with ChatGPT$", active)):
+            return "sign_in"
+        if any(re.fullmatch(r"›\s*Ask Codex to do anything", line) for line in lines[-4:]):
+            return "clear"
+    return None
 
 
 @dataclass(frozen=True)
@@ -45,6 +82,37 @@ class ActivityBinding:
     cwd: str
     native_pid: int | None = None
     registered_at: datetime | None = None
+    tmux_target: str | None = None
+    binding_id: int | None = None
+
+
+def _capture_native_input_wait(provider: str, binding: ActivityBinding) -> str | None:
+    """Read the visible pane after checking its exact process identity."""
+    if not binding.tmux_target or provider not in {"claude-code", "codex-cli"}:
+        return None
+    def pane_identity(target):
+        process = subprocess.run(["tmux", "display-message", "-p", "-t", target,
+                                  "#{pane_pid}:#{pane_id}"], capture_output=True, text=True, timeout=0.5)
+        if process.returncode != 0:
+            return None
+        match = re.fullmatch(r"(\d+):(%\d+)", process.stdout.strip())
+        return (int(match[1]), match[2]) if match else None
+    try:
+        before = pane_identity(binding.tmux_target)
+        if before is None or before[0] != binding.pane_pid:
+            return None
+        state, start = _process(binding.pane_pid)
+        if start != binding.pane_start or state in _STOPPED_STATES:
+            return None
+        captured = subprocess.run(["tmux", "capture-pane", "-p", "-t", before[1]],
+            capture_output=True, text=True, timeout=0.5)
+        after = pane_identity(before[1])
+        state, start = _process(binding.pane_pid)
+        if captured.returncode != 0 or before != after or start != binding.pane_start or state in _STOPPED_STATES:
+            return None
+        return recognize_native_input_wait(provider, captured.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def _canonical_session_id(value: object) -> str | None:
@@ -57,12 +125,12 @@ def _canonical_session_id(value: object) -> str | None:
 
 
 def _process(pid: int) -> tuple[str, str]:
-    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    fields = (_PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
     return fields[0], fields[19]  # state and kernel process start, not PID alone
 
 
 def _codex_home(pid: int) -> Path:
-    proc = Path(f"/proc/{pid}")
+    proc = _PROC / str(pid)
     # Cross-user controllers may read stat/cmdline but not environ. In that
     # case use the process owner's default home; custom homes remain unknown.
     try:
@@ -86,7 +154,7 @@ def _process_rollout_path(pid: int, home: Path, session_id: str) -> Path | None:
     This needs only read access. SQLite's live WAL index can require writable
     scratch files even for a mode=ro query from another controller user.
     """
-    descriptors = Path(f"/proc/{pid}/fd")
+    descriptors = _PROC / str(pid) / "fd"
     matches: set[Path] = set()
     try:
         with os.scandir(descriptors) as entries:
@@ -102,6 +170,51 @@ def _process_rollout_path(pid: int, home: Path, session_id: str) -> Path | None:
                     matches.add(target)
     except OSError:
         return None
+    if len(matches) > 1:
+        raise ValueError("Native conversation has ambiguous process descriptors")
+    return next(iter(matches), None)
+
+
+def _new_codex_rollout(pid: int, cwd: str, now: datetime, started_at: datetime) -> str | None:
+    """Capture one current rollout from this exact process. This is not work evidence."""
+    home = _codex_home(pid)
+    uid = (_PROC / str(pid)).stat().st_uid
+    matches = set()
+    with os.scandir(_PROC / str(pid) / "fd") as entries:
+        for index, entry in enumerate(entries):
+            if index >= _MAX_PROCESS_DESCRIPTORS:
+                raise ValueError("Process descriptor observation exceeds its bound")
+            try:
+                target = Path(os.readlink(entry.path))
+                identity = _canonical_session_id(target.stem[-36:])
+                if (identity is None or target.suffix != ".jsonl" or not target.is_absolute()
+                        or not target.resolve().is_relative_to((home / "sessions").resolve())):
+                    continue
+                descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(descriptor, "rb") as stream:
+                    info = os.fstat(stream.fileno())
+                    opened = os.stat(entry.path)
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid
+                            or info.st_mode & stat.S_IWOTH
+                            or (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino)):
+                        continue
+                    line = stream.readline(65537)
+                    if len(line) > 65536 or not line.endswith(b"\n"):
+                        continue
+                    row = json.loads(line)
+                    current = os.stat(entry.path)
+                    if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                        continue
+                payload = row.get("payload", {})
+                if (row.get("type") != "session_meta" or payload.get("id") != identity
+                        or Path(payload.get("cwd", "")).resolve() != Path(cwd).resolve()):
+                    continue
+                timestamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+                if timestamp.tzinfo is None or not started_at <= timestamp <= now + timedelta(seconds=5):
+                    continue
+                matches.add(identity)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                continue
     if len(matches) > 1:
         raise ValueError("Native conversation has ambiguous process descriptors")
     return next(iter(matches), None)
@@ -207,9 +320,17 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
              candidates: list[ActivityBinding], duplicate_identity: bool, now: datetime,
              *, provenance: dict | None = None,
              ) -> AgentActivityObservation:
+    waiting_input = None
     def result(state: str, reason: str, observed_at: datetime | None = None):
+        if reason == "binding_changed" or state == "stopped":
+            if provenance is not None:
+                for key in ("input_wait_known", "input_wait_reason", "input_wait_binding_id"):
+                    provenance.pop(key, None)
+        wait = waiting_input if reason != "binding_changed" and state != "stopped" else None
+        if wait is not None:
+            state, reason, observed_at = "idle", "native_input_wait", now
         return AgentActivityObservation(slot_id=slot_id, state=state, reason=reason,
-                                        observed_at=observed_at)
+                                        observed_at=observed_at, waiting_input=wait)
 
     try:
         live = {}
@@ -262,6 +383,28 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
             return result("unknown", "duplicate_native_identity")
+        matching = [binding for binding in candidates if binding.pane_pid == pid and binding.pane_start == start]
+        targets = {binding.tmux_target for binding in matching if binding.tmux_target}
+        if len(targets) == 1:
+            selected_binding = next(binding for binding in matching if binding.tmux_target in targets)
+            input_reason = _capture_native_input_wait(provider, selected_binding)
+            if input_reason is not None:
+                if provenance is not None:
+                    provenance.update(input_wait_known=True, input_wait_reason=input_reason,
+                                      input_wait_binding_id=selected_binding.binding_id)
+                if input_reason != "clear":
+                    waiting_input = NativeInputWait(reason=input_reason, observed_at=now)
+        if provider == "codex-cli" and not session_id:
+            argv = (_PROC / str(pid) / "cmdline").read_bytes().split(b"\0")
+            if argv and Path(os.fsdecode(argv[0])).name == "codex":
+                identity = _new_codex_rollout(pid, cwd, now, _process_started_at(start))
+                process_state, current_start = _process(pid)
+                if current_start != start or process_state in _STOPPED_STATES:
+                    return result("unknown", "binding_changed")
+                if identity:
+                    if provenance is not None:
+                        provenance["discovered_session_id"] = identity
+                    return result("unknown", "restart_needed_for_observation")
         if not session_id or _canonical_session_id(session_id) != session_id:
             return result("unknown", "session_identity_unavailable")
         if provider == "claude-code":
@@ -276,10 +419,17 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             if provenance is not None and provenance.get("session_id"):
                 provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        argv = (_PROC / str(pid) / "cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
         from app.services.codex_process_identity import explicit_resume
         if not explicit_resume(argv, session_id):
+            if argv and Path(os.fsdecode(argv[0])).name == "codex":
+                identity = _new_codex_rollout(pid, cwd, now, _process_started_at(start))
+                process_state, current_start = _process(pid)
+                if current_start != start or process_state in _STOPPED_STATES:
+                    return result("unknown", "binding_changed")
+                if identity == session_id:
+                    return result("unknown", "restart_needed_for_observation")
             return result("unknown", "session_mismatch")
         home = _codex_home(pid)
         path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)
@@ -310,22 +460,12 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
 
     slots = [row[0] for row in await rows(select(AgentTeamSlot).where(
         AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))]
-    # A rollout identifies a conversation, not its writer PID. Conservatively
-    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
-    # so another harness cannot supply a false Working event for this owner.
-    native_identity_counts: dict[str, int] = {}
-    for (options,) in await rows(select(AgentTeamSlot.launch_options).where(
-            AgentTeamSlot.provider.in_(["codex-cli", "claude-code"]))):
-        session_id = _canonical_session_id((options or {}).get("session_id"))
-        if session_id is not None:
-            native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
+    options = await rows(select(AgentTeamSlot.launch_options).where(
+        AgentTeamSlot.provider.in_(["codex-cli", "claude-code"])))
     members = [row[0] for row in await rows(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
             MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
                 populate_existing=True))]
-    current_member = {}
-    for member in members:
-        current_member.setdefault(member.team_slot_id, member.id)
     bound_rows = await rows(select(AgentPaneBinding, MailAgentSession).join(
         MailAgentSession,
         (MailAgentSession.bound_pane_pid == AgentPaneBinding.pane_pid)
@@ -340,13 +480,31 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
             MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))
+    return _inputs_from_rows(slots, options, members, bound_rows)
+
+
+def _inputs_from_rows(slots, options, members, bound_rows):
+    """Build the same native inputs from an existing read snapshot."""
+    # A rollout identifies a conversation, not its writer PID. Conservatively
+    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
+    # so another harness cannot supply a false Working event for this owner.
+    native_identity_counts: dict[str, int] = {}
+    for (launch_options,) in options:
+        session_id = _canonical_session_id((launch_options or {}).get("session_id"))
+        if session_id is not None:
+            native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
+    current_member = {}
+    for member in sorted(members, key=lambda m: (m.updated_at, m.id), reverse=True):
+        current_member.setdefault(member.team_slot_id, member.id)
     bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
     for binding, session in bound_rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
             bindings.setdefault(binding.slot_id, set()).add((session.provider, ActivityBinding(
                 binding.pane_pid, binding.pane_proc_start, session.cwd,
                 session.pid if session.provider == "pi-cli" else None,
-                session.created_at if session.provider == "pi-cli" else None)))
+                session.created_at if session.provider == "pi-cli" else None,
+                getattr(binding, "tmux_target", None) or getattr(session, "pane_id", None),
+                getattr(binding, "id", None))))
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
                sorted((binding for provider, binding in bindings.get(slot.id, set())
                        if provider == slot.provider), key=lambda x: (
@@ -356,20 +514,178 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
             for slot in slots]
 
 
-async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
-    inputs = await _team_inputs(db, preset_id)
+async def _bounded_native_read(read):
+    if not _BOUNDED_PRIVATE_WORKERS.acquire(blocking=False):
+        raise ValueError("activity_observation_busy")
+    task = asyncio.create_task(asyncio.to_thread(read))
+
+    def finished(worker):
+        _BOUNDED_PRIVATE_WORKERS.release()
+        if not worker.cancelled():
+            worker.exception()
+
+    task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def observe_team(db: AsyncSession, preset_id: int, *, include_agent_status: bool = True,
+                       persist_identities: bool = True, max_input_rows: int | None = None,
+                       input_fence: dict | None = None) -> AgentTeamActivityResponse:
+    inputs = await _team_inputs(db, preset_id) if max_input_rows is None else await _team_inputs(db, preset_id, max_input_rows)
     now = datetime.now(timezone.utc)
-    observations = await asyncio.to_thread(
-        lambda: [_observe(slot_id, provider, session_id, candidates, duplicate_identity, now)
-                 for slot_id, provider, session_id, candidates, duplicate_identity in inputs])
-    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
+    metadata = [{} for _ in inputs]
+    def read():
+        return [_observe(*entry, now, provenance=details) for entry, details in zip(inputs, metadata)]
+    observations = await asyncio.to_thread(read) if max_input_rows is None else await _bounded_native_read(read)
+    refreshed = await _team_inputs(db, preset_id) if max_input_rows is None else await _team_inputs(db, preset_id, max_input_rows)
+    current = {entry[0]: entry for entry in refreshed}
+    if input_fence is not None:
+        input_fence.update(current)
     for entry, observation in zip(inputs, observations):
         if current.get(entry[0]) != entry:
             observation.state = "unknown"
             observation.reason = "binding_changed"
             observation.observed_at = None
+            observation.waiting_input = None
+    notices_changed = await _record_input_waits(db, preset_id, inputs, metadata, current, now=now)
+    if persist_identities and await _save_codex_identities(db, inputs, metadata, current):
+        await db.commit()
+    if notices_changed:
+        await db.commit()
+    if include_agent_status:
+        from app.services.agent_status_service import agent_status_service, unknown_status
+        statuses = await agent_status_service.for_team(
+            db, preset_id, activities={entry.slot_id: entry for entry in observations})
+        observations = [AgentActivityDisplayObservation(
+            **entry.model_dump(), agent_status=statuses.get(entry.slot_id, unknown_status(now)))
+            for entry in observations]
+    else:
+        observations = [AgentActivityDisplayObservation(**entry.model_dump()) for entry in observations]
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
+
+
+async def _record_input_waits(db, preset_id, inputs, metadata, current, *, now) -> bool:
+    """Store one fixed notice per continuous wait under current binding authority."""
+    changed = False
+    for entry, details in zip(inputs, metadata):
+        reason = details.get("input_wait_reason")
+        if (not details.get("input_wait_known") or reason not in {"question", "trust", "sign_in", "clear"}
+                or current.get(entry[0]) != entry):
+            continue
+        matching = [binding for binding in entry[3] if binding.binding_id == details.get("input_wait_binding_id")]
+        if len(matching) != 1:
+            continue
+        binding = matching[0]
+        # Recheck membership, authenticated session, slot and retirement in the write.
+        newest_member = (select(MailTeamMember.id).where(MailTeamMember.team_preset_id == preset_id,
+            MailTeamMember.team_slot_id == entry[0]).order_by(MailTeamMember.updated_at.desc(),
+            MailTeamMember.id.desc()).limit(1).scalar_subquery())
+        authenticated = exists(select(MailAgentSession.id).where(
+            MailAgentSession.member_id == newest_member, MailAgentSession.source == "mcp",
+            MailAgentSession.closed_at.is_(None), MailAgentSession.mailbox_status == "connected",
+            MailAgentSession.capability_token_hash.is_not(None), MailAgentSession.cwd == binding.cwd,
+            MailAgentSession.provider == entry[1], MailAgentSession.team_slot_id == entry[0],
+            MailAgentSession.team_preset_id == preset_id, MailAgentSession.bound_pane_pid == binding.pane_pid,
+            MailAgentSession.bound_pane_proc_start == binding.pane_start,
+            or_(AgentPaneBinding.tmux_target == binding.tmux_target,
+                and_(AgentPaneBinding.tmux_target.is_(None), MailAgentSession.pane_id == binding.tmux_target))))
+        active_slot = exists(select(AgentTeamSlot.id).where(AgentTeamSlot.id == entry[0],
+            AgentTeamSlot.preset_id == preset_id, AgentTeamSlot.provider == entry[1], AgentTeamSlot.enabled.is_(True)))
+        retired = exists(select(MailPaneLifecycle.pane_pid).where(MailPaneLifecycle.pane_pid == binding.pane_pid,
+            MailPaneLifecycle.pane_proc_start == binding.pane_start, MailPaneLifecycle.retired_at.is_not(None)))
+        conditions = [AgentPaneBinding.id == binding.binding_id, AgentPaneBinding.slot_id == entry[0],
+            AgentPaneBinding.preset_id == preset_id, AgentPaneBinding.pane_pid == binding.pane_pid,
+            AgentPaneBinding.pane_proc_start == binding.pane_start, authenticated, active_slot, ~retired,
+            or_(AgentPaneBinding.waiting_input_observed_at.is_(None), AgentPaneBinding.waiting_input_observed_at <= now)]
+        if reason == "clear":
+            result = await db.execute(update(AgentPaneBinding).where(*conditions).values(waiting_input_reason=None,
+                waiting_input_started_at=None, waiting_input_notice_id=None, waiting_input_observed_at=now).execution_options(synchronize_session=False))
+            changed = changed or result.rowcount == 1
+            continue
+        kept = await db.execute(update(AgentPaneBinding).where(*conditions,
+            AgentPaneBinding.waiting_input_reason.is_not(None)).values(waiting_input_observed_at=now)
+            .execution_options(synchronize_session=False))
+        if kept.rowcount == 1:
+            changed = True
+            continue
+        team = (await db.execute(select(AgentTeamPreset.supervisor_actor_id, AgentTeamPreset.leader_slot_id)
+            .where(AgentTeamPreset.id == preset_id))).one_or_none()
+        if team is None:
+            continue
+        actor_id, leader_slot_id = team
+        recipient = None
+        if actor_id is None:
+            recipient = await db.scalar(select(MailTeamMember.id).join(AgentTeamSlot,
+                AgentTeamSlot.id == MailTeamMember.team_slot_id).where(
+                MailTeamMember.team_preset_id == preset_id, MailTeamMember.team_slot_id == leader_slot_id,
+                AgentTeamSlot.preset_id == preset_id, AgentTeamSlot.enabled.is_(True))
+                .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))
+            if recipient is None:
+                continue
+        same_route = exists(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset_id,
+            AgentTeamPreset.supervisor_actor_id.is_(None) if actor_id is None else AgentTeamPreset.supervisor_actor_id == actor_id,
+            AgentTeamPreset.leader_slot_id == leader_slot_id if actor_id is None else True))
+        if recipient is not None:
+            leader_current = (select(MailTeamMember.id).where(MailTeamMember.team_preset_id == preset_id,
+                MailTeamMember.team_slot_id == leader_slot_id).order_by(MailTeamMember.updated_at.desc(),
+                MailTeamMember.id.desc()).limit(1).scalar_subquery())
+            conditions.extend([leader_current == recipient, exists(select(AgentTeamSlot.id).where(
+                AgentTeamSlot.id == leader_slot_id, AgentTeamSlot.preset_id == preset_id,
+                AgentTeamSlot.enabled.is_(True)))])
+        result = await db.execute(update(AgentPaneBinding).where(*conditions, same_route,
+            AgentPaneBinding.waiting_input_reason.is_(None)).values(waiting_input_reason=reason,
+            waiting_input_started_at=now, waiting_input_observed_at=now).execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            continue
+        payload = {"notice": "native_input_wait", "slot_id": entry[0], "reason": reason}
+        if actor_id is not None:
+            payload["supervisor_actor_id"] = actor_id
+        message = MailMessage(kind="message", subject="Waiting for input",
+            body_markdown=f"Slot {entry[0]} waits for input. Reason: {reason}.", payload=payload,
+            audience_type="team_preset" if actor_id is not None else None,
+            audience_id=str(preset_id) if actor_id is not None else None, recipient_member_id=recipient)
+        db.add(message)
+        await db.flush()
+        if recipient is not None:
+            db.add(MailReceipt(message_id=message.id, member_id=recipient))
+        await db.execute(update(AgentPaneBinding).where(AgentPaneBinding.id == binding.binding_id)
+            .values(waiting_input_notice_id=message.id).execution_options(synchronize_session=False))
+        changed = True
+    return changed
+
+
+async def _save_codex_identities(db, inputs, metadata, current) -> bool:
+    """Save a captured first-launch ID only while its original binding remains current."""
+    changed = False
+    for entry, details in zip(inputs, metadata):
+        identity = details.get("discovered_session_id")
+        if (not identity or entry[1] != "codex-cli" or entry[2] is not None
+                or current.get(entry[0]) != entry):
+            continue
+        slot = await db.get(AgentTeamSlot, entry[0])
+        if slot is None or slot.provider != "codex-cli" or slot.launch_mode != "plain":
+            continue
+        previous = slot.launch_options
+        if (previous or {}).get("session_id"):
+            continue
+        duplicate = exists(select(AgentTeamSlot.id).where(
+            AgentTeamSlot.id != slot.id,
+            AgentTeamSlot.provider.in_(["claude-code", "codex-cli"]),
+            AgentTeamSlot.launch_options["session_id"].as_string() == identity))
+        options_match = (or_(AgentTeamSlot.launch_options.is_(None),
+                             AgentTeamSlot.launch_options == JSON.NULL)
+                         if previous is None else AgentTeamSlot.launch_options == previous)
+        result = await db.execute(update(AgentTeamSlot).where(
+            AgentTeamSlot.id == slot.id, AgentTeamSlot.provider == "codex-cli",
+            AgentTeamSlot.launch_mode == "plain", options_match,
+            ~duplicate,
+        ).values(launch_options={**(previous or {}), "session_id": identity, "use_last": False},
+                 launch_mode="resume").execution_options(synchronize_session=False))
+        changed = changed or result.rowcount == 1
+        if result.rowcount == 1:
+            await db.refresh(slot)
+    return changed
 
 
 @dataclass(frozen=True)
@@ -398,12 +714,14 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
                                max_input_rows: int | None = None) -> dict[int, PrivateActivity]:
     inputs = await _team_inputs(db, preset_id, max_input_rows)
     now = datetime.now(timezone.utc)
+    captured = []
 
     def observations():
         values = {}
         for entry in inputs:
             metadata = {}
             observed = _observe(*entry, now, provenance=metadata)
+            captured.append(metadata)
             identity = None
             binding_identity = None
             if metadata.get("session_id") and metadata.get("pane_pid"):
@@ -431,20 +749,11 @@ async def observe_private_team(db: AsyncSession, preset_id: int,
     if max_input_rows is None:
         values = await asyncio.to_thread(observations)
     else:
-        if not _BOUNDED_PRIVATE_WORKERS.acquire(blocking=False):
-            raise ValueError("activity_observation_busy")
-        task = asyncio.create_task(asyncio.to_thread(observations))
-
-        def finished(worker):
-            _BOUNDED_PRIVATE_WORKERS.release()
-            if not worker.cancelled():
-                worker.exception()
-
-        task.add_done_callback(finished)
-        # A response timeout must not release capacity while its native worker runs.
-        values = await asyncio.shield(task)
+        values = await _bounded_native_read(observations)
     current = {entry[0]: entry for entry in await _team_inputs(db, preset_id, max_input_rows)}
     for entry in inputs:
         if current.get(entry[0]) != entry:
             values[entry[0]] = PrivateActivity("unknown", "binding_changed", None, None, None)
+    await _save_codex_identities(db, inputs, captured, current)
+    await _record_input_waits(db, preset_id, inputs, captured, current, now=now)
     return values

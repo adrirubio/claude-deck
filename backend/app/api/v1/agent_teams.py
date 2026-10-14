@@ -11,6 +11,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
+from app.models.api_model import format_utc_time
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,8 @@ from app.api.v1.deps import (
 )
 from app.config import settings
 from app.database import get_db
+from app.models.factory_schemas import AgentTeamSummaryResponse
+from app.services.agent_team_summary_service import agent_team_summary_service
 from app.models.database import (
     AgentTeamSlot,
     AgentTeamPreset,
@@ -81,6 +84,8 @@ from app.models.schemas import (
     TeamGithubScopeListResponse,
     TeamGithubScopeResponse,
     TeamGithubScopeUpdate,
+    SupervisorBindingRequest,
+    SupervisorObservation,
 )
 from app.services.agent_mail_service import (
     MailAuthorityError,
@@ -99,8 +104,10 @@ from app.services.github_initial_approval_recovery import cancel_stranded_initia
 from app.services.github_dispatch_service import (
     HandoffExternalEffectError,
     ResumeAttemptError,
+    _item_identity,
     github_dispatch_service,
 )
+from app.services.github_terminal_revision_service import TERMINAL_ITEMS
 
 
 _CONTINUATION_POLICY_FIELDS = (
@@ -111,6 +118,7 @@ _CONTINUATION_POLICY_FIELDS = (
     "max_scope_paths",
     "max_scope_commands",
 )
+
 
 
 def _operator_actor() -> dict:
@@ -320,6 +328,30 @@ from app.api.v1.factory_delivery import router as delivery_router
 from app.services.factory_delivery_policy import scope_policy
 
 router = APIRouter()
+
+
+@router.get("/presets/{preset_id}/supervisor", response_model=SupervisorObservation,
+            dependencies=[Depends(require_operator)])
+async def read_supervisor(preset_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import observe_supervisor
+    observation = await observe_supervisor(db, preset_id)
+    if observation is None:
+        raise HTTPException(status_code=404, detail="supervisor_team_missing")
+    return observation
+
+
+@router.put("/presets/{preset_id}/supervisor", response_model=SupervisorObservation,
+            dependencies=[Depends(require_operator)])
+async def update_supervisor(preset_id: int, request: SupervisorBindingRequest,
+                            db: AsyncSession = Depends(get_db)):
+    from app.services.agent_team_supervisor_service import bind_supervisor
+    try:
+        return await bind_supervisor(db, preset_id, actor_id=request.actor_id,
+            grace_seconds=request.grace_seconds, set_grace="grace_seconds" in request.model_fields_set)
+    except ValueError as exc:
+        code = str(exc)
+        raise HTTPException(status_code=409 if code == "supervisor_binding_changed" else 404,
+                            detail=code) from exc
 router.include_router(delivery_router)
 
 logger = logging.getLogger(__name__)
@@ -436,6 +468,7 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         dispatch_label=scope.dispatch_label,
         design_label=scope.design_label,
         merge_policy=scope.merge_policy,
+        review_hold_label=scope.review_hold_label,
         delivery_policy=scope_policy(scope),
         delivery_policy_revision=scope.delivery_policy_revision,
         github_auth_mode=scope.github_auth_mode,
@@ -636,7 +669,7 @@ async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
 
 _SCOPE_CONFIGURATION_FIELDS = (
     "preset_id", "repo_owner", "repo_name", "repo_path", "dispatch_label", "design_label",
-    "merge_policy", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+    "merge_policy", "review_hold_label", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
     "max_auto_merges_per_day", "base_ref", "builds_out_of_tree", "build_dir_template",
     "build_command_hint", "max_build_parallelism", "github_auth_mode", "github_app_installation_id",
     "continuation_enabled", "max_continuation_revisions", "max_continuation_failed_heads",
@@ -735,6 +768,11 @@ def _apply_scope_create(
         scope.design_label = _clean_label(request.design_label, "Design label")
     if request.merge_policy is not None:
         scope.merge_policy = request.merge_policy
+    if "review_hold_label" in request.model_fields_set:
+        scope.review_hold_label = (
+            _clean_label(request.review_hold_label, "Review hold label")
+            if request.review_hold_label is not None else None
+        )
     if request.max_approval_rounds is not None:
         scope.max_approval_rounds = request.max_approval_rounds
     if request.max_concurrent_dispatched is not None:
@@ -846,6 +884,27 @@ async def _authorize_dispatch_report(
                 status_code=409,
                 detail=f"lease_token does not match the current lease for item {item.id}",
             )
+
+
+async def _observe_terminal_dispatch_report(db, item, report, session):
+    """Keep an authorized status note without changing terminal item facts."""
+    from app.services import factory_audit_service as _audit
+
+    observed = await _audit.record_observation(
+        db,
+        event_kind="owner_status_report",
+        source="agent_teams.report_dispatch_status",
+        occurred_at=datetime.now(timezone.utc),
+        actor=_session_actor(session),
+        scope_id=item.scope_id,
+        item_id=item.id,
+        action_outcome="rejected",
+        sanitized_reason="terminal_status_report_ignored",
+        after_values={"status": report.status, "dispatch_status": item.dispatch_status,
+                      "status_note": report.note},
+    )
+    if observed is None:
+        raise HTTPException(status_code=503, detail="terminal_status_report_audit_unavailable")
 
 
 @router.post("/git-credential", response_model=GithubCredentialResponse)
@@ -1054,7 +1113,9 @@ async def report_dispatch_status(
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 
-    if report.status == "triaging":
+    if item.dispatch_status in TERMINAL_ITEMS and report.status != "workspace_released":
+        await _observe_terminal_dispatch_report(db, item, report, session)
+    elif report.status == "triaging":
         if report.note is not None:
             item.status_note = report.note
             item.updated_at = datetime.utcnow()
@@ -1155,8 +1216,17 @@ async def report_dispatch_status(
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
-        await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
-        await db.commit()
+        scope_id, owner_slot_id = item.scope_id, item.owner_slot_id
+        applied = await github_dispatch_service._escalate_current_item(
+            db, item, _item_identity(item), "plan_blocked", report.note)
+        if not applied:
+            # A merge can win after authorization. The guarded escalation
+            # refreshes the item and cannot overwrite the newer state.
+            if (item.dispatch_status in TERMINAL_ITEMS and item.scope_id == scope_id
+                    and item.owner_slot_id == owner_slot_id):
+                await _observe_terminal_dispatch_report(db, item, report, session)
+            else:
+                raise HTTPException(status_code=409, detail="dispatch_report_context_changed")
     elif report.status == "ack_received":
         evidence = await github_dispatch_service.record_ack_received(db, item, scope)
         if not evidence.ok:
@@ -2272,6 +2342,15 @@ async def get_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/presets/{preset_id}/summary", response_model=AgentTeamSummaryResponse)
+async def get_team_summary(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    result = await agent_team_summary_service.summary(db, preset_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="preset_not_found")
+    return result
+
+
 @router.get("/presets/{preset_id}/activity", response_model=AgentTeamActivityResponse)
 async def get_team_activity(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
     try:
@@ -2296,6 +2375,10 @@ async def update_preset(
             name=request.name,
             description=request.description,
             autonomy_enabled=request.autonomy_enabled,
+            **({"parent_issue_url": request.parent_issue_url}
+               if "parent_issue_url" in request.model_fields_set else {}),
+            **{field: getattr(request, field) for field in ("backlog_milestone", "planned_decisions")
+               if field in request.model_fields_set},
         )
     except ValueError as exc:
         if str(exc) == "leader_assignment_required":
@@ -2827,11 +2910,11 @@ async def force_release_github_workspace(
         if workspace.leased_item_id is None:
             current = "the workspace is no longer leased"
         else:
-            current = f"it now reports leased_at {workspace.leased_at.isoformat()}"
+            current = f"it now reports leased_at {format_utc_time(workspace.leased_at)}"
         raise _conflict(
             "The workspace lease changed between inspection and release, so "
             f"nothing was released. You confirmed leased_at "
-            f"{request.expected_leased_at.isoformat()}, but {current}. "
+            f"{format_utc_time(request.expected_leased_at)}, but {current}. "
             "Refresh the workspace and confirm again.",
             block_code="lease_changed",
         )

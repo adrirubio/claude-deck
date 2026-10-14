@@ -1,3 +1,5 @@
+import type { AgentStatus } from './agentStatus'
+
 export type MailMessageKind = 'message' | 'broadcast' | 'context_request' | 'handoff' | 'answer'
 export type MailRequestStatus = 'pending' | 'answered' | 'acknowledged'
 export type MailMemberStatus = 'connected' | 'observed' | 'offline'
@@ -47,6 +49,7 @@ export interface MailMemberResponse {
   wake_state?: MailWakeState
   last_inbox_checked_at?: string | null
   sessions: MailSessionResponse[]
+  agent_status?: AgentStatus | null
 }
 
 export interface TeamListResponse {
@@ -77,7 +80,7 @@ export interface MailMessageResponse {
   kind: MailMessageKind
   sender_member_id?: number | null
   sender_actor_id?: number | null
-  sender_type?: 'director' | 'member' | 'external_actor' | string
+  sender_type?: 'system' | 'director' | 'member' | 'external_actor' | 'legacy' | string
   sender_actor_kind?: string | null
   sender_name: string
   recipient_member_id?: number | null
@@ -106,11 +109,13 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  mail_capability_tokens_required: boolean
   pi_cli_available?: boolean
   pi_mail_ready?: boolean
   pi_mail_reason?: string | null
   claude_code_hooks: string[]
   claude_code_hooks_missing: string[]
+  claude_code_prompt_block_installed?: boolean
   claude_code_mcp_installed: boolean
   codex_cli_available: boolean
   codex_mcp_installed: boolean

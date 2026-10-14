@@ -203,6 +203,19 @@ function respond(req) {
   unknown.push(key);
   return null;
 }
+// Serve only the files that exist in dist when the server starts. A request
+// selects one of them by name, so no file path is built from the request.
+const distRoot = path.resolve(process.cwd(), "dist");
+const assets = new Map();
+const listAssets = async (dir) => {
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) await listAssets(full);
+    else if (entry.isFile()) assets.set("/" + path.relative(distRoot, full).split(path.sep).join("/"), full);
+  }
+};
+await listAssets(distRoot);
+const indexFile = path.join(distRoot, "index.html");
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url.startsWith("/api/v1/")) {
@@ -211,19 +224,8 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(data ?? { detail: "No fixture for endpoint" }));
       return;
     }
-    let file = path.join(
-      process.cwd(),
-      "dist",
-      decodeURIComponent(req.url.split("?")[0]),
-    );
-    if (!file.startsWith(path.join(process.cwd(), "dist")))
-      throw Error("Invalid asset path");
-    try {
-      const stat = await fs.stat(file);
-      if (!stat.isFile()) file = path.join(process.cwd(), "dist/index.html");
-    } catch {
-      file = path.join(process.cwd(), "dist/index.html");
-    }
+    // An unknown name is a client route: serve the app shell, as before.
+    const file = assets.get(decodeURIComponent(req.url.split("?")[0])) ?? indexFile;
     res.setHeader(
       "Content-Type",
       file.endsWith(".js")
@@ -236,8 +238,10 @@ const server = http.createServer(async (req, res) => {
     );
     res.end(await fs.readFile(file));
   } catch (error) {
+    // Keep the detail in the test log; the client gets a fixed message.
+    console.error(error);
     res.writeHead(500);
-    res.end(String(error));
+    res.end("Fixture server error");
   }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -498,7 +502,7 @@ try {
       if (name === "detail" || name === "offline-detail") {
         const primary = await focusByTab('nav[aria-label="Work context"] a[href^="/agent-bridge?"]');
         const hierarchy = await evaluate("(() => {const nav=document.querySelector('nav[aria-label=\"Work context\"]'),links=[...nav.querySelectorAll('a')];return links.map(a=>({name:a.textContent.trim(),href:a.getAttribute('href'),border:getComputedStyle(a).borderTopWidth,tag:a.tagName,role:a.getAttribute('role')}));})()");
-        for (const label of ["Team", "Repository scope", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
+        for (const label of ["Team", "Repository", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
         assert(hierarchy.every(a => a.tag === "A" && a.role !== "button"));
         const sessionUrl = new URL(primary.href, "http://fixture.test");
         assert.equal(sessionUrl.searchParams.get("context"), "readonly");
@@ -579,14 +583,14 @@ try {
         for (let i = 0; i < 100; i++) {
           if (
             await evaluate(
-              'document.body.innerText.includes("Live updates paused")',
+              'document.body.innerText.includes("Updates are paused while you browse older results")',
             )
           )
             break;
           await sleep(50);
         }
         const after = await evaluate(
-          '({top:document.querySelector("main").scrollTop,left:document.querySelector("[data-work-table]")?.scrollLeft,href:document.activeElement?.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length,paused:document.body.innerText.includes("Live updates paused")})',
+          '({top:document.querySelector("main").scrollTop,left:document.querySelector("[data-work-table]")?.scrollLeft,href:document.activeElement?.getAttribute("href"),rows:document.querySelectorAll("tbody tr").length,paused:document.body.innerText.includes("Updates are paused while you browse older results")})',
         );
         assert.equal(after.rows, before.rows);
         assert.equal(after.rows, 4);

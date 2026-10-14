@@ -1,4 +1,5 @@
 """Application configuration using pydantic-settings."""
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +14,7 @@ class Settings(BaseSettings):
 
     # Application settings
     app_name: str = "Claude Deck"
-    app_version: str = "3.0.0"
+    app_version: str = "3.1.0"
     debug: bool = False
 
     # API settings
@@ -26,7 +27,7 @@ class Settings(BaseSettings):
     cors_headers: list[str] = ["*"]
 
     # Database settings
-    database_url: str = "sqlite+aiosqlite:///./claude_registry.db"
+    database_url: str = Field(default="sqlite+aiosqlite:///./claude_registry.db", repr=False)
 
     # Agent Bridge attachment settings
     bridge_attachment_dir: str = "~/.claude-registry/bridge-attachments"
@@ -36,9 +37,9 @@ class Settings(BaseSettings):
     bridge_attachment_max_per_session_per_day: int = 100
 
     # GitHub integration (autonomous dispatch)
-    github_token: str = ""
+    github_token: str = Field(default="", repr=False)
     github_app_id: str = ""
-    github_app_private_key_path: str = ""
+    github_app_private_key_path: str = Field(default="", repr=False)
     github_app_bot_login: str = ""
     github_app_token_refresh_margin_seconds: int = 300
     github_dispatch_interval_seconds: int = 60
@@ -55,18 +56,27 @@ class Settings(BaseSettings):
     github_continuation_leader_nudge_cooldown_seconds: int = 180
     github_continuation_owner_ack_nudge_cooldown_seconds: int = 180
     github_recovery_nudge_cooldown_seconds: int = 180
-    github_recovery_only_attempt: str = ""
+    github_recovery_only_attempt: str = Field(default="", repr=False)
     # Existing external supervisors can supply their HOLD markers. Paths are never
     # exposed to agents or public coordination responses. Unreadable paths halt work.
-    github_coordination_hold_paths: list[str] = []
+    github_coordination_hold_paths: list[str] = Field(default_factory=list, repr=False)
 
     # Agent Mail identity settings
-    mail_capability_tokens_required: bool = False
-    operator_token: str = ""
+    mail_capability_tokens_required: bool = True
+    operator_token: str = Field(default="", repr=False)
 
     # Server settings
     host: str = "127.0.0.1"
     port: int = 8000
+
+    # Test instance (scripts/e2e-instance.sh). No dispatch scheduler, no
+    # start-up relay cleanup (it signals every tmux client on the host) and no
+    # GitHub network access. Never set this on a real installation.
+    test_instance: bool = False
+    # A test instance reports these on /health, so the E2E harness can refuse
+    # a server that belongs to another run. Ignored unless test_instance is set.
+    test_instance_root: str = Field(default="", repr=False)
+    test_instance_token: str = Field(default="", repr=False)
 
 
 # Global settings instance

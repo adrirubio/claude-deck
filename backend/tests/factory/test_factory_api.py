@@ -24,6 +24,32 @@ async def get_ok(client, path, **params):
     return response.json()
 
 
+async def test_ci_signal_reaches_work_list_and_detail_with_safe_reason(factory_client, factory_store):
+    item_id = factory_store.ids.by_status["verifying"]
+    since = datetime.utcnow() - timedelta(minutes=16)
+    async with factory_store.maker() as db:
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(
+            checks_unavailable_since=since, checks_unavailable_reason=PRIVATE))
+        await db.commit()
+    detail = await get_ok(factory_client, f"work-items/{item_id}")
+    item = detail["work_item"]["item"]
+    signal = item["required_ci_unreadable"]
+    assert signal["code"] == "required_ci_unreadable"
+    assert signal["label"] == "Required CI cannot be read"
+    assert signal["reason"] == item["checks_unavailable_reason"] == "unknown"
+    assert signal["next_steps"]
+    listing = await get_ok(factory_client, "work-items", category="active", limit=100)
+    row = next(row for row in listing["items"] if row["item"]["id"] == item_id)
+    assert row["item"]["required_ci_unreadable"] == signal
+    assert PRIVATE not in json.dumps(detail) and PRIVATE not in json.dumps(listing)
+    async with factory_store.maker() as db:
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(
+            checks_unavailable_since=None, checks_unavailable_reason=None))
+        await db.commit()
+    cleared = (await get_ok(factory_client, f"work-items/{item_id}"))["work_item"]["item"]
+    assert cleared["required_ci_unreadable"] is None and cleared["checks_unavailable_since"] is None
+
+
 async def test_complete_counts_and_timestamp_id_pagination(factory_client, factory_store):
     first = await get_ok(factory_client, "work-items", limit=100)
     assert first["total"] == 132
@@ -53,6 +79,26 @@ async def test_category_counts_cover_complete_selected_set(factory_client, facto
     assert response["counts"]["total"] == expected
     assert len(response["items"]) == 1
     assert response["items"][0]["category"] == category
+
+
+async def test_open_category_is_every_item_that_is_not_finished(factory_client, factory_store):
+    statuses = tuple(projection.STATUS_CATEGORY) + ("future_status",)
+    expected = sum(1 for i in range(132) if projection.STATUS_CATEGORY.get(statuses[i % 10], "unknown") != "finished")
+    first = await get_ok(factory_client, "work-items", category="open", limit=100)
+    assert first["filters"]["category"] == "open"
+    assert first["total"] == expected
+    assert first["counts"]["total"] == expected and first["counts"]["finished"] == 0
+    assert first["has_more"] and first["next_cursor"]
+    second = await get_ok(factory_client, "work-items", category="open", limit=100, cursor=first["next_cursor"])
+    rows = first["items"] + second["items"]
+    ids = [r["item"]["id"] for r in rows]
+    assert len(ids) == len(set(ids)) == expected
+    assert ids == sorted(ids, reverse=True)
+    assert all(r["category"] != "finished" for r in rows)
+    assert not {"merged", "completed"} & {r["item"]["dispatch_status"] for r in rows}
+    # A status that Deck does not know yet is not finished, so it is open.
+    assert "future_status" in {r["item"]["dispatch_status"] for r in rows}
+    assert {r["category"] for r in rows} == {"queued", "active", "review", "attention", "unknown"}
 
 
 async def test_provider_filter_matches_only_current_owner_and_repo_roster(factory_client, factory_store):
@@ -186,6 +232,9 @@ async def test_redaction_list_detail_overview_and_repository(factory_client, fac
     result = await get_ok(factory_client, f"work-items/{factory_store.ids.by_status['escalated']}")
     item = result["work_item"]
     assert set(item["item"]) == set(wire.SafeWorkItem.model_fields)
+    assert set(item["team"]) == set(wire.TeamReference.model_fields)
+    assert "parent_issue_url" not in item["item"]
+    assert "outcome" not in item["item"]
     assert item["category"] == "attention"
     assert item["waiting"]["reason_code"] == "abandoned_by_operator"
     assert item["item"]["active_scope_status"] == "active"

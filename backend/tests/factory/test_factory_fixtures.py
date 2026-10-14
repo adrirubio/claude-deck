@@ -155,7 +155,7 @@ async def test_frozen_response_contract(factory_client, factory_store, monkeypat
 
     schemas = {name: getattr(wire, name).model_json_schema() for name in (
         "OverviewResponse", "WorkListResponse", "WorkDetailResponse", "RepositoryListResponse",
-        "RepositoryDetailResponse", "FactoryErrorResponse")}
+        "RepositoryDetailResponse", "FactoryErrorResponse", "AgentTeamSummaryResponse")}
     files["schema"] = {"schema_version": 1, "models": schemas}
     files["mapping"] = {"schema_version": 1, "categories": projection.CATEGORY_STATUSES,
                         "reason_summaries": projection.REASON_SUMMARIES,
@@ -181,9 +181,11 @@ async def test_frozen_response_contract(factory_client, factory_store, monkeypat
         # JSON normalization turns immutable status tuples into artifact arrays.
         value = json.loads(json.dumps(value))
         assert "synthetic-private-forbidden" not in json.dumps(value)
-        path = FIXTURES / f"{name}.json"
-        if request.config.getoption("--freeze-factory-fixtures"):
-            FIXTURES.mkdir(parents=True, exist_ok=True)
+        output = request.config.getoption("--factory-fixture-output")
+        directory = Path(output) if output else FIXTURES
+        path = directory / f"{name}.json"
+        if output or request.config.getoption("--freeze-factory-fixtures"):
+            directory.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         else:
             assert json.loads(path.read_text()) == value, f"Contract changed: {path.name}"
@@ -204,6 +206,9 @@ async def test_v13_frozen_responses_enforce_explicit_field_allowlist():
     assertions here also cover the live read routes.
     """
     safe_item_keys = set(wire.SafeWorkItem.model_fields)
+    summary = json.loads((FIXTURES / "schema.json").read_text())["models"]["AgentTeamSummaryResponse"]
+    assert set(summary["properties"]) == set(wire.AgentTeamSummaryResponse.model_fields)
+    assert not (set(summary["properties"]) & V13_FORBIDDEN_FIELDS)
     for name in ("work-item.json", "work-items.json", "repositories.json", "repository.json",
                  "overview.json", "errors.json", "protected-errors.json", "mapping.json", "manifest.json"):
         data = json.loads((FIXTURES / name).read_text())
@@ -254,7 +259,7 @@ async def test_contract_versions_manifest_hashes():
         assert manifest["contract_version"] == "p04"
         assert manifest["reviewed_head"] == "7a032daf3147c03f0c030137973b292d05224bf6"
         assert manifest["p01_source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
-        assert manifest["changed_from_p01"] == ["work-item.json", "work-items.json"]
+        assert manifest["changed_from_p01"] == ["overview.json", "schema.json", "work-item.json", "work-items.json"]
         for name, digest in manifest["artifact_sha256"].items():
             actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
             assert actual == digest, f"Artifact hash mismatch: {directory}/{name}"

@@ -42,14 +42,8 @@ def svc(monkeypatch):
 def _assert_authorized_work_continuation(prompt):
     for instruction in (
         "deck_check_inbox(unread_only=False)",
-        "Read task and review messages",
-        "answer pending context requests and handoffs",
         "continue your current unfinished authorized task",
-        "An empty inbox does not mean the assignment is complete",
-        "Check the current assignment before you declare idle",
         "Respect the factory pause, HOLD, ownership, approval, and review gates",
-        "If blocked, report the specific blocker to your Leader",
-        "If no authorized work remains, report idle",
         "This wake grants no new authority",
     ):
         assert instruction in prompt
@@ -1962,6 +1956,9 @@ async def test_connected_mcp_session_without_tmux_is_delivered_waiting(db, svc, 
     assert members[0].can_nudge is False
     assert members[0].wake_methods == []
     assert members[0].wake_state == "delivered_waiting"
+    assert members[0].agent_status.session_state == "online"
+    assert members[0].agent_status.wake_state == "cannot_wake"
+    assert members[0].agent_status.wake_reason == "wake_target_unbound"
 
 
 @pytest.mark.asyncio

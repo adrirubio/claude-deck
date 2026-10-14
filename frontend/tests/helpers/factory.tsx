@@ -37,20 +37,30 @@ export function fixtureFetch(
 ) {
   const requests: { path: string; query: URLSearchParams; method: string }[] =
     [];
+  // The filter selects read the team and repository names once. Those reads
+  // are kept apart, so the counts of page reads stay about the page.
+  const optionRequests: typeof requests = [];
   const fetch = vi.fn(
     (input: string | URL | Request, options?: RequestInit) => {
       const url = new URL(String(input), "http://fixture.test");
       const path = url.pathname.replace("/api/v1/", "");
-      requests.push({
+      const entry = {
         path,
         query: url.searchParams,
         method: options?.method ?? "GET",
-      });
+      };
+      if (
+        (path === "factory/repositories" && url.searchParams.get("limit") === "100") ||
+        // The recovery panel on the Work item page reads these for the team of the item.
+        /^agent-teams\/presets(\/\d+\/(github-work-items|github-scopes|activity))?$/.test(path)
+      )
+        optionRequests.push(entry);
+      else requests.push(entry);
       return Promise.resolve(handler(path, url.searchParams, options));
     },
   );
   vi.stubGlobal("fetch", fetch);
-  return { fetch, requests };
+  return { fetch, requests, optionRequests };
 }
 export async function settle() {
   await act(async () => {

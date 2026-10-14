@@ -1,5 +1,5 @@
 """HTTP contract tests for Agent Team presets."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -22,6 +22,80 @@ from app.models.database import (
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 from app.services.github_app_auth_service import github_app_auth_service
+
+
+@pytest.mark.asyncio
+async def test_preset_http_timestamp_names_utc_without_changing_storage(client, db):
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    preset = AgentTeamPreset(name="UTC", created_at=stamp, updated_at=stamp)
+    db.add(preset)
+    await db.commit()
+    response = await client.get("/api/v1/agent-teams/presets")
+    assert response.status_code == 200
+    item = next(row for row in response.json()["presets"] if row["id"] == preset.id)
+    parsed = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00"))
+    assert parsed == stamp.replace(tzinfo=timezone.utc)
+    await db.refresh(preset)
+    assert preset.updated_at == stamp
+    assert preset.updated_at.tzinfo is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation_zone", [None, timezone.utc, timezone(timedelta(hours=2))])
+@pytest.mark.parametrize("stale", [False, True])
+async def test_leader_timestamp_round_trip_preserves_instant_and_stale_refusal(client, db, tmp_path, confirmation_zone, stale):
+    stamp = datetime(2026, 10, 9, 6, 20, 53, 83886)
+    created = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Confirm UTC", slots=[
+        AgentTeamSlotCreate(display_name="Leader", repo_path=str(tmp_path))]))
+    preset = await db.get(AgentTeamPreset, created.id)
+    preset.updated_at = stamp
+    await db.commit()
+    confirmed = stamp - timedelta(seconds=1) if stale else stamp
+    if confirmation_zone is not None:
+        confirmed = confirmed.replace(tzinfo=timezone.utc).astimezone(confirmation_zone)
+    response = await client.put(f"/api/v1/agent-teams/presets/{created.id}/leader", json={
+        "leader_slot_id": created.slots[0].id, "expected_leader_slot_id": None,
+        "expected_updated_at": confirmed.isoformat(), "reason": "UTC confirmation fixture"})
+    assert response.status_code == (409 if stale else 200)
+    await db.refresh(preset)
+    assert preset.leader_slot_id == (None if stale else created.slots[0].id)
+
+
+@pytest.mark.asyncio
+async def test_parent_issue_http_create_update_and_clear(client):
+    url = "https://github.com/example/repo/issues/506"
+    created = await client.post("/api/v1/agent-teams/presets", json={
+        "name": "Linked", "description": "Ship the release.", "parent_issue_url": url})
+    assert created.status_code == 200
+    data = created.json()
+    assert data["parent_issue_url"] == url
+    path = f"/api/v1/agent-teams/presets/{data['id']}"
+    renamed = await client.patch(path, json={"name": "Renamed"})
+    assert renamed.json()["parent_issue_url"] == url
+    invalid = await client.patch(path, json={"parent_issue_url": "https://github.com/example/repo/pull/1"})
+    assert invalid.status_code == 422
+    cleared = await client.patch(path, json={"parent_issue_url": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["parent_issue_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_team_summary_http_is_read_only_and_not_cached(client, monkeypatch):
+    monkeypatch.setattr("app.services.agent_team_summary_service.hold_code", lambda: None)
+    created = await client.post("/api/v1/agent-teams/presets", json={
+        "name": "Summary", "description": "Ship the release.",
+        "parent_issue_url": "https://github.com/example/repo/issues/506"})
+    preset_id = created.json()["id"]
+    response = await client.get(f"/api/v1/agent-teams/presets/{preset_id}/summary")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    data = response.json()
+    assert data["description"] == "Ship the release."
+    assert data["remaining_work"]["effort_low_minutes"] == 0
+    assert data["supervisor"] == "none"
+    unchanged = await client.get(f"/api/v1/agent-teams/presets/{preset_id}")
+    assert unchanged.json() == created.json()
+    assert (await client.get("/api/v1/agent-teams/presets/999999/summary")).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -935,6 +1009,37 @@ async def test_team_creation_requires_operator(client):
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "operator_token_required"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["", "wrong-key"])
+async def test_campaign_fields_need_director_key(client, key):
+    created = await client.post("/api/v1/agent-teams/presets", json={"name": "Campaign", "slots": []})
+    path = f'/api/v1/agent-teams/presets/{created.json()["id"]}'
+    changes = {"backlog_milestone": "Campaign", "planned_decisions": [{"text": "Decide promotion.", "state": "later"}]}
+    denied = await client.patch(path, json=changes, headers={"X-Deck-Operator-Token": key,
+                                                           "X-Deck-Session-Token": "synthetic-session-key"})
+    assert denied.status_code == 401
+    unchanged = (await client.get(path)).json()
+    assert unchanged["backlog_milestone"] is None and unchanged["planned_decisions"] is None
+    allowed = await client.patch(path, json=changes)
+    assert allowed.status_code == 200
+    assert allowed.json()["backlog_milestone"] == "Campaign"
+    assert allowed.json()["planned_decisions"] == changes["planned_decisions"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"planned_decisions": [{"text": "", "state": "later"}]},
+    {"planned_decisions": [{"text": "Decide promotion.", "state": "requested"}]},
+    {"planned_decisions": [{"text": "Two\nlines", "state": "now"}]},
+    {"planned_decisions": [{"text": "Decide promotion.", "private_key": "forbidden"}]},
+    {"backlog_milestone": "Two\nlines"},
+])
+async def test_campaign_fields_reject_invalid_public_metadata(client, changes):
+    created = await client.post("/api/v1/agent-teams/presets", json={"name": "Campaign", "slots": []})
+    response = await client.patch(f'/api/v1/agent-teams/presets/{created.json()["id"]}', json=changes)
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

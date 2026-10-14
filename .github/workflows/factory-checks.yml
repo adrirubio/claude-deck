@@ -2,8 +2,8 @@ name: Factory source checks
 
 on:
   pull_request:
-    branches: [master, feature/software-delivery-product-reposition]
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
     name: Changed Python undefined names
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0

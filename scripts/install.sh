@@ -21,12 +21,20 @@ echo "Found Python $PYTHON_VERSION"
 
 # Check Node.js
 if ! command -v node &> /dev/null; then
-    echo "Error: Node.js not found. Please install Node.js 18+."
+    echo "Error: Node.js not found. Please install Node.js 22.12+."
     exit 1
 fi
 
 NODE_VERSION=$(node --version)
 echo "Found Node.js $NODE_VERSION"
+
+# Vite 8 and Vitest 5 need Node.js 22.12 or later.
+NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/^v//' | cut -d. -f1)
+NODE_MINOR=$(echo "$NODE_VERSION" | sed 's/^v//' | cut -d. -f2)
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
+    echo "Error: Node.js $NODE_VERSION is too old. Please install Node.js 22.12+."
+    exit 1
+fi
 
 # Setup backend
 echo ""

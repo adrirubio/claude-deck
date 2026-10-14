@@ -160,6 +160,8 @@ async def test_agent_bridge_mail_projection_matches_same_repo_panes_independentl
     assert [pane["mail_member_id"] for pane in projected] == expected_member_ids
     assert [pane["mail_mcp_session_id"] for pane in projected] == expected_mcp_ids
     assert [pane["mail_wake_state"] for pane in projected] == ["wakeable", "wakeable"]
+    assert [pane["agent_status"]["session_state"] for pane in projected] == ["online", "online"]
+    assert [pane["agent_status"]["wake_state"] for pane in projected] == ["can_wake", "can_wake"]
     assert [pane["mail_wake_target"] for pane in projected] == ["deck:0.0", "deck:1.0"]
     assert "secret-token-0" not in str(projected)
     assert "capability_token_hash" not in str(projected)
@@ -247,6 +249,9 @@ async def test_agent_bridge_mail_projection_marks_stale_binding_without_mutation
 
     assert projected[0]["mail_wake_state"] == "stale"
     assert projected[0]["mail_wake_reason"] == "wake_target_stale"
+    assert projected[0]["agent_status"]["session_state"] == "online"
+    assert projected[0]["agent_status"]["wake_state"] == "cannot_wake"
+    assert projected[0]["agent_status"]["wake_reason"] == "wake_target_unbound"
     assert projected[0]["mail_mcp_session_id"] is None
     assert projected[0]["mail_wake_target"] is None
     assert observed.last_seen_at == before
@@ -349,5 +354,8 @@ async def test_agent_bridge_mail_projection_reports_ambiguous_observation_read_o
 
     assert projected[0]["mail_wake_state"] == "ambiguous"
     assert projected[0]["mail_wake_reason"] == "wake_target_ambiguous"
+    assert projected[0]["agent_status"]["session_state"] == "unknown"
+    assert projected[0]["agent_status"]["wake_state"] == "cannot_wake"
+    assert projected[0]["agent_status"]["wake_reason"] == "wake_target_ambiguous"
     assert projected[0]["mail_wake_target"] is None
     assert [row.last_seen_at for row in observed_rows] == before

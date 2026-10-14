@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import require_operator
 from app.database import get_db
+from app.models.api_model import format_utc_time
 from app.models.database import GithubAcceptedSourceImport, GithubMaintenanceEvent, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
+from app.models.schemas import TerminalRevisionReconcileRequest
+from app.services.github_terminal_revision_service import terminal_revision_report, reconcile_terminal_revision
 from app.services.accepted_source_imports import SourceImportRequest, register_source_import
 from app.services.github_client import GithubClientResponseError
 from app.services.github_check_observation import GithubCheckObservationError
@@ -41,6 +44,30 @@ async def context(db, preset_id, item_id):
     if scope is None or scope.preset_id != preset_id:
         raise HTTPException(status_code=404, detail="Work item not found")
     return item, scope
+
+
+@router.get("/presets/{preset_id}/terminal-revisions")
+async def terminal_revisions(preset_id: int, response: Response,
+                             _operator=Depends(require_operator), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    return await terminal_revision_report(db, preset_id)
+
+
+@router.post("/presets/{preset_id}/work-items/{item_id}/terminal-revisions/{revision_id}/reconcile")
+async def terminal_revision_reconcile(preset_id: int, item_id: int, revision_id: int,
+                                      request: TerminalRevisionReconcileRequest, response: Response,
+                                      _operator=Depends(require_operator), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item, _scope = await context(db, preset_id, item_id)
+    try:
+        return await reconcile_terminal_revision(db, item, revision_id, request.expected_context_sha256,
+                                                 request.operation_id, request.reason)
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="terminal_revision_context_changed") from None
 
 
 @router.post("/presets/{preset_id}/work-items/{item_id}/accepted-source-imports")
@@ -80,7 +107,7 @@ async def accepted_source_imports(preset_id: int, item_id: int, response: Respon
                          "accepted_source_sha": row.accepted_source_sha,
                          "accepted_merge_sha": row.accepted_merge_sha,
                          "observed_head_sha": row.observed_head_sha,
-                         "paths": sorted(row.path_snapshots), "created_at": row.created_at}
+                         "paths": sorted(row.path_snapshots), "created_at": format_utc_time(row.created_at)}
                         for row in rows[:64]],
             "limits": "Exact accepted contents only. The original owner scope, baseline and budgets remain."}
 
@@ -93,9 +120,11 @@ async def observation_pauses(preset_id: int, item_id: int, response: Response,
     records = (await db.scalars(select(GithubOwnerObservationPause).where(
         GithubOwnerObservationPause.work_item_id == item.id).order_by(GithubOwnerObservationPause.id.desc()).limit(20))).all()
     return {"work_item_id": item.id, "dispatch_status": item.dispatch_status,
-            "pauses": [{"pause_id": row.id, "status": row.status, "wait_deadline": row.deadline,
-                        "paused_at": row.paused_at, "resume_deadline": row.resume_deadline,
-                        "resumed_at": row.resumed_at, "notice_status": row.notice_status} for row in records],
+            "pauses": [{"pause_id": row.id, "status": row.status, "wait_deadline": format_utc_time(row.deadline),
+                        "paused_at": format_utc_time(row.paused_at) if row.paused_at is not None else None,
+                        "resume_deadline": format_utc_time(row.resume_deadline) if row.resume_deadline is not None else None,
+                        "resumed_at": format_utc_time(row.resumed_at) if row.resumed_at is not None else None,
+                        "notice_status": row.notice_status} for row in records],
             "action": "Inspect the current owner and authority. Resume only the unchanged recorded observation pause.",
             "completion": "The resume operation returns resumed. The owner then reports actual progress within the existing nudge grace.",
             "limits": "No restart, new scope, ACK, retry, budget reset, merge or milestone acceptance."}

@@ -2,6 +2,11 @@
 
 Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.
 
+Response timestamps identify UTC with `Z` or `+00:00`. The JSON serializer leaves stored datetimes unchanged.
+Send the returned timestamp unchanged in `expected_updated_at` or `expected_leased_at`.
+Those two confirmation fields preserve the instant when they decode a UTC or non-UTC offset.
+Naive confirmation values keep their existing UTC meaning. Stale instants still fail the existing comparison with 409.
+
 ## Authorization
 
 "Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
@@ -12,6 +17,7 @@ Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copi
 
 | Route | Access |
 | --- | --- |
+| GET `/api/v1/agent-teams/presets/{preset_id}/summary` | None |
 | GET `/api/v1/agent-teams/presets`, GET `/api/v1/agent-teams/presets/{preset_id}`, GET `/api/v1/agent-teams/presets/{preset_id}/activity`, GET `/api/v1/agent-teams/presets/{preset_id}/github-scopes` | None |
 | POST `/api/v1/agent-teams/presets`, `/api/v1/agent-teams/presets/from-agent-mail`, `/api/v1/agent-teams/presets/from-agent-bridge`, `/api/v1/agent-teams/presets/{preset_id}/duplicate` | Operator token |
 | PATCH and DELETE `/api/v1/agent-teams/presets/{preset_id}` | Operator token |
@@ -24,6 +30,38 @@ Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copi
 A Mail session that plans or launches cannot use prompt or path overrides, include disabled slots, force a respawn, adopt unbound sessions or skip plan confirmation. Those requests return 403 `operator_launch_override_required`. For plan and launch, a session that does not qualify returns 403 `authenticated_mcp_session_required`. For retry, a session that does not qualify or is not the current Leader returns 403 `current_leader_required`.
 
 ## Presets
+
+### Shared agent status
+
+The activity route returns `agent_status` for each slot.
+Agent Mail members, Live sessions, and factory session associations use the same status service.
+
+| Field | Values or meaning |
+| --- | --- |
+| `session_state` | `online`, `offline`, or `unknown` |
+| `activity_state` | `working`, `idle`, `stopped`, or `unknown` from native evidence |
+| `activity_reason` | Native observation reason |
+| `wake_state` | `can_wake`, `cannot_wake`, or `unknown` |
+| `wake_reason` | Existing delivery refusal code, or null when delivery has a wake target |
+| `idle_since` | Native idle event time, or null when that time is unknown |
+| `checked_at`, `valid_until` | UTC observation time and expiry; the validity interval is 15 seconds |
+
+Online status and wake status are separate facts.
+An old pane observation does not hide a live MCP session.
+It can still prevent delivery under the existing wake rules.
+For example, an agent can be online and idle, with `cannot_wake` and `wake_target_unbound`.
+
+Calculate idle duration only from `idle_since`.
+Do not use mailbox age as idle duration.
+Show unknown after `valid_until` expires.
+Unknown activity does not prove that work stopped.
+
+The shared status does not grant approval, execution, recovery, lease renewal, or delivery authority.
+Delivery checks its current target again.
+Legacy native observation fields and wake fields keep their existing meanings.
+Shared status reads send no input and change no heartbeat.
+They do not save native session identity.
+The existing Teams activity route retains its separate first-launch identity capture.
 
 ### List Presets
 
@@ -184,9 +222,41 @@ Use `deck_prepare_operator_action_contexts(scope_id, entries)` for intended Lead
 Use `deck_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
 The latter reads `human-actions?include_templates=true`. Ordinary UI reads omit templates to keep responses small.
 
+### Parent issue and team summary
+
+`parent_issue_url` is nullable. Create and update requests accept an HTTPS GitHub issue URL.
+Omit the field to keep its value. Send `null` in a PATCH request to clear it.
+The additive startup migration preserves existing teams and links.
+The existing `description` supplies the outcome. Completion conditions stay in the parent issue.
+
+`GET /api/v1/agent-teams/presets/{preset_id}/summary` returns one observation for the team card.
+It returns the outcome, parent link, existing attention signals, human actions, remaining effort, and next actors.
+The `description` field supplies the outcome text. No `outcome` or `done_when` field is added.
+`supervisor` stays `none` until #549 supplies the supervisor contract.
+`hold_code` uses the existing HOLD and recovery-only check.
+Attention uses existing recovery actions, recorded owner escalations, and recorded observation pauses.
+This read creates no monitor, dispatch action, approval, resume authority, or owner contact.
+The existing progress service can refresh its derived observation cache.
+
+The summary limits observations to eight seconds and 64 unfinished tracked items.
+The existing human-actions read also limits coverage to 32 repository scopes.
+It excludes `merged` and `completed` items from effort totals.
+The total is known only when every included report is current and has validated numeric bounds.
+Incomplete, stale, unknown, expired, or changed-context observations keep the whole estimate Unknown.
+The total excludes waiting time. Its confidence is the lowest reported confidence.
+An empty complete observation has zero remaining effort.
+`next_actors` preserves all observed actors. `next_actor_coverage_complete` states whether coverage is complete.
+Consumers must check `valid_until` and coverage. These observations grant no execution authority.
+
+MCP tools: `deck_get_team_summary` reads the summary.
+`deck_update_team_parent_issue` changes only the link. Its required nullable argument clears the link with `null`.
+`deck_create_team` accepts `parent_issue_url`. Existing preset reads return the link.
+
 ### Work remaining reports
 
 `GET /api/v1/agent-teams/github-work-items/{item_id}/progress` includes `remaining_work`.
+Current validated reports expose `effort_low_minutes`, `effort_high_minutes`, and `confidence`.
+Historical reports do not expose current numeric bounds.
 The view contains three short fields: `remaining`, `estimate`, and `next_action`.
 It includes report state, author, time, source SHA, and optional completed work and assumptions.
 The ordinary progress read makes no GitHub writes and changes no dispatch authority.

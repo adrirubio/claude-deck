@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal, init_db
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
+from app.services.test_instance_campaign_service import test_instance_campaign_poller
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +28,24 @@ async def lifespan(app: FastAPI):
             await agent_bridge_attachment_service.cleanup_expired(db)
     except Exception:
         logger.exception("Failed to clean up expired Agent Bridge attachments")
-    try:
-        await github_dispatch_scheduler.start()
-    except Exception:
-        logger.exception("Failed to start autonomous GitHub dispatch scheduler")
-    # Clean up any orphaned relay processes from previous runs
-    from app.services.cc_bridge.pty_relay import close_all_relays, cleanup_orphaned_relays
-    cleanup_orphaned_relays()
+    if settings.test_instance:
+        # A test instance runs no autonomous dispatch and must not signal
+        # tmux clients that belong to other servers on the host.
+        logger.warning("Test instance: dispatch scheduler and relay cleanup are off")
+        await test_instance_campaign_poller.start()
+    else:
+        try:
+            await github_dispatch_scheduler.start()
+        except Exception:
+            logger.exception("Failed to start autonomous GitHub dispatch scheduler")
+        # Clean up any orphaned relay processes from previous runs
+        from app.services.cc_bridge.pty_relay import cleanup_orphaned_relays
+        cleanup_orphaned_relays()
     yield
     # Shutdown: Cleanup
+    from app.services.cc_bridge.pty_relay import close_all_relays
+    if settings.test_instance:
+        await test_instance_campaign_poller.shutdown()
     await github_dispatch_scheduler.shutdown()
     await close_all_relays()
 
@@ -63,11 +73,18 @@ app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {
+    body = {
         "name": settings.app_name,
         "version": settings.app_version,
         "status": "running"
     }
+    if settings.test_instance:
+        # The E2E harness checks that this server is its own run's instance.
+        body["test_instance"] = {
+            "root": settings.test_instance_root,
+            "token": settings.test_instance_token,
+        }
+    return body
 
 # Serve static files from the frontend build directory
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")

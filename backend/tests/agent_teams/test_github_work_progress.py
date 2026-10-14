@@ -527,6 +527,9 @@ async def test_remaining_report_current_cache_and_phase_change(db):
     first = await service.summary(db, item.id)
     assert first.remaining_work.state == "current"
     assert first.remaining_work.estimate == "About 30–60 minutes of active work (low confidence; interface fixes)."
+    assert first.remaining_work.effort_low_minutes == 30
+    assert first.remaining_work.effort_high_minutes == 60
+    assert first.remaining_work.confidence == "low"
     assert first.remaining_work_context.source_sha == SHA
     saved = await db.get(GithubWorkProgressSnapshot, item.id)
     assert saved.observation["_remaining_report"]["report"]["remaining"] == client.report.remaining
@@ -538,6 +541,8 @@ async def test_remaining_report_current_cache_and_phase_change(db):
     changed = await service.summary(db, item.id)
     assert (changed.phase, changed.next_actor) == ("review", "operator")
     assert changed.remaining_work.state == "historical" and changed.remaining_work.reason == "context_changed"
+    assert changed.remaining_work.effort_low_minutes is None
+    assert changed.remaining_work.effort_high_minutes is None
     assert item.retry_count == 0 and item.approval_round_count == 0 and preset.autonomy_enabled
     assert workspace.lease_token == "private-lease-value"
 

@@ -20,6 +20,7 @@ from app.main import app
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    FactoryAuditEvent,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
@@ -479,6 +480,107 @@ async def test_blocked_uses_spec_reason_and_persists_note(client_and_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["merged", "closed", "completed", "cancelled", "withdrawn"])
+@pytest.mark.parametrize("status", [
+    "blocked", "triaging", "in_progress", "ack_received", "pr_opened", "pr_ready",
+    "continuation_completed", "diagnostic_completed", "handoff_initiated",
+])
+async def test_terminal_owner_report_records_note_without_item_change(client_and_db, terminal, status):
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(maker, dispatch_status=terminal)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.pr_number = 580
+        item.status_note = "Delivered note."
+        item.auto_merged_at = datetime(2026, 10, 12, 12)
+        item.last_verified_sha = "a" * 40
+        item.last_nudge_at = datetime(2026, 10, 12, 11)
+        await db.commit()
+        before = {column.name: getattr(item, column.name) for column in item.__table__.columns}
+
+    note = "An untracked scratch file blocks workspace release."
+    response = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": status, "lease_token": "lease-current",
+        "pr_number": 999 if status == "pr_opened" else None,
+        "head_ref": "replacement-branch" if status == "pr_ready" else None,
+        "reassign_to_slot_id": other_id, "note": note,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["dispatch_status"] == terminal
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert {column.name: getattr(item, column.name) for column in item.__table__.columns} == before
+        event = (await db.scalars(select(FactoryAuditEvent).where(
+            FactoryAuditEvent.event_kind == "owner_status_report"))).one()
+        assert event.item_id == item_id
+        assert event.scope_id == item.scope_id
+        assert event.action_outcome == "rejected"
+        assert event.sanitized_reason == "terminal_status_report_ignored"
+        assert event.after_values == {"status": status, "dispatch_status": terminal, "status_note": note}
+        assert event.actor_kind == "member"
+        session = await db.get(MailAgentSession, event.actor_session_id)
+        assert event.actor_member_id == session.member_id
+        assert session.team_slot_id == owner_id
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id == item_id
+        assert workspace.lease_last_owner_contact_at is not None
+
+
+@pytest.mark.asyncio
+async def test_terminal_report_sanitizes_note_and_keeps_delivery_note(client_and_db):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, dispatch_status="merged", status_note="Delivered.")
+    response = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "blocked", "note": "lease_token=SYNTHETICPRIVATE123 scratch file remains",
+    })
+    assert response.status_code == 200
+    async with maker() as db:
+        assert (await db.get(GithubWorkItem, item_id)).status_note == "Delivered."
+        event = (await db.scalars(select(FactoryAuditEvent).where(
+            FactoryAuditEvent.event_kind == "owner_status_report"))).one()
+        assert event.after_values["status_note"] == "lease_token=[redacted] scratch file remains"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("race", ["merge", "owner"])
+async def test_blocked_report_cannot_overwrite_late_merge_or_owner(wal_client_and_db, monkeypatch, race):
+    ac, maker = wal_client_and_db
+    item_id, _, other_id, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    authorize = agent_teams_routes._authorize_dispatch_report
+
+    async def interleaving_authorize(db, item, report, session):
+        await authorize(db, item, report, session)
+        async with maker() as other_db:
+            fresh = await other_db.get(GithubWorkItem, item_id)
+            if race == "merge":
+                fresh.dispatch_status = "merged"
+                fresh.auto_merged_at = datetime(2026, 10, 12, 12)
+                fresh.status_note = "Delivered after the report began."
+            else:
+                fresh.owner_slot_id = other_id
+            await other_db.commit()
+
+    monkeypatch.setattr(agent_teams_routes, "_authorize_dispatch_report", interleaving_authorize)
+    response = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "blocked", "note": "Late owner note.",
+    })
+    assert response.status_code == (200 if race == "merge" else 409)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.escalation_reason is None
+        if race == "merge":
+            assert item.dispatch_status == "merged"
+            assert item.status_note == "Delivered after the report began."
+            event = (await db.scalars(select(FactoryAuditEvent).where(
+                FactoryAuditEvent.event_kind == "owner_status_report"))).one()
+            assert event.after_values["status_note"] == "Late owner note."
+        else:
+            assert item.dispatch_status == "dispatched"
+            assert item.owner_slot_id == other_id
+
+
+@pytest.mark.asyncio
 async def test_in_progress_records_activity_without_satisfying_ack(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, last_nudge_at=datetime.utcnow())
@@ -540,6 +642,99 @@ async def test_owner_releases_terminal_item_idempotently(client_and_db, monkeypa
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
+        assert (await db.get(GithubWorkItem, item_id)).dispatch_status == "merged"
+
+
+@pytest.mark.asyncio
+async def test_merged_release_refusal_note_keeps_terminal_state_and_release_guard(client_and_db, monkeypatch):
+    ac, maker = client_and_db
+    item_id, _, _, workspace_id, path = await _seed_leased_item(maker)
+    runner = _FakeGitRunner()
+    runner.statuses[path] = "?? scratch.tmp\n"
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+    release = {"work_item_id": item_id, "status": "workspace_released", "lease_token": "lease-current"}
+    refused = await ac.post("/api/v1/agent-teams/dispatch-status", json=release)
+    assert refused.status_code == 409
+    assert "untracked" in refused.json()["detail"]
+    reported = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "blocked", "note": "An untracked scratch file blocks release.",
+    })
+    assert reported.status_code == 200
+    async with maker() as db:
+        assert (await db.get(GithubWorkItem, item_id)).dispatch_status == "merged"
+        assert (await db.get(GithubWorkspace, workspace_id)).leased_item_id == item_id
+    runner.statuses[path] = ""
+    released = await ac.post("/api/v1/agent-teams/dispatch-status", json=release)
+    assert released.status_code == 200
+    async with maker() as db:
+        assert (await db.get(GithubWorkItem, item_id)).dispatch_status == "merged"
+        assert (await db.get(GithubWorkspace, workspace_id)).leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_report_audit_failure_keeps_terminal_facts(client_and_db, monkeypatch):
+    from app.services import factory_audit_service as audit
+
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, dispatch_status="merged", status_note="Delivered.")
+
+    async def failed_observation(db, **fields):
+        await db.rollback()
+        return None
+
+    monkeypatch.setattr(audit, "record_observation", failed_observation)
+    response = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "blocked", "note": "Release is blocked.",
+    })
+    assert response.status_code == 503
+    assert response.json()["detail"] == "terminal_status_report_audit_unavailable"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "merged"
+        assert item.escalation_reason is None
+        assert item.status_note == "Delivered."
+
+
+@pytest.mark.asyncio
+async def test_terminal_report_keeps_owner_and_lease_authorization(client_and_db):
+    ac, maker = client_and_db
+    item_id, _, other_id, _, _ = await _seed_leased_item(maker)
+    other_token = await _token_for_slot(maker, other_id, key="mcp:terminal-other")
+    refused_owner = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "blocked", "note": "Other slot note.",
+    }, headers=_auth(other_token))
+    assert refused_owner.status_code == 403
+    refused_lease = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "pr_ready", "head_ref": "replacement-branch",
+        "lease_token": "old-lease", "note": "Stale lease note.",
+    })
+    assert refused_lease.status_code == 409
+    async with maker() as db:
+        assert (await db.get(GithubWorkItem, item_id)).dispatch_status == "merged"
+        assert not (await db.scalars(select(FactoryAuditEvent).where(
+            FactoryAuditEvent.event_kind == "owner_status_report"))).all()
+
+
+@pytest.mark.asyncio
+async def test_terminal_handoff_acceptance_only_records_authorized_target_note(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(maker)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.handoff_state = "initiated"
+        item.handoff_target_slot_id = other_id
+        await db.commit()
+    target_token = await _token_for_slot(maker, other_id, key="mcp:terminal-target")
+    response = await ac.post("/api/v1/agent-teams/dispatch-status", json={
+        "work_item_id": item_id, "status": "handoff_accepted", "note": "Late target note.",
+    }, headers=_auth(target_token))
+    assert response.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "merged"
+        assert item.owner_slot_id == owner_id
+        assert item.handoff_state == "initiated"
+        assert item.handoff_target_slot_id == other_id
 
 
 @pytest.mark.asyncio

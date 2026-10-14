@@ -18,6 +18,20 @@ Authentication is endpoint-specific. The five observational [Factory GET routes]
 
 All request and response bodies use JSON. Set `Content-Type: application/json` for requests with bodies.
 
+## UTC timestamps
+
+UTC means Coordinated Universal Time. Response datetimes identify UTC with `Z` or `+00:00`.
+A naive datetime has no timezone. JSON serialization treats a naive server datetime as UTC.
+Serialization converts an aware datetime to the same instant in UTC. Stored values and Python model values stay unchanged.
+
+Declared legacy timestamp strings also identify UTC in JSON. User text and other strings stay unchanged.
+Backup archive manifests keep their storage serializer. The API formats a copy of a manifest.
+Stored progress snapshots also keep their serializer. The progress API formats a copied observation.
+
+Use the response timestamp unchanged for confirmation.
+`AgentTeamLeaderUpdateRequest.expected_updated_at` and `GithubWorkspaceForceReleaseRequest.expected_leased_at` decode aware input into the existing naive UTC form.
+Naive input stays unchanged. Database predicates, lease token checks, and authority rules stay unchanged.
+
 ## Common Query Parameters
 
 | Parameter | Type | Description |

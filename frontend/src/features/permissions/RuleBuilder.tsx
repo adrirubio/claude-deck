@@ -218,7 +218,7 @@ export function RuleBuilder({
               placeholder={selectedTool?.hint || "e.g., npm run *, *.py, /etc/*"}
             />
             <div className="flex items-start gap-2 text-xs text-muted-foreground">
-              <Lightbulb className="h-3 w-3 mt-0.5 flex-shrink-0" />
+              <Lightbulb className="h-3 w-3 mt-0.5 shrink-0" />
               <div>
                 {selectedTool ? (
                   <span>

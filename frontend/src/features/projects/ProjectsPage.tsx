@@ -1,7 +1,8 @@
 /**
- * Projects management page
+ * "Folders Deck knows about": the folders that a project-scoped Harness page can use.
  */
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { FolderOpen } from 'lucide-react';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import { ProjectList } from './ProjectList';
@@ -20,10 +21,12 @@ export function ProjectsPage() {
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <FolderOpen className="h-8 w-8" />
-            Projects
+            Folders Deck knows about
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage local project directories
+            These folders scope project-level native settings (MCP servers, commands, configuration and others) on the{' '}
+            <Link className="text-primary underline" to="/harnesses">Harnesses</Link> pages. Each page chooses its folder with its Project selector.
+            Team members' folders appear there automatically. Add a folder here only when it is not in that list.
           </p>
         </div>
         <div className="flex gap-2">
@@ -53,9 +56,9 @@ export function ProjectsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Tracked Projects</CardTitle>
+          <CardTitle>Added folders</CardTitle>
           <CardDescription>
-            {projects.length} project{projects.length !== 1 ? 's' : ''} tracked
+            {projects.length} folder{projects.length !== 1 ? 's' : ''} added
           </CardDescription>
         </CardHeader>
         <CardContent>
