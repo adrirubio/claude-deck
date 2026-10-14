@@ -372,7 +372,8 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
 
     # #549: a supervisor actor. It is bound to Release crew only when the #549
     # columns exist, so the seed works before and after #549 merges. "Healthy"
-    # is relative to the real clock: the next check is 8 minutes from now.
+    # is relative to the real clock: the next check is 60 minutes from now, so a
+    # long suite run still sees it.
     s.insert(
         "mail_external_actors", id=LANE_G_SUPERVISOR_ACTOR, actor_key="e2e-supervisor",
         display_name="Supervisor (e2e)", kind="external_tool",
@@ -386,7 +387,7 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
             "UPDATE agent_team_presets SET supervisor_actor_id = ?, supervisor_checked_at = ?, "
             "supervisor_next_check_at = ? WHERE id = ?",
             (LANE_G_SUPERVISOR_ACTOR, (now - timedelta(minutes=2)).isoformat(sep=" "),
-             (now + timedelta(minutes=8)).isoformat(sep=" "), RELEASE_TEAM),
+             (now + timedelta(minutes=60)).isoformat(sep=" "), RELEASE_TEAM),
         )
 
     # #550: item #102 (PR #202) cannot have its required CI read for 2 hours,

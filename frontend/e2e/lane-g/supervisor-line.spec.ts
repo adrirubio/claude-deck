@@ -5,7 +5,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // #549: the team card shows a supervisor line derived from the clock, as in
 // the design reference (screens/06-teams.png, explainer 06): None, Healthy,
 // Late or Absent. Seed (scripts/e2e/scenarios.py, seed_lane_g): Release crew
-// has a bound supervisor whose next check is 8 minutes ahead (Healthy), when
+// has a bound supervisor whose next check is 60 minutes ahead (Healthy), when
 // the #549 columns exist. Quiet team has no supervisor (None).
 // Active since #549 (backend PR #627, pages PR for #623).
 
