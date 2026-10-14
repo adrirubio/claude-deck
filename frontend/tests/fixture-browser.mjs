@@ -211,13 +211,15 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(data ?? { detail: "No fixture for endpoint" }));
       return;
     }
-    let file = path.join(
-      process.cwd(),
-      "dist",
-      decodeURIComponent(req.url.split("?")[0]),
-    );
-    if (!file.startsWith(path.join(process.cwd(), "dist")))
-      throw Error("Invalid asset path");
+    // Serve only files inside dist. A prefix test would also accept a sibling
+    // such as dist-other, so compare against dist plus a path separator.
+    const root = path.resolve(process.cwd(), "dist");
+    let file = path.resolve(root, "." + path.sep + decodeURIComponent(req.url.split("?")[0]));
+    if (file !== root && !file.startsWith(root + path.sep)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
     try {
       const stat = await fs.stat(file);
       if (!stat.isFile()) file = path.join(process.cwd(), "dist/index.html");
@@ -236,8 +238,10 @@ const server = http.createServer(async (req, res) => {
     );
     res.end(await fs.readFile(file));
   } catch (error) {
+    // Keep the detail in the test log; the client gets a fixed message.
+    console.error(error);
     res.writeHead(500);
-    res.end(String(error));
+    res.end("Fixture server error");
   }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
