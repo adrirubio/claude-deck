@@ -1674,6 +1674,8 @@ class AgentTeamService:
                 values[key] = value
         if slot.provider == "pi-cli":
             values["platform"] = self._clean_optional(raw_options.get("platform")) or "openrouter"
+        if slot.provider == "muse-cli" and values["mode"] == "resume":
+            values["prompt"] = None  # `muse resume <uuid>` takes no prompt; the session keeps its context.
         return SpawnCommandOptions(**values)
 
     async def _bootstrap_prompt(

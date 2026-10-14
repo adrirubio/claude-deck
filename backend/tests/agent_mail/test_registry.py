@@ -1360,7 +1360,7 @@ async def test_duplicate_mcp_bindings_for_one_pane_refuse_wake_and_opt_in(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["pi-cli", "codex-cli"])
+@pytest.mark.parametrize("provider", ["pi-cli", "codex-cli", "muse-cli"])
 async def test_dead_auxiliary_native_bindings_do_not_block_owner_wake(
     db, svc, tmp_path, monkeypatch, provider
 ):

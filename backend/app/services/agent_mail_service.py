@@ -59,7 +59,7 @@ OBSERVED_TTL_SECONDS = 300
 STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
-TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
+TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli", "muse-cli"}
 LEGACY_SYSTEM_PAYLOAD_KINDS = {
     "github_backlog_reconcile", "github_owner_followup",
     "github_dispatch_assignment", "github_dispatch_handoff",
