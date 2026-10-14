@@ -128,7 +128,7 @@ starlette==1.1.0
     #   fastapi
     #   mcp
     #   sse-starlette
-tomlkit==0.15.0
+tomlkit==0.15.1
     # via claude-code-registry-backend
 typing-extensions==4.15.0
     # via
