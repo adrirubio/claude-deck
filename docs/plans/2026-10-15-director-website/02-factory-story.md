@@ -42,7 +42,7 @@ Evidence: `docs/guide/factory-audit-and-metrics.md:46-49` and `:94` state that t
 
 **Understand the cost limits.** Deck can show estimates for Claude Code sessions when their data is available. It does not yet measure the full cost of delivering a feature. No trial has measured how much director time it saves.
 
-Evidence: `docs/guide/operating-model.md:65-70` and `:89-98` list the decisions the Director keeps and the checkpoints the work passes. `docs/features/usage.md` covers the Claude Code session cost estimates, and `docs/guide/factory-audit-and-metrics.md:46-49` and `:94` keep the unknown costs unknown.
+Evidence: `docs/guide/operating-model.md:65-70` and `:89-98` list the decisions the Director keeps and the checkpoints the work passes. `docs/features/usage.md` covers Claude Code session cost estimates. `docs/guide/factory-audit-and-metrics.md:57` and `:96-97` state that delivery cost and human time savings are not measured.
 
 ### The words for this level
 
