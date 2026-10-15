@@ -1,8 +1,8 @@
 # Website plan for claudedeck.org
 
-For: row 743 under parent issue #745. This plan uses `01-audit.md` and `02-factory-story.md` on master.
+For: issue #757 under parent issue #745. This revision uses `01-audit.md` and the revised `02-factory-story.md` merged under issue #756.
 
-Main action: **Understand and share it.** A director reads the home page, understands the factory, and forwards one link, one page, or one short video.
+Main action: **Understand and share it.** A director sees the graphical home page, understands the factory mostly through its animated pictures, and forwards one link, one page, or one short video. The detail lives on the second page, "How it works".
 
 This plan names evidence for each claim. A claim with no evidence does not enter the copy.
 
@@ -20,36 +20,29 @@ A director reads in this order. Each page answers one question.
 
 | Order | Page | Question the page answers | Director purpose |
 |---|---|---|---|
-| 1 | Home | What is Deck, and why does it matter? | Understand the factory in one visit. |
-| 2 | The factory story | How does one issue become merged work? | Retell the story to a peer. |
-| 3 | What you see and decide | What do I watch, and what stays mine? | Learn the screens and the retained decisions. |
-| 4 | Share Deck | How do I brief my board or my team? | Forward the link, the one-page summary, or the video. |
-| 5 | Limits and trust | What does Deck not promise? | Share with the limits stated, not hidden. |
-| 6 | For operators | How does an operator set Deck up? | Hand the setup to a technical operator. |
+| 1 | Home | What is Deck, in one look? | Understand backlog, team, and finished work through the pictures. |
+| 2 | How it works | How does one piece of work travel, and what do I see and decide? | Read the six steps, the screens, and the gates. |
+| 3 | Share Deck | How do I brief my board or my team? | Forward the link, the one-page summary, or the video. |
+| 4 | Limits and trust | What does Deck not promise? | Share with the limits stated, not hidden. |
+| 5 | For operators | How does an operator set Deck up? | Hand the setup to a technical operator. |
 
-The home page carries the full director read. The other pages carry depth. No director page starts with install steps.
+The home page carries the whole idea in pictures and a few short lines. "How it works" carries the depth. No director page starts with install steps.
 
-Evidence: `01-audit.md` finds install steps and developer words on the first screen today. The story gives the director order in Steps 1 to 6.
+Evidence: `01-audit.md` finds install steps and developer words on the first screen today. The revised story in `02-factory-story.md` puts the three-part top level first and marks the six-step layer for a second page.
 
 ## Page structure
 
 ### Home
 
-Purpose: a director understands and can share Deck after one page.
+Purpose: a director understands and can share Deck after one graphical page.
 
-Sections, in order: first screen, what Deck is, one piece of work, what you see and decide, why it matters, words you need, share it, what Deck does not promise, and a footer that points operators to setup.
+Sections, in order: first screen (the story sentence and the main action), the idea in pictures (four animated illustrations in the opening flow), Share Deck, Limits and trust, For operators. Text stays at a few short lines. The pictures carry the story. The six words, the retell, and the operator paragraph live on "How it works".
 
-### The factory story
+### How it works
 
-Purpose: the full story from `02-factory-story.md`, told as one page.
+Purpose: the second page, for readers who want the detail.
 
-The page keeps the one sentence, the one paragraph, the six steps, and the retell paragraph.
-
-### What you see and decide
-
-Purpose: one page per screen group, in director words.
-
-The page covers Overview, Work, Repositories, Teams, Agent Mail, Harnesses, and Audit. Each screen gets one line: what it shows, and which decision it supports.
+The page follows one piece of work through the six steps from the revised story. Each step gives its copy, what the director sees on the named screens with their seeded states, and the decision that stays with the Director. The page ends with the nine detail words and the limits. The home page links here, and this page links back home.
 
 ### Share Deck
 
@@ -73,106 +66,73 @@ Evidence for the structure: `01-audit.md` ranks the missing director decision ma
 
 ## Draft copy for the home page
 
-The mockup at `mockup/index.html` uses this copy. The copy uses the story sentence, paragraph, and glossary terms.
+The mockup at `mockup/index.html` uses this copy. The copy is the top level of the revised story. It uses the story sentence and the six top-level words, and no developer words. The #756 word check runs on this copy (see "The mockup" below).
 
 ### First screen
 
-Heading: **Your AI team ships GitHub work. You keep the decisions.**
+Heading: **Your backlog. Your AI team. Finished work.**
 
-Deck runs a team of AI agents that take GitHub issues to reviewed work, while the people in charge keep the key decisions.
+One line: You shape the feature backlog, Deck's AI team builds and checks the work, and the key decisions stay with you.
 
-One issue goes in. Reviewed work comes out. You see who owns each item, what waits for a person, and what the audit ledger recorded.
+Main button: **Understand and share it** — it links to the sharing section, as the parent issue requires. Secondary link: **How it works** — it links to the second page.
 
-Button: **Understand and share it.** Button: **See one piece of work.**
+The four illustrations follow at once, in the opening flow. There is no text-only flow above them, so the first picture sits on the first screen, on mobile too.
 
-Evidence: the heading sentence is the story one sentence, in director words. `02-factory-story.md` gives that sentence and the roles.
+Evidence: the line is the revised story's one sentence. `02-factory-story.md` gives each claim its evidence. The parent issue #745 names "Understand and share it" as the main action.
 
-### What Deck is
+### The idea in pictures
 
-Deck is a local workspace where a director runs AI agent teams on GitHub work. The director owns the backlog and sets the goal. The assigned owner proposes a plan and the designated Leader approves it. Members build the work, reviewers check it, and the Supervisor, when one is assigned, watches the factory and repairs routine faults under delegation. The director sees progress on Overview and Work, tracks repositories and teams, checks the audit record, and still decides publication, budgets, models, and security stops. GitHub stays the home for issues, pull requests, and review.
+Four animated illustrations carry the story. Each one is self-contained: one idea, inline SVG and CSS, no Deck screenshots, no screen labels, no product UI. That keeps each one reusable as a video scene. Each one has a still version: under `prefers-reduced-motion`, the animation stops and the finished state of the picture stays on screen, with the same caption.
 
-Evidence: this paragraph is the story one paragraph. `02-factory-story.md` states its evidence.
+1. **Backlog — you shape the list.** The viewer sees three feature cards settling into an ordered list, first to third. Motion: each card lifts slightly and settles back, in turn. Loop: 6 seconds, calm. Idea it teaches: the backlog is yours, ordered by you. Still version: the three cards at rest in order.
+2. **AI team — clear roles.** The viewer sees a Leader, members, and a reviewer, with one card of work passing from building to checking. Motion: each role lights in turn while the work card moves across. Loop: 8 seconds. Idea it teaches: the Leader organises and approves plans, members build, reviewers check work they did not build. Still version: all roles lit, work card in place.
+3. **Finished work — work comes back to you.** The viewer sees checked work beside its record, with one record line drawn dashed. Motion: the check mark and the record lines appear in turn. Loop: 7 seconds. Idea it teaches: work returns for you to assess, and gaps in the record are shown, not hidden. Still version: checked work and the full record, gap line included.
+4. **People in charge deciding — the key decisions stay yours.** The viewer sees a dot of work travel, pause at a gate marked "You decide", and pass only when the gate opens. Motion: travel, a clear pause, then the gate lifts. Loop: 8 seconds. Idea it teaches: goals, priorities, budget, and publication stay with the Director. Still version: the dot rests beside the closed gate, with the caption "Work waits here for your decision", so the still itself teaches the decision idea.
 
-### One piece of work
+Evidence: each caption restates one accepted claim from the revised story's three parts and "Why it matters", with its limits kept (record gaps shown; decisions reserved). No picture shows a screen, a time saving, or a cost.
 
-Follow one issue from goal to merged work.
+### Captions
 
-1. You write the issue and order the backlog.
-2. The owner proposes a plan. The Leader approves it.
-3. A member builds the change and opens a pull request.
-4. A reviewer checks the exact version. Checks run.
-5. The pull request merges under repository policy.
-6. The audit ledger keeps the record.
+One short caption per picture: "Choose what matters." / "Your AI team builds and checks it." / "Review the result and its record." / "You decide what gets published." The full glossary (the six top-level words and the nine detail words) and the retell sit on "How it works", so the home text stays at a few short lines.
 
-This path is an example. It is not a measured delivery.
+Evidence: `02-factory-story.md` defines both word sets and gives the retell.
 
-Evidence: Steps 1 to 6 in `02-factory-story.md` tell this path with screens and gates.
+### Share Deck, Limits and trust, For operators (home sections)
 
-### What you see and decide
+Share Deck: Send this page to someone you want to build with. When you want the detail, read "How it works".
 
-Overview shows what needs you. Work shows each owner and each waiting reason. Repositories shows which backlog feeds each team. Teams shows the roster and the named Leader. Audit shows what the factory did, with its limits.
+Limits and trust: Deck runs on your computer. Full delivery cost and time saved are not measured.
 
-Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. The Leader approves agent plans inside those limits.
+For operators: Setup lives in the operator guides. Start from "How it works".
 
-Evidence: `01-audit.md` records Overview with "Needs you", Work with owners and waiting reasons, and Teams with the roster and the named Leader. `docs/guide/operating-model.md` lists the retained decisions.
+Evidence: the limits lines restate "Why it matters" (cost) and "What the story does not promise" in the revised story. Deck can show estimates for Claude Code sessions when their data is available (`docs/features/usage.md`). Factory delivery cost and director-time savings are not measured (`docs/guide/factory-audit-and-metrics.md:57`, `:96-97`).
 
-### Why it matters
+## The "How it works" page
 
-Control. You own the backlog and the retained decisions. The Leader approves plans inside your limits.
+The mockup at `mockup/how-it-works.html` carries this page. Its intro reads: "Follow a small change through the team. This example explains who does what and where you decide; it does not show a timed delivery." The named example is "Add a short help note to the welcome page", from a GitHub issue to a merged PR. The page also carries the six top-level words, the retell, and a short For operators note, moved from the home page.
 
-Visibility. You see waiting work on one screen. You do not open each agent session to learn who waits.
+Sections, in order: the six steps (each with copy, what you see, and your decision), words for this page (the nine detail words), and what this page does not promise.
 
-Safety gates. A plan needs Leader approval before build. A pull request follows repository policy before merge. A security stop stays with you.
+| Step | Copy in one line | Screen and seeded state it shows | Decision that stays with the Director |
+|---|---|---|---|
+| 1. The Director writes the issue | Choose the result, set its priority, and decide when it is ready to start. | Written example only. No GitHub capture: GitHub is not a Deck screen, and Deck does not replace it. | Result, priority, ready decision. |
+| 2. The owner proposes. The Leader approves. | Building starts only after the designated Leader approves the owner's plan. | Overview ("Needs you", progress), Work (owner, waiting reason), Teams (roster, named Leader). Seeded states: see the screenshot list. | Outcome and limits. The Leader approves plans inside them. |
+| 3. A member does the work | The member builds in a separate working copy, runs the checks agreed for this work, and opens a PR. | Work (owner, state, PR link), Repositories (which backlog feeds the team). | None, unless a decision only the Director can make, or a safety stop, applies. |
+| 4. Reviewers check the work | An independent reviewer reads the exact version. Fixes stay on the same PR. CI runs again. | Work (waiting for review, with its PR field), Audit (delivery measures with limits). | If your rules call for your review, decide whether the change is ready. Passing review and checks does not authorize a merge. |
+| 5. The Supervisor watches and helps | Optional. It fixes routine blockers inside its delegation and explains retained decisions with evidence. | Overview Supervisor state when one is registered. Observed seeded state: Healthy, from the seeded team screen recorded in `01-audit.md` (supervisor status on the selected roster). Capture that seeded state; keep the registered-Supervisor condition in the caption. Audit detail stays behind its locked access gate. | Choose what the Supervisor may do. Publication, budgets, AI models, safety stops stay with the Director. |
+| 6. The PR merges. The record stays. | The PR merges under repository policy. The issue closes. | Work (finished; use the All filter), Audit (history with limits; event list locked). | Accept the result. Decide publication. |
 
-Cost, stated with its limit. The Usage screen shows Claude Code session estimates where Deck can read them. Factory delivery cost stays unknown. This site claims no saving that no trial has measured.
-
-Evidence: `02-factory-story.md` states each point with its source. `docs/features/usage.md` covers the session estimates. `docs/guide/factory-audit-and-metrics.md` keeps cost unknown.
-
-### Words you need
-
-The home page defines five words in place: team, Leader, member, pull request, and audit ledger. The factory story page carries the full glossary of 15 words.
-
-Evidence: `01-audit.md` finds `harness`, `pull request`, and `ledger` in use before any definition today. The glossary in `02-factory-story.md` defines each word in one sentence.
-
-### Share it
-
-Send the link. The home page is the brief.
-
-Send the one-page summary. It carries the one sentence, the six steps, and the limits.
-
-Show the video. It walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. The clip ends on the Audit screen.
-
-Evidence: `01-audit.md` finds no share artefact on the site today. This section creates the three artefacts. The video script follows Steps 1 to 6 in `02-factory-story.md`.
-
-### What Deck does not promise
-
-Deck does not promise a time saving. No trial measures director time saved.
-
-Deck does not work alone for you. A person writes the goal, sets the limits, and decides publication.
-
-Deck runs on your machine. An operator sets up the host first. Deck changes real local agent files.
-
-Deck does not replace GitHub. GitHub holds the issues, the pull requests, and the final record.
-
-Evidence: `02-factory-story.md` states each limit with its source. The local-running limit cites the current landing page in that story.
+Evidence: Steps 1 to 6, their screens, and their gates come from the "How it works" layer of the revised story. The seeded states come from the screenshot list below, which records the audit evidence and the seed.
 
 ## Headings and key sentences for the other pages
 
-### The factory story
+### How it works
 
-Heading: **One issue in. Reviewed work out.**
+Heading: **How it works: one piece of work, step by step.**
 
 Key sentence: The owner proposes the plan, the Leader approves it, and you keep the decisions that matter.
 
-The page then gives the six steps and the retell paragraph from the story.
-
-### What you see and decide
-
-Heading: **Watch the work. Keep the decisions.**
-
-Key sentence: Overview shows what needs you, Work shows who owns each item, and Audit shows what happened.
-
-Each screen then gets one short block. Each block names the decision the screen supports.
+The page then gives the six steps. Each step names what you see on the screens and the decision that stays yours. The mockup page carries this copy in full.
 
 ### Share Deck
 
@@ -198,7 +158,7 @@ Evidence: the headings use the story terms. The operator key sentence matches th
 
 ## Screenshots and short clips each section needs
 
-Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images.
+Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images. The graphical home page needs no screenshot: its four animated illustrations carry the story, and they hold no screen detail. Screenshots belong to "How it works", Share Deck, Limits and trust, and For operators.
 
 The old images freeze older versions. Evidence: `01-audit.md` records the two main images at version 3.0.0 and six feature previews with a v2.0.0 footer. The tested source reports version 3.1.0.
 
@@ -206,18 +166,18 @@ Seed evidence: the test seed holds five different issues, one per work state. Ev
 
 | Section | Screen to capture | Seeded state to show | What the director learns | Limit to print with the image |
 |---|---|---|---|---|
-| First screen | Overview | Seeded counts with one item in each state: queued, active, review, attention, finished | Work waits in named states, and one state needs a person | Seeded example data. Not live records. |
-| What Deck is | Teams | Seeded team "Release crew" with a named Leader and its member slots | A team is a roster with one Leader | Seeded roster. Not a live team. |
-| One piece of work | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
-| What you see and decide | Overview | The "Needs you" area with campaign progress and team summaries | The screen puts the director decision first | Browser observation from the audit. Counts alone do not prove the summaries. |
-| What you see and decide | Repositories | Three seeded repository scopes, with paused intake on two scopes | A backlog feeds a team only when intake allows it | Seeded scopes. Paused intake shows no live polling. |
-| Why it matters, safety | Work | One seeded item that waits for review, with its pull request field | A gate stops work until a reviewer acts | Review follows repository policy. This image shows one example policy. |
+| Home, the idea in pictures | No screenshot. Four animated illustrations (inline SVG and CSS). | No seeded state. No screen detail in any illustration. | Backlog, team, finished work, and retained decisions, mostly through the pictures | Each illustration is a concept picture, not a product screen. Its still version serves reduced motion. |
+| How it works, Step 2 | Overview and Teams | Overview seeded counts with one item in each state: queued, active, review, attention, finished. Teams seeded team "Release crew" with a named Leader and its member slots. | Work waits in named states, and a team is a roster with one Leader | Seeded example data. Not live records. Seeded roster, not a live team. |
+| How it works, Steps 3 and 6 | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
+| How it works, Step 2 | Overview | The "Needs you" area with campaign progress and team summaries | The screen puts the director decision first | Browser observation from the audit. Counts alone do not prove the summaries. |
+| How it works, Step 3 | Repositories | Three seeded repository scopes, with paused intake on two scopes | A backlog feeds a team only when intake allows it | Seeded scopes. Paused intake shows no live polling. |
+| How it works, Step 4 | Work | One seeded item that waits for review, with its pull request field | A gate stops work until a reviewer acts | Review follows repository policy. This image shows one example policy. |
 | Agent tools, on For operators | Harnesses | Six seeded harness providers with setup and support labels | Deck shows the setup and support for each agent tool | This capture supports agent-tool setup only. It supports no cost claim. Account, model, and session readiness stay unknown without a separate check. |
 | Limits and trust | Audit | Safe delivery metrics with the event list locked | The ledger shows metrics, and events stay behind an access gate | Locked events are an access gate, not a load failure. No event rows shown. |
 | Limits and trust | Agent Mail | No public capture. The only observed state stayed at participant loading. | No director claim rests on this screen yet | Keep this state in the evidence limits. Add a public capture only when a supported coordination state exists. The limit proves no Mail failure and no docs defect. |
 | Share it | Overview, Work, and Audit, as a clip | The seeded stills for the normal path in story order: queued, active, review, finished. One separate attention still. One closing Audit still with safe metrics and events locked. Each state shows a different seeded issue. | The director sees the normal path, the exception that needs a person, and the ledger screen that closes the story | Narrated example over static states. No single seeded issue moves through all states. The Audit still shows no event record for these issues. Not a measured delivery time. |
 
-Short clips: one clip only. The clip narrates the normal path: queued, active, review, finished. It then shows attention separately, as the exception that needs a person. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout. The clip closes on the Audit still above. Its narration states that each state shows a different example issue. It adds no new claim.
+Short clips: the video itself is planned under issue #758. This plan supplies its reusable scenes: the four screen-free home illustrations, each one idea, ready to rebuild as video scenes. The seeded screen stills above stay available for a short closing segment only. Any state sequence still carries its limit: each state shows a different seeded issue, and no single seeded issue moves through all states. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout.
 
 Still open: Usage cost. No image in this plan shows a cost total as proof. Evidence: `01-audit.md` records the old Usage image with zero totals, and `docs/guide/factory-audit-and-metrics.md` keeps factory cost unknown. The cost copy above states the limit in words instead.
 
@@ -234,18 +194,18 @@ Remove from the home page:
 Move to the docs, and link from Limits and trust:
 
 - Autonomy host setup and token steps. Evidence: `01-audit.md` finds host setup in `docs/autonomy.md`.
-- Harness readiness detail and per-tool setup. The home page keeps one line: Deck shows the setup and support for each agent tool.
-- Audit event access detail. The home page keeps the locked-gate line.
+- Harness readiness detail and per-tool setup. Explain agent-tool setup on For operators.
+- Audit event access detail. Explain access to Audit events on How it works, with a link to the operator guide.
 
-Keep on the home page: the story, the screens in director words, the retained decisions, the share kit, and the limits.
+Keep on the home page: the story sentence, the four pictures with short captions, the share line, and the compact limits. The glossary, the retell, the operator paragraph, and screens in director words live on "How it works".
 
 ## How a director shares Deck
 
 Three ways. Each way stands alone.
 
-1. **A link.** The director sends the home page link. The first screen carries the one sentence, the path, and the decisions. The peer needs no setup and no account to read it.
-2. **A one-page summary.** The director sends one page with the one sentence, the six steps, what the director decides, and the limits. The summary prints cleanly and forwards as a document.
-3. **The video.** The director shows a clip under three minutes. The clip walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. The clip ends on the Audit screen, with safe metrics and events locked. That ending shows no event record for these issues.
+1. **A link.** The director sends the home page link. The first screen carries the one sentence, the three-part flow, and the link to the detail. The peer needs no setup and no account to read it.
+2. **A one-page summary.** The director sends one page with the one sentence, the three parts, what the director decides, and the limits. The summary prints cleanly and forwards as a document.
+3. **The video.** The director shows the short video planned under issue #758. It tells the same three-part story, reuses the home pictures as scenes, and keeps any screen shots to a short, replaceable closing segment.
 
 Evidence: `01-audit.md` finds only Docs and GitHub links today, and no forwardable brief. The three items above close that gap. Each item uses only claims from `02-factory-story.md`.
 
@@ -253,15 +213,20 @@ Share limits: the summary and the video use seeded example data. Each one says s
 
 ## The mockup
 
-The mockup at `mockup/index.html` shows the new home page with the draft copy above.
+The mockup has two pages. `mockup/index.html` shows the graphical home page with the four animated illustrations built in. `mockup/how-it-works.html` shows the second page with the six steps. The home page links to the second page, and the second page links back.
 
-It is one self-contained HTML file. It uses inline CSS only. It makes no external requests. It holds no script that fetches data.
+Each page is one self-contained HTML file. Each uses inline CSS and inline SVG only. Neither makes an external request. Neither holds a script. Under `prefers-reduced-motion`, every animation stops and each illustration shows its still version.
 
-The first screen shows the factory intent at once: the one sentence, the issue-to-merged-work path, and what the director sees and decides. A critic reads the mockup as a director and confirms that intent on the first screen.
+A critic opens both pages in a browser, on desktop and mobile widths and with reduced motion on, and confirms: the home page tells backlog → team → finished work mostly through the graphics, and the detail lives on "How it works".
 
-The mockup is a plan artifact. It is never deployed. No step in this plan copies it to the website repository.
+Both mockup pages are plan artifacts. They are never deployed. No step in this plan copies them to the website repository.
 
-Check: search the mockup file for external references and require no matches. The build notes record the exact command and its result.
+Checks, with commands. The build notes record each command and its result.
+
+- External requests: `grep -En 'https?://|url\(|@import|<link|src=|fetch\(|XMLHttpRequest|<script|<iframe|srcset|action='` on both files. Require no matches, except two exempt forms only: the exact SVG namespace string, and `url(` followed by `#`. List every exempt match in the build notes.
+- Reduced motion: `grep -n 'prefers-reduced-motion'` in both files. Each illustration must have its still state in that block.
+- Link: `grep -n 'how-it-works.html'` in `mockup/index.html`, then serve the mockup folder locally and require HTTP 200 for both pages.
+- Home word check: extract the home page visible copy and run `grep -Eio 'github|\bprs?\b|pull requests?|\bissues?\b|\bci\b|\bmerg[a-z]*|\bbranch[a-z]*|\blabel[a-z]*'`. It must print nothing.
 
 ## What this plan does not promise
 
