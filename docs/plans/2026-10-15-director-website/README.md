@@ -47,12 +47,12 @@ Do the changes in this order. Each line states the source and the decision the D
 
 The campaign leaves six questions open. Each question blocks the change named beside it.
 
-1. Is a human director trial needed before publication? All reviews so far are agent readings. No human director trial is recorded for the story, the plan, or the mockups. This question blocks a final publication claim.
+1. Is a human director trial needed before publication? The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded. This question blocks a final publication claim.
 2. When and how does the website change publish? The website repository deploys its whole root on a push to its main branch. A partial copy is not a safe publish. This question blocks change 1.
 3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 4 and the video closing segment.
 4. Agent Mail stayed at "Loading participants..." in two agent checks. Investigate that state before any Mail capture or Mail claim. This question blocks any Mail image.
 5. Who produces the final animations and the video, and at what budget? This campaign plans both and produces neither. This question blocks changes 8 and 9.
-6. What are the commercial-use licence terms of Remotion, ElevenLabs, and Suno on the plans the Director will use? The Director checks them before publication. This question blocks change 9.
+6. What are the commercial-use licence terms of Remotion, ElevenLabs, and Suno on the plans the Director will use? Check the commercial-use terms for the chosen plans before production spending. Keep the results with the project. Publication stays a separate Director decision. This question blocks change 9.
 
 ## Limits that stay in force
 

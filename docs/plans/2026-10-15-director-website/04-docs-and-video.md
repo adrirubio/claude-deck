@@ -97,7 +97,7 @@ Audience: a non-technical product person who has never seen Deck, and the peer t
 
 Message: you shape the feature backlog, Deck's AI team builds and checks the work, and the key decisions stay with you.
 
-Length: about 2 minutes 34 seconds of story (scenes below), plus an optional closing segment of at most 10 seconds and an end card. The total stays inside two to three minutes with or without the closing segment.
+Length: about 2 minutes 34 seconds of story (scenes below), plus an optional closing segment of at most 10 seconds and a 4-second end card. The longest version is 2:48, inside two to three minutes with or without the closing segment.
 
 The narration claims no measured delivery, no time saving, and no delivery cost. Evidence: `02-factory-story.md` keeps those limits, and `docs/guide/factory-audit-and-metrics.md:57` and `:96-97` keep delivery cost and human time savings unmeasured.
 
@@ -105,17 +105,17 @@ The narration claims no measured delivery, no time saving, and no delivery cost.
 
 Natural, warm spoken English. Read it aloud at the pace in the voice brief (about 140 words per minute). The word count of each scene fits its window with hold time to spare (timing table below). The script uses no developer words. The same banned-word check as the home copy runs on it (see "Checks" under Production approach).
 
-**Opening, 0:00–0:18.** "Every product team has a list — the features you would love to build next, if only there were time. This is Deck. Deck gives that list a team."
+**Opening, 0:00–0:18.** "You know what you want to build next. Deck gives those ideas an AI team, while you decide what matters."
 
-**The backlog, 0:18–0:42.** "It starts with your backlog. Not a pile of wishes, but a list you shaped yourself: each feature written down with a clear result, in the order you want them. You decide what belongs on it, what comes first, and what is ready to begin."
+**The backlog, 0:18–0:42.** "Start with the features you want to build. Give each one a clear result, then put them in priority order. That is your backlog. You decide what belongs there and what is ready for the team."
 
-**Meet the team, 0:42–1:08.** "Then the team gets to work. A Leader organises the work and approves the plans before anyone builds. Members build the features. And reviewers — who did not build them — check every result with fresh eyes. Everyone has a role, and nobody marks their own homework."
+**Meet the team, 0:42–1:08.** "The Leader organises the work and approves the plans. Members build the features. Other team members review the results, so the person who builds a change is not its independent reviewer."
 
-**Finished work, 1:08–1:32.** "What comes back is finished work, already checked, with a plain record of what happened along the way. You can see what is done, what still needs attention, and even where the record has gaps. Deck would rather show you a gap than hide one."
+**Finished work, 1:08–1:32.** "The team returns work for you to assess, with a record of what happened. You can see what is finished, what still needs attention, and where that record has gaps."
 
 **You stay in charge, 1:32–1:58.** "And through it all, the decisions that matter stay with you. The goals. The priorities. The budget. And what gets published. The team handles the routine problems inside the limits you set — and anything reserved for you waits for you."
 
-**Honest limits, 1:58–2:22.** "Two honest notes. Deck runs on your own computer, and a person sets it up first. And the full cost of a finished feature — and the time it saves you — are not measured yet. We would rather tell you that than dress it up."
+**Honest limits, 1:58–2:22.** "Deck runs on your own computer, and someone needs to set it up. The full cost of delivering a feature is not yet measured. Neither is the time it might save you."
 
 **Closing line, 2:22–2:34.** "Your backlog. Your AI team. Finished work — with you in charge. That is Deck."
 
@@ -123,14 +123,14 @@ Timing check, at about 140 words per minute. Every scene window covers its speec
 
 | Scene | Window | Words | Speech | Hold |
 |---|---|---|---|---|
-| Opening | 0:00–0:18 (18s) | 29 | 12.4s | 5.6s |
-| The backlog | 0:18–0:42 (24s) | 45 | 19.3s | 4.7s |
-| Meet the team | 0:42–1:08 (26s) | 47 | 20.1s | 5.9s |
-| Finished work | 1:08–1:32 (24s) | 45 | 19.3s | 4.7s |
+| Opening | 0:00–0:18 (18s) | 20 | 8.6s | 9.4s |
+| The backlog | 0:18–0:42 (24s) | 36 | 15.4s | 8.6s |
+| Meet the team | 0:42–1:08 (26s) | 31 | 13.3s | 12.7s |
+| Finished work | 1:08–1:32 (24s) | 30 | 12.9s | 11.1s |
 | You stay in charge | 1:32–1:58 (26s) | 41 | 17.6s | 8.4s |
-| Honest limits | 1:58–2:22 (24s) | 46 | 19.7s | 4.3s |
+| Honest limits | 1:58–2:22 (24s) | 32 | 13.7s | 10.3s |
 | Closing line | 2:22–2:34 (12s) | 15 | 6.4s | 5.6s |
-| **Total** | **154s** | **268** | **114.9s** | **39.1s** |
+| **Total** | **154s** | **205** | **87.9s** | **66.1s** |
 
 Evidence for the script: the closing line and the three middle scenes restate the revised story's three parts and "Why it matters" in spoken form. "Approves the plans before anyone builds" keeps the accepted roles (owner proposes on the detail page; Leader approves). The limits scene restates local running and the unmeasured-cost limits from `02-factory-story.md`.
 
@@ -144,7 +144,7 @@ Every scene except the closing segment is an animated concept picture. No scene 
 | 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready to begin". | You shape and order the list. |
 | 3. Meet the team | 0:42 | The #757 team animation: Leader, members, reviewer. A card of work passes from building to checking. | Roles light in turn with the narration. The work card travels across. | Clear roles. Nobody checks their own work. |
 | 4. Finished work | 1:08 | The #757 finished-work animation: checked work beside its record, one record line dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
-| 5. You stay in charge | 1:32 | The #757 decision animation: work travels, pauses at the "You decide" gate, passes when it opens. | Travel, a clear pause on the decision words, gate lifts on "waits for you". | The key decisions stay yours. |
+| 5. You stay in charge | 1:32 | The #757 decision animation: work travels and stops at the closed "You decide" gate. | The work stops at the closed gate while the narrator says "waits for you". A separate approval cue then opens the gate. Approval never comes from elapsed time alone. | The key decisions stay yours. |
 | 6. Honest limits | 1:58 | The same three-part picture, quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
 | 7. Closing line | 2:22 | The three parts side by side: list, team, checked work. End card with the Deck name. | Parts slide together. Hold for the last line. | Backlog, team, finished work — with you in charge. |
 | 8. Closing segment (optional) | after 2:34, at most 10s | The only screens in the video. See its own section below. | Separate sequence. Swappable or cuttable. | A short look at the real product, labeled as examples. |
@@ -153,11 +153,11 @@ Transitions: match cuts on the moving card between Scenes 2, 3, and 4, so one pi
 
 ### The closing segment (the only screens)
 
-Length: at most 10 seconds, after the closing line and before (or under) the end card. Optional: the video is complete without it.
+Length: at most 10 seconds, after the closing line and before the end card. The end card holds 4 seconds. With the montage the total is at most 2:48 (154s story + 10s montage + 4s end card). Without it, 2:38. Both versions stay under three minutes. Optional: the video is complete without it.
 
 What it may show: a short "see it in action" montage of real Deck screens, using seeded captures from the `03-website-plan.md` screenshot list (Overview, Work with the All filter, Teams). Every capture carries the seeded-data label: "Example data — seeded screens. Not live records." No Audit event rows (locked gate), no Agent Mail capture (loading limit), no Usage total as cost proof.
 
-How it is cut out: the segment is one separate sequence in the render (its own composition, with its own start and end frames on plain background). To refresh it, swap the captures and re-render. To remove it, drop the sequence and re-render. Neither change touches the narration, the music timing, or Scenes 1 to 7. The end card follows either way.
+How it is cut out: Keep Scenes 1-7 and their audio fixed. Give the optional montage its own music bed and edit boundaries. The same end card follows either version. To refresh it, swap the captures in that sequence and re-render. To remove it, drop the sequence and its music bed and re-render.
 
 Narration over it: none. Music only, so cutting it never cuts a sentence.
 
@@ -166,7 +166,7 @@ Narration over it: none. Music only, so cutting it never cuts a sentence.
 Job: carry the energy the calm pictures do not. High beat, warm, forward-moving. No lyrics anywhere: words under narration fight the narrator.
 
 - Tempo and energy: about 118–124 BPM. Bright and confident, never frantic.
-- Shape: gentle intro under the opening, builds through the team scene, a small lift at finished work, drops low and warm under "Honest limits", then a short bright rise for the closing line and end card.
+- Shape: gentle intro under the opening, builds through the backlog, energetic but spacious under the team narration, settles into a warm, lighter groove at finished work, drops low and warm under "Honest limits", then a short bright rise for the closing line and end card.
 - Level: always under the narration. The mix ducks the music whenever the voice speaks. The limits scene sits lowest.
 - Length: generate about 3 minutes, then trim or loop-extend to the final cut (2:34 plus closing segment and end card).
 
@@ -183,8 +183,8 @@ Structure text (paste into Lyrics, instrumental mode). Times match the scenes; e
 ```text
 [Intro — soft piano and pads, gentle pulse, 0:00-0:18]
 [Build — drums enter, guitar arpeggios, growing energy, 0:18-0:42]
-[Drop — full band, brightest section, handclaps, 0:42-1:08]
-[Groove — steady and warm, slightly softer, 1:08-1:32]
+[Drop — full band but spacious, ducked below the voice, handclaps light, 0:42-1:08]
+[Groove — warm, lighter groove, settles down, 1:08-1:32]
 [Build — rising again, strings enter, 1:32-1:58]
 [Break — sparse piano, low and calm, space for voice, 1:58-2:22]
 [Lift — bright short rise, full but clean, 2:22-2:34]
@@ -221,9 +221,9 @@ The Director chose this approach. This section records it with its reasons.
 
 Why not the other ways:
 
-- Not whole-film text-to-video: generated footage drifts between shots, text and logos wobble, and exact edits (one word, one number, one colour) mean regenerating whole scenes. The story needs consistency across 2–3 minutes and across future re-renders.
-- Not explainer-template tools: template libraries push stock screen mockups and fixed layouts, which fight the screens rule and the reuse of the #757 animations. The film would look like every other template film.
-- Not avatar presenters: a synthetic talking head spends the film on a face, not the ideas, and dates fastest of all. The story here is three ideas with pictures, not a presenter.
+- We chose code so the same artwork can appear on the website and in the video, with precise edits to words, colours, and timing. That is the project's reason for Remotion over whole-film text-to-video or template tools for this film.
+- A custom layout lets us reuse these animations without depending on a template library.
+- We want the viewer to focus on the backlog, team, and result, so this film uses illustrated ideas rather than an on-screen presenter.
 
 Check first, before production money is spent: the commercial-use licence terms of Remotion, ElevenLabs, and Suno, for the exact plans the Director will use. Record the answers with the project. This plan names the check; it does not state any tool's terms.
 
@@ -241,6 +241,6 @@ This plan does not produce the docs pages or the video. Both stay later work, af
 
 This plan does not promise that seeded screens prove live value. Each shot and page carries its seeded-data limit.
 
-This plan does not promise a human verdict. Reviews so far are agent readings. No human director trial has run.
+This plan does not promise a human verdict. The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded.
 
 This plan keeps factory delivery cost unknown and claims no time saving. Evidence: `docs/guide/factory-audit-and-metrics.md` and `02-factory-story.md`.
