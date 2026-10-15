@@ -236,6 +236,7 @@
     },
     "copilot-cli": {},
     "opencode-cli": {},
-    "pi-cli": {}
+    "pi-cli": {},
+    "muse-cli": {}
   }
 }

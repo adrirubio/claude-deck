@@ -54,16 +54,16 @@ describe('accepted provider operations', () => {
    else { expect(reported.adapter_id).toBe(`${id}:${surface}:${adapter.component}`); expect(access).toBe(reported.access==='read_only'?'read_only':'write_capable') }
   }
  })
- it('shows five compact harness cards without technical details', async () => {
+ it('shows six compact harness cards without technical details', async () => {
   localStorage.setItem('claude-deck:selected-provider','pi-cli')
   const {requests}=fixtureFetch(answer)
   renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses','/harnesses'); await settle()
-  expect(screen.getAllByRole('article')).toHaveLength(5)
-  expect(screen.getAllByText('Ready')).toHaveLength(5)
-  expect(screen.getAllByText('No settings pages in Deck')).toHaveLength(3)
+  expect(screen.getAllByRole('article')).toHaveLength(6)
+  expect(screen.getAllByText('Ready')).toHaveLength(6)
+  expect(screen.getAllByText('No settings pages in Deck')).toHaveLength(4)
   expect(screen.queryByText(/Credentials|Operations and conditions|No team slot selected/)).toBeNull()
   expect(screen.queryByRole('button',{name:'Refresh observations'})).toBeNull()
-  expect(requests.filter(r=>r.path.endsWith('/operations'))).toHaveLength(5)
+  expect(requests.filter(r=>r.path.endsWith('/operations'))).toHaveLength(6)
   expect(requests.every(r=>r.method==='GET')).toBe(true)
   expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
  })

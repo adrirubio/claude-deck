@@ -501,6 +501,7 @@ function SlotDialog({
                 <SelectItem value="copilot-cli">GitHub Copilot CLI</SelectItem>
                 <SelectItem value="opencode-cli">OpenCode CLI</SelectItem>
                 <SelectItem value="pi-cli">Pi (OpenRouter)</SelectItem>
+                <SelectItem value="muse-cli">Muse Code (Meta)</SelectItem>
               </SelectContent>
             </Select>
           </div>

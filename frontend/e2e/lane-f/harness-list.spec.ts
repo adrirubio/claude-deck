@@ -8,7 +8,7 @@ import { expectKeyboardReachable } from '../support/keyboard'
 // Design reference: screen 18 (harness list).
 // @active since #523 merged.
 
-const HARNESSES = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli']
+const HARNESSES = ['claude-code', 'codex-cli', 'copilot-cli', 'opencode-cli', 'pi-cli', 'muse-cli']
 // Words and codes that belong only inside "Technical details".
 const TECHNICAL = /\bunknown\b|\badapter\b|\bbinding\b|\b[a-z]+(?:_[a-z]+)+\b|write capable|read only/i
 
@@ -31,7 +31,7 @@ function card(page: import('@playwright/test').Page, harness: string): Locator {
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-test('@active all 5 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
+test('@active all 6 harness cards fit in one 1440 × 900 viewport', async ({ page }) => {
   await page.goto('/harnesses')
   await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()
   for (const harness of HARNESSES) {

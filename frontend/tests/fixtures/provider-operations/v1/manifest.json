@@ -2,23 +2,24 @@
   "schema_version": 1,
   "source_base_sha": "667841e7e71ea4c1007a4124273bb7c3a6b04869",
   "exact_review_head": "Recorded in external authenticated freeze receipt; no self-referential commit hash",
-  "catalog_sha256": "326aef478a580794926886cf46662a46fe8e0a533c813bf80c2bda8f51ff6fe1",
+  "catalog_sha256": "d001249b54cde32d21eb829d2d108c1ae338be1a0ce568bf1390001ae7e96065",
   "source_sha256": {
-    "backend/app/models/provider_operations_schemas.py": "7cb632961ccdbf3350ba69381bc34b82de73b37d581e634d805fd79bb88333d8",
-    "backend/app/services/provider_readiness_service.py": "991cc57f69a2844ce9cad0ab7f5ab7a237eb3adfda6c6845ddc69e49df9ed5f0",
+    "backend/app/models/provider_operations_schemas.py": "53e6e0a3aac830a381e7c06e7157ac3987d60a178e0263859c6792675f101fac",
+    "backend/app/services/provider_readiness_service.py": "cad7cc4ad28b56957c5fc26a53387ee2387b297fb5ba75cb288d8defaf9ac432",
     "backend/app/services/provider_operations_service.py": "05b7194a4cee07f4b6837a209e84ab5b4152c804ae743b984f476de1813c0387",
     "backend/app/api/v1/providers.py": "1568537ef086cd1188e9b641460a6a50d851a53d3aba7e6eeb6370de6933e2fd",
-    "backend/app/services/agent_team_service.py": "169af0ea01f674190a013d1452ad30ce3c4139a49452a18f1f4cf5293ae0ad6c",
-    "frontend/tests/fixtures/factory/native-adapters.json": "fdf65fa6f92a60cd9748084726b5caea78c4b62662c3226eee66def090bc07be",
+    "backend/app/services/agent_team_service.py": "9e3ba04750248bb4fb02e73a5c4fe6c580ad9b695acaa5cac9da90c06c880f9a",
+    "frontend/tests/fixtures/factory/native-adapters.json": "40e931b0c9d855877595e86539fde51d7506a60169ac2582edd0120e167706fd",
     "backend/tests/test_provider_operations.py": "ebe6960bea779891fcf96e4a598389197812c08280133c2ed7046cca51f8fa5e",
-    "backend/tests/test_provider_readiness.py": "48bc09e71031115bdf52d1d01efec61e7c0cac11e4d61869414fc770b4c624f7"
+    "backend/tests/test_provider_readiness.py": "64db62f3122050ae3e00959d4cc26d823cea5b6bad827dca434ffb0036e89e5e"
   },
   "providers": [
     "claude-code",
     "codex-cli",
     "copilot-cli",
     "opencode-cli",
-    "pi-cli"
+    "pi-cli",
+    "muse-cli"
   ],
   "scenarios": [
     "binary_missing",

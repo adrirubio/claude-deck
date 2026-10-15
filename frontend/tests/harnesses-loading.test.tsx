@@ -27,7 +27,7 @@ describe('Harnesses page while it loads', () => {
   it('shows a skeleton card for every harness and no unknown or unavailable text while the registry loads', () => {
     renderPage()
 
-    expect(screen.getAllByRole('article')).toHaveLength(5)
+    expect(screen.getAllByRole('article')).toHaveLength(6)
     for (const card of screen.getAllByRole('article')) expect(card).toHaveAttribute('aria-busy', 'true')
     expect(document.body.textContent).not.toMatch(NOT_LOADED)
     expect(screen.queryByRole('button', { name: 'Refresh observations' })).not.toBeInTheDocument()

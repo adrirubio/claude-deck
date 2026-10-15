@@ -46,3 +46,28 @@ def test_real_owner_identity_helper_uses_exact_resume_parser(monkeypatch,argumen
     if accepted: assert pause._process_identity(slot,session,workspace)=='fixture-start'
     else:
         with pytest.raises(ValueError,match='owner_native_identity_changed'): pause._process_identity(slot,session,workspace)
+
+
+MUSE_SESSION='01a13c39-4863-7870-8ca7-e5b33ccc8225'
+
+
+@pytest.mark.parametrize('argv,accepted',[
+    ([b'/home/u/.local/bin/muse-bin-1.4.8-R6256.1',b'--trust-workspace',b'--yolo',b'resume',MUSE_SESSION.encode()],True),
+    ([b'muse',b'resume',MUSE_SESSION.encode()],True),
+    ([b'muse-bin-1.4.8',b'resume',b'01a13c39-0000-7000-8000-000000000000'],False),
+    ([b'muse-bin-1.4.8',b'--trust-workspace'],False),
+    ([b'/usr/bin/yes',b'resume',MUSE_SESSION.encode()],False),
+])
+def test_muse_owner_identity_needs_its_executable_and_exact_resume(monkeypatch,argv,accepted):
+    from datetime import datetime,timedelta,timezone
+    from types import SimpleNamespace
+    from app.services import owner_observation_pause as pause
+    monkeypatch.setattr(pause.activity,'_process',lambda _pid: ('S','fixture-start'))
+    monkeypatch.setattr(pause.activity,'_process_started_at',lambda _start: datetime.now(timezone.utc)-timedelta(minutes=2))
+    monkeypatch.setattr(pause,'Path',lambda _path: SimpleNamespace(read_bytes=lambda:b'\0'.join([*argv,b''])))
+    slot=SimpleNamespace(provider='muse-cli',launch_options={'session_id':MUSE_SESSION})
+    session=SimpleNamespace(pid=12,created_at=datetime.utcnow(),cwd='/tmp/fixture')
+    workspace=SimpleNamespace(leased_owner_pid=11,leased_owner_proc_start='fixture-start')
+    if accepted: assert pause._process_identity(slot,session,workspace)=='fixture-start'
+    else:
+        with pytest.raises(ValueError,match='owner_native_identity_changed'): pause._process_identity(slot,session,workspace)

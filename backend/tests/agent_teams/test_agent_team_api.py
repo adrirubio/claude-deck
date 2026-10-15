@@ -3239,3 +3239,28 @@ async def test_readiness_reused_leaf_pid_across_reads_is_refused(client, db, mon
         peer._PROC_ROOT = original_root
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_mcp_process_gap" in codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("argv,confirmed", [
+    (["/home/u/.local/bin/muse-bin-1.4.8-R6256.1", "--trust-workspace", "resume", "x"], True),
+    (["muse", "--trust-workspace"], True),
+    (["/usr/bin/yes", "muse"], False),
+    (["codex", "exec"], False),
+])
+async def test_readiness_confirms_muse_identity_by_its_registered_executable(
+    client, db, monkeypatch, tmp_path, argv, confirmed
+):
+    """The Muse launcher execs a versioned muse-bin binary; both name the registered executable."""
+    from app.models.database import AgentTeamSlot, MailAgentSession
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "MuseId", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1007, 8107, last_seen=datetime.utcnow())
+    await db.flush()
+    (await db.get(AgentTeamSlot, preset.slots[1].id)).provider = "muse-cli"
+    (await db.get(MailAgentSession, 8107)).provider = "muse-cli"
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv", lambda pane_pid, proc_start: argv)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert ("owner_binding_native_identity" not in codes) is confirmed

@@ -35,6 +35,7 @@ from app.models.schemas import (
 )
 from app.services.pi_activity_service import observe_pi
 from app.services.claude_activity_service import observe_claude
+from app.services.muse_activity_service import discover_muse_session, observe_muse
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
@@ -46,7 +47,7 @@ _PROC = Path("/proc")
 
 def recognize_native_input_wait(provider: str, screen: str) -> str | None:
     """Recognize captured active prompts. None means the screen is unknown."""
-    if provider not in {"claude-code", "codex-cli"} or len(screen) > 65536:
+    if provider not in {"claude-code", "codex-cli", "muse-cli"} or len(screen) > 65536:
         return None
     plain = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", screen)
     plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", plain)
@@ -64,6 +65,13 @@ def recognize_native_input_wait(provider: str, screen: str) -> str | None:
                 and re.search(r"(?m)^❯\s*(?:No,|Yes,)", active)):
             return "trust"
         if any(re.fullmatch(r"❯\s*", line) for line in lines[-4:]):
+            return "clear"
+    elif provider == "muse-cli":
+        if (re.search(r"Enter to select\s*·\s*↑/↓ to move\s*·\s*Tab for an optional note\s*·\s*Esc to interrupt", active)
+                and re.search(r"(?m)^⟩\s*\d+\.", active)):
+            return "question"
+        status = any(re.match(r"muse-[a-z0-9.\-]+ · ", line) for line in lines[-3:])
+        if status and any(re.fullmatch(r"❯\s*", line) for line in lines[-5:]):
             return "clear"
     else:
         if (footer.endswith("Press enter to continue") and "Welcome to Codex" in active
@@ -379,6 +387,41 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             if provenance is not None and provenance.get("session_id"):
                 provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
+        if provider == "muse-cli":
+            if not session_id:
+                identity = discover_muse_session(pid, cwd)
+                process_state, current_start = _process(pid)
+                if current_start != start or process_state in _STOPPED_STATES:
+                    return result("unknown", "binding_changed")
+                if identity and provenance is not None:
+                    provenance["discovered_session_id"] = identity
+                return result("unknown", "restart_needed_for_observation" if identity
+                              else "session_identity_unavailable")
+            if _canonical_session_id(session_id) != session_id:
+                return result("unknown", "session_identity_unavailable")
+            options = {"provenance": provenance} if provenance is not None else {}
+            state, reason, observed_at = observe_muse(
+                pid, session_id, cwd, now, _process_started_at(start), **options)
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            # The event log gives the question state exactly; record it per binding
+            # the same way the screen recogniser does for other harnesses.
+            matching = [binding for binding in candidates if binding.pane_pid == pid and binding.pane_start == start]
+            if len(matching) == 1 and state in {"waiting_input", "working", "idle"}:
+                input_reason = "question" if state == "waiting_input" else "clear"
+                if provenance is not None:
+                    provenance.update(input_wait_known=True, input_wait_reason=input_reason,
+                                      input_wait_binding_id=matching[0].binding_id)
+                if input_reason == "question":
+                    waiting_input = NativeInputWait(reason="question", observed_at=now)
+            if state == "waiting_input":
+                state = "working"
+            if provenance is not None and provenance.get("session_id"):
+                provenance.update(pane_pid=pid, pane_start=start, provider=provider)
+            return result(state, reason, observed_at)
         if provider not in {"codex-cli", "claude-code"}:
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
@@ -461,7 +504,7 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
     slots = [row[0] for row in await rows(select(AgentTeamSlot).where(
         AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))]
     options = await rows(select(AgentTeamSlot.launch_options).where(
-        AgentTeamSlot.provider.in_(["codex-cli", "claude-code"])))
+        AgentTeamSlot.provider.in_(["codex-cli", "claude-code", "muse-cli"])))
     members = [row[0] for row in await rows(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
             MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
@@ -655,29 +698,33 @@ async def _record_input_waits(db, preset_id, inputs, metadata, current, *, now) 
     return changed
 
 
+# First-launch session ids that Deck discovers from the live process.
+_DISCOVERED_IDENTITY_PROVIDERS = {"codex-cli", "muse-cli"}
+
+
 async def _save_codex_identities(db, inputs, metadata, current) -> bool:
     """Save a captured first-launch ID only while its original binding remains current."""
     changed = False
     for entry, details in zip(inputs, metadata):
         identity = details.get("discovered_session_id")
-        if (not identity or entry[1] != "codex-cli" or entry[2] is not None
+        if (not identity or entry[1] not in _DISCOVERED_IDENTITY_PROVIDERS or entry[2] is not None
                 or current.get(entry[0]) != entry):
             continue
         slot = await db.get(AgentTeamSlot, entry[0])
-        if slot is None or slot.provider != "codex-cli" or slot.launch_mode != "plain":
+        if slot is None or slot.provider != entry[1] or slot.launch_mode != "plain":
             continue
         previous = slot.launch_options
         if (previous or {}).get("session_id"):
             continue
         duplicate = exists(select(AgentTeamSlot.id).where(
             AgentTeamSlot.id != slot.id,
-            AgentTeamSlot.provider.in_(["claude-code", "codex-cli"]),
+            AgentTeamSlot.provider.in_(["claude-code", "codex-cli", "muse-cli"]),
             AgentTeamSlot.launch_options["session_id"].as_string() == identity))
         options_match = (or_(AgentTeamSlot.launch_options.is_(None),
                              AgentTeamSlot.launch_options == JSON.NULL)
                          if previous is None else AgentTeamSlot.launch_options == previous)
         result = await db.execute(update(AgentTeamSlot).where(
-            AgentTeamSlot.id == slot.id, AgentTeamSlot.provider == "codex-cli",
+            AgentTeamSlot.id == slot.id, AgentTeamSlot.provider == entry[1],
             AgentTeamSlot.launch_mode == "plain", options_match,
             ~duplicate,
         ).values(launch_options={**(previous or {}), "session_id": identity, "use_last": False},

@@ -1,4 +1,4 @@
-export type AgentProviderId = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
+export type AgentProviderId = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli' | 'muse-cli'
 
 export const providerOperationKeys = [
   'launch', 'observe_session', 'mail_identity', 'receive_work', 'report_work_status',

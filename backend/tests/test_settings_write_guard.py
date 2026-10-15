@@ -51,7 +51,7 @@ def _routes(write: bool) -> list[tuple[str, str]]:
 # but live on the Mail router, whose other writes must stay open to agents.
 MAIL_INSTALL_WRITES = [
     ("POST", f"{settings.api_v1_prefix}/agent-mail/install/{harness}/{action}")
-    for harness in ("claude-code", "codex", "copilot", "opencode")
+    for harness in ("claude-code", "codex", "copilot", "opencode", "muse")
     for action in ("apply", "uninstall")
 ]
 WRITES = _routes(write=True) + MAIL_INSTALL_WRITES

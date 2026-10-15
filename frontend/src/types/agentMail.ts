@@ -129,6 +129,11 @@ export interface AgentMailInstallStatus {
   opencode_mcp_installed: boolean
   opencode_plugin_events: string[]
   opencode_plugin_events_missing: string[]
+  muse_cli_available?: boolean
+  muse_mcp_installed?: boolean
+  muse_hooks?: string[]
+  muse_hooks_missing?: string[]
+  muse_settings_path?: string
   curl_available: boolean
   shim_path: string
   python_path: string

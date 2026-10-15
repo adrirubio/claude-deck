@@ -1169,7 +1169,7 @@ async def agent_inbox(
 
 def _hook_provider(payload: dict) -> str:
     provider = str(payload.get("provider") or "claude-code")
-    return provider if provider in {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"} else "unknown"
+    return provider if provider in {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "muse-cli"} else "unknown"
 
 
 def _hook_session_key(payload: dict) -> Optional[str]:
@@ -1182,6 +1182,7 @@ def _hook_session_key(payload: dict) -> Optional[str]:
         "codex-cli": "codex",
         "copilot-cli": "copilot",
         "opencode-cli": "opencode",
+        "muse-cli": "muse",
     }
     prefix = prefix_by_provider.get(provider, "unknown")
     team_slot_id = _payload_int(payload, "team_slot_id")
@@ -1392,6 +1393,38 @@ async def uninstall_codex(
 ):
     _require_confirmed(body)
     return await agent_mail_install_service.uninstall_codex(db)
+
+
+@router.post(
+    "/install/muse/apply",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
+async def install_muse(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    try:
+        return await agent_mail_install_service.apply_muse_install(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/install/muse/uninstall",
+    response_model=AgentMailInstallStatus,
+    dependencies=INSTALL_WRITES,
+)
+async def uninstall_muse(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    try:
+        return await agent_mail_install_service.uninstall_muse(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(

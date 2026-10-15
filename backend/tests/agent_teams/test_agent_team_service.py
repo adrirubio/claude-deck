@@ -127,6 +127,9 @@ def _ready_install_status():
         opencode_cli_available=True,
         opencode_mcp_installed=True,
         opencode_plugin_events_missing=[],
+        muse_cli_available=True,
+        muse_mcp_installed=True,
+        muse_hooks_missing=[],
     )
 
 
@@ -2814,3 +2817,46 @@ async def test_failed_claude_spawn_does_not_save_new_identity(db, tmp_path, monk
     slot = await db.get(AgentTeamSlot, preset.slots[0].id)
     assert not (slot.launch_options or {}).get("session_id")
     assert slot.launch_mode == "plain"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["plain", "resume"])
+async def test_muse_launch_sends_the_bootstrap_prompt_only_to_a_new_session(db, tmp_path, monkeypatch, mode):
+    # `muse resume <uuid>` takes no prompt, so a resumed Muse slot must launch without one.
+    from app.services.providers import get_provider
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    session_id = "01a13c39-4863-7870-8ca7-e5b33ccc8225"
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Muse team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Muse researcher",
+                    provider="muse-cli",
+                    repo_path=str(repo),
+                    bootstrap_prompt="Custom team startup prompt.",
+                    launch_mode=mode,
+                    launch_options={"model": "muse-wonder-1.0", "session_id": session_id} if mode == "resume" else {"model": "muse-wonder-1.0"},
+                )
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    commands = []
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        commands.append(get_provider(provider_id).build_spawn_command(options))
+        return {"session_name": "repo-abcd", "tmux_target": "repo-abcd:0.0"}
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+
+    assert result.items[0].error is None
+    if mode == "resume":
+        assert commands[0][-2:] == ["resume", session_id]
+        assert not any("Custom team startup prompt." in part for part in commands[0])
+    else:
+        assert commands[0][-1].startswith("Custom team startup prompt.")

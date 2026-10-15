@@ -81,6 +81,17 @@ def notice(record):
         item = payload.get('item') if payload.get('type') == 'item_completed' else None
         if isinstance(item, dict) and item.get('type') == 'AgentMessage':
             return _match(_texts(item.get('content')))
+    if record.get('payload_type') == 'runtime.session':
+        # Muse Code: the agent's own reply is assistant_message_committed. The user's
+        # prompt, task output (tool results) and reasoning (which can quote the
+        # prompt) are not checked.
+        event = (record.get('payload') or {}).get('event') or {}
+        if event.get('kind') == 'assistant_message_committed':
+            return _match(str(event.get('text', '')))
+        if event.get('kind') in {'error', 'model_failed', 'stream_error'}:
+            text = str(event.get('message', ''))
+            return _match(text) or _error_code(text)
+        return None
     if kind == 'response_item':
         # Codex 0.159: the assistant message. Tool output and user input are not checked.
         payload = record.get('payload') or {}
@@ -265,6 +276,15 @@ class Supervisor:
             # must not go unread. The recorded path is informational only.
             root = pathlib.Path(self.config['codex_sessions_root'])
             found = sorted(root.glob('*/*/*/rollout-*-' + native_id + '.jsonl'))
+            if len(found) != 1:
+                raise FileNotFoundError('native_transcript_missing' if not found else 'native_transcript_ambiguous')
+            path = found[0]
+            self.state.setdefault('native_paths', {})[native_id] = str(path)
+        elif provider == 'muse-cli':
+            # Muse Code writes sessions/YYYY/MM/DD/<session uuid>/session.jsonl.
+            # As for Codex, exactly one match must exist on every scan.
+            root = pathlib.Path(self.config['muse_sessions_root'])
+            found = sorted(root.glob('*/*/*/' + native_id + '/session.jsonl'))
             if len(found) != 1:
                 raise FileNotFoundError('native_transcript_missing' if not found else 'native_transcript_ambiguous')
             path = found[0]

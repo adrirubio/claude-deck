@@ -21,6 +21,7 @@ def configured(**changes):
         copilot_cli_available=True, copilot_mcp_installed=True, copilot_hooks_missing=[],
         opencode_cli_available=True, opencode_mcp_installed=True, opencode_plugin_events_missing=[],
         pi_mail_ready=True, pi_mail_reason=None,
+        muse_cli_available=True, muse_mcp_installed=True, muse_hooks_missing=[],
     )
     values.update(changes)
     return SimpleNamespace(**values)
@@ -124,7 +125,11 @@ def test_shared_reason_preserves_all_original_decisions():
             cases.append(configured(**{key: False}))
         elif isinstance(value, list):
             cases.append(configured(**{key: ["missing"]}))
-    for provider in [p.id for p in get_providers()] + ["unknown"]:
+    # The reviewed tree covers the providers that existed then. A newer provider
+    # (muse-cli) has no reviewed decision to preserve; its own tests pin it.
+    reviewed = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
+    assert reviewed < {p.id for p in get_providers()}
+    for provider in sorted(reviewed) + ["unknown"]:
         for status in cases:
             assert agent_mail_ready_reason(provider, status) == original(None, provider, status)
 

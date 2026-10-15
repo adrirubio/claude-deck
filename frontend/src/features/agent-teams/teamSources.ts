@@ -4,7 +4,7 @@ import type { AgentTeamSlotInput } from '@/types/agentTeams'
 import type { AgentProviderId } from '@/types/providers'
 
 // The providers that a team slot can use. The backend accepts the same list.
-export const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli']
+export const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli', 'muse-cli']
 
 // One row of a "create a team from ..." picker.
 export interface PickItem {

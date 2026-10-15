@@ -92,6 +92,7 @@ export const surfaceRegistry: Record<
   "copilot-cli": {},
   "opencode-cli": {},
   "pi-cli": {},
+  "muse-cli": {},
 };
 export function nativeAdapter(
   provider: string,
@@ -180,7 +181,7 @@ export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
   // Only this fixed read can bootstrap the required catalog. It does not grant
   // access to any returned adapter/API path or exempt nested native mutations.
   if (/^providers\/[^/]+\/operations(?:\/|$)/.test(path)) {
-    if (method.toUpperCase() === "GET" && /^providers\/(claude-code|codex-cli|copilot-cli|opencode-cli|pi-cli)\/operations$/.test(path)) return;
+    if (method.toUpperCase() === "GET" && /^providers\/(claude-code|codex-cli|copilot-cli|opencode-cli|pi-cli|muse-cli)\/operations$/.test(path)) return;
     throw new Error("Operating catalog permits only a known provider GET.");
   }
   const route = window.location.pathname.split("/").filter(Boolean);

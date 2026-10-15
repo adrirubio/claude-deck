@@ -210,3 +210,54 @@ def test_an_acknowledged_damaged_fragment_is_skipped(tmp_path, monkeypatch):
 def test_a_record_that_is_not_an_object_fails_closed(tmp_path, monkeypatch, line):
     with pytest.raises(ValueError, match="native_record_not_object"):
         _scan_file(tmp_path, monkeypatch, [line])
+
+
+def _muse(kind, **event):
+    return {"payload_type": "runtime.session", "stream": {"kind": "session", "id": SESSION},
+            "payload": {"kind": "session", "event": {"kind": kind, **event}}}
+
+
+def test_muse_agent_reply_notice_is_found():
+    assert ts.notice(_muse("assistant_message_committed", text=NOTICE)) == "cybersecurity_notice"
+
+
+@pytest.mark.parametrize("record", [
+    _muse("started", prompt=NOTICE),
+    _muse("tool_result_batch_committed", results=[{"output": NOTICE}]),
+    _muse("output", final_result={"text": NOTICE}),
+    _muse("reasoning_committed", text=NOTICE),
+], ids=["user_prompt", "tool_result", "task_output", "reasoning"])
+def test_muse_quoted_or_tool_text_never_creates_a_hold(record):
+    assert ts.notice(record) is None
+
+
+def test_muse_error_event_code_is_found():
+    assert ts.notice(_muse("error", message="request failed: cybersecurity_blocked")) == "cybersecurity_blocked"
+
+
+def test_muse_transcript_is_found_in_its_date_folder(tmp_path):
+    path = tmp_path / "muse-sessions" / "2026" / "10" / "14" / SESSION / "session.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    sup = _supervisor(tmp_path, muse_sessions_root=str(tmp_path / "muse-sessions"))
+    assert sup.transcript("muse-cli", "/w/research", SESSION) == path
+
+
+def test_muse_transcript_missing_or_ambiguous_fails_closed(tmp_path):
+    root = tmp_path / "muse-sessions"
+    root.mkdir()
+    sup = _supervisor(tmp_path, muse_sessions_root=str(root))
+    with pytest.raises(FileNotFoundError, match="native_transcript_missing"):
+        sup.transcript("muse-cli", "/w/research", SESSION)
+    for day in ("13", "14"):
+        path = root / "2026" / "10" / day / SESSION / "session.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+    with pytest.raises(FileNotFoundError, match="native_transcript_ambiguous"):
+        sup.transcript("muse-cli", "/w/research", SESSION)
+
+
+def test_muse_sessions_root_must_be_configured(tmp_path):
+    # The guard runs as root, so a ~ default would point at root's home.
+    with pytest.raises(KeyError):
+        _supervisor(tmp_path).transcript("muse-cli", "/w/research", SESSION)

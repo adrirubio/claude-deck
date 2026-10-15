@@ -24,6 +24,7 @@ function readStoredProvider(): AgentProviderId {
     || stored === 'copilot-cli'
     || stored === 'opencode-cli'
     || stored === 'pi-cli'
+    || stored === 'muse-cli'
     ? stored
     : DEFAULT_PROVIDER
 }

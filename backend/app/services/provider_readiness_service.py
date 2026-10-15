@@ -15,6 +15,14 @@ def agent_mail_ready_reason(provider: str, install_status: Any) -> str | None:
         if install_status.claude_code_hooks_missing:
             return "Claude Code Agent Mail hooks are missing"
         return None
+    if provider == "muse-cli":
+        if not install_status.muse_cli_available:
+            return "Muse Code is not available on this machine"
+        if not install_status.muse_mcp_installed:
+            return "Muse Code Agent Mail MCP is not installed"
+        if install_status.muse_hooks_missing:
+            return "Muse Code Agent Mail hooks are missing"
+        return None
     if provider == "codex-cli":
         if not install_status.codex_cli_available:
             return "Codex CLI is not available on this machine"
@@ -52,6 +60,7 @@ def configuration_readiness(provider_id: str, display_name: str, installed: bool
         "copilot-cli": {"copilot_cli_available": bool, "copilot_mcp_installed": bool, "copilot_hooks_missing": list},
         "opencode-cli": {"opencode_cli_available": bool, "opencode_mcp_installed": bool, "opencode_plugin_events_missing": list},
         "pi-cli": {"pi_mail_ready": bool},
+        "muse-cli": {"muse_cli_available": bool, "muse_mcp_installed": bool, "muse_hooks_missing": list},
     }
     expected = fields.get(provider_id)
     if expected is None or (install_status is not None and any(type(getattr(install_status, name, None)) is not kind for name, kind in expected.items())):
