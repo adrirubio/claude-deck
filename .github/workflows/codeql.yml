@@ -5,6 +5,7 @@ on:
     branches: [master, release/v3.1]
   pull_request:
     branches: [master, release/v3.1]
+    paths-ignore: ['docs/**', '*.md']  # not a required check; docs need no code scan
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC
 

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read  # the docs-only detector lists the changed files
 
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
@@ -25,35 +26,48 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Detect a docs-only change
+        id: changes
+        working-directory: .
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/docs_only.py
       - uses: actions/setup-python@v6
+        if: steps.changes.outputs.run_suites != 'false'
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - uses: actions/setup-node@v7
+        if: steps.changes.outputs.run_suites != 'false'
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install the backend
+        if: steps.changes.outputs.run_suites != 'false'
         run: |
           python -m venv backend/venv
           backend/venv/bin/pip install -r backend/requirements.txt apscheduler
       - name: Install the frontend and Chromium
+        if: steps.changes.outputs.run_suites != 'false'
         working-directory: frontend
         run: |
           npm ci
           npx playwright install --with-deps chromium
       - name: Install tmux
+        if: steps.changes.outputs.run_suites != 'false'
         run: sudo apt-get install -y --no-install-recommends tmux
       - name: Type-check the journeys
+        if: steps.changes.outputs.run_suites != 'false'
         working-directory: frontend
         run: npm run e2e:typecheck
       - name: Run the active journeys
+        if: steps.changes.outputs.run_suites != 'false'
         working-directory: frontend
         run: npm run e2e
       - name: Upload traces and screenshots
-        if: failure()
+        if: steps.changes.outputs.run_suites != 'false' && (failure())
         uses: actions/upload-artifact@v5
         with:
           name: e2e-results
@@ -73,38 +87,50 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Detect a docs-only change
+        id: changes
+        working-directory: .
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/docs_only.py
       - uses: actions/setup-python@v6
+        if: steps.changes.outputs.run_suites != 'false'
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - uses: actions/setup-node@v7
+        if: steps.changes.outputs.run_suites != 'false'
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install the backend
+        if: steps.changes.outputs.run_suites != 'false'
         run: |
           python -m venv backend/venv
           backend/venv/bin/pip install -r backend/requirements.txt apscheduler
       - name: Install the frontend and Chromium
+        if: steps.changes.outputs.run_suites != 'false'
         working-directory: frontend
         run: |
           npm ci
           npx playwright install --with-deps chromium
       - name: Install tmux
+        if: steps.changes.outputs.run_suites != 'false'
         run: sudo apt-get install -y --no-install-recommends tmux
       - name: Run the pending journeys
+        if: steps.changes.outputs.run_suites != 'false'
         id: pending
         working-directory: frontend
         run: npm run e2e:pending
         continue-on-error: true
       - name: Report progress
-        if: always()
+        if: steps.changes.outputs.run_suites != 'false' && (always())
         working-directory: frontend
         run: node e2e/support/report-progress.mjs test-results/results.json >> "$GITHUB_STEP_SUMMARY"
       - name: Upload traces and screenshots
-        if: steps.pending.outcome == 'failure'
+        if: steps.changes.outputs.run_suites != 'false' && (steps.pending.outcome == 'failure')
         uses: actions/upload-artifact@v5
         with:
           name: e2e-pending-results

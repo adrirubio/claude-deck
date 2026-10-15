@@ -86,6 +86,7 @@ GitHub Actions workflows in `.github/workflows/`:
 - `claude.yml` — Claude Code integration (triggers on @claude mentions)
 - `codeql.yml` — CodeQL security analysis
 - `release.yml` — Manual release (builds frontend, creates GitHub release)
+- Docs-only pull requests (every changed file under `docs/` or root Markdown) skip the expensive steps of the backend, frontend and e2e jobs. The jobs still finish `success`, because Deck's delivery policy requires that conclusion. Detection: `scripts/ci/docs_only.py`; any doubt runs the suites. Pushes to `master` always run everything.
 
 ## Gotchas
 
