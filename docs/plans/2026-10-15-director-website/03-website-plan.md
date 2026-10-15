@@ -209,12 +209,14 @@ Planning only: nothing is built under this plan. Every tool below is the Directo
 
 - **Framework: Astro.** The Director chose Astro for static pages with zero JavaScript by default. Only the animated sections load code, as islands. Astro builds to `dist/`, and only `dist/` is deployed.
 - **Deploy change.** The `dist/` deploy replaces today's whole-root deploy. Evidence for today: the website reference (`website-ref` at commit `0c35f391759633c774b7cc4ace5c52b96dd53d12`) runs `pages deploy .` in `.github/workflows/deploy.yml:21`, which publishes the whole repository root.
-- **Draft website: Cloudflare Pages previews.** Each branch gets a Cloudflare Pages preview URL. The Director reviews a production-like draft there before anything is published. Publication stays a Director decision.
+- **Draft website: Cloudflare Pages previews.** Each branch gets a Cloudflare Pages preview URL. The Director reviews a production-like draft there before production publication. Publication stays a Director decision.
 - **Motion: GSAP.** ScrollTrigger drives scroll-driven storytelling, so the reader's scroll drives the story. DrawSVG, MorphSVG, and SplitText handle line drawing, shape change, and text motion.
 - **Graphics: animated SVG built in code.** The Director chose code-built SVG over editor-made Rive or Lottie files, so the team can write and change the graphics exactly.
 - **Supporting tools.** Lenis for smooth scrolling. The View Transitions API for page-to-page transitions. An optional, light WebGL backdrop (Three.js) in the hero only — kept only if it stays fast against the targets below; it is not promised.
 - **One component library.** Each scene is a React component. Astro shows the same component on the site, and Remotion renders the same component in the video (see `04-docs-and-video.md`, Production approach). One scene, two outputs.
 - **Standards, stated as targets.** A still version of every scene for reduced motion. A target of 60 fps, using transform and opacity only. No layout shift as a build rule. A Lighthouse target above 95. Animations start when their section is visible. These are targets for the build, not measured results.
+
+Unresolved constraint, for the Director to decide before the build uses those effects: The Director selected DrawSVG and MorphSVG and also specified transform-and-opacity-only animation. Drawing and morphing change other SVG properties. The implementation plan must reconcile these requirements before using those effects; this plan grants no exception. Evidence for what the plugins animate: [DrawSVGPlugin](https://gsap.com/docs/v3/Plugins/DrawSVGPlugin/) and [MorphSVGPlugin](https://gsap.com/docs/v3/Plugins/MorphSVGPlugin/).
 
 ### Animation storyboard (website)
 
@@ -234,7 +236,7 @@ The scroll story, matched to the story's eight steps and the five home pictures.
 
 ## The mockup
 
-The mockup proves the copy and the pictures; it is not the Astro build above. The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
+The mockup shows the draft copy and concept pictures for review. It does not test the Astro build or human understanding. The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
 
 Each page is one self-contained HTML file. Each uses inline CSS and inline SVG only. Neither makes an external request. Neither holds a script. Under `prefers-reduced-motion`, every animation stops and each illustration shows its still version.
 

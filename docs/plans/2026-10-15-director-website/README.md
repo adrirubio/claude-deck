@@ -11,13 +11,17 @@ Read them in this order.
 | File | What it gives |
 |---|---|
 | `01-audit.md` | The audit of the current site and docs, page by page, with evidence and limits. |
-| `02-factory-story.md` | The factory story: backlog, AI team, finished work at the top level, with the six-step "How it works" layer and both glossaries. |
-| `03-website-plan.md` | The website plan: the graphical home page, four animation concepts, and the "How it works" page. Mockups in `mockup/index.html` and `mockup/how-it-works.html`. |
+| `02-factory-story.md` | The factory story: backlog, AI team, finished work at the top level, with the eight-step "How it works" layer, parallel tracks, several teams, and both glossaries. |
+| `03-website-plan.md` | The website plan: the graphical home page, five animation concepts, the "How it works" page, technology and build, and the next-work order. Mockups in `mockup/index.html` and `mockup/how-it-works.html`. |
 | `04-docs-and-video.md` | The director docs plan and the story-only video concept, with narration, animation storyboard, Suno music prompt, voice brief, and production approach. |
 
 ## Recommended changes, in order
 
-Do the changes in this order. Each line states the source and the decision the Director must make. The build order follows issue #765: Director approval first, then style options, then the website build on a preview branch, then the video prototype.
+Four stages govern the work, in order: (1) the Director approves this plan; (2) style frames are made and the Director picks a style; (3) the preview website build, including its shared React scenes; (4) the #760 video prototype using those scenes. The scoped checklist below sits inside those stages with its dependencies. It is not a second sequence. Each line states the source and the decision the Director must make.
+
+Stage 1: Director plan approval. Stage 2: style frames and the Director's style choice. Stage 3: preview website build, including its shared React scenes. Stage 4: the #760 prototype using those scenes.
+
+Scoped checklist, by stage:
 
 1. **Approve this plan, then pick a visual style.** Two or three still frames (the hero and the parallel lanes) in different styles. Source: `03-website-plan.md`, "Order of the next work". Director: approve the plan and pick the style; the site and the video follow it.
 2. **Build the graphical home page** in Astro, on a preview branch with its Cloudflare Pages preview URL. A few short lines, the five animations with still versions, main action "Understand and share it". Only the built `dist/` folder deploys. Source: `03-website-plan.md`, Home and "Technology and build"; `02-factory-story.md`; `01-audit.md`, top problem 1. Director: review the draft at its preview URL and approve publication.
@@ -45,14 +49,15 @@ Do the changes in this order. Each line states the source and the decision the D
 
 ## Open questions for the Director
 
-The campaign leaves five questions open. Each question blocks the change named beside it. One earlier question is answered and no longer open: who produces the animations and the video — Claude Opus 5.5 (Director answer recorded in issue #765).
+Seven questions remain open. The producer decision is answered: Claude Opus 5.5 (recorded in issue #765).
 
 1. Is a human director trial needed before publication? The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded. This question blocks a final publication claim.
-2. When does the website change publish? The build now has a safe route (preview branch, `dist/` only), but the moment and the go-ahead stay the Director's. This question blocks change 2.
+2. When does the website change publish? The plan specifies a preview branch and deployment of `dist/` only. The build must verify that route. The Director decides when to publish. This blocks production publication. The preview build follows plan and style approval.
 3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 5 and the video closing segment.
 4. Agent Mail stayed at "Loading participants..." in two agent checks. Investigate that state before any Mail capture or Mail claim. This question blocks any Mail image.
 5. What is the production budget? Items to check: the ElevenLabs plan, the Suno plan, the Remotion licence, agent time (measured by the #760 prototype), and optional AI texture clips. This question blocks changes 8 and 9.
 6. What are the commercial-use licence terms of Remotion, ElevenLabs, and Suno on the plans the Director will use? Check the commercial-use terms for the chosen plans before production spending. Keep the results with the project. Publication stays a separate Director decision. This question blocks change 9.
+7. How should the animation constraint be reconciled? The Director selected DrawSVG and MorphSVG and also specified transform-and-opacity-only animation. Drawing and morphing change other SVG properties. The implementation plan must reconcile these requirements before using those effects; this plan grants no exception. This needs a Director decision before the build uses those effects.
 
 ## Limits that stay in force
 

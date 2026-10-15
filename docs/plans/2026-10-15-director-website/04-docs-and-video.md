@@ -9,8 +9,8 @@ Each claim names its evidence. A claim with no evidence does not enter the plan.
 ## Sources
 
 - `01-audit.md` records the current docs, page by page, with limits.
-- `02-factory-story.md` gives the one sentence, the three parts, the six-step "How it works" layer, the six top-level words, and the nine detail words.
-- `03-website-plan.md` gives the website pages, the graphical home copy, the four animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
+- `02-factory-story.md` gives the one sentence, the three parts, the eight-step "How it works" layer with parallel tracks and several teams, the six top-level words, and the nine detail words.
+- `03-website-plan.md` gives the website pages, the graphical home copy, the five animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
 - The existing docs live in `docs/guide/`, `docs/features/`, `docs/index.md`, and `docs/autonomy.md`.
 - Issue #758 gives the Director's video direction and the chosen production approach. Seeded screen states from the audit serve only the closing-segment capture list. They are not live records and not human trials.
 
@@ -38,7 +38,7 @@ Read the pages in this order. Each page answers one question.
 
 | Order | Page | New or changed | Purpose | Short outline |
 |---|---|---|---|---|
-| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the four home pictures as still images. A link to "How it works" for the detail. |
+| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the five home pictures as still images. A link to "How it works" for the detail. |
 | 2 | A first look at Overview | New director page | The director learns what needs a person | What "Needs you" means. Campaign progress in plain words. Which item waits for the director, and which waits for the team. |
 | 3 | A first look at Work | New director page | The director learns who owns each item | One row explained: owner, state, waiting reason, pull request link. The four normal states and the attention exception. |
 | 4 | A first look at Repositories and Teams | New director page | The director learns which backlog feeds which team | One scope explained in plain words. The roster, the named Leader, and the supervisor status. Repository count and work count. |
@@ -59,9 +59,9 @@ Screen limits that the pages must print:
 
 ### The "How it works" docs page
 
-The per-issue detail does not sit in the Start here path. It lives on one "How it works" page, placed after "What Deck is" and linked both ways: from Start here for directors who want depth, and from the technical documentation for operators who want the story behind the rules. The page carries the six steps, the decision at each step, the nine detail words, and the retell. It is the docs twin of the website's second page in `03-website-plan.md`, and it links onward to `docs/guide/operating-model.md` and the feature pages for depth.
+The detail follows the backlog through eight steps, then explains parallel tracks and several teams. It lives on a separate "How it works" page, linked from Start here and the technical docs, placed after "What Deck is". The page carries the eight steps, the decision at each step, the nine detail words, and the retell. It is the docs twin of the website's second page in `03-website-plan.md`, and it links onward to `docs/guide/operating-model.md` and the feature pages for depth.
 
-Evidence: the revised story marks its six-step layer "read this on the second page". `03-website-plan.md` gives the website the same split. The docs keep that split so a director meets the same shape in both places.
+Evidence: the revised story marks its eight-step layer "read this on the second page". `03-website-plan.md` gives the website the same split. The docs keep that split so a director meets the same shape in both places.
 
 ### What changes in the existing docs
 
