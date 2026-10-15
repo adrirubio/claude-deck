@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Deck — Your AI team ships GitHub work. You keep the decisions.</title>
+<style>
+  :root{
+    --ink:#1c2420; --muted:#4c5a52; --line:#d8ded9; --paper:#ffffff;
+    --wash:#eef2ee; --green:#166534; --green-dark:#14532d; --amber:#92400e;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);background:var(--paper);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55}
+  h1,h2,h3{font-family:"Iowan Old Style",Palatino,Georgia,serif;line-height:1.15;margin:0}
+  a{color:var(--green-dark)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header.site{border-bottom:1px solid var(--line)}
+  .bar{display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:19px;letter-spacing:.01em}
+  .brand span{color:var(--green)}
+  nav a{margin-left:18px;text-decoration:none;color:var(--muted);font-size:15px}
+  nav a:hover{color:var(--ink);text-decoration:underline}
+  .hero{padding:56px 0 40px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:42px;max-width:22ch;margin-bottom:18px}
+  .hero p.lede{font-size:19px;max-width:62ch;color:var(--ink);margin:0 0 14px}
+  .hero p.sub{color:var(--muted);max-width:62ch;margin:0 0 26px}
+  .actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:36px}
+  .btn{display:inline-block;padding:11px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px}
+  .btn-main{background:var(--green);color:#fff}
+  .btn-plain{border:1px solid var(--line);color:var(--ink);background:#fff}
+  .path{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  .path li{border:1px solid var(--line);border-radius:var(--radius);padding:12px;background:#fff}
+  .path b{display:block;font-size:13px;color:var(--green-dark);margin-bottom:6px}
+  .path span{font-size:14px;color:var(--muted)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+  section{padding:44px 0;border-bottom:1px solid var(--line)}
+  section h2{font-size:29px;margin-bottom:14px}
+  section p{max-width:68ch;margin:0 0 12px}
+  .note{color:var(--muted);font-size:14px}
+  .panel{background:var(--wash);border-radius:var(--radius);padding:20px}
+  .panel h3{font-size:18px;margin-bottom:10px}
+  .panel ul{margin:0;padding-left:20px}
+  .panel li{margin-bottom:6px}
+  ol.steps{max-width:68ch;padding-left:22px}
+  ol.steps li{margin-bottom:8px}
+  dl.words{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:18px 0 0}
+  dl.words div{border-top:2px solid var(--green);padding-top:10px}
+  dl.words dt{font-weight:700;margin-bottom:4px}
+  dl.words dd{margin:0;color:var(--muted);font-size:15px}
+  .share{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+  .share article{border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .share h3{font-size:17px;margin-bottom:8px}
+  .share p{font-size:15px;color:var(--muted);margin:0}
+  .warn{border-left:4px solid var(--amber);padding:4px 0 4px 16px;margin-bottom:16px}
+  footer.site{padding:28px 0 40px;color:var(--muted);font-size:14px}
+  @media (max-width:820px){
+    .path{grid-template-columns:repeat(2,1fr)}
+    .split,.share{grid-template-columns:1fr}
+    .hero h1{font-size:32px}
+  }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap bar">
+    <div class="brand">Claude <span>Deck</span></div>
+    <nav>
+      <a href="#story">The factory story</a>
+      <a href="#decide">What you see and decide</a>
+      <a href="#share">Share Deck</a>
+      <a href="#limits">Limits and trust</a>
+      <a href="#operators">For operators</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <h1>Your AI team ships GitHub work. You keep the decisions.</h1>
+      <p class="lede">Deck runs a team of AI agents that take GitHub issues to reviewed work, while the people in charge keep the key decisions.</p>
+      <p class="sub">One issue goes in. Reviewed work comes out. You see who owns each item, what waits for a person, and what the audit ledger recorded.</p>
+      <div class="actions">
+        <a class="btn btn-main" href="#share">Understand and share it</a>
+        <a class="btn btn-plain" href="#story">See one piece of work</a>
+      </div>
+      <ol class="path">
+        <li><b>1. Issue</b><span>You write the goal and order the backlog.</span></li>
+        <li><b>2. Plan</b><span>The owner proposes it. The Leader approves it.</span></li>
+        <li><b>3. Build</b><span>A member builds the change in its own workspace.</span></li>
+        <li><b>4. Review</b><span>A reviewer checks the exact version. Checks run.</span></li>
+        <li><b>5. Merge</b><span>The pull request merges under repository policy.</span></li>
+        <li><b>6. Record</b><span>The audit ledger keeps what happened.</span></li>
+      </ol>
+    </div>
+  </div>
+
+  <section id="what">
+    <div class="wrap">
+      <h2>What Deck is</h2>
+      <p>Deck is a local workspace where a director runs AI agent teams on GitHub work. The director owns the backlog and sets the goal. The assigned owner proposes a plan and the designated Leader approves it. Members build the work, reviewers check it, and the Supervisor, when one is assigned, watches the factory and repairs routine faults under delegation.</p>
+      <p>The director sees progress on Overview and Work, tracks repositories and teams, checks the audit record, and still decides publication, budgets, models, and security stops. GitHub stays the home for issues, pull requests, and review.</p>
+    </div>
+  </section>
+
+  <section id="story">
+    <div class="wrap">
+      <h2>One piece of work</h2>
+      <p>Follow one issue from goal to merged work.</p>
+      <ol class="steps">
+        <li>You write the issue and order the backlog.</li>
+        <li>The owner proposes a plan. The Leader approves it.</li>
+        <li>A member builds the change and opens a pull request.</li>
+        <li>A reviewer checks the exact version. Checks run.</li>
+        <li>The pull request merges under repository policy.</li>
+        <li>The audit ledger keeps the record.</li>
+      </ol>
+      <p class="note">This path is an example. It is not a measured delivery.</p>
+    </div>
+  </section>
+
+  <section id="decide">
+    <div class="wrap">
+      <h2>What you see and decide</h2>
+      <div class="split">
+        <div class="panel">
+          <h3>What you see</h3>
+          <ul>
+            <li>Overview shows what needs you.</li>
+            <li>Work shows each owner and each waiting reason.</li>
+            <li>Repositories shows which backlog feeds each team.</li>
+            <li>Teams shows the roster and the named Leader.</li>
+            <li>Audit shows what the factory did, with its limits.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>What stays yours</h3>
+          <ul>
+            <li>The goal and the backlog order.</li>
+            <li>Publication, budgets, and models.</li>
+            <li>Security stops.</li>
+            <li>The Leader approves agent plans inside those limits.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <h2>Why it matters</h2>
+      <p><strong>Control.</strong> You own the backlog and the retained decisions. The Leader approves plans inside your limits.</p>
+      <p><strong>Visibility.</strong> You see waiting work on one screen. You do not open each agent session to learn who waits.</p>
+      <p><strong>Safety gates.</strong> A plan needs Leader approval before build. A pull request follows repository policy before merge. A security stop stays with you.</p>
+      <p><strong>Cost, stated with its limit.</strong> The Usage screen shows Claude Code session estimates where Deck can read them. Factory delivery cost stays unknown. This site claims no saving that no trial has measured.</p>
+    </div>
+  </section>
+
+  <section id="words">
+    <div class="wrap">
+      <h2>Words you need</h2>
+      <dl class="words">
+        <div><dt>Team</dt><dd>A saved roster of agent sessions that work as one unit.</dd></div>
+        <div><dt>Leader</dt><dd>The one team member who approves plans and picks the next work.</dd></div>
+        <div><dt>Member</dt><dd>One agent slot on a team that owns a piece of work.</dd></div>
+        <div><dt>Pull request</dt><dd>A proposed change reviewed under repository policy.</dd></div>
+        <div><dt>Audit ledger</dt><dd>The ledger that records what the factory did and its limits.</dd></div>
+      </dl>
+      <p class="note">The factory story page carries the full glossary of 15 words.</p>
+    </div>
+  </section>
+
+  <section id="share">
+    <div class="wrap">
+      <h2>Share it</h2>
+      <p>Brief your board or your team in one step. Each item stands alone.</p>
+      <div class="share">
+        <article>
+          <h3>Send the link</h3>
+          <p>The home page is the brief. The first screen carries the one sentence, the path, and the decisions.</p>
+        </article>
+        <article>
+          <h3>Send the one-page summary</h3>
+          <p>It carries the one sentence, the six steps, what you decide, and the limits.</p>
+        </article>
+        <article>
+          <h3>Show the video</h3>
+          <p>It walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. It ends on the Audit screen.</p>
+        </article>
+      </div>
+      <p class="note">The summary and the video use seeded example data. Each one says so.</p>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="wrap">
+      <h2>What Deck does not promise</h2>
+      <div class="warn"><p>Deck does not promise a time saving. No trial measures director time saved.</p></div>
+      <div class="warn"><p>Deck does not work alone for you. A person writes the goal, sets the limits, and decides publication.</p></div>
+      <div class="warn"><p>Deck runs on your machine. An operator sets up the host first. Deck changes real local agent files.</p></div>
+      <div class="warn"><p>Deck does not replace GitHub. GitHub holds the issues, the pull requests, and the final record.</p></div>
+    </div>
+  </section>
+
+  <section id="operators">
+    <div class="wrap">
+      <h2>For operators</h2>
+      <p>An operator installs Deck, connects the agent tools, and turns on team automation under policy. Setup, harness detail, and autonomy steps live in the docs, not on this page.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <p>Claude Deck — a local workspace for AI agent teams on GitHub work. GitHub holds the issues, the pull requests, and the final record.</p>
+    <p>Plan mockup. This page shows draft website copy. It is not a deployed site.</p>
+  </div>
+</footer>
+</body>
+</html>
