@@ -10,7 +10,7 @@ Evidence rule. Each claim names its evidence: a page file, a doc file, or an e2e
 
 ## Sources read
 
-Website. The read-only reference clone at `/home/deckproductctl/work/website-plan/website-ref`.
+Website. The read-only reference clone at commit `0c35f391759633c774b7cc4ace5c52b96dd53d12`.
 
 - Landing page: `website-ref/index.html`.
 - Built docs pages under `website-ref/docs/`, generated from Deck `docs/`.
@@ -23,12 +23,24 @@ Documentation. The Deck source in this repository at `origin/master` `b43af6d`.
 - Feature pages under `docs/features/`, including `docs/features/work.md`, `docs/features/agent-teams.md`, and `docs/features/repositories.md`.
 - `docs/autonomy.md` and `docs/changelog.md`.
 
-Product. Deck 3.1.0 on the isolated e2e instance via `scripts/e2e-instance.sh`.
+Product. The tested source is Deck 3.1.0 on the isolated e2e instance via `scripts/e2e-instance.sh`.
 
-- Version evidence: `VERSION` in the workspace root reads `3.1.0`.
-- Instance evidence: `GET http://127.0.0.1:18765/health` returns `{"name":"Claude Deck","version":"3.1.0","status":"running"}`.
-- Screens checked: Overview (`/`), Work (`/work`), Repositories (`/repositories`), Teams (`/teams`), Agent Mail (`/agent-mail`), Harnesses (`/harnesses`), and Audit (`/audit`).
-- Sidebar evidence: `frontend/src/components/layout/Sidebar.tsx` lists the visible labels `Overview`, `Work`, `Repositories`, `Teams`, `Live sessions`, `Harnesses`, `Agent Mail`, and `Audit`.
+- Version evidence: `VERSION` in the workspace root reads `3.1.0`. It shows the tested source version. It does not show a published release.
+- Instance evidence: `GET http://127.0.0.1:18765/health` returns `{"name":"Claude Deck","version":"3.1.0","status":"running"}`. It shows the tested source version. It does not show a published release.
+- Screens checked: seven scoped screens — Overview (`/`), Work (`/work`), Repositories (`/repositories`), Teams (`/teams`), Agent Mail (`/agent-mail`), Harnesses (`/harnesses`), and Audit (`/audit`).
+- Sidebar evidence: `frontend/src/components/layout/Sidebar.tsx` lists eight entries. The seven screens above are a scoped selection from those eight.
+
+## Product screens observed on the tested source
+
+Evidence rule for this section. A line means my observation on the e2e instance. A limit means the observation stops there.
+
+- Overview (`/`). The screen shows `NeedsYou`, `CampaignProgress`, team summaries, and tracking counts. Evidence: `frontend/src/features/factory/pages/OverviewPage.tsx` lines 63–67 hold `NeedsYou`, `CampaignProgress`, and `StatusTiles`. My check of `GET /api/v1/factory/overview` returned counts `queued`, `active`, `review`, `attention`, and `finished`. The website Overview image shows numeric ID filters and tracking counts instead. Evidence: `website-ref/assets/screenshot-overview.png` alt text and caption at `website-ref/index.html` lines 263 and 277. C1 saw "Needs you", campaign progress, "Your decisions ahead", and team decision summaries here. My observation confirms the campaign and team parts. Limit: I read the API and source components. I did not click every Overview dialog in a browser.
+- Work (`/work`). The screen shows owners, waiting reasons, and PR links, with team, repository, and harness filters. Evidence: `docs/features/work.md` opening and `docs/guide/quick-start.md` key-pages table. Limit: the e2e `GET /api/v1/factory/work` returned no body in my probe. I did not invent Work rows.
+- Repositories (`/repositories`). The screen shows configured enablement apart from effective intake. My check of `GET /api/v1/factory/repositories` returned three scopes with states `blocked` and `Team automation is paused.` Evidence: that response. The intakes show paused teams, not live polling.
+- Teams (`/teams`). The screen shows rosters, the Leader slot, and launch plans. Evidence: `docs/features/agent-teams.md` and `docs/guide/index.md`. Limit: the e2e `GET /api/v1/agent-teams` returned no body in my probe. I make no claim about a live roster count.
+- Agent Mail (`/agent-mail`). The screen lists participants and team mail. Evidence: `frontend/src/features/agent-mail/TeamTab.tsx` line 124 shows `Loading participants...`. Limit: in my probe the screen data did not load beyond that label. C1 saw the same label after 30 seconds. L1 did not check this. I record the stall as a limit. I do not claim the mail function fails.
+- Harnesses (`/harnesses`). The screen shows a readiness catalogue. My check of `GET /api/v1/providers` returned six providers with display names, binary names, and capability labels. Evidence: that response. The tested source has six harnesses.
+- Audit (`/audit`). The screen shows the delivery ledger and metrics. Evidence: `docs/guide/factory-audit-and-metrics.md` and `docs/index.md`. Limit: audit events were locked in my probe. I did not unlock them and I did not change settings. I make no claim about event rows.
 
 ## Verdict in one paragraph
 
@@ -108,7 +120,18 @@ Work page. Evidence: `docs/features/work.md` opens with `Open Work to browse mix
 
 Agent Teams page. Evidence: `docs/features/agent-teams.md` opens with `Agent Teams are saved rosters of local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.` The roster idea helps. The page then uses `watch`, `polling`, `merge policy`, `finite dispatch/recovery limits`, and `leader_slot_id` without a director glossary.
 
-Other feature pages. Evidence: `docs/features/` holds 21 files, from `docs/features/agent-bridge.md` to `docs/features/work.md`. The count alone hides the seven screens that matter first: Overview, Work, Repositories, Teams, Agent Mail, Harnesses, and Audit.
+Operating model page. Evidence: `docs/guide/operating-model.md` defines the factory, the Director, the Supervisor, the Leader, backlog ownership, and retained decisions. Lines 17–18 name the Director as owner of the outcome and the backlog. Lines 85–91 separate Leader plan approval from the Director's retained decisions. The guide sidebar links it: `docs/.vitepress/config.ts` line 40 lists `Factory Operating Model`. Status: this page exists in source. It needs revision for a director, not creation. The website reference does not ship these guide pages. Status: public pages are missing. The source page is separate.
+
+Other guide and feature pages, one by one.
+
+- `docs/features/dashboard.md` (Overview). Reviewer judgment: the page must map counts to decisions. The tested Overview source holds `NeedsYou` and `CampaignProgress`. The docs name the counts first. A director needs the decision first.
+- `docs/features/work.md` (Work). Evidence: the page states `Human PR review remains separate from agent plan approval`. What works: the separation is clear. Gap: filters and retry rules come before the director decision.
+- `docs/features/repositories.md` (Repositories). What works: the page separates configured enablement from effective intake. Evidence: `docs/guide/index.md` states that split. Gap: `intake`, `polling`, and `advisory overlaps` need a glossary first.
+- `docs/features/agent-teams.md` (Teams). What works: the roster idea in the first sentence. Gap: `leader_slot_id`, budgets, and reuse rules need a plain map.
+- `docs/features/agent-mail.md` (Agent Mail). What works: the page can show coordination apart from human PR review. Gap: my Audit probe found the participants list did not load. A director needs a load state, not a silent stall.
+- `docs/features/harnesses.md` (Harnesses). What works: per-harness readiness. Evidence: `GET /api/v1/providers` shows six providers. Gap: the landing page still says five. See contradiction 1.
+- `docs/features/agent-bridge.md` and `docs/features/cc-bridge.md` (Live sessions). Evidence: the sidebar names `Live sessions` at `/agent-bridge`. These pages suit operators. A director needs one line: live sessions let a person watch or join agent work.
+- Remaining feature pages count. Evidence: `docs/features/` holds 22 files in total. Reviewer judgment: the count alone is not an audit. Each page above names its finding. The catalogue still hides the seven scoped screens.
 
 ### Autonomy — `docs/autonomy.md`
 
@@ -140,9 +163,9 @@ Fragment three: visible ownership. Evidence: e2e `GET /api/v1/factory/overview` 
 
 Fragment four: the landing summary. Evidence: `website-ref/index.html` lines 110–112 state Deck shows which issues are queued, which agent owns each one, and which pull requests wait for review. That sentence is the clearest factory fragment on the site.
 
-Missing piece one: the because sentence. No page states why the factory saves director time or risk in plain words. Evidence: no landing or docs text read above claims time saved. Instead `docs/index.md` states `Finished tracking does not establish reviewed delivery.` The caution is honest. The story stops there.
+Product benefit, separate from measured savings. The benefit exists on the landing page. Evidence: `website-ref/index.html` lines 226–240, heading `Why use Claude Deck instead of GitHub and terminals alone?` The text states GitHub stays the home for issues and PRs while Deck adds one operating view: what is queued, who owns it, what waits for a person, and what needs attention. Assessment: that explanation is present. Its clarity is low for a director. The paragraph comes after the audience warning and still uses `Attempts`, `review`, and `attention` without a glossary. No page claims a measured time saving. Evidence: `docs/index.md` states `Finished tracking does not establish reviewed delivery.` and `docs/changelog.md` states `Cost is unknown.` Reviewer judgment: keep the benefit claim and the evidence limits. Do not add a savings claim without trial data.
 
-Missing piece two: the director decision map. No first page lists the three decisions a director makes: approve the plan, review the PR, or accept the result. Evidence: the landing feature cards at lines 306–308 and 393–395 split those decisions across operator cards.
+Missing piece two: the director decision map. Decision roles, corrected. Agent plan approval belongs to the designated Leader. Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. Campaign approval belongs to the Director. The Director owns the backlog and the retained decisions. Evidence: `docs/guide/operating-model.md` lines 85–91 list backlog ownership for the Director and plan approval for the Team Leader, with publication, budgets, models, and security HOLD as Director retained decisions. Human PR review and merge follow repository policy. Evidence: `docs/guide/index.md` states human PR review and merge follow repository policy. No first page lists those three roles together. Evidence: the landing feature cards at lines 306–308 and 393–395 split those decisions across operator cards.
 
 Missing piece three: the share artefact. No page offers a one-page brief for a board or peer. Evidence: the landing page offers `Docs` at line 73 and GitHub at line 75. Neither link gives a director summary to forward.
 
@@ -150,13 +173,13 @@ Missing piece three: the share artefact. No page offers a one-page brief for a b
 
 Contradiction 1: harness count. The landing page names five harnesses. Evidence: `website-ref/index.html` line 121 badge `Five harnesses` and lines 348–350 listing Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi. The product has six. Evidence: `docs/index.md` states `Harnesses includes the versioned operations/readiness catalog for all six harnesses`. The e2e `Sidebar.tsx` shows `Harnesses` as one screen. The count mismatch confuses a director.
 
-Contradiction 2: screenshot version. The landing screenshots freeze version 3.0.0. Evidence: `website-ref/index.html` lines 252 and 277 state the images show `Claude Deck 3.0.0`. The site readme agrees: `website-ref/README.md` lines 27 and 33 name source commit `bc66e5f` from `release/v3.0.0`. The shipped product is 3.1.0. Evidence: workspace `VERSION` reads `3.1.0` and the e2e `/health` reports `3.1.0`. A director sees old screens.
+Contradiction 2: screenshot version. The landing screenshots freeze version 3.0.0. Evidence: `website-ref/index.html` lines 252 and 277 state the images show `Claude Deck 3.0.0`. The site readme agrees: `website-ref/README.md` lines 27 and 33 name source commit `bc66e5f` from `release/v3.0.0`. The tested source is 3.1.0. Evidence: workspace `VERSION` reads `3.1.0` and the e2e `/health` reports `3.1.0`. Both show the tested source version. They do not show a published release. Reviewer judgment: a director sees old screens.
 
 Contradiction 3: docs build lag. The website docs copy is generated from v3.0. Evidence: `website-ref/README.md` lines 24–29 state the docs under `docs/` are generated from `release/v3.0.0`. The source docs at `origin/master` describe the integrated candidate, including six harnesses. Evidence: `docs/index.md`, paragraph on Harnesses. A director who follows the site link reads older navigation claims.
 
-Contradiction 4: changelog version label. The changelog heading reads `3.0.0 — Unreleased`. Evidence: `docs/changelog.md` heading line. The product version is 3.1.0. Evidence: `VERSION` file and e2e `/health`. A director cannot tell whether the audit ledger is shipped or planned.
+Contradiction 4: changelog version label. The changelog heading reads `3.0.0 — Unreleased`. Evidence: `docs/changelog.md` heading line. The tested source is 3.1.0. Evidence: `VERSION` file and e2e `/health`. Both show the tested source version. They do not show a published release. Reviewer judgment: a director cannot tell whether the audit ledger is ready or planned.
 
-Contradiction 5: autonomy host story. The site promises local running. Evidence: `website-ref/index.html` line 187 states `Claude Deck runs on your machine`. The autonomy guide then needs host token setup. Evidence: `docs/autonomy.md` step 1 asks the reader to edit `backend/.env`. Both statements are true. Together they imply a director can start the factory alone. The guide proves an operator must start it first.
+Setup barrier, not a contradiction: autonomy host setup. The site states local running. Evidence: `website-ref/index.html` line 186 states Deck runs on the machine, with no Deck account and no Deck telemetry. Line 186 also names external services and credentials. Line 198 targets technical operators. The autonomy guide then needs host token setup. Evidence: `docs/autonomy.md` step 1 asks the reader to edit `backend/.env`. Local running and host setup do not conflict. The gap is an audience and setup barrier: a director cannot start the factory alone, and an operator must set up the host first.
 
 ## Top ten problems, ranked
 
@@ -178,9 +201,9 @@ Rank rule. Rank measures how much the problem stops a director from understandin
 
 8. Decision rights are scattered. Evidence: `docs/guide/index.md` `Keep the actors separate` versus `website-ref/index.html` feature cards at lines 306 and 393. A director must hunt for who approves, who reviews, and who merges.
 
-9. Honest limits hide the benefit. Evidence: `docs/index.md` (`Finished tracking does not establish reviewed delivery`) and `docs/changelog.md` (`Cost is unknown`). The limits are right. No adjacent sentence states the auditable benefit a director can claim.
+9. Benefit and limits lack one clear paragraph. Evidence: `website-ref/index.html` lines 226–240 state the benefit: one operating view across teams and repositories. Evidence: `docs/index.md` (`Finished tracking does not establish reviewed delivery`) and `docs/changelog.md` (`Cost is unknown`) state the limits. Reviewer judgment: the parts are both true. No short paragraph joins the benefit to its limits for a director to cite.
 
-10. Too many feature doors first. Evidence: 21 files in `docs/features/` versus seven first screens in `frontend/src/components/layout/Sidebar.tsx`. A director faces a catalogue, not a path.
+10. Too many feature doors first. Evidence: 22 files in `docs/features/` versus eight sidebar entries in `frontend/src/components/layout/Sidebar.tsx`. The seven audited screens are a scoped selection. Reviewer judgment: a director faces a catalogue, not a path.
 
 ## What stays good
 
@@ -190,12 +213,12 @@ Honest evidence limits. Evidence: `docs/guide/index.md` and `docs/changelog.md` 
 
 Separate review kinds. Evidence: `docs/features/work.md` states human PR review remains separate from agent plan approval. That separation fits director control.
 
-Live product proves the screens exist. Evidence: e2e `/health` reports 3.1.0 running, and `Sidebar.tsx` labels match the seven screens the Director cares about. The story is true. The telling comes first.
+Live product proves the screens exist. Evidence: e2e `/health` reports the tested source 3.1.0 running. `Sidebar.tsx` lists eight entries. The seven scoped screens match that selection. The story is true. The telling comes first.
 
 ## Audit limits
 
 Screenshots. I did not open every website image at pixel size. I read image files, alt text, and captions. Evidence: `website-ref/assets/` holds eight screenshots, including `screenshot-overview.png` and `screenshot-work.png`.
 
-E2e path. I read the e2e API and the sidebar source. I did not click every dialog in a browser. The e2e health and overview endpoints confirm the factory screens exist with the labels above.
+E2e path. I opened the seven scoped screens via the e2e instance and recorded what each screen shows above. Limit: I read the e2e API and source components. I did not click every dialog in a browser. Agent Mail did not load beyond `Loading participants...`. Audit events stayed locked. I did not unlock them.
 
-Scope. This audit reads text and navigation. It does not test colour contrast, screen readers, or print layout.
+Scope. This audit reads text and navigation. Reviewer judgments state predicted director reactions. No human director trial supports those judgments. This audit does not test colour contrast, screen readers, or print layout.
