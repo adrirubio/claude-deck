@@ -1,24 +1,69 @@
 # The factory story for directors
 
-For: row 742 under parent issue #745. This document starts from `01-audit.md` on master.
+For: issue #756 under parent issue #745. This revision starts from `01-audit.md` and the first factory story on master.
 
-Purpose. A director can retell the Deck story from this page. The page uses short, plain sentences. Each claim names its evidence.
+Purpose. A non-technical product person can retell this story after one short read. The top level tells the whole idea in three parts. The detail sits in a second layer, marked for a second page. Evidence notes sit under the copy, so the reading stays clean and every claim still names where it comes from.
 
-## One sentence
+## The story in short
 
-Deck runs a team of AI agents that take GitHub issues to reviewed work, while the people in charge keep the key decisions.
+### One sentence
 
-Evidence: `docs/guide/operating-model.md` defines the factory as the supervisor, the Deck controller, and the team working on the Director's backlog. `docs/guide/index.md` states the team works on GitHub issues with bounded attempts.
+You keep a well-groomed list of features you want, a team of AI agents builds them for you, and finished, checked work comes back — while the decisions that matter stay yours.
 
-## One paragraph
+Evidence: `docs/guide/operating-model.md` describes the factory as a team working on the Director's ordered backlog, with the key decisions kept by the Director.
 
-Deck is a local workspace where a director runs AI agent teams on GitHub work. The director owns the backlog and sets the goal. The assigned owner proposes a plan and the designated Leader approves it. Members build the work, reviewers check it, and the Supervisor, when one is assigned, watches the factory and repairs routine faults under delegation. The director sees progress on Overview and Work, tracks repositories and teams, checks the audit record, and still decides publication, budgets, models, and security stops. GitHub stays the home for issues, pull requests, and review.
+### One paragraph
 
-Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. `docs/guide/operating-model.md` gives the backlog to the Director and retained decisions to the Director, and keeps GitHub outside the factory as the record home. The e2e sidebar in `frontend/src/components/layout/Sidebar.tsx` lists Overview, Work, Repositories, Teams, and Audit.
+Think of Deck as a small, well-run workshop that lives on your own computer. You shape a short, ordered list of features you would love to have. A team of AI helpers takes it from there: one of them plans the work and hands it out, others build it, and independent reviewers check every result before it counts as done. You can watch the whole thing on calm, clear screens — what is moving, what is waiting, and what needs you. And throughout, the big calls stay with you: the goals, the order, the budget, what gets published, and when to stop.
 
-## The story of one piece of work
+Evidence: `docs/guide/operating-model.md` gives the backlog and the big decisions to the Director, planning and assignment to the Team Leader, and building to the team. The audit in `01-audit.md` records the screens that show progress, waiting work, and what needs a person.
 
-Read this story as one example job that moves from a GitHub issue to a merged PR. The example uses one simple issue: "Add a short help note to the welcome page." This example is not a measured delivery. It shows the roles, the screens, and the gates.
+### The three parts
+
+**1. A backlog you groom, not a pile you chase.** Your backlog is a short, cared-for list of features, each one shaped until it is clear what "done" looks like, and sorted so the most valuable thing comes first. You see the whole list and its order at a glance, together with how much of it is already on its way. You decide what goes on the list, what comes first, and what is ready to start — nothing begins until you say it is ready.
+
+Evidence: `docs/guide/operating-model.md` states that the Director writes and orders the work, sets what counts as done, and marks what is ready to start.
+
+**2. A team that knows its roles.** Your AI team works like a good small crew. The Leader reads the next feature, makes a short plan, and decides who does what. Members build, each in their own tidy workspace, so nobody steps on anyone else's work. Reviewers who did not build a change check it with fresh eyes before it counts. You see the whole crew on one screen — who leads, who is busy, and who is waiting for a person — and you decide the limits they work inside, and who leads them.
+
+Evidence: the audit in `01-audit.md` records the team screen with its roster, its named Leader, and its work counts, and the work screen with an owner and a waiting reason for each item. `docs/guide/operating-model.md` gives plan approval and next-work choice to the Leader.
+
+**3. Finished work you can trust and trace.** What comes back is finished and checked, ready for you to accept, with a plain record of what happened along the way. You see what is done, what still waits for you, and a ledger that shows what the factory did, honestly, including where its view stops. You decide whether the result is accepted and published — nothing goes out into the world on its own.
+
+Evidence: `docs/guide/factory-audit-and-metrics.md` states that the ledger records what the factory actually did and keeps its limits visible. Publication stays a Director decision in `docs/guide/operating-model.md`.
+
+### Why it matters
+
+**You stay in control, without doing the chasing.** The list, the order, the budget, and the final say are yours. The team works inside the limits you set, so you lead the product instead of herding the work.
+
+**You can see everything at a glance.** One calm view shows what needs you, who is doing what, and where things wait. No digging through chats or files to find out where a feature stands.
+
+**Nothing slips through unchecked.** Work pauses at clear checkpoints: a plan gets approved before building starts, and a finished change gets checked by fresh eyes before it counts. If something stops or goes wrong, it waits visibly for a person instead of quietly going ahead.
+
+**You know what is known — and what is not.** Where Deck can read them, it shows estimated running costs for the helpers' sessions. The full cost of delivering a feature is not known yet, and no saving in your time has been measured. Deck says both plainly rather than dressing either up.
+
+Evidence: `docs/guide/operating-model.md` lists the decisions the Director keeps and the checkpoints the work passes. `docs/features/usage.md` covers the session cost estimates, and `docs/guide/factory-audit-and-metrics.md` keeps the unknown costs unknown.
+
+### The words for this level
+
+Six words carry the whole story. Everything else can wait for the next page.
+
+1. **Backlog** — your ordered, well-groomed list of features you want built.
+2. **Team** — the crew of AI agents that works through your list together.
+3. **Leader** — the team member who plans the work and decides who does what.
+4. **Member** — one agent on the team, building the part it was given.
+5. **Reviewer** — the independent checker who reads finished work with fresh eyes.
+6. **Director** — you: the person who owns the goals, the list, and the final decisions.
+
+### Retell it in half a minute
+
+"We keep a short, well-groomed list of the features we want. Our AI team picks up the next one: their Leader plans it, members build it, and reviewers check it. Finished work comes back with a clear record of what happened. We watch it all on one set of screens, and the big decisions — goals, order, budget, publishing — stay with us."
+
+Evidence: each sentence maps to the three parts above — the list and its order, the team and its roles, and finished work with its record — with the decisions kept by the Director.
+
+## How it works — read this on the second page
+
+*This layer belongs on a second page. Read it when you want the detail behind the story above. It follows one piece of work from a GitHub issue to a merged PR. The example uses one simple issue: "Add a short help note to the welcome page." This example is not a measured delivery. It shows the roles, the screens, and the gates.*
 
 Example policy. In this example, repository policy asks a human to review this PR before merge. Other repositories use other rules. Evidence: `docs/autonomy.md` states the auto policy merges eligible code PRs after checks pass, and design PRs always need human review. Repository policy sets the review rule for each PR.
 
@@ -72,37 +117,19 @@ What the Director sees: Work shows the item as finished. Audit shows the deliver
 
 Decision that stays with the Director: accept the campaign result and decide publication.
 
-## Why it matters to a director
+### Words for this page
 
-Each point below names what the product shows today. No point claims a saving the product cannot prove.
+These words belong to the How it works page. Each entry gives one short sentence.
 
-Control. The Director owns the backlog and the retained decisions. Evidence: `docs/guide/operating-model.md` lists backlog ownership for the Director and names publication, budgets, models, and security HOLD as retained decisions. The Leader approves plans inside those limits. Evidence: `docs/guide/operating-model.md` gives plan approval to the Team Leader.
-
-Visibility. The Director sees waiting work without opening each terminal. Evidence: the audit at `01-audit.md` records Overview with "Needs you" and campaign progress, and Work with owners and waiting reasons. Repositories shows enablement apart from intake. Evidence: `docs/guide/index.md` states that split.
-
-Safety gates. Work stops at named gates. A plan needs Leader approval before build. In this example, a PR needs human review and CI before merge. Other repositories set other review rules. A security HOLD stays with the Director. Evidence: `docs/guide/index.md` keeps agent plan approval apart from human PR review. `docs/autonomy.md` states the auto policy merges eligible code PRs after checks pass, and design PRs always need human review. `docs/guide/operating-model.md` keeps security HOLD as a Director decision.
-
-Cost. Usage shows Claude Code session estimates where Deck can read them. Evidence: `docs/features/usage.md` states the Usage page aggregates Claude Code session tokens and estimated cost. Factory delivery cost stays unknown. Evidence: `docs/guide/factory-audit-and-metrics.md` keeps unknown observations as unknown. This section claims no campaign cost and no measured saving. No trial measures those savings yet.
-
-## Glossary
-
-At most 15 words. Each entry gives one short sentence.
-
-1. **Team** — A saved roster of agent sessions that work as one unit.
-2. **Leader** — The one team member who approves plans and picks the next work.
-3. **Member** — One agent slot on a team that owns a piece of work.
-4. **Harness** — The agent tool a member runs, such as Claude Code or Codex.
-5. **Scope** — The link that connects one team to one repository and its dispatch labels.
-6. **Work item** — One tracked piece of work from issue to review.
-7. **Approval** — A recorded yes at a gate, such as plan approval or PR review.
-8. **Agent Mail** — The team mailbox where agents coordinate and hand off work.
-9. **Backlog** — The ordered list of GitHub issues the Director wants done.
-10. **Director** — The human who owns the outcome and the retained decisions.
-11. **Supervisor** — The outside watcher that repairs routine faults under delegation.
-12. **Reviewer** — The independent reader who checks the exact PR before merge.
-13. **Audit** — The ledger that records what the factory did and its limits.
-14. **CI** — Automatic checks that run on a PR before merge.
-15. **PR** — A pull request is a proposed change reviewed under repository policy.
+1. **Harness** — The agent tool a member runs, such as Claude Code or Codex.
+2. **Scope** — The link that connects one team to one repository and its dispatch labels.
+3. **Work item** — One tracked piece of work from issue to review.
+4. **Approval** — A recorded yes at a gate, such as plan approval or PR review.
+5. **Agent Mail** — The team mailbox where agents coordinate and hand off work.
+6. **Supervisor** — The outside watcher that repairs routine faults under delegation.
+7. **Audit** — The ledger that records what the factory did and its limits.
+8. **CI** — Automatic checks that run on a PR before merge.
+9. **PR** — A pull request is a proposed change reviewed under repository policy.
 
 ## What the story does not promise
 
@@ -115,9 +142,3 @@ Deck does not promise that every screen always loads its data. Agent Mail once s
 Deck does not promise cloud hosting. Deck runs on the director's machine and changes real local agent files. Evidence: the landing page at `website-ref/index.html` lines 185–186 and the audit verdict. An operator must set up the host first.
 
 Deck does not replace GitHub. GitHub holds the issues, the PRs, and the final record. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the record home.
-
-## How a director retells the story
-
-A director can say: "We write goals as GitHub issues. The owner proposes a plan and our Leader approves it. Members build it and reviewers check the exact change. We watch progress on Overview and Work and read the audit ledger after. We still decide the goal, the budget, the models, and publication."
-
-Evidence for the retell: each sentence above maps to Steps 1–6. The Leader approves plans. The Director keeps the retained decisions. Human PR review follows repository policy.
