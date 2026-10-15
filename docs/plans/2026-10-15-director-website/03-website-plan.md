@@ -1,6 +1,6 @@
 # Website plan for claudedeck.org
 
-For: issue #764 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, and `04-docs-and-video.md` on master.
+For: issue #765 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, and `04-docs-and-video.md` on master.
 
 Main action: **Understand and share it.** A director sees the graphical home page, understands the factory mostly through its animated pictures, and forwards one link, one page, or one short video. The detail lives on the second page, "How it works".
 
@@ -203,9 +203,38 @@ Evidence: `01-audit.md` finds only Docs and GitHub links today, and no forwardab
 
 Share limits: the summary and the video use seeded example data. Each one says so. Neither one claims a measured saving or a measured delivery time.
 
+## Technology and build
+
+Planning only: nothing is built under this plan. Every tool below is the Director's choice, made on 2026-10-15 and recorded in issue #765. This section records the choices. It makes no claim about any tool's licence terms, price, or performance; licence checks stay named Director checks before production spending.
+
+- **Framework: Astro.** The Director chose Astro for static pages with zero JavaScript by default. Only the animated sections load code, as islands. Astro builds to `dist/`, and only `dist/` is deployed.
+- **Deploy change.** The `dist/` deploy replaces today's whole-root deploy. Evidence for today: the website reference (`website-ref` at commit `0c35f391759633c774b7cc4ace5c52b96dd53d12`) runs `pages deploy .` in `.github/workflows/deploy.yml:21`, which publishes the whole repository root.
+- **Draft website: Cloudflare Pages previews.** Each branch gets a Cloudflare Pages preview URL. The Director reviews a production-like draft there before anything is published. Publication stays a Director decision.
+- **Motion: GSAP.** ScrollTrigger drives scroll-driven storytelling, so the reader's scroll drives the story. DrawSVG, MorphSVG, and SplitText handle line drawing, shape change, and text motion.
+- **Graphics: animated SVG built in code.** The Director chose code-built SVG over editor-made Rive or Lottie files, so the team can write and change the graphics exactly.
+- **Supporting tools.** Lenis for smooth scrolling. The View Transitions API for page-to-page transitions. An optional, light WebGL backdrop (Three.js) in the hero only — kept only if it stays fast against the targets below; it is not promised.
+- **One component library.** Each scene is a React component. Astro shows the same component on the site, and Remotion renders the same component in the video (see `04-docs-and-video.md`, Production approach). One scene, two outputs.
+- **Standards, stated as targets.** A still version of every scene for reduced motion. A target of 60 fps, using transform and opacity only. No layout shift as a build rule. A Lighthouse target above 95. Animations start when their section is visible. These are targets for the build, not measured results.
+
+### Animation storyboard (website)
+
+The scroll story, matched to the story's eight steps and the five home pictures. Each part names its still version for reduced motion.
+
+1. **Hero, "your backlog".** Feature cards drop into a priority stack. A "ready" mark lands, and the cards flow toward the team. Steps 1–2; the backlog picture. Still: the ordered stack with the ready mark.
+2. **The team at work (scroll).** Cards split into parallel lanes. In each lane: an owner drafts a plan, the Leader approves it, the owner builds, a reviewer checks, the Leader and the Supervisor (when assigned) check, and the item lands on a "finished" shelf. Several lanes move at once. Steps 3–8; the parallel-lanes and finished-work pictures. Still: cards part-way down their lanes, one item on the finished shelf.
+3. **Zoom out, many teams.** The view pulls back. This team becomes one of several teams in one Deck, each with its own project backlog. The several-teams picture. Still: the three team groups at rest.
+4. **You decide.** The Director's moments — marking work ready, and publishing — light up along the way. The decision picture. Still: work resting beside the closed decision gate.
+
+### Order of the next work
+
+1. The Director approves this plan.
+2. **Style options:** two or three still frames (the hero and the parallel lanes) in different visual styles. The Director picks one; the site and the video follow it.
+3. **Website build** on a preview branch, reviewed as the draft site at its preview URL.
+4. **Video prototype** under issue #760, reusing the same React scene components.
+
 ## The mockup
 
-The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
+The mockup proves the copy and the pictures; it is not the Astro build above. The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
 
 Each page is one self-contained HTML file. Each uses inline CSS and inline SVG only. Neither makes an external request. Neither holds a script. Under `prefers-reduced-motion`, every animation stops and each illustration shows its still version.
 

@@ -1,6 +1,6 @@
 # Director website campaign — summary and recommended changes
 
-For: issue #758 under parent issue #745. This summary covers the four plan documents and the two mockup pages in this folder, after the Director review round (#756 to #758).
+For: issue #765 under parent issue #745. This summary covers the four plan documents and the two mockup pages in this folder, after Director review rounds 2 and 3 (#756 to #765).
 
 This README recommends changes. It grants no approval. The Director approves the campaign plan under #745. Publication stays a Director decision.
 
@@ -17,41 +17,41 @@ Read them in this order.
 
 ## Recommended changes, in order
 
-Do the changes in this order. Each line states the source and the decision the Director must make.
+Do the changes in this order. Each line states the source and the decision the Director must make. The build order follows issue #765: Director approval first, then style options, then the website build on a preview branch, then the video prototype.
 
-1. **Build the graphical home page.** A few short lines, the four animations with still versions, main action "Understand and share it". Source: `03-website-plan.md`, Home; `02-factory-story.md`; `01-audit.md`, top problem 1. Director: approve the copy and the animations. Publication stays a Director decision.
-2. **Add the "How it works" page.** The six steps, the decision roles, the glossary, and the retell. Source: `03-website-plan.md`, "How it works"; `02-factory-story.md`, "How it works" layer; `01-audit.md`, top problem 8. Director: confirm the retained decisions are correct.
-3. **Add Share Deck.** The link, the one-page summary, and later the video. Source: `03-website-plan.md`, Share Deck; `01-audit.md`, top problem 4. Director: approve the summary text.
-4. **Fix the wrong facts and make new captures** for "How it works" and the video closing segment. Six harnesses, not five. Replace the old-version screenshots. Source: `03-website-plan.md`, screenshot list; `01-audit.md`, top problems 6 and 7. Director: approve public use of seeded captures, with the label.
-5. **Move operator content to For operators and the docs.** Install steps, shell commands, and the tech list leave the director pages. Source: `03-website-plan.md`, "What to remove or move to the docs"; `01-audit.md`, top problems 2 and 5. Director: approve the split.
-6. **Add "Limits and trust".** Claude Code session estimates only, delivery cost unknown, no time-saving claim. Source: `03-website-plan.md`, "Limits and trust"; `01-audit.md`, top problem 9. Director: approve the limit wording.
-7. **Build the docs "Start here" path**, opening with the story, with its own "How it works" page linked to the technical docs. Source: `04-docs-and-video.md`, Part 1. Director: approve the docs structure.
-8. **Produce the final animations**, reused on the home page and in the video. Source: `03-website-plan.md`, animation concepts; `04-docs-and-video.md`, storyboard. Director: decide who produces them.
-9. **Produce the video as code.** Remotion scenes, ElevenLabs narration, Suno music. The first step is a separate 20-second prototype issue. Source: `04-docs-and-video.md`, Part 2. Director: choose the voice, generate the Suno track, check the licences, approve the budget and publication.
+1. **Approve this plan, then pick a visual style.** Two or three still frames (the hero and the parallel lanes) in different styles. Source: `03-website-plan.md`, "Order of the next work". Director: approve the plan and pick the style; the site and the video follow it.
+2. **Build the graphical home page** in Astro, on a preview branch with its Cloudflare Pages preview URL. A few short lines, the five animations with still versions, main action "Understand and share it". Only the built `dist/` folder deploys. Source: `03-website-plan.md`, Home and "Technology and build"; `02-factory-story.md`; `01-audit.md`, top problem 1. Director: review the draft at its preview URL and approve publication.
+3. **Add the "How it works" page.** The eight steps, parallel tracks, several teams, the decision roles, the glossary, and the retell. Source: `03-website-plan.md`, "How it works"; `02-factory-story.md`, "How it works" layer; `01-audit.md`, top problem 8. Director: confirm the retained decisions are correct.
+4. **Add Share Deck.** The link, the one-page summary, and later the video. Source: `03-website-plan.md`, Share Deck; `01-audit.md`, top problem 4. Director: approve the summary text.
+5. **Fix the wrong facts and make new captures** for "How it works" and the video closing segment. Six harnesses, not five. Source: `03-website-plan.md`, screenshot list; `01-audit.md`, top problems 6 and 7. Director: approve public use of seeded captures, with the label.
+6. **Move operator content to For operators and the docs.** Source: `03-website-plan.md`, "What to remove"; `01-audit.md`, top problems 2 and 5. Director: approve the split.
+7. **Build the docs "Start here" path**, opening with the story, with its own "How it works" page. Source: `04-docs-and-video.md`, Part 1. Director: approve the docs structure.
+8. **Produce the final animations** as shared React scenes, reused on the home page and in the video. Source: `03-website-plan.md`, animation concepts and storyboard; `04-docs-and-video.md`, storyboard. Director: Claude Opus 5.5 produces them (answered — see open questions). Approve the style frames first.
+9. **Produce the video as code**, starting with the 20-second prototype under issue #760. Remotion renders the shared scenes, ElevenLabs narrates, Suno supplies the music. Source: `04-docs-and-video.md`, Part 2. Director: choose the voice, generate the Suno track, check the licences, approve the budget and publication.
 
 ## What each change needs from the Director
 
 | Change | Director gives | Without it |
 |---|---|---|
-| Graphical home page | Copy and animation approval, then a publication decision | The site keeps the developer first screen. |
+| Plan and style approval | Plan approval, then one picked visual style | No build starts. |
+| Graphical home page | Draft review at the preview URL, then a publication decision | The site keeps the developer first screen. |
 | How it works page | Confirmation of the retained decisions | The detail has no director home. |
 | Share Deck | Summary text approval | A director has no artefact to forward. |
 | Fact fixes and new captures | Approval to publish seeded captures, with the label | The site keeps old screens at two ages. |
 | Page split | Approval of the director and operator split | Install steps stay on the director read. |
-| Limits and trust | Limit wording approval | A reader can over-read the benefit. |
 | Docs Start here | Docs structure approval | The docs keep an operator first step. |
-| Final animations | A producer decision (who, and at what budget) | The home page and video hold concept pictures only. |
+| Final animations | Style-frame approval (producer already answered) | The home page and video hold concept pictures only. |
 | Video | Voice choice, the generated Suno track, licence checks, budget, publication approval | The share kit holds pages and text only. |
 
 ## Open questions for the Director
 
-The campaign leaves six questions open. Each question blocks the change named beside it.
+The campaign leaves five questions open. Each question blocks the change named beside it. One earlier question is answered and no longer open: who produces the animations and the video — Claude Opus 5.5 (Director answer recorded in issue #765).
 
 1. Is a human director trial needed before publication? The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded. This question blocks a final publication claim.
-2. When and how does the website change publish? The website repository deploys its whole root on a push to its main branch. A partial copy is not a safe publish. This question blocks change 1.
-3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 4 and the video closing segment.
+2. When does the website change publish? The build now has a safe route (preview branch, `dist/` only), but the moment and the go-ahead stay the Director's. This question blocks change 2.
+3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 5 and the video closing segment.
 4. Agent Mail stayed at "Loading participants..." in two agent checks. Investigate that state before any Mail capture or Mail claim. This question blocks any Mail image.
-5. Who produces the final animations and the video, and at what budget? This campaign plans both and produces neither. This question blocks changes 8 and 9.
+5. What is the production budget? Items to check: the ElevenLabs plan, the Suno plan, the Remotion licence, agent time (measured by the #760 prototype), and optional AI texture clips. This question blocks changes 8 and 9.
 6. What are the commercial-use licence terms of Remotion, ElevenLabs, and Suno on the plans the Director will use? Check the commercial-use terms for the chosen plans before production spending. Keep the results with the project. Publication stays a separate Director decision. This question blocks change 9.
 
 ## Limits that stay in force
