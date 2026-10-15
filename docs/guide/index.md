@@ -45,3 +45,5 @@ Repository setup uses a guided, observation-only access and label check. Leader 
 - [Quick Start](/guide/quick-start)
 - [Factory API](/api/factory)
 - [Architecture](/guide/architecture)
+
+<!-- CI docs-only probe -->
