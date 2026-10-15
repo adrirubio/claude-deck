@@ -1,6 +1,6 @@
 # Director docs plan and video concept
 
-For: issue #744 under parent issue #745. This plan uses `01-audit.md`, `02-factory-story.md`, and `03-website-plan.md` on master.
+For: issue #758 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, the revised `03-website-plan.md`, and both mockup pages on master.
 
 This file plans two things. It plans the documentation for directors. It plans the product video concept. It produces neither one. Both stay later work.
 
@@ -9,10 +9,10 @@ Each claim names its evidence. A claim with no evidence does not enter the plan.
 ## Sources
 
 - `01-audit.md` records the current docs, page by page, with limits.
-- `02-factory-story.md` gives the one sentence, the roles, and the glossary of 15 words.
-- `03-website-plan.md` gives the website pages, the home-page copy, and the share ways.
+- `02-factory-story.md` gives the one sentence, the three parts, the six-step "How it works" layer, the six top-level words, and the nine detail words.
+- `03-website-plan.md` gives the website pages, the graphical home copy, the four animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
 - The existing docs live in `docs/guide/`, `docs/features/`, `docs/index.md`, and `docs/autonomy.md`.
-- An isolated test instance supplied fresh seeded screen states for the storyboard. The states are seeded example data. They are not live records and not human trials.
+- Issue #758 gives the Director's video direction and the chosen production approach. Seeded screen states from the audit serve only the closing-segment capture list. They are not live records and not human trials.
 
 ## Part 1. The docs plan
 
@@ -38,7 +38,7 @@ Read the pages in this order. Each page answers one question.
 
 | Order | Page | New or changed | Purpose | Short outline |
 |---|---|---|---|---|
-| 1 | What Deck is | New director page | The director learns the factory in two minutes | The story one sentence. The story one paragraph. One picture of the path: issue, plan, build, review, merge, record. A link to the full story. |
+| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the four home pictures as still images. A link to "How it works" for the detail. |
 | 2 | A first look at Overview | New director page | The director learns what needs a person | What "Needs you" means. Campaign progress in plain words. Which item waits for the director, and which waits for the team. |
 | 3 | A first look at Work | New director page | The director learns who owns each item | One row explained: owner, state, waiting reason, pull request link. The four normal states and the attention exception. |
 | 4 | A first look at Repositories and Teams | New director page | The director learns which backlog feeds which team | One scope explained in plain words. The roster, the named Leader, and the supervisor status. Repository count and work count. |
@@ -46,16 +46,22 @@ Read the pages in this order. Each page answers one question.
 | 6 | A first look at Agent Mail | New director page | The director learns how the team coordinates | What Agent Mail holds: durable participants, structured mailboxes, context requests, and handoffs. Mail reads stay protected. This page uses words and a diagram. It holds no screen capture. |
 | 7 | A first look at Harnesses | New director page | The director learns which agent tools Deck can set up | What a harness is, in one sentence. The six agent tools by name. Setup and support in plain words. Account, model, and session readiness stay unknown here. Operator setup stays on the operator path. |
 | 8 | The decisions that are yours | New director page | The director learns the retained decisions | Goal and backlog order. Publication, budgets, models, security stops. The Leader approves agent plans inside those limits. Human review follows repository policy. |
-| 9 | Words you need | New director page | The director learns the 15 words | The glossary from the story, one short sentence per word. Each word links to the page that uses it. |
+| 9 | Words you need | New director page | The director learns the story words | The six top-level words first, then the nine "How it works" words, one short sentence per word. Each word links to the page that uses it. |
 | 10 | Limits and trust | New director page | The director learns what Deck does not promise | Local running and operator setup. Seeded example data. Locked Audit events. Usage session estimates beside unknown factory cost. No measured time saving. |
 | 11 | Share Deck from the docs | New director page | The director briefs a peer from the docs | The link, the one-page summary, and the video. Each item stands alone. |
 
-Evidence for the screen claims: `01-audit.md` records Overview with "Needs you" and campaign progress, Work with owners and waiting reasons, Teams with the roster and the named Leader, Repositories with enablement apart from intake, and Audit with safe metrics and locked events. `02-factory-story.md` gives the retained decisions. The glossary comes from the story, at 15 words.
+Evidence for the screen claims: `01-audit.md` records Overview with "Needs you" and campaign progress, Work with owners and waiting reasons, Teams with the roster and the named Leader, Repositories with enablement apart from intake, and Audit with safe metrics and locked events. `02-factory-story.md` gives the retained decisions. The glossary comes from the story: six top-level words, then nine detail words.
 
 Screen limits that the pages must print:
 
 - The Agent Mail introduction rests on `docs/features/agent-mail.md`. That page describes durable participants, structured mailboxes, and protected Mail reads. The page holds no screen capture. The only observed screen state stayed at participant loading. Evidence: `01-audit.md` records that state as an open observation limit. It proves no Mail failure and no docs defect. Add a capture only when a supported coordination state exists to show.
 - The Harnesses introduction keeps the readiness limit in its first lines. The screen shows setup and support. Account, model, and session readiness stay unknown without a separate check. Evidence: `docs/features/harnesses.md`. Tool setup itself stays on the operator path.
+
+### The "How it works" docs page
+
+The per-issue detail does not sit in the Start here path. It lives on one "How it works" page, placed after "What Deck is" and linked both ways: from Start here for directors who want depth, and from the technical documentation for operators who want the story behind the rules. The page carries the six steps, the decision at each step, the nine detail words, and the retell. It is the docs twin of the website's second page in `03-website-plan.md`, and it links onward to `docs/guide/operating-model.md` and the feature pages for depth.
+
+Evidence: the revised story marks its six-step layer "read this on the second page". `03-website-plan.md` gives the website the same split. The docs keep that split so a director meets the same shape in both places.
 
 ### What changes in the existing docs
 
@@ -81,97 +87,153 @@ Screen limits that the pages must print:
 
 ## Part 2. The video concept
 
-Producing the video is later work. This part gives the concept, the script draft, the storyboard, and the voice requirements.
+Producing the video is later work. This part gives the concept, the narration script, the animation storyboard, the music brief with its Suno prompt, the voice brief, the closing segment, and the production approach.
+
+Director direction (issue #758): the video explains the story, not how Deck is implemented. Screens change, so a video built on screenshots would date. The audience is non-technical product people. The style is very engaging: much animation and many transitions, warm narration, high-beat music. **Screens rule: no Deck screen appears outside the short closing segment in the last few seconds.** That segment is self-contained, so it can be replaced or cut without re-editing the rest.
 
 ### Audience and message
 
-Audience: a director who has never seen Deck, and the peer that director forwards the video to.
+Audience: a non-technical product person who has never seen Deck, and the peer they forward the video to. Technical readers go to the technical documentation instead.
 
-Message: your AI team ships GitHub work, and you keep the decisions.
+Message: you shape the feature backlog, Deck's AI team builds and checks the work, and the key decisions stay with you.
 
-Length: two to three minutes. The timing budget below gives a 150-second video: about 113 seconds of speech, 29 seconds of shot holds, and 8 seconds of pauses between sections.
+Length: about 2 minutes 34 seconds of story (scenes below), plus an optional closing segment of at most 10 seconds and an end card. The total stays inside two to three minutes with or without the closing segment.
 
-The video uses seeded example screens. Every screen shot carries one persistent label: "Example data — seeded screens. Not live records." The spoken script also states the limits. The video claims no measured delivery and no time saving. Evidence: `03-website-plan.md` sets those limits for the clip.
+The narration claims no measured delivery, no time saving, and no delivery cost. Evidence: `02-factory-story.md` keeps those limits, and `docs/guide/factory-audit-and-metrics.md:57` and `:96-97` keep delivery cost and human time savings unmeasured.
 
-### Script draft
+### Narration script
 
-Read the script aloud at the pace in the voice requirements. The script, the shots, and the times match. The order is the normal path first, then attention as the exception, then the Audit close.
+Natural, warm spoken English. Read it aloud at the pace in the voice brief (about 140 words per minute). The word count of each scene fits its window with hold time to spare (timing table below). The script uses no developer words. The same banned-word check as the home copy runs on it (see "Checks" under Production approach).
 
-**Opening, 0:00 to 0:20.** "This is Deck. Deck runs a team of AI agents that take GitHub issues to reviewed work. You write the goals. You keep the key decisions. You see this factory on example data, not live records."
+**Opening, 0:00–0:18.** "Every product team has a list — the features you would love to build next, if only there were time. This is Deck. Deck gives that list a team."
 
-**The path, 0:20 to 0:55.** "Follow the normal path. You write an issue and order the backlog. That queued item still waits for an owner. The owner proposes a short plan, and the Leader approves it. A member builds the change. A reviewer checks the exact version, and checks run. A human review waits in review. The pull request merges under your repository policy."
+**The backlog, 0:18–0:42.** "It starts with your backlog. Not a pile of wishes, but a list you shaped yourself: each feature written down with a clear result, in the order you want them. You decide what belongs on it, what comes first, and what is ready to begin."
 
-**What you see, 0:55 to 1:25.** "You do not open each agent session to learn who waits. Overview shows what needs you. Work shows each owner and each waiting reason. Teams shows the roster and the named Leader. When work stops or fails, it waits in attention. Attention is the exception, not a step on the path."
+**Meet the team, 0:42–1:08.** "Then the team gets to work. A Leader organises the work and approves the plans before anyone builds. Members build the features. And reviewers — who did not build them — check every result with fresh eyes. Everyone has a role, and nobody marks their own homework."
 
-**Your decisions, 1:25 to 1:50.** "The Leader approves agent plans inside your limits. Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. Deck runs on your machine. An operator sets up the host. GitHub holds the issues, the pull requests, and the final record."
+**Finished work, 1:08–1:32.** "What comes back is finished work, already checked, with a plain record of what happened along the way. You can see what is done, what still needs attention, and even where the record has gaps. Deck would rather show you a gap than hide one."
 
-**Close, 1:50 to 2:30.** "Each Work state shows a different example issue. These are static seeded examples. These pictures prove no delivery time and no saving. Usage shows Claude Code session cost estimates where Deck can read them. The cost of a whole delivery stays unknown. The audit ledger keeps the record, and this closing screen shows no event record for these issues. Your team ships GitHub work in the open, and you keep the decisions."
+**You stay in charge, 1:32–1:58.** "And through it all, the decisions that matter stay with you. The goals. The priorities. The budget. And what gets published. The team handles the routine problems inside the limits you set — and anything reserved for you waits for you."
 
-Timing budget: the spoken draft holds 263 words. At about 140 words per minute, speech takes about 113 seconds. Shot holds add 29 seconds. Section pauses add 8 seconds. The total is about 150 seconds, inside the two to three minute limit. Section check at the same pace: Opening holds 36 words in 20 seconds. The path holds 59 words in 35 seconds. What you see holds 51 words in 30 seconds. Your decisions holds 45 words in 25 seconds. The Close holds 72 words in 40 seconds. Each section window covers its speech time and leaves hold time.
+**Honest limits, 1:58–2:22.** "Two honest notes. Deck runs on your own computer, and a person sets it up first. And the full cost of a finished feature — and the time it saves you — are not measured yet. We would rather tell you that than dress it up."
 
-Evidence for the script: the opening uses the story one sentence. The path follows Steps 1 to 6 in `02-factory-story.md`. Attention maps to escalated or failed work, not to human review. Evidence: `backend/app/services/factory_projection_service.py` keeps human review in the review state and attention for the stopped or failed states. The decisions match the retained decisions in `docs/guide/operating-model.md`. The close keeps the Claude Code cost split from `docs/features/usage.md` and `docs/guide/factory-audit-and-metrics.md`.
+**Closing line, 2:22–2:34.** "Your backlog. Your AI team. Finished work — with you in charge. That is Deck."
 
-### Storyboard
+Timing check, at about 140 words per minute. Every scene window covers its speech and leaves hold time for the picture.
 
-Each shot names the real Deck screen and the seeded state to capture. The seed holds one issue per Work state. Each Work state therefore shows a different issue. Overview shows many issues at once, Teams shows a roster, and Audit shows no issue event record. The spoken close states the Work limit. The persistent seeded-data label sits on every screen shot.
+| Scene | Window | Words | Speech | Hold |
+|---|---|---|---|---|
+| Opening | 0:00–0:18 (18s) | 29 | 12.4s | 5.6s |
+| The backlog | 0:18–0:42 (24s) | 45 | 19.3s | 4.7s |
+| Meet the team | 0:42–1:08 (26s) | 47 | 20.1s | 5.9s |
+| Finished work | 1:08–1:32 (24s) | 45 | 19.3s | 4.7s |
+| You stay in charge | 1:32–1:58 (26s) | 41 | 17.6s | 8.4s |
+| Honest limits | 1:58–2:22 (24s) | 46 | 19.7s | 4.3s |
+| Closing line | 2:22–2:34 (12s) | 15 | 6.4s | 5.6s |
+| **Total** | **154s** | **268** | **114.9s** | **39.1s** |
 
-| Shot | Time | Screen | Seeded state to capture | Narration line it carries | Caption or limit on screen |
-|---|---|---|---|---|---|
-| 1 | 0:00 | Overview | Seeded counts with one item in each state | "This is Deck." | Persistent seeded-data label. |
-| 2 | 0:20 | Work, All filter | Queued item #105, "Add keyboard shortcuts", with no owner yet | "You write an issue and order the backlog." | The queued item waits for an owner. |
-| 3 | 0:27 | Teams | Seeded team "Release crew" with its named Leader and member slots | "The owner proposes a short plan, and the Leader approves it." | Seeded roster. Not a live team. |
-| 4 | 0:34 | Work, All filter | Active item #103, "Document the import format", with its owner | "A member builds the change." | One state, one example issue. |
-| 5 | 0:41 | Work, All filter | Review item #102, "Fix the settings page layout", with its pull request field | "A reviewer checks the exact version, and checks run." | A human review waits in review. |
-| 6 | 0:48 | Work, All filter | Finished item #104, "Rename the sync command", in merged state | "The pull request merges under your repository policy." | Example path. Not a measured delivery. |
-| 7 | 0:55 | Overview | The "Needs you" area with campaign progress | "Overview shows what needs you." | Counts alone do not prove the summaries. |
-| 8 | 1:10 | Work, All filter | Attention item #101, "Add the CSV export button", stopped after its owner went idle | "When work stops or fails, it waits in attention." | Attention is the stopped or failed exception. |
-| 9 | 1:25 | Teams | The "Release crew" roster with its named Leader | "The Leader approves agent plans inside your limits." | Seeded roster. Not a live team. |
-| 10 | 1:50 | Audit | Safe delivery metrics with the event list locked | "The audit ledger keeps the record." | This closing screen shows no event record for these issues. The video ends here. |
+Evidence for the script: the closing line and the three middle scenes restate the revised story's three parts and "Why it matters" in spoken form. "Approves the plans before anyone builds" keeps the accepted roles (owner proposes on the detail page; Leader approves). The limits scene restates local running and the unmeasured-cost limits from `02-factory-story.md`.
 
-Seed evidence: the test seed creates issues #101 to #105 in the attention, review, active, finished, and queued states, each with its own title. Evidence: `scripts/e2e/scenarios.py`. A fresh check of the test instance returned the same five states. The default Work filter hides finished work, so shots 2, 4, 5, 6, and 8 name the All filter. Evidence: `03-website-plan.md` records that filter rule from the audit review.
+### Animation storyboard
 
-Excluded shots:
+Every scene except the closing segment is an animated concept picture. No scene shows a Deck screen, a screen label, or product UI. Scenes 2 to 5 reuse the four home-page animations from #757, rebuilt at video size. Each animation stays self-contained: one idea, ready to reuse.
 
-- No Agent Mail shot. The observed state stayed at participant loading. A loading screen shows no coordination. Evidence: `01-audit.md`.
-- No Usage total as proof of cost. The old Usage image shows zero totals, and factory cost stays unknown. Evidence: `01-audit.md` and `docs/guide/factory-audit-and-metrics.md`.
-- No install or terminal shot. Setup belongs to the operator path. Evidence: `01-audit.md` install finding.
+| Scene | Time | What the viewer sees | Motion and transition | One idea it teaches |
+|---|---|---|---|---|
+| 1. Opening | 0:00 | A soft pile of feature cards. The Deck name settles above them. | Cards drift in and settle. Cut on "This is Deck." | Every team has a list. Deck gives it a team. |
+| 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready to begin". | You shape and order the list. |
+| 3. Meet the team | 0:42 | The #757 team animation: Leader, members, reviewer. A card of work passes from building to checking. | Roles light in turn with the narration. The work card travels across. | Clear roles. Nobody checks their own work. |
+| 4. Finished work | 1:08 | The #757 finished-work animation: checked work beside its record, one record line dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
+| 5. You stay in charge | 1:32 | The #757 decision animation: work travels, pauses at the "You decide" gate, passes when it opens. | Travel, a clear pause on the decision words, gate lifts on "waits for you". | The key decisions stay yours. |
+| 6. Honest limits | 1:58 | The same three-part picture, quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
+| 7. Closing line | 2:22 | The three parts side by side: list, team, checked work. End card with the Deck name. | Parts slide together. Hold for the last line. | Backlog, team, finished work — with you in charge. |
+| 8. Closing segment (optional) | after 2:34, at most 10s | The only screens in the video. See its own section below. | Separate sequence. Swappable or cuttable. | A short look at the real product, labeled as examples. |
 
-### AI voice requirements
+Transitions: match cuts on the moving card between Scenes 2, 3, and 4, so one piece of work seems to travel. A soft fade into Scene 6 (the quiet scene) and out to the end card. No whip pans, no text flying at the viewer: the energy comes from the music and the steady motion, not from tricks.
 
-The voice is an AI voice. The video states that fact in its credits. The requirements below bind the voice choice.
+### The closing segment (the only screens)
 
-Tone:
+Length: at most 10 seconds, after the closing line and before (or under) the end card. Optional: the video is complete without it.
 
-- Calm and plain. The voice sounds like a briefing officer, not an advert.
-- Confident on facts. Careful on limits. The voice gives each limit the same weight as each claim.
-- No excitement words. No "revolutionary", no "effortless", no "game changer".
+What it may show: a short "see it in action" montage of real Deck screens, using seeded captures from the `03-website-plan.md` screenshot list (Overview, Work with the All filter, Teams). Every capture carries the seeded-data label: "Example data — seeded screens. Not live records." No Audit event rows (locked gate), no Agent Mail capture (loading limit), no Usage total as cost proof.
 
-Pace:
+How it is cut out: the segment is one separate sequence in the render (its own composition, with its own start and end frames on plain background). To refresh it, swap the captures and re-render. To remove it, drop the sequence and re-render. Neither change touches the narration, the music timing, or Scenes 1 to 7. The end card follows either way.
 
-- About 140 words per minute. The two and a half minutes include the shot holds and the section pauses, not speech alone.
-- One sentence, then a short pause. A breath pause at each shot change.
-- Numbers and state names get a slower pace: queued, active, review, attention, finished.
+Narration over it: none. Music only, so cutting it never cuts a sentence.
 
-Pronunciation of product words:
+### Music brief
 
-| Word | Say it as | Rule |
-|---|---|---|
-| Deck | "deck", one syllable | Never spell it out. Never say "the deck platform". |
-| Claude Deck | "clawd deck" | Keep the product name together. |
-| harness | "HAR-ness" | Say "agent tool" right after the first use. |
-| pull request | "pull request", both words in full | Never say the short form in this video. |
-| audit ledger | "AW-dit LED-jer" | Keep both words. Never shorten to "the ledger" in the script lines above. |
-| Leader | "LEE-der", with stress on the first part | Always "the Leader" for the role. |
-| Supervisor | "SOO-per-vy-zor" | Say "the Supervisor, when one is assigned" at first use. The role is optional. |
-| GitHub | "GIT-hub" | Keep the name plain. No added claim about the service. |
-| Overview, Work, Teams, Audit | Say each screen name in full, then pause | The listener must map each name to the shot on screen. |
+Job: carry the energy the calm pictures do not. High beat, warm, forward-moving. No lyrics anywhere: words under narration fight the narrator.
 
-Do and do not:
+- Tempo and energy: about 118–124 BPM. Bright and confident, never frantic.
+- Shape: gentle intro under the opening, builds through the team scene, a small lift at finished work, drops low and warm under "Honest limits", then a short bright rise for the closing line and end card.
+- Level: always under the narration. The mix ducks the music whenever the voice speaks. The limits scene sits lowest.
+- Length: generate about 3 minutes, then trim or loop-extend to the final cut (2:34 plus closing segment and end card).
 
-- Do read every limit line in full. Do not lower the voice or speed up on limits.
-- Do keep one voice for the whole video. Do not switch voices per section.
-- Do not add music under the limit lines. Keep the close quiet.
-- Do not let the voice invent a benefit. The voice reads the approved script only.
+Ready-to-paste Suno prompt. The Director generates the track in Suno's app from this text. Suno settings: Instrumental ON. No lyrics field beyond the section tags below.
+
+Style text (paste into Style):
+
+```text
+Uplifting instrumental corporate pop, 122 BPM, warm and confident, bright piano chords, clean electric guitar arpeggios, soft synth pads, steady pop drums with handclaps, light strings in the lift, optimistic forward motion, polished product-video feel. No vocals, no lyrics, no choir, no harsh distortion, no drops with heavy bass, no minor-key drama.
+```
+
+Structure text (paste into Lyrics, instrumental mode). Times match the scenes; extend or trim sections in Suno to fit the final narration timing.
+
+```text
+[Intro — soft piano and pads, gentle pulse, 0:00-0:18]
+[Build — drums enter, guitar arpeggios, growing energy, 0:18-0:42]
+[Drop — full band, brightest section, handclaps, 0:42-1:08]
+[Groove — steady and warm, slightly softer, 1:08-1:32]
+[Build — rising again, strings enter, 1:32-1:58]
+[Break — sparse piano, low and calm, space for voice, 1:58-2:22]
+[Lift — bright short rise, full but clean, 2:22-2:34]
+[Outro — warm resolve, end-card hold, fade]
+```
+
+Settings and fit: instrumental, target about 3 minutes. Generate two or three takes and keep the best. If a section runs long or short against the final narration timestamps, use Suno's extend/trim on that section, or let the editor loop the Groove section. Keep the Break under the limits scene: if the generated Break is busy, regenerate with "sparse, minimal" added to the style.
+
+Two alternative style prompts, so the Director can choose:
+
+- Calmer: "Warm acoustic instrumental, 104 BPM, gentle and trustworthy, fingerpicked acoustic guitar, soft piano, light brushed drums, subtle strings, calm product-story feel. No vocals, no lyrics, no electronic drops, no harsh sounds."
+- More energetic: "Energetic instrumental indie electronic, 128 BPM, bright and driving, pulsing synths, punchy clean drums, plucked bass, sparkling arpeggios, launch-video energy. No vocals, no lyrics, no dubstep drops, no distortion, no dark mood."
+
+Commercial use: whether the generated track may be used commercially depends on the Suno plan's terms. The Director checks the current terms for their plan before publication, and keeps the generation receipt with the project files. This plan does not state Suno's terms.
+
+### Voice brief
+
+The narrator is an AI voice. The video credits say so. The Director picks the voice.
+
+- Tone: warm, friendly, and clear — a good colleague explaining over coffee. Confident on the story, gentle on the limits, never salesy. No excitement words beyond the script. Smile in the voice, not hype.
+- Pace: about 140 words per minute, with a breath at each scene change. Slower on the decision list ("The goals. The priorities. The budget.") and on the limits. Word timestamps from the voice render drive the scene timing, so generate the voice first, then lock the cuts.
+- Pronunciation: Deck — "deck", one syllable. Claude Deck — "clawd deck", kept together. Leader — "the Leader", stress on "lead". Reviewer — plain. Backlog — "BACK-log". Do not spell out abbreviations: the script holds none.
+- Rules: read every limit line in full, at the same warmth as the claims. One voice for the whole video. The voice reads the approved script only — no ad-libbed benefits.
+
+### Production approach
+
+The Director chose this approach. This section records it with its reasons.
+
+- **Video as code, with Remotion.** A Deck team writes the animated scenes as React code rendered to MP4. Agent-written scenes reuse the four #757 home animations, so the website and the video tell the story with the same pictures. Code gives exact, repeatable edits: a word, a timing, or a colour changes in one place and re-renders.
+- **Narration with ElevenLabs.** The Director picks the voice. Its word timestamps drive the scene timing, so cuts land on sentences, not guesses.
+- **Music with Suno.** The Director generates the track in Suno's app from the prompt above, chooses among takes and the two alternative styles, and hands the file to the render.
+- **Optional texture clips only.** Short AI-generated atmosphere clips (for example Veo or Runway) may add texture where a scene needs it — a soft background drift, never a product claim, never a fake screen.
+- **Swappable closing sequence.** The closing segment is its own sequence. Swap its captures or cut it, then re-render. The story scenes never change when screens change — which is the point of the screens rule.
+
+Why not the other ways:
+
+- Not whole-film text-to-video: generated footage drifts between shots, text and logos wobble, and exact edits (one word, one number, one colour) mean regenerating whole scenes. The story needs consistency across 2–3 minutes and across future re-renders.
+- Not explainer-template tools: template libraries push stock screen mockups and fixed layouts, which fight the screens rule and the reuse of the #757 animations. The film would look like every other template film.
+- Not avatar presenters: a synthetic talking head spends the film on a face, not the ideas, and dates fastest of all. The story here is three ideas with pictures, not a presenter.
+
+Check first, before production money is spent: the commercial-use licence terms of Remotion, ElevenLabs, and Suno, for the exact plans the Director will use. Record the answers with the project. This plan names the check; it does not state any tool's terms.
+
+Checks for this concept (run on the draft, and again on the final storyboard):
+
+- Screens rule: read every storyboard row. Outside the closing segment, each row must name an animation concept, never a Deck screen. In the storyboard, screen words appear only in the rule statement itself and in the closing-segment row.
+- Narration words: run the home-copy banned-word check on the script text — `grep -Eio 'github|\bprs?\b|pull requests?|\bissues?\b|\bci\b|\bmerg[a-z]*|\bbranch[a-z]*|\blabel[a-z]*'` — and require no matches.
+- Timing: count each scene's words, divide by the voice pace (about 140 per minute), and require speech time below the scene window. The table above records this check.
+
+Producing the video stays later work. The first step is a 20-second prototype under a separate issue. It proves the render path, the voice timing, and the music fit before the full film is built.
 
 ## What this plan does not promise
 
