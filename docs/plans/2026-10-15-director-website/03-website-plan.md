@@ -61,7 +61,7 @@ The page holds the share link text, the one-page summary, and the short video. E
 
 Purpose: the honest limits in one place.
 
-The page states local running, operator setup, seeded example data, locked Audit events, unknown cost, and no measured time saving.
+The page states local running, operator setup, seeded example data, and locked Audit events. It also states that Usage shows Claude Code session estimates and that factory delivery cost stays unknown. It claims no measured time saving.
 
 ### For operators
 
@@ -140,7 +140,7 @@ Send the link. The home page is the brief.
 
 Send the one-page summary. It carries the one sentence, the six steps, and the limits.
 
-Show the video. It follows one issue from goal to merged work in under three minutes.
+Show the video. It walks the five seeded work states in story order in under three minutes. Each state shows a different example issue.
 
 Evidence: `01-audit.md` finds no share artefact on the site today. This section creates the three artefacts. The video script follows Steps 1 to 6 in `02-factory-story.md`.
 
@@ -184,7 +184,7 @@ Key sentence: Send the link, send the one-page summary, or show the short video.
 
 Heading: **What Deck does not promise.**
 
-Key sentence: Cost stays unknown, time saved stays unmeasured, and a person keeps the final decisions.
+Key sentence: Usage shows Claude Code session estimates. Factory delivery cost stays unknown, time saved stays unmeasured, and a person keeps the final decisions.
 
 ### For operators
 
@@ -202,20 +202,22 @@ Each request names the real Deck screen and the seeded state to capture. Capture
 
 The old images freeze older versions. Evidence: `01-audit.md` records the two main images at version 3.0.0 and six feature previews with a v2.0.0 footer. The tested source reports version 3.1.0.
 
+Seed evidence: the test seed holds five different issues, one per work state. Evidence: `scripts/e2e/scenarios.py` seeds issues #101 to #105 in the attention, review, active, finished, and queued states. No single seeded issue moves through all states. The clip below therefore narrates static states. It does not show one issue in motion.
+
 | Section | Screen to capture | Seeded state to show | What the director learns | Limit to print with the image |
 |---|---|---|---|---|
 | First screen | Overview | Seeded counts with one item in each state: queued, active, review, attention, finished | Work waits in named states, and one state needs a person | Seeded example data. Not live records. |
 | What Deck is | Teams | Seeded team "Release crew" with a named Leader and its member slots | A team is a roster with one Leader | Seeded roster. Not a live team. |
-| One piece of work | Work | Five seeded work items with owners and waiting reasons, one item per state | Each item has an owner and a reason it waits | Seeded example data. The path is an example, not a measured delivery. |
+| One piece of work | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
 | What you see and decide | Overview | The "Needs you" area with campaign progress and team summaries | The screen puts the director decision first | Browser observation from the audit. Counts alone do not prove the summaries. |
 | What you see and decide | Repositories | Three seeded repository scopes, with paused intake on two scopes | A backlog feeds a team only when intake allows it | Seeded scopes. Paused intake shows no live polling. |
 | Why it matters, safety | Work | One seeded item that waits for review, with its pull request field | A gate stops work until a reviewer acts | Review follows repository policy. This image shows one example policy. |
-| Why it matters, cost | Harnesses | Six seeded harness providers with setup and support labels | Deck shows which agent tools it can set up | Account, model, and session readiness stay unknown without a separate check. |
+| Agent tools, on For operators | Harnesses | Six seeded harness providers with setup and support labels | Deck shows the setup and support for each agent tool | This capture supports agent-tool setup only. It supports no cost claim. Account, model, and session readiness stay unknown without a separate check. |
 | Limits and trust | Audit | Safe delivery metrics with the event list locked | The ledger shows metrics, and events stay behind an access gate | Locked events are an access gate, not a load failure. No event rows shown. |
-| Limits and trust | Agent Mail | The participant loading state | Coordination exists, and one observation stayed at loading | Open observation limit. It proves no Mail failure and no docs defect. |
-| Share it | All screens, as a clip | One seeded issue that moves from queued to finished across Overview and Work | The full path takes under three minutes to show | Seeded path. Not a measured delivery time. |
+| Limits and trust | Agent Mail | No public capture. The only observed state stayed at participant loading. | No director claim rests on this screen yet | Keep this state in the evidence limits. Add a public capture only when a supported coordination state exists. The limit proves no Mail failure and no docs defect. |
+| Share it | Overview and Work, as a clip | The five seeded state stills in story order: queued, active, review, attention, finished. Each state shows a different seeded issue. | The director sees each state the story path passes through | Narrated example over static states. No single seeded issue moves through all states. Not a measured delivery time. |
 
-Short clips: one clip only. The clip follows the Share it row. It uses the same seeded states as the still images. It adds no new claim.
+Short clips: one clip only. The clip narrates the still states in story order. Its narration states that each state shows a different example issue. It adds no new claim.
 
 Still open: Usage cost. No image in this plan shows a cost total as proof. Evidence: `01-audit.md` records the old Usage image with zero totals, and `docs/guide/factory-audit-and-metrics.md` keeps factory cost unknown. The cost copy above states the limit in words instead.
 
@@ -243,7 +245,7 @@ Three ways. Each way stands alone.
 
 1. **A link.** The director sends the home page link. The first screen carries the one sentence, the path, and the decisions. The peer needs no setup and no account to read it.
 2. **A one-page summary.** The director sends one page with the one sentence, the six steps, what the director decides, and the limits. The summary prints cleanly and forwards as a document.
-3. **The video.** The director shows a clip under three minutes. The clip follows one seeded issue from goal to merged work and ends on the audit record.
+3. **The video.** The director shows a clip under three minutes. The clip walks the five seeded work states in story order and ends on the audit record. Each state shows a different example issue.
 
 Evidence: `01-audit.md` finds only Docs and GitHub links today, and no forwardable brief. The three items above close that gap. Each item uses only claims from `02-factory-story.md`.
 
