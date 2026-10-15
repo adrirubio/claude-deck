@@ -32,7 +32,7 @@ Decision that stays with the Director: approve the goal, the order, and the read
 
 ### Step 2. The owner proposes a plan and the Leader approves it
 
-The controller assigns the ready issue to one owner. The owner proposes a short plan. The designated Leader approves the plan. Then the work starts. Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. `backend/app/services/github_approval_service.py` `create_initial_request` records the owner proposal and the Leader decision. `docs/guide/operating-model.md` gives next-work selection to the Team Leader.
+The controller assigns the ready issue to one owner. The owner proposes a short plan. The designated Leader approves the plan. Then the work starts. Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. `backend/app/services/github_approval_service.py` `create_initial_request` records the owner proposal. `decide` in the same file records the Leader decision. `docs/guide/operating-model.md` gives next-work selection to the Team Leader.
 
 What the Director sees: Overview shows campaign progress and team summaries. Work shows the owner and the waiting reason. Teams shows the roster, the named Leader, supervisor status, repositories, and work counts. Evidence: the audit at `01-audit.md` records Overview with "Needs you", campaign progress, and team summaries, Work with owners and waiting reasons, and Teams with the selected roster, the named Leader, supervisor status, repository count, and work count.
 
@@ -48,7 +48,7 @@ Decision that stays with the Director: none at this step, unless the work hits a
 
 ### Step 4. Reviewers check the work
 
-In this example, an independent reviewer reads the exact PR head. The PR head is the latest commit on the PR branch. The reviewer sends findings to the owner. The owner fixes them on the same branch and PR. Hosted checks (CI) run on the new head. Evidence: `docs/features/work.md` states human PR review stays separate from agent plan approval in this example policy. `docs/autonomy.md`, "Ordinary review corrections", gives the same-branch fix loop.
+In this example, an independent reviewer reads the exact PR head. The PR head is the exact version proposed for review. The reviewer sends findings to the owner. The owner fixes them on the same branch and PR. Hosted checks (CI) run on the new head. Evidence: `docs/features/work.md` states human PR review stays separate from agent plan approval in this example policy. `docs/autonomy.md`, "Ordinary review corrections", gives the same-branch fix loop.
 
 What the Director sees: Work shows whether the item waits for review. Agent Mail holds the coordination messages under its access rules. Audit shows safe delivery metrics without a secret token. Evidence: `docs/features/agent-mail.md` explains protected Mail reads under "Authentication and upgrades". The audit at `01-audit.md` records Audit from `docs/guide/factory-audit-and-metrics.md`. The audit did not see loaded Mail messages. The browser stayed at "Loading participants...". That state is an open observation limit. It is not a docs defect.
 
@@ -102,7 +102,7 @@ At most 15 words. Each entry gives one short sentence.
 12. **Reviewer** — The independent reader who checks the exact PR before merge.
 13. **Audit** — The ledger that records what the factory did and its limits.
 14. **CI** — Automatic checks that run on a PR before merge.
-15. **PR** — A pull request: one proposed change. Repository policy sets its review rule.
+15. **PR** — A pull request is a proposed change reviewed under repository policy.
 
 ## What the story does not promise
 
