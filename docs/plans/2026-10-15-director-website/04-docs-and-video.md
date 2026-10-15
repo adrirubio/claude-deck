@@ -89,7 +89,7 @@ Audience: a director who has never seen Deck, and the peer that director forward
 
 Message: your AI team ships GitHub work, and you keep the decisions.
 
-Length: two to three minutes. The timing budget below gives a 150-second video: about 112 seconds of speech, 30 seconds of shot holds, and 8 seconds of pauses between sections.
+Length: two to three minutes. The timing budget below gives a 150-second video: about 113 seconds of speech, 29 seconds of shot holds, and 8 seconds of pauses between sections.
 
 The video uses seeded example screens. Every screen shot carries one persistent label: "Example data — seeded screens. Not live records." The spoken script also states the limits. The video claims no measured delivery and no time saving. Evidence: `03-website-plan.md` sets those limits for the clip.
 
@@ -99,34 +99,34 @@ Read the script aloud at the pace in the voice requirements. The script, the sho
 
 **Opening, 0:00 to 0:20.** "This is Deck. Deck runs a team of AI agents that take GitHub issues to reviewed work. You write the goals. You keep the key decisions. You see this factory on example data, not live records."
 
-**The path, 0:20 to 1:20.** "Follow the normal path. You write an issue and order the backlog. That queued item still waits for an owner. The owner proposes a short plan, and the Leader approves it. A member builds the change. A reviewer checks the exact version, and checks run. A human review waits in review. The pull request merges under your repository policy."
+**The path, 0:20 to 0:55.** "Follow the normal path. You write an issue and order the backlog. That queued item still waits for an owner. The owner proposes a short plan, and the Leader approves it. A member builds the change. A reviewer checks the exact version, and checks run. A human review waits in review. The pull request merges under your repository policy."
 
-**What you see, 1:20 to 1:50.** "You do not open each agent session to learn who waits. Overview shows what needs you. Work shows each owner and each waiting reason. Teams shows the roster and the named Leader. When work stops or fails, it waits in attention. Attention is the exception, not a step on the path."
+**What you see, 0:55 to 1:25.** "You do not open each agent session to learn who waits. Overview shows what needs you. Work shows each owner and each waiting reason. Teams shows the roster and the named Leader. When work stops or fails, it waits in attention. Attention is the exception, not a step on the path."
 
-**Your decisions, 1:50 to 2:10.** "The Leader approves agent plans inside your limits. Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. Deck runs on your machine. An operator sets up the host. GitHub holds the issues, the pull requests, and the final record."
+**Your decisions, 1:25 to 1:50.** "The Leader approves agent plans inside your limits. Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. Deck runs on your machine. An operator sets up the host. GitHub holds the issues, the pull requests, and the final record."
 
-**Close, 2:10 to 2:30.** "Each screen here shows a different example issue, in still seeded states. These pictures prove no delivery time and no saving. Usage shows Claude Code session cost estimates where Deck can read them. The cost of a whole delivery stays unknown. The audit ledger keeps the record, and this closing screen shows no event record for these issues. Your team ships GitHub work in the open, and you keep the decisions."
+**Close, 1:50 to 2:30.** "Each Work state shows a different example issue. These are static seeded examples. These pictures prove no delivery time and no saving. Usage shows Claude Code session cost estimates where Deck can read them. The cost of a whole delivery stays unknown. The audit ledger keeps the record, and this closing screen shows no event record for these issues. Your team ships GitHub work in the open, and you keep the decisions."
 
-Timing budget: the spoken draft holds 262 words. At about 140 words per minute, speech takes about 112 seconds. Shot holds add 30 seconds. Section pauses add 8 seconds. The total is about 150 seconds, inside the two to three minute limit.
+Timing budget: the spoken draft holds 263 words. At about 140 words per minute, speech takes about 113 seconds. Shot holds add 29 seconds. Section pauses add 8 seconds. The total is about 150 seconds, inside the two to three minute limit. Section check at the same pace: Opening holds 36 words in 20 seconds. The path holds 59 words in 35 seconds. What you see holds 51 words in 30 seconds. Your decisions holds 45 words in 25 seconds. The Close holds 72 words in 40 seconds. Each section window covers its speech time and leaves hold time.
 
 Evidence for the script: the opening uses the story one sentence. The path follows Steps 1 to 6 in `02-factory-story.md`. Attention maps to escalated or failed work, not to human review. Evidence: `backend/app/services/factory_projection_service.py` keeps human review in the review state and attention for the stopped or failed states. The decisions match the retained decisions in `docs/guide/operating-model.md`. The close keeps the Claude Code cost split from `docs/features/usage.md` and `docs/guide/factory-audit-and-metrics.md`.
 
 ### Storyboard
 
-Each shot names the real Deck screen and the seeded state to capture. The seed holds one issue per state. Each state therefore shows a different issue. The spoken close states that limit. The persistent seeded-data label sits on every screen shot.
+Each shot names the real Deck screen and the seeded state to capture. The seed holds one issue per Work state. Each Work state therefore shows a different issue. Overview shows many issues at once, Teams shows a roster, and Audit shows no issue event record. The spoken close states the Work limit. The persistent seeded-data label sits on every screen shot.
 
 | Shot | Time | Screen | Seeded state to capture | Narration line it carries | Caption or limit on screen |
 |---|---|---|---|---|---|
 | 1 | 0:00 | Overview | Seeded counts with one item in each state | "This is Deck." | Persistent seeded-data label. |
 | 2 | 0:20 | Work, All filter | Queued item #105, "Add keyboard shortcuts", with no owner yet | "You write an issue and order the backlog." | The queued item waits for an owner. |
-| 3 | 0:33 | Teams | Seeded team "Release crew" with its named Leader and member slots | "The owner proposes a short plan, and the Leader approves it." | Seeded roster. Not a live team. |
-| 4 | 0:46 | Work, All filter | Active item #103, "Document the import format", with its owner | "A member builds the change." | One state, one example issue. |
-| 5 | 0:59 | Work, All filter | Review item #102, "Fix the settings page layout", with its pull request field | "A reviewer checks the exact version, and checks run." | A human review waits in review. |
-| 6 | 1:10 | Work, All filter | Finished item #104, "Rename the sync command", in merged state | "The pull request merges under your repository policy." | Example path. Not a measured delivery. |
-| 7 | 1:20 | Overview | The "Needs you" area with campaign progress | "Overview shows what needs you." | Counts alone do not prove the summaries. |
-| 8 | 1:35 | Work, All filter | Attention item #101, "Add the CSV export button", stopped after its owner went idle | "When work stops or fails, it waits in attention." | Attention is the stopped or failed exception. |
-| 9 | 1:50 | Teams | The "Release crew" roster with its named Leader | "The Leader approves agent plans inside your limits." | Seeded roster. Not a live team. |
-| 10 | 2:10 | Audit | Safe delivery metrics with the event list locked | "The audit ledger keeps the record." | This closing screen shows no event record for these issues. The video ends here. |
+| 3 | 0:27 | Teams | Seeded team "Release crew" with its named Leader and member slots | "The owner proposes a short plan, and the Leader approves it." | Seeded roster. Not a live team. |
+| 4 | 0:34 | Work, All filter | Active item #103, "Document the import format", with its owner | "A member builds the change." | One state, one example issue. |
+| 5 | 0:41 | Work, All filter | Review item #102, "Fix the settings page layout", with its pull request field | "A reviewer checks the exact version, and checks run." | A human review waits in review. |
+| 6 | 0:48 | Work, All filter | Finished item #104, "Rename the sync command", in merged state | "The pull request merges under your repository policy." | Example path. Not a measured delivery. |
+| 7 | 0:55 | Overview | The "Needs you" area with campaign progress | "Overview shows what needs you." | Counts alone do not prove the summaries. |
+| 8 | 1:10 | Work, All filter | Attention item #101, "Add the CSV export button", stopped after its owner went idle | "When work stops or fails, it waits in attention." | Attention is the stopped or failed exception. |
+| 9 | 1:25 | Teams | The "Release crew" roster with its named Leader | "The Leader approves agent plans inside your limits." | Seeded roster. Not a live team. |
+| 10 | 1:50 | Audit | Safe delivery metrics with the event list locked | "The audit ledger keeps the record." | This closing screen shows no event record for these issues. The video ends here. |
 
 Seed evidence: the test seed creates issues #101 to #105 in the attention, review, active, finished, and queued states, each with its own title. Evidence: `scripts/e2e/scenarios.py`. A fresh check of the test instance returned the same five states. The default Work filter hides finished work, so shots 2, 4, 5, 6, and 8 name the All filter. Evidence: `03-website-plan.md` records that filter rule from the audit review.
 
@@ -148,7 +148,7 @@ Tone:
 
 Pace:
 
-- About 140 words per minute. The script runs about two and a half minutes at that pace.
+- About 140 words per minute. The two and a half minutes include the shot holds and the section pauses, not speech alone.
 - One sentence, then a short pause. A breath pause at each shot change.
 - Numbers and state names get a slower pace: queued, active, review, attention, finished.
 
