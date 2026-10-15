@@ -30,17 +30,17 @@ Product. The tested source is Deck 3.1.0 on the isolated e2e instance via `scrip
 - Screens checked: seven scoped screens — Overview (`/`), Work (`/work`), Repositories (`/repositories`), Teams (`/teams`), Agent Mail (`/agent-mail`), Harnesses (`/harnesses`), and Audit (`/audit`).
 - Sidebar evidence: `frontend/src/components/layout/Sidebar.tsx` lists eight entries. The seven screens above are a scoped selection from those eight.
 
-## Product screens observed on the tested source
+## Product screens on the tested source, by evidence source
 
-Evidence rule for this section. A line means my observation on the e2e instance. A limit means the observation stops there.
+Label rule. `[Browser — C1]` means C1 observed the screen in a browser with seeded data. `[API — R1]` means R1 checked the e2e API. `[Source — R1]` means R1 read the source or docs text. Each entry names its label. A limit stops the claim there. Agent observations use seeded data. They are not human director trials.
 
-- Overview (`/`). The screen shows `NeedsYou`, `CampaignProgress`, team summaries, and tracking counts. Evidence: `frontend/src/features/factory/pages/OverviewPage.tsx` lines 63–67 hold `NeedsYou`, `CampaignProgress`, and `StatusTiles`. My check of `GET /api/v1/factory/overview` returned counts `queued`, `active`, `review`, `attention`, and `finished`. The website Overview image shows numeric ID filters and tracking counts instead. Evidence: `website-ref/assets/screenshot-overview.png` alt text and caption at `website-ref/index.html` lines 263 and 277. C1 saw "Needs you", campaign progress, "Your decisions ahead", and team decision summaries here. My observation confirms the campaign and team parts. Limit: I read the API and source components. I did not click every Overview dialog in a browser.
-- Work (`/work`). The screen shows owners, waiting reasons, and PR links, with team, repository, and harness filters. Evidence: `docs/features/work.md` opening and `docs/guide/quick-start.md` key-pages table. Limit: the e2e `GET /api/v1/factory/work` returned no body in my probe. I did not invent Work rows.
-- Repositories (`/repositories`). The screen shows configured enablement apart from effective intake. My check of `GET /api/v1/factory/repositories` returned three scopes with states `blocked` and `Team automation is paused.` Evidence: that response. The intakes show paused teams, not live polling.
-- Teams (`/teams`). The screen shows rosters, the Leader slot, and launch plans. Evidence: `docs/features/agent-teams.md` and `docs/guide/index.md`. Limit: the e2e `GET /api/v1/agent-teams` returned no body in my probe. I make no claim about a live roster count.
-- Agent Mail (`/agent-mail`). The screen lists participants and team mail. Evidence: `frontend/src/features/agent-mail/TeamTab.tsx` line 124 shows `Loading participants...`. Limit: in my probe the screen data did not load beyond that label. C1 saw the same label after 30 seconds. L1 did not check this. I record the stall as a limit. I do not claim the mail function fails.
-- Harnesses (`/harnesses`). The screen shows a readiness catalogue. My check of `GET /api/v1/providers` returned six providers with display names, binary names, and capability labels. Evidence: that response. The tested source has six harnesses.
-- Audit (`/audit`). The screen shows the delivery ledger and metrics. Evidence: `docs/guide/factory-audit-and-metrics.md` and `docs/index.md`. Limit: audit events were locked in my probe. I did not unlock them and I did not change settings. I make no claim about event rows.
+- Overview (`/`). `[Browser — C1]` C1 saw "Needs you", campaign progress, "Your decisions ahead", and team decision summaries on Overview at head `f2728044a6ab48d815d1d2c18d22cf393eeeb0cf`. `[API — R1]` `GET /api/v1/factory/overview` returned counts `queued`, `active`, `review`, `attention`, and `finished`. Limit: API counts do not verify campaign summaries. Use the visible label "Needs you" for the director claim. The website Overview image shows numeric ID filters and tracking counts instead. Evidence: the image itself, `website-ref/assets/screenshot-overview.png`. Reviewer judgment: the live Overview is more decision-shaped than the website image.
+- Work (`/work`). `[Browser — C1]` C1 saw rows with owners and waiting reasons. `[API — R1]` `GET /api/v1/factory/work-items` returned five items with owners, waiting summaries such as `Waiting for dispatch.`, and PR fields. Evidence: that response. The earlier probe used the wrong path. It sets no limit now.
+- Repositories (`/repositories`). `[API — R1]` `GET /api/v1/factory/repositories` returned three scopes with states `blocked` and `Team automation is paused.` Evidence: that response. `[Source — R1]` the screen shows configured enablement apart from effective intake. Evidence: `docs/guide/index.md`. The intakes show paused teams, not live polling.
+- Teams (`/teams`). `[Browser — C1]` C1 saw the selected roster, the named Leader, supervisor status, repository count, and work count. `[API — R1]` `GET /api/v1/agent-teams/presets` returned presets such as `Release crew` with `leader_slot_id` and slots for `L1 Leader`. Evidence: that response. The earlier probe used the wrong path. It sets no limit now.
+- Agent Mail (`/agent-mail`). `[Browser — C1]` the screen stayed at "Loading participants..." after 30 seconds. `[Source — R1]` the loading label is in `frontend/src/features/agent-mail/TeamTab.tsx` line 124. Limit: an open observation limit only. It does not prove a Mail function failure and it does not prove a docs defect.
+- Harnesses (`/harnesses`). `[API — R1]` `GET /api/v1/providers` returned six providers with display names, binary names, and capability labels. Evidence: that response. The tested source has six harnesses.
+- Audit (`/audit`). `[Browser — C1]` the screen showed safe delivery metrics, coverage limits, and locked events. `[Source — R1]` the screen shows the delivery ledger and metrics. Evidence: `docs/guide/factory-audit-and-metrics.md` states safe metrics load without an operator token and the event list needs the operator token. Limit: audit events stay locked. I made no setting change and I make no claim about event rows.
 
 ## Verdict in one paragraph
 
@@ -124,11 +124,11 @@ Operating model page. Evidence: `docs/guide/operating-model.md` defines the fact
 
 Other guide and feature pages, one by one.
 
-- `docs/features/dashboard.md` (Overview). Reviewer judgment: the page must map counts to decisions. The tested Overview source holds `NeedsYou` and `CampaignProgress`. The docs name the counts first. A director needs the decision first.
+- `docs/features/dashboard.md` (Overview). Reviewer judgment: the page must map counts to decisions. The live Overview shows the visible label "Needs you". The docs name the counts first. A director needs the decision first.
 - `docs/features/work.md` (Work). Evidence: the page states `Human PR review remains separate from agent plan approval`. What works: the separation is clear. Gap: filters and retry rules come before the director decision.
 - `docs/features/repositories.md` (Repositories). What works: the page separates configured enablement from effective intake. Evidence: `docs/guide/index.md` states that split. Gap: `intake`, `polling`, and `advisory overlaps` need a glossary first.
 - `docs/features/agent-teams.md` (Teams). What works: the roster idea in the first sentence. Gap: `leader_slot_id`, budgets, and reuse rules need a plain map.
-- `docs/features/agent-mail.md` (Agent Mail). What works: the page can show coordination apart from human PR review. Gap: my Audit probe found the participants list did not load. A director needs a load state, not a silent stall.
+- `docs/features/agent-mail.md` (Agent Mail). Assessment from the page text. Evidence: the page opens with local sessions that coordinate as a user-directed team and keeps durable participants and structured mailboxes. The `Authentication and upgrades` section explains protected Mail reads: Mail reads need a current Mail session or the Director key when one is set. Limit: the C1 browser observation at "Loading participants..." is an open observation limit only. The probe does not show a defect in this page and it does not show a Mail function failure.
 - `docs/features/harnesses.md` (Harnesses). What works: per-harness readiness. Evidence: `GET /api/v1/providers` shows six providers. Gap: the landing page still says five. See contradiction 1.
 - `docs/features/agent-bridge.md` and `docs/features/cc-bridge.md` (Live sessions). Evidence: the sidebar names `Live sessions` at `/agent-bridge`. These pages suit operators. A director needs one line: live sessions let a person watch or join agent work.
 - Remaining feature pages count. Evidence: `docs/features/` holds 22 files in total. Reviewer judgment: the count alone is not an audit. Each page above names its finding. The catalogue still hides the seven scoped screens.
@@ -140,6 +140,14 @@ The opening suits an operator. Evidence: the file opens with `This guide is for 
 The preconditions assume a host operator. Evidence: step 1 tells the reader to add `github_token=<token>` to `backend/.env` and restart the backend. A director gets lost here.
 
 The value is still visible. Evidence: the file states issues move through `queued, dispatched, verifying, and ready for human review or merged`. That sentence describes the factory line in plain stages.
+
+### Supervised factory playbook — `docs/guide/supervised-factory-playbook.md`
+
+The playbook lists roles and steps. Evidence: the table names `Operator`, `Supervisor`, `Team Leader`, `Implementer`, and `Independent verifier`, and steps 1–7 cover outcome, preparation, review, maintenance, and gates. Director impact: a director gets the process map here, not on the landing page. Unchecked limit: this audit did not run the playbook steps.
+
+### Factory audit and metrics — `docs/guide/factory-audit-and-metrics.md`
+
+The page defines the ledger and metrics. Evidence: the file states `The audit ledger records what the factory actually did.` and `Cost` is `Unknown.` Director impact: a director can cite the ledger as proof of what happened, with coverage and cost limits. Unchecked limit: audit events stay locked. I made no setting change and I read no event rows.
 
 ### Changelog — `docs/changelog.md`
 
@@ -217,8 +225,21 @@ Live product proves the screens exist. Evidence: e2e `/health` reports the teste
 
 ## Audit limits
 
-Screenshots. I did not open every website image at pixel size. I read image files, alt text, and captions. Evidence: `website-ref/assets/` holds eight screenshots, including `screenshot-overview.png` and `screenshot-work.png`.
+E2e path. Each screen entry above names its source: browser observation, API check, or source review. The C1 browser rows use seeded data. They are not human director trials. Agent Mail stayed at "Loading participants...". Audit events stayed locked. I made no setting change. The earlier failed probes used wrong API paths. The correct probes above replace them.
 
-E2e path. I opened the seven scoped screens via the e2e instance and recorded what each screen shows above. Limit: I read the e2e API and source components. I did not click every dialog in a browser. Agent Mail did not load beyond `Loading participants...`. Audit events stayed locked. I did not unlock them.
+### Coverage table for remaining screenshots
+
+Columns: source, observed content, director impact, unchecked limit.
+
+| Source | Observed content | Director impact | Unchecked limit |
+| --- | --- | --- | --- |
+| `website-ref/index.html:426` preview, `screenshot-cc-bridge.png` (Agent Bridge) | Terminal-style panels for agent sessions | A director sees people can watch or join live work | I did not open every preview at full size |
+| `website-ref/index.html:451` preview, `screenshot-mcp.png` (MCP Servers) | Server list with add and test actions | A director sees external tool links need setup | I did not test a server connection |
+| `website-ref/index.html:478` preview, `screenshot-config.png` (Configuration) | Settings form with save actions | A director sees settings change real agent files | I did not save a setting |
+| `website-ref/index.html:506` preview, `screenshot-usage.png` (Usage) | Token, cost, and billing charts | A director sees spend exists without a savings claim | I did not verify a billing value |
+| `website-ref/index.html:533` preview, `screenshot-hooks.png` (Hooks and Permissions) | Rule lists for automation and access | A director sees control rules need review | I did not change a rule |
+| `website-ref/index.html:560` preview, `screenshot-sessions.png` (Session Transcripts) | Message list with tool detail | A director sees agent talk stays readable as a record | I did not open a full transcript |
+
+Screenshots. I did not open every website image at pixel size. I read image files, alt text, and captions. Evidence: `website-ref/assets/` holds eight screenshots. The table covers the six previews in this section.
 
 Scope. This audit reads text and navigation. Reviewer judgments state predicted director reactions. No human director trial supports those judgments. This audit does not test colour contrast, screen readers, or print layout.
