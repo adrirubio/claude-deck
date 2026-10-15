@@ -110,7 +110,7 @@ Sections, in order: the eight steps (each with copy, what you see, and your deci
 | Step | Copy in one line | Screen and seeded state it shows | Decision that stays with the Director |
 |---|---|---|---|
 | 1. The Director writes the backlog and marks it ready | Choose the result, set its priority, decide when it is ready. | Written example only. No GitHub capture: GitHub is not a Deck screen. | Goals, order, ready decision. |
-| 2. The team works autonomously | The team works through ready items inside your goals, limits, and safety stops. | Overview ("Needs you", progress), Work (items in their states at once). | Hold or pause. Change the limits. |
+| 2. The team works autonomously | The team works through ready items without you steering each step. It follows your goals and limits, respects safety stops, and uses the plan approvals and reviews below. | Overview ("Needs you", progress), Work (each item's progress and owner). | Hold or pause. Change the limits. |
 | 3. Agent owner writes the plan | Each item is assigned to an agent owner, who writes a short plan. | Work (owner per item), Teams (roster, named Leader). | Outcome and limits, not each plan. |
 | 4. Leader reviews and approves | Building starts only after the Leader approves the owner's plan. | Overview (campaign progress, team summaries). | None at this gate. |
 | 5. Agent owner works | Builds in a separate working copy, checks own work, runs agreed checks, opens a PR. | Work (owner, state, PR link), Repositories (which backlog feeds the team). | None, unless a Director-only decision or safety stop applies. |
@@ -150,7 +150,7 @@ Evidence: the headings use the story terms. The operator key sentence matches th
 
 ## Screenshots and short clips each section needs
 
-Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images. The graphical home page needs no screenshot: its four animated illustrations carry the story, and they hold no screen detail. Screenshots belong to "How it works", Share Deck, and For operators.
+Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images. The graphical home page needs no screenshot: its five animated illustrations carry the story, and they hold no screen detail. Screenshots belong to "How it works", Share Deck, and For operators.
 
 The old images freeze older versions. Evidence: `01-audit.md` records the two main images at version 3.0.0 and six feature previews with a v2.0.0 footer. The tested source reports version 3.1.0.
 
@@ -158,18 +158,18 @@ Seed evidence: the test seed holds five different issues, one per work state. Ev
 
 | Section | Screen to capture | Seeded state to show | What the director learns | Limit to print with the image |
 |---|---|---|---|---|
-| Home, the idea in pictures | No screenshot. Four animated illustrations (inline SVG and CSS). | No seeded state. No screen detail in any illustration. | Backlog, team, finished work, and retained decisions, mostly through the pictures | Each illustration is a concept picture, not a product screen. Its still version serves reduced motion. |
-| How it works, Step 2 | Overview and Teams | Overview seeded counts with one item in each state: queued, active, review, attention, finished. Teams seeded team "Release crew" with a named Leader and its member slots. | Work waits in named states, and a team is a roster with one Leader | Seeded example data. Not live records. Seeded roster, not a live team. |
-| How it works, Steps 3 and 6 | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
+| Home, the idea in pictures | No screenshot. Five animated illustrations (inline SVG and CSS). | No seeded state. No screen detail in any illustration. | Backlog, team, finished work, and retained decisions, mostly through the pictures | Each illustration is a concept picture, not a product screen. Its still version serves reduced motion. |
+| How it works, Steps 2 and 3 | Overview and Teams | Overview seeded counts with one item in each state: queued, active, review, attention, finished. Teams seeded team "Release crew" with a named Leader and its member slots. | Work waits in named states, and a team is a roster with one Leader | Seeded example data. Not live records. Seeded roster, not a live team. |
+| How it works, Steps 2, 5 and 8 | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
 | How it works, Step 2 | Overview | The "Needs you" area with campaign progress and team summaries | The screen puts the director decision first | Browser observation from the audit. Counts alone do not prove the summaries. |
-| How it works, Step 3 | Repositories | Three seeded repository scopes, with paused intake on two scopes | A backlog feeds a team only when intake allows it | Seeded scopes. Paused intake shows no live polling. |
-| How it works, Step 4 | Work | One seeded item that waits for review, with its pull request field | A gate stops work until a reviewer acts | Review follows repository policy. This image shows one example policy. |
+| How it works, Step 5 | Repositories | Three seeded repository scopes, with paused intake on two scopes | A backlog feeds a team only when intake allows it | Seeded scopes. Paused intake shows no live polling. |
+| How it works, Step 6 | Work | One seeded item that waits for review, with its pull request field | A gate stops work until a reviewer acts | Review follows repository policy. This image shows one example policy. |
 | Agent tools, on For operators | Harnesses | Six seeded harness providers with setup and support labels | Deck shows the setup and support for each agent tool | This capture supports agent-tool setup only. It supports no cost claim. Account, model, and session readiness stay unknown without a separate check. |
 | How it works, Steps 6 and 8 | Audit | Safe delivery metrics with the event list locked | The ledger shows metrics, and events stay behind an access gate | Locked events are an access gate, not a load failure. No event rows shown. |
 | How it works, Step 6 | Agent Mail | No public capture. The only observed state stayed at participant loading. | No director claim rests on this screen yet | Keep this state in the evidence limits. Add a public capture only when a supported coordination state exists. The limit proves no Mail failure and no docs defect. |
 | Share it | Overview, Work, and Audit, as a clip | The seeded stills for the normal path in story order: queued, active, review, finished. One separate attention still. One closing Audit still with safe metrics and events locked. Each state shows a different seeded issue. | The director sees the normal path, the exception that needs a person, and the ledger screen that closes the story | Narrated example over static states. No single seeded issue moves through all states. The Audit still shows no event record for these issues. Not a measured delivery time. |
 
-Short clips: the video itself is planned under issue #758. This plan supplies its reusable scenes: the four screen-free home illustrations, each one idea, ready to rebuild as video scenes. The seeded screen stills above stay available for a short closing segment only. Any state sequence still carries its limit: each state shows a different seeded issue, and no single seeded issue moves through all states. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout.
+Short clips: the video itself is planned under issue #758. This plan supplies its reusable scenes: the five screen-free home illustrations, each one idea, ready to rebuild as video scenes. The seeded screen stills above stay available for a short closing segment only. Any state sequence still carries its limit: each state shows a different seeded issue, and no single seeded issue moves through all states. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout.
 
 Still open: Usage cost. No image in this plan shows a cost total as proof. Evidence: `01-audit.md` records the old Usage image with zero totals, and `docs/guide/factory-audit-and-metrics.md` keeps factory cost unknown. The cost copy above states the limit in words instead.
 
@@ -189,7 +189,7 @@ Move to the docs, and link from "How it works" and For operators:
 - Harness readiness detail and per-tool setup. Explain agent-tool setup on For operators.
 - Audit event access detail. Explain access to Audit events on How it works, with a link to the operator guide.
 
-Keep on the home page: the story sentence, the four pictures with short captions, the share line, and the compact limits. The glossary, the retell, the operator paragraph, and screens in director words live on "How it works".
+Keep on the home page: the story sentence, five pictures with short captions, the share line, and the For operators link. The glossary, the retell, the operator paragraph, and screens in director words live on "How it works".
 
 ## How a director shares Deck
 

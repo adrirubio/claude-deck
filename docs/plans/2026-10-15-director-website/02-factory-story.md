@@ -26,7 +26,7 @@ Evidence: `docs/guide/operating-model.md` states that the Director writes and or
 
 **2. An AI team with clear roles.** The Leader organises the work and approves the team's plans. Members build the features, and reviewers who did not build them check the results. You can see who leads the team, who is working, and where help is needed. You choose the Leader and set the team's limits.
 
-Evidence: the audit in `01-audit.md` records the team screen with its roster, its named Leader, and its work counts, and the work screen with an owner and a waiting reason for each item. `docs/guide/operating-model.md` gives plan approval and next-work choice to the Leader. Organising the work is not writing every plan: the owner proposes the plan and the Leader decides on it (see Step 2 and `docs/guide/index.md:13`).
+Evidence: the audit in `01-audit.md` records the team screen with its roster, its named Leader, and its work counts, and the work screen with an owner and a waiting reason for each item. `docs/guide/operating-model.md` gives plan approval and next-work choice to the Leader. Organising the work is not writing every plan: the owner proposes the plan and the Leader decides on it (see Steps 3 and 4 and `docs/guide/index.md:13`).
 
 **3. Checked work and a record to review.** The team returns its work for you to assess. You can see what is finished, what still needs attention, and the available record of what happened. Deck also shows gaps in that record. You decide whether the result meets your goal and when to publish it.
 
@@ -77,9 +77,9 @@ Decision that stays with the Director: the goals, the order, and what is ready.
 
 ### Step 2. The team works on the backlog items autonomously
 
-Autonomously means the team works through the ready items without the Director steering each step — inside the Director's goals, limits, and safety stops, and with the plan and review gates below. It does not mean the team works without limits. Evidence: `docs/guide/operating-model.md` gives normal running to the Leader and team inside the Director's retained decisions, with a safety hold available.
+Autonomously means the team works through ready items without the Director steering each step. It follows the Director's goals and limits, respects safety stops, and uses the plan approvals and reviews below. It does not mean the team works without limits. Evidence: `docs/guide/operating-model.md` gives normal running to the Leader and team inside the Director's retained decisions, with a safety hold available.
 
-What the Director sees: Overview shows progress and what needs a person. Work shows the items in their states at once. Evidence: the audit at `01-audit.md` records Overview with "Needs you" and Work with owners, states, and waiting reasons.
+What the Director sees: Overview shows progress and what needs a person. Work shows each item's progress and who owns it. Evidence: the audit at `01-audit.md` records Overview with "Needs you" and Work with owners, states, and waiting reasons.
 
 Decision that stays with the Director: hold or pause the work, and change the limits.
 
@@ -105,7 +105,7 @@ The agent owner builds the change in a leased workspace. A leased workspace is a
 
 What the Director sees: Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team. Evidence: the audit at `01-audit.md` records Work with PR fields and Repositories with enablement and intake.
 
-Decision that stays with the Director: none at this step, unless the team needs a decision only you can make, or a safety stop applies.
+Decision that stays with the Director: none here, unless the team needs a decision only you can make or a safety stop applies.
 
 ### Step 6. A reviewer checks the work
 
