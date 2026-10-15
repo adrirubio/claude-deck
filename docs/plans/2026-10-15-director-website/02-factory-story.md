@@ -63,59 +63,87 @@ Evidence: each sentence maps to the three parts above — the list and its order
 
 ## How it works — read this on the second page
 
-*This layer belongs on a second page. Read it when you want the detail behind the story above. It follows one piece of work from a GitHub issue to a merged PR. The example uses one simple issue: "Add a short help note to the welcome page." This example is not a measured delivery. It shows the roles, the screens, and the gates.*
+*This layer belongs on a second page. Read it when you want the detail behind the story above. It follows the backlog through the team, not one single item alone. The example uses one simple backlog item: "Add a short help note to the welcome page." This example is not a measured delivery. It shows the roles, the screens, and the gates.*
 
 Example policy. In this example, repository policy asks a human to review this PR before merge. Other repositories use other rules. Evidence: `docs/autonomy.md` states the auto policy merges eligible code PRs after checks pass, and design PRs always need human review. Repository policy sets the review rule for each PR.
 
-### Step 1. The Director writes the issue
+### Step 1. The Director writes the backlog and marks it ready
 
-The Director writes the example issue with a clear result. The Director orders the backlog and marks the issue ready. Evidence: `docs/guide/operating-model.md` states the Director writes and orders issues, sets acceptance conditions, and applies the dispatch label as the ready signal.
+The Director writes each backlog item with a clear result, orders the backlog, and marks what is ready for the team to start. Evidence: `docs/guide/operating-model.md` states the Director writes and orders issues, sets acceptance conditions, and applies the dispatch label as the ready signal.
 
-What the Director sees: GitHub shows the issue and its place in the backlog. Deck does not replace GitHub. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the place where the work and its final record are kept.
+What the Director sees: GitHub shows the backlog and each item's place in it. Deck does not replace GitHub. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the place where the work and its final record are kept.
 
-Decision that stays with the Director: approve the goal, the order, and the ready mark.
+Decision that stays with the Director: the goals, the order, and what is ready.
 
-### Step 2. The owner proposes a plan and the Leader approves it
+### Step 2. The team works on the backlog items autonomously
 
-The controller assigns the ready issue to one owner. The owner proposes a short plan. The designated Leader approves the plan. Then the work starts. Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. `backend/app/services/github_approval_service.py` `create_initial_request` records the owner proposal. `decide` in the same file records the Leader decision. `docs/guide/operating-model.md` gives next-work selection to the Team Leader.
+Autonomously means the team works through the ready items without the Director steering each step — inside the Director's goals, limits, and safety stops, and with the plan and review gates below. It does not mean the team works without limits. Evidence: `docs/guide/operating-model.md` gives normal running to the Leader and team inside the Director's retained decisions, with a safety hold available.
 
-What the Director sees: Overview shows campaign progress and team summaries. Work shows the owner and the waiting reason. Teams shows the roster, the named Leader, supervisor status, repositories, and work counts. Evidence: the audit at `01-audit.md` records Overview with "Needs you", campaign progress, and team summaries, Work with owners and waiting reasons, and Teams with the selected roster, the named Leader, supervisor status, repository count, and work count.
+What the Director sees: Overview shows progress and what needs a person. Work shows the items in their states at once. Evidence: the audit at `01-audit.md` records Overview with "Needs you" and Work with owners, states, and waiting reasons.
 
-Decision that stays with the Director: set the outcome and the limits for the campaign. The Leader approves the agent plan. The Director does not approve each agent plan.
+Decision that stays with the Director: hold or pause the work, and change the limits.
 
-### Step 3. A member does the work
+### Step 3. Each backlog item is assigned to an agent owner, who writes the plan
 
-The assigned member builds the change in a leased workspace. A leased workspace is a separate working copy that only this job may use. The member runs the scoped checks and opens a pull request (PR). A PR is one proposed change. Repository policy sets its review rule. Evidence: `docs/guide/operating-model.md` gives implementation to team members under the Leader. `docs/guide/index.md` states human PR review and merge follow repository policy.
+The controller assigns one ready item to one agent owner. The owner writes a short plan for that item. Evidence: `docs/guide/index.md` line 13 states agents propose plans for designated Leader decisions. `backend/app/services/github_approval_service.py` `create_initial_request` records the owner proposal.
 
-What the Director sees: Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team. Harnesses shows the observed setup and support for each agent tool. Account, model, and session readiness stay unknown here. Evidence: the audit at `01-audit.md` records Work with PR fields and Repositories with enablement and intake. `docs/features/harnesses.md` states readiness stays unknown without a separate check.
+What the Director sees: Work shows the owner for each item. Teams shows the roster and the named Leader. Evidence: the audit at `01-audit.md` records both screens.
+
+Decision that stays with the Director: none per plan. The Director sets the outcome and the limits for the campaign.
+
+### Step 4. The Leader reviews and approves the plan
+
+The designated Leader reviews the owner's plan and approves it. Only then does building start. If the Leader asks for changes, the owner revises the plan first. Evidence: `decide` in `backend/app/services/github_approval_service.py` records the Leader decision. `docs/guide/operating-model.md` gives next-work selection to the Team Leader.
+
+What the Director sees: Overview shows campaign progress and team summaries. Evidence: the audit at `01-audit.md` records Overview with "Needs you", campaign progress, and team summaries.
+
+Decision that stays with the Director: none at this gate. The Leader approves agent plans inside the Director's limits.
+
+### Step 5. The agent owner works on the item
+
+The agent owner builds the change in a leased workspace. A leased workspace is a separate working copy that only this job may use. The owner checks their own work, runs the checks agreed for this work, and opens a pull request (PR). A PR is one proposed change. Repository policy sets its review rule. Evidence: `docs/guide/operating-model.md` gives implementation to team members under the Leader. `docs/guide/index.md` states human PR review and merge follow repository policy.
+
+What the Director sees: Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team. Evidence: the audit at `01-audit.md` records Work with PR fields and Repositories with enablement and intake.
 
 Decision that stays with the Director: none at this step, unless the team needs a decision only you can make, or a safety stop applies.
 
-### Step 4. Reviewers check the work
+### Step 6. A reviewer checks the work
 
-In this example, an independent reviewer reads the exact PR head. The PR head is the exact version proposed for review. The reviewer sends findings to the owner. The owner fixes them on the same branch and PR. Hosted checks (CI) run on the new head. Evidence: `docs/features/work.md` states human PR review stays separate from agent plan approval in this example policy. `docs/autonomy.md`, "Ordinary review corrections", gives the same-branch fix loop.
+A reviewer who did not build the change reads the exact PR head. The PR head is the exact version proposed for review. Findings go back to the owner, who fixes them on the same branch and PR. Hosted checks (CI) run on the new head. Members check their own work as they build; this step is the independent check. Evidence: `docs/features/work.md` states human PR review stays separate from agent plan approval in this example policy. `docs/autonomy.md`, "Ordinary review corrections", gives the same-branch fix loop.
 
-What the Director sees: Work shows whether the item waits for review. Agent Mail holds the coordination messages under its access rules. Audit shows safe delivery metrics without a secret token. Evidence: `docs/features/agent-mail.md` explains protected Mail reads under "Authentication and upgrades". The audit at `01-audit.md` records Audit from `docs/guide/factory-audit-and-metrics.md`. The audit did not see loaded Mail messages. The browser stayed at "Loading participants...". That state is an open observation limit. It is not a docs defect.
+What the Director sees: Work shows whether the item waits for review. Agent Mail holds the coordination messages under its access rules. Evidence: `docs/features/agent-mail.md` explains protected Mail reads under "Authentication and upgrades". The audit did not see loaded Mail messages. The browser stayed at "Loading participants...". That state is an open observation limit. It is not a docs defect.
 
-Decision that stays with the Director: in this example, review the final PR under repository policy, or leave that review to the named reviewers. Passing review and CI give no merge power alone. The merger named in the example is the Supervisor under the example repository policy.
+Decision that stays with the Director: if your rules call for your review, decide whether the change is ready. Passing review and checks does not authorize a merge.
 
-### Step 5. The Supervisor watches and helps
+### Step 7. The Leader and the Supervisor check it
 
-The Supervisor is optional. When no supervisor is registered, the status reads None and no supervisor is required. Evidence: `docs/guide/operating-model.md` calls the supervisor an optional staff role and lists None as not an error.
+The Leader checks that the finished work matches the approved plan and the campaign limits. When a Supervisor is assigned, the Supervisor also checks it. The Supervisor is optional: without one, the Leader reports directly to the Director, and no supervisor is required. Evidence: `docs/guide/operating-model.md:28` calls the supervisor an optional staff role. The Supervisor uses Director powers only inside the recorded delegation.
 
-When a Supervisor is assigned, the Supervisor is an outside AI agent that watches the factory. The Supervisor fixes routine blockers inside the recorded delegation. When only you can decide, the Supervisor explains what you need to decide and gives you the evidence. Evidence: `docs/guide/operating-model.md` gives repair, upgrade, and rollback to the Supervisor with the maintenance script, and states the Supervisor uses Director powers only inside delegation.
+What the Director sees: Overview shows whether a registered Supervisor is Healthy, Late, or Absent. Evidence: `docs/guide/operating-model.md` defines those three states from the last promised check.
 
-What the Director sees: Overview shows whether the Supervisor is Healthy, Late, or Absent when a supervisor is registered. Evidence: `docs/guide/operating-model.md` defines those three states from the last promised check.
+Decision that stays with the Director: grant or withdraw delegation, and decide publication, budgets, models, and security stops.
 
-Decision that stays with the Director: grant or withdraw delegation, and decide publication, budgets, models, and security HOLD.
+### Step 8. The work is merged
 
-### Step 6. The PR merges and the record stays
+The work is merged under repository policy, after the checks above pass. In this example, the merger is the Supervisor under the example repository policy. Other repositories name other mergers. Passing review and CI alone give no merge power. The backlog item closes, and the audit record keeps what happened. Evidence: `docs/guide/operating-model.md` keeps GitHub as the final record. `docs/guide/factory-audit-and-metrics.md` states the audit ledger records what the factory actually did.
 
-In this example, the Supervisor merges the PR after review and CI pass under the example repository policy. Passing review and CI alone give no merge power. The issue closes. The audit ledger keeps what happened. Evidence: `docs/guide/operating-model.md` keeps GitHub as the final record. `docs/guide/factory-audit-and-metrics.md` states the audit ledger records what the factory actually did.
-
-What the Director sees: Work shows the item as finished. Audit shows the delivery history with coverage limits. Locked Audit events are an access gate. They are not a load failure. Evidence: the audit at `01-audit.md` records finished tracking apart from reviewed delivery, and cost as unknown. `docs/guide/factory-audit-and-metrics.md` states the event list needs the operator token.
+What the Director sees: Work shows the item as finished. Audit shows the delivery history with coverage limits. Locked Audit events are an access gate. They are not a load failure. Evidence: the audit at `01-audit.md` records finished tracking apart from reviewed delivery. `docs/guide/factory-audit-and-metrics.md` states the event list needs the operator token.
 
 Decision that stays with the Director: accept the campaign result and decide publication.
+
+### Parallel tracks: several items at once
+
+A team does not have to work one item at a time. The Director chooses how many implementers and verifiers a team has, so a team can have several agent owners and several reviewers. With the right setting, those members work on parallel tracks of the backlog at the same time, each track in its own workspace, coordinated by the Leader. Evidence: `docs/guide/operating-model.md:30` gives the implementer and verifier counts to the Director and names concurrent-dispatch limits. `docs/guide/supervised-factory-playbook.md:193` registers one dispatch workspace for each concurrent item. `docs/features/repositories.md:20` and `docs/features/agent-mail.md:114` show a team has several member slots.
+
+One limit, in plain words: a new backlog link starts at one item at a time. Parallel tracks need a higher setting and one workspace per track. That setting is the Director's choice. Evidence: `docs/features/repositories.md:22` saves a new scope at concurrency 1.
+
+### Several teams in one Deck
+
+One Deck can run several teams in parallel, each working on the backlog of a different project. Each team keeps its own Leader, roster, and backlog link. Evidence: `docs/features/repositories.md:3` lists watched scopes across teams. `docs/features/work.md:3` browses mixed-team work. `docs/guide/supervised-factory-playbook.md:37` states one actor can supervise several teams. The test seed in `scripts/e2e/scenarios.py` holds several saved teams in one Deck (such as "Release crew" and "Quiet team"); the seeded quiet team is idle, so the seed shows several teams existing in one Deck, not all of them running.
+
+What the Director sees: Teams lists the teams. Work can filter by team. Overview summarises each team. Evidence: the audit at `01-audit.md` records the Teams roster screen and team summaries on Overview.
+
+Decision that stays with the Director: how many teams to run, which project each team serves, and each team's limits.
 
 ### Words for this page
 
@@ -130,15 +158,3 @@ These words belong to the How it works page. Each entry gives one short sentence
 7. **Audit** — The ledger that records what the factory did and its limits.
 8. **CI** — Automatic checks that run on a PR before merge.
 9. **PR** — A pull request is a proposed change reviewed under repository policy.
-
-## What the story does not promise
-
-Deck does not promise a time saving. No trial measures director time saved. Evidence: `docs/changelog.md` keeps cost as unknown and the audit keeps finished tracking apart from reviewed delivery.
-
-Deck does not promise that agents work alone. A person still writes the goal, sets limits, and decides publication. PR review follows repository policy. Evidence: `docs/guide/operating-model.md` keeps the goal and retained decisions with the Director. `docs/guide/index.md` states human PR review and merge follow repository policy.
-
-Deck does not promise that every screen always loads its data. Agent Mail once stayed at "Loading participants...". That state is an open observation limit. Audit events stay behind an access gate. A locked event list is not a load failure. Evidence: the audit at `01-audit.md` records both limits on the tested source. `docs/guide/factory-audit-and-metrics.md` states the event list needs the operator token.
-
-Deck does not promise cloud hosting. Deck runs on the director's machine and changes real local agent files. Evidence: the landing page at `website-ref/index.html` lines 185–186 and the audit verdict. An operator must set up the host first.
-
-Deck does not replace GitHub. GitHub holds the issues, the PRs, and the final record. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the place where the work and its final record are kept.
