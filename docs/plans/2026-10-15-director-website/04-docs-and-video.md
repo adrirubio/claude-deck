@@ -132,7 +132,7 @@ Timing check, at about 140 words per minute. Every scene window covers its speec
 | Closing line | 2:22–2:34 (12s) | 15 | 6.4s | 5.6s |
 | **Total** | **154s** | **205** | **87.9s** | **66.1s** |
 
-Evidence for the script: the closing line and the three middle scenes restate the revised story's three parts and "Why it matters" in spoken form. "Approves the plans before anyone builds" keeps the accepted roles (owner proposes on the detail page; Leader approves). The limits scene restates local running and the unmeasured-cost limits from `02-factory-story.md`.
+Evidence for the script: the closing line and the three middle scenes restate the revised story's three parts and "Why it matters" in spoken form. "The Leader organises the work and approves the plans" keeps the accepted roles (owner proposes on the detail page; Leader approves). The limits scene restates local running and the unmeasured-cost limits from `02-factory-story.md`.
 
 ### Animation storyboard
 
@@ -140,9 +140,9 @@ Every scene except the closing segment is an animated concept picture. No scene 
 
 | Scene | Time | What the viewer sees | Motion and transition | One idea it teaches |
 |---|---|---|---|---|
-| 1. Opening | 0:00 | A soft pile of feature cards. The Deck name settles above them. | Cards drift in and settle. Cut on "This is Deck." | Every team has a list. Deck gives it a team. |
-| 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready to begin". | You shape and order the list. |
-| 3. Meet the team | 0:42 | The #757 team animation: Leader, members, reviewer. A card of work passes from building to checking. | Roles light in turn with the narration. The work card travels across. | Clear roles. Nobody checks their own work. |
+| 1. Opening | 0:00 | A soft pile of feature cards. The Deck name settles above them. | Let the cards settle as the opening sentence ends. Hold until the next scene. | Every team has a list. Deck gives it a team. |
+| 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready for the team". | You shape and order the list. |
+| 3. Meet the team | 0:42 | The #757 team animation: Leader, members, reviewer. A card of work passes from building to checking. | Roles light in turn with the narration. The work card travels across. | Members check their work. Someone else independently reviews it. |
 | 4. Finished work | 1:08 | The #757 finished-work animation: checked work beside its record, one record line dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
 | 5. You stay in charge | 1:32 | The #757 decision animation: work travels and stops at the closed "You decide" gate. | The work stops at the closed gate while the narrator says "waits for you". A separate approval cue then opens the gate. Approval never comes from elapsed time alone. | The key decisions stay yours. |
 | 6. Honest limits | 1:58 | The same three-part picture, quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
