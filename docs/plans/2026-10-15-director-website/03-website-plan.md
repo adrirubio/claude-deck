@@ -140,7 +140,7 @@ Send the link. The home page is the brief.
 
 Send the one-page summary. It carries the one sentence, the six steps, and the limits.
 
-Show the video. It walks the five seeded work states in story order in under three minutes. Each state shows a different example issue.
+Show the video. It walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. The clip ends on the Audit screen.
 
 Evidence: `01-audit.md` finds no share artefact on the site today. This section creates the three artefacts. The video script follows Steps 1 to 6 in `02-factory-story.md`.
 
@@ -215,9 +215,9 @@ Seed evidence: the test seed holds five different issues, one per work state. Ev
 | Agent tools, on For operators | Harnesses | Six seeded harness providers with setup and support labels | Deck shows the setup and support for each agent tool | This capture supports agent-tool setup only. It supports no cost claim. Account, model, and session readiness stay unknown without a separate check. |
 | Limits and trust | Audit | Safe delivery metrics with the event list locked | The ledger shows metrics, and events stay behind an access gate | Locked events are an access gate, not a load failure. No event rows shown. |
 | Limits and trust | Agent Mail | No public capture. The only observed state stayed at participant loading. | No director claim rests on this screen yet | Keep this state in the evidence limits. Add a public capture only when a supported coordination state exists. The limit proves no Mail failure and no docs defect. |
-| Share it | Overview and Work, as a clip | The five seeded state stills in story order: queued, active, review, attention, finished. Each state shows a different seeded issue. | The director sees each state the story path passes through | Narrated example over static states. No single seeded issue moves through all states. Not a measured delivery time. |
+| Share it | Overview, Work, and Audit, as a clip | The seeded stills for the normal path in story order: queued, active, review, finished. One separate attention still. One closing Audit still with safe metrics and events locked. Each state shows a different seeded issue. | The director sees the normal path, the exception that needs a person, and the ledger screen that closes the story | Narrated example over static states. No single seeded issue moves through all states. The Audit still shows no event record for these issues. Not a measured delivery time. |
 
-Short clips: one clip only. The clip narrates the still states in story order. Its narration states that each state shows a different example issue. It adds no new claim.
+Short clips: one clip only. The clip narrates the normal path: queued, active, review, finished. It then shows attention separately, as the exception that needs a person. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout. The clip closes on the Audit still above. Its narration states that each state shows a different example issue. It adds no new claim.
 
 Still open: Usage cost. No image in this plan shows a cost total as proof. Evidence: `01-audit.md` records the old Usage image with zero totals, and `docs/guide/factory-audit-and-metrics.md` keeps factory cost unknown. The cost copy above states the limit in words instead.
 
@@ -245,7 +245,7 @@ Three ways. Each way stands alone.
 
 1. **A link.** The director sends the home page link. The first screen carries the one sentence, the path, and the decisions. The peer needs no setup and no account to read it.
 2. **A one-page summary.** The director sends one page with the one sentence, the six steps, what the director decides, and the limits. The summary prints cleanly and forwards as a document.
-3. **The video.** The director shows a clip under three minutes. The clip walks the five seeded work states in story order and ends on the audit record. Each state shows a different example issue.
+3. **The video.** The director shows a clip under three minutes. The clip walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. The clip ends on the Audit screen, with safe metrics and events locked. That ending shows no event record for these issues.
 
 Evidence: `01-audit.md` finds only Docs and GitHub links today, and no forwardable brief. The three items above close that gap. Each item uses only claims from `02-factory-story.md`.
 
