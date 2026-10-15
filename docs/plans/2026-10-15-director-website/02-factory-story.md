@@ -8,56 +8,56 @@ Purpose. A non-technical product person can retell this story after one short re
 
 ### One sentence
 
-You keep a well-groomed list of features you want, a team of AI agents builds them for you, and finished, checked work comes back — while the decisions that matter stay yours.
+You shape the feature backlog, Deck's AI team builds and checks the work, and the key decisions stay with you.
 
 Evidence: `docs/guide/operating-model.md` describes the factory as a team working on the Director's ordered backlog, with the key decisions kept by the Director.
 
 ### One paragraph
 
-Think of Deck as a small, well-run workshop that lives on your own computer. You shape a short, ordered list of features you would love to have. A team of AI helpers takes it from there: one of them plans the work and hands it out, others build it, and independent reviewers check every result before it counts as done. You can watch the whole thing on calm, clear screens — what is moving, what is waiting, and what needs you. And throughout, the big calls stay with you: the goals, the order, the budget, what gets published, and when to stop.
+Deck brings an AI team to the features you want to build. You decide what matters and what is ready to start. The Leader organises the work, members build it, and independent reviewers check it. You can follow progress and see where a decision is needed. You keep control of the goals, priorities, budget, AI models, publication, and safety stops. Deck runs on your own computer.
 
-Evidence: `docs/guide/operating-model.md` gives the backlog and the big decisions to the Director, planning and assignment to the Team Leader, and building to the team. The audit in `01-audit.md` records the screens that show progress, waiting work, and what needs a person.
+Evidence: `docs/guide/operating-model.md` gives the backlog and the big decisions to the Director, organising and plan approval to the Team Leader, and building to the team. The audit in `01-audit.md` records the screens that show progress, waiting work, and what needs a person.
 
 ### The three parts
 
-**1. A backlog you groom, not a pile you chase.** Your backlog is a short, cared-for list of features, each one shaped until it is clear what "done" looks like, and sorted so the most valuable thing comes first. You see the whole list and its order at a glance, together with how much of it is already on its way. You decide what goes on the list, what comes first, and what is ready to start — nothing begins until you say it is ready.
+**1. A clear list of priorities.** Your backlog is the list of features you want built, with a clear result for each. You can see their order and progress. You choose what belongs on the list, what comes first, and what is ready for the team to start.
 
 Evidence: `docs/guide/operating-model.md` states that the Director writes and orders the work, sets what counts as done, and marks what is ready to start.
 
-**2. A team that knows its roles.** Your AI team works like a good small crew. The Leader reads the next feature, makes a short plan, and decides who does what. Members build, each in their own tidy workspace, so nobody steps on anyone else's work. Reviewers who did not build a change check it with fresh eyes before it counts. You see the whole crew on one screen — who leads, who is busy, and who is waiting for a person — and you decide the limits they work inside, and who leads them.
+**2. An AI team with clear roles.** The Leader organises the work and approves the team's plans. Members build the features, and reviewers who did not build them check the results. You can see who leads the team, who is working, and where help is needed. You choose the Leader and set the team's limits.
 
-Evidence: the audit in `01-audit.md` records the team screen with its roster, its named Leader, and its work counts, and the work screen with an owner and a waiting reason for each item. `docs/guide/operating-model.md` gives plan approval and next-work choice to the Leader.
+Evidence: the audit in `01-audit.md` records the team screen with its roster, its named Leader, and its work counts, and the work screen with an owner and a waiting reason for each item. `docs/guide/operating-model.md` gives plan approval and next-work choice to the Leader. Organising the work is not writing every plan: the owner proposes the plan and the Leader decides on it (see Step 2 and `docs/guide/index.md:13`).
 
-**3. Finished work you can trust and trace.** What comes back is finished and checked, ready for you to accept, with a plain record of what happened along the way. You see what is done, what still waits for you, and a ledger that shows what the factory did, honestly, including where its view stops. You decide whether the result is accepted and published — nothing goes out into the world on its own.
+**3. Checked work and a record to review.** The team returns its work for you to assess. You can see what is finished, what still needs attention, and the available record of what happened. Deck also shows gaps in that record. You decide whether the result meets your goal and when to publish it.
 
-Evidence: `docs/guide/factory-audit-and-metrics.md` states that the ledger records what the factory actually did and keeps its limits visible. Publication stays a Director decision in `docs/guide/operating-model.md`.
+Evidence: `docs/guide/factory-audit-and-metrics.md:46-49` and `:94` state that the record shows what the factory actually did and keeps its limits visible. `docs/guide/operating-model.md:65-70` and `:89-98` keep acceptance and publication with the Director.
 
 ### Why it matters
 
-**You stay in control, without doing the chasing.** The list, the order, the budget, and the final say are yours. The team works inside the limits you set, so you lead the product instead of herding the work.
+**Keep the key decisions.** You set the goals, priorities, budget, and limits. The team works within them. The team can handle routine problems within its authority. Decisions reserved for you stay yours.
 
-**You can see everything at a glance.** One calm view shows what needs you, who is doing what, and where things wait. No digging through chats or files to find out where a feature stands.
+**See where your attention is needed.** Deck brings progress, owners, and waiting work together so you can see what needs a decision.
 
-**Nothing slips through unchecked.** Work pauses at clear checkpoints: a plan gets approved before building starts, and a finished change gets checked by fresh eyes before it counts. If something stops or goes wrong, it waits visibly for a person instead of quietly going ahead.
+**Keep checks part of the work.** The Leader approves plans before building starts, and reviewers check the results. Deck shows work that needs attention.
 
-**You know what is known — and what is not.** Where Deck can read them, it shows estimated running costs for the helpers' sessions. The full cost of delivering a feature is not known yet, and no saving in your time has been measured. Deck says both plainly rather than dressing either up.
+**Understand the cost limits.** Deck can show estimates for Claude Code sessions when their data is available. It does not yet measure the full cost of delivering a feature. No trial has measured how much director time it saves.
 
-Evidence: `docs/guide/operating-model.md` lists the decisions the Director keeps and the checkpoints the work passes. `docs/features/usage.md` covers the session cost estimates, and `docs/guide/factory-audit-and-metrics.md` keeps the unknown costs unknown.
+Evidence: `docs/guide/operating-model.md:65-70` and `:89-98` list the decisions the Director keeps and the checkpoints the work passes. `docs/features/usage.md` covers the Claude Code session cost estimates, and `docs/guide/factory-audit-and-metrics.md:46-49` and `:94` keep the unknown costs unknown.
 
 ### The words for this level
 
 Six words carry the whole story. Everything else can wait for the next page.
 
-1. **Backlog** — your ordered, well-groomed list of features you want built.
-2. **Team** — the crew of AI agents that works through your list together.
-3. **Leader** — the team member who plans the work and decides who does what.
-4. **Member** — one agent on the team, building the part it was given.
-5. **Reviewer** — the independent checker who reads finished work with fresh eyes.
+1. **Backlog** — The features you want built, in the order you want them.
+2. **Team** — The AI agents working through your backlog.
+3. **Leader** — The team member who organises the work and approves plans.
+4. **Member** — An AI agent assigned to build part of the work.
+5. **Reviewer** — Someone who checks work they did not build.
 6. **Director** — you: the person who owns the goals, the list, and the final decisions.
 
 ### Retell it in half a minute
 
-"We keep a short, well-groomed list of the features we want. Our AI team picks up the next one: their Leader plans it, members build it, and reviewers check it. Finished work comes back with a clear record of what happened. We watch it all on one set of screens, and the big decisions — goals, order, budget, publishing — stay with us."
+"We choose and order the features we want. Our AI team works through them: the Leader organises the work, members build it, and reviewers check it. We follow progress and see what needs us. We keep the decisions about goals, priorities, budget, and publication."
 
 Evidence: each sentence maps to the three parts above — the list and its order, the team and its roles, and finished work with its record — with the decisions kept by the Director.
 
@@ -71,7 +71,7 @@ Example policy. In this example, repository policy asks a human to review this P
 
 The Director writes the example issue with a clear result. The Director orders the backlog and marks the issue ready. Evidence: `docs/guide/operating-model.md` states the Director writes and orders issues, sets acceptance conditions, and applies the dispatch label as the ready signal.
 
-What the Director sees: GitHub shows the issue and its place in the backlog. Deck does not replace GitHub. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the record home.
+What the Director sees: GitHub shows the issue and its place in the backlog. Deck does not replace GitHub. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the place where the work and its final record are kept.
 
 Decision that stays with the Director: approve the goal, the order, and the ready mark.
 
@@ -89,7 +89,7 @@ The assigned member builds the change in a leased workspace. A leased workspace 
 
 What the Director sees: Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team. Harnesses shows the observed setup and support for each agent tool. Account, model, and session readiness stay unknown here. Evidence: the audit at `01-audit.md` records Work with PR fields and Repositories with enablement and intake. `docs/features/harnesses.md` states readiness stays unknown without a separate check.
 
-Decision that stays with the Director: none at this step, unless the work hits a retained decision or a safety stop.
+Decision that stays with the Director: none at this step, unless the team needs a decision only you can make, or a safety stop applies.
 
 ### Step 4. Reviewers check the work
 
@@ -103,7 +103,7 @@ Decision that stays with the Director: in this example, review the final PR unde
 
 The Supervisor is optional. When no supervisor is registered, the status reads None and no supervisor is required. Evidence: `docs/guide/operating-model.md` calls the supervisor an optional staff role and lists None as not an error.
 
-When a Supervisor is assigned, the Supervisor is an outside AI agent that watches the factory. The Supervisor fixes routine blockers inside the recorded delegation. The Supervisor prepares exact requests when a retained decision is needed. Evidence: `docs/guide/operating-model.md` gives repair, upgrade, and rollback to the Supervisor with the maintenance script, and states the Supervisor uses Director powers only inside delegation.
+When a Supervisor is assigned, the Supervisor is an outside AI agent that watches the factory. The Supervisor fixes routine blockers inside the recorded delegation. When only you can decide, the Supervisor explains what you need to decide and gives you the evidence. Evidence: `docs/guide/operating-model.md` gives repair, upgrade, and rollback to the Supervisor with the maintenance script, and states the Supervisor uses Director powers only inside delegation.
 
 What the Director sees: Overview shows whether the Supervisor is Healthy, Late, or Absent when a supervisor is registered. Evidence: `docs/guide/operating-model.md` defines those three states from the last promised check.
 
@@ -141,4 +141,4 @@ Deck does not promise that every screen always loads its data. Agent Mail once s
 
 Deck does not promise cloud hosting. Deck runs on the director's machine and changes real local agent files. Evidence: the landing page at `website-ref/index.html` lines 185–186 and the audit verdict. An operator must set up the host first.
 
-Deck does not replace GitHub. GitHub holds the issues, the PRs, and the final record. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the record home.
+Deck does not replace GitHub. GitHub holds the issues, the PRs, and the final record. Evidence: `docs/guide/operating-model.md` keeps GitHub outside the factory as the place where the work and its final record are kept.
