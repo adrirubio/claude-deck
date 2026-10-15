@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Deck — How it works</title>
+<style>
+  :root{--ink:#1c2420;--muted:#4c5a52;--line:#d8ded9;--paper:#ffffff;--wash:#eef2ee;--green:#166534;--green-dark:#14532d;--amber:#92400e;--radius:10px}
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);background:var(--paper);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55}
+  h1,h2,h3{font-family:"Iowan Old Style",Palatino,Georgia,serif;line-height:1.15;margin:0}
+  a{color:var(--green-dark)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header.site{border-bottom:1px solid var(--line)}
+  .bar{display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:19px}.brand span{color:var(--green)}
+  nav a{margin-left:18px;text-decoration:none;color:var(--muted);font-size:15px}
+  .hero{padding:48px 0 32px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:36px;max-width:26ch;margin-bottom:12px}
+  .hero p{max-width:64ch;color:var(--muted);margin:0}
+  section{padding:38px 0;border-bottom:1px solid var(--line)}
+  section h2{font-size:26px;margin-bottom:12px}
+  .step{display:grid;grid-template-columns:52px 1fr;gap:16px;margin-bottom:26px}
+  .num{width:44px;height:44px;border-radius:50%;background:var(--green);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:19px}
+  .step h3{font-size:20px;margin-bottom:8px;padding-top:8px}
+  .step p{max-width:66ch;margin:0 0 8px}
+  .see{background:var(--wash);border-radius:var(--radius);padding:12px 16px;max-width:66ch}
+  .see p{margin:0 0 6px;font-size:15px}.see p:last-child{margin:0}
+  .see b{color:var(--green-dark)}
+  dl.words{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:16px 0 0}
+  dl.words div{border-top:2px solid var(--green);padding-top:10px}
+  dl.words dt{font-weight:700;margin-bottom:4px}
+  dl.words dd{margin:0;color:var(--muted);font-size:15px}
+  .note{color:var(--muted);font-size:14px}
+  footer.site{padding:28px 0 40px;color:var(--muted);font-size:14px}
+  @media (max-width:620px){.step{grid-template-columns:1fr}.hero h1{font-size:29px}}
+  @media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important}}
+</style>
+</head>
+<body>
+<header class="site"><div class="wrap bar">
+  <div class="brand">Claude <span>Deck</span></div>
+  <nav><a href="index.html">Home</a><a href="index.html#share">Share Deck</a><a href="index.html#limits">Limits and trust</a><a href="index.html#operators">For operators</a></nav>
+</div></header>
+<main>
+  <div class="hero"><div class="wrap">
+    <h1>How it works: one piece of work, step by step</h1>
+    <p>This page follows one example from a GitHub issue to a merged pull request (PR): “Add a short help note to the welcome page.” It is an example, not a measured delivery. It shows the roles, the screens, and the gates.</p>
+  </div></div>
+
+  <section><div class="wrap">
+    <div class="step"><div class="num">1</div><div>
+      <h3>The Director writes the issue</h3>
+      <p>The Director writes the issue with a clear result, orders the backlog, and marks the issue ready.</p>
+      <div class="see"><p><b>What you see:</b> GitHub shows the issue and its place in the backlog. Deck does not replace GitHub.</p><p><b>Your decision:</b> the goal, the order, and the ready mark.</p></div>
+    </div></div>
+    <div class="step"><div class="num">2</div><div>
+      <h3>The owner proposes a plan. The Leader approves it.</h3>
+      <p>One owner is assigned. The owner proposes a short plan. The designated Leader approves it, and only then does building start.</p>
+      <div class="see"><p><b>What you see:</b> Overview shows progress and what needs you. Work shows the owner and the waiting reason. Teams shows the roster and the named Leader.</p><p><b>Your decision:</b> the outcome and the limits. The Leader approves agent plans inside them.</p></div>
+    </div></div>
+    <div class="step"><div class="num">3</div><div>
+      <h3>A member does the work</h3>
+      <p>The member builds the change in a separate working copy for this job, runs the scoped checks, and opens a PR — one proposed change.</p>
+      <div class="see"><p><b>What you see:</b> Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team.</p><p><b>Your decision:</b> none here, unless the team needs a decision only you can make, or a safety stop applies.</p></div>
+    </div></div>
+    <div class="step"><div class="num">4</div><div>
+      <h3>Reviewers check the work</h3>
+      <p>An independent reviewer reads the exact version proposed. Findings go back to the owner, who fixes them on the same PR. Automatic checks (CI) run again on the new version.</p>
+      <div class="see"><p><b>What you see:</b> Work shows whether the item waits for review. Audit shows delivery measures with their limits.</p><p><b>Your decision:</b> review follows your repository rules. Passing checks alone give nobody the power to merge.</p></div>
+    </div></div>
+    <div class="step"><div class="num">5</div><div>
+      <h3>The Supervisor watches and helps — when you assign one</h3>
+      <p>The Supervisor is optional. When assigned, it fixes routine blockers inside the authority you gave it. When only you can decide, it explains what you need to decide and gives you the evidence.</p>
+      <div class="see"><p><b>What you see:</b> Overview shows whether the Supervisor is healthy, late, or absent.</p><p><b>Your decision:</b> grant or withdraw that authority, and keep publication, budgets, models, and safety stops.</p></div>
+    </div></div>
+    <div class="step"><div class="num">6</div><div>
+      <h3>The PR merges, and the record stays</h3>
+      <p>The PR merges under your repository rules, after review and checks pass. The issue closes, and the audit record keeps what happened.</p>
+      <div class="see"><p><b>What you see:</b> Work shows the item finished. Audit shows the delivery history with its limits. Some audit detail sits behind an access gate.</p><p><b>Your decision:</b> accept the result and decide publication.</p></div>
+    </div></div>
+    <p class="note">Each screen above is a real Deck screen, shown with seeded example data in the plan. Seeded data is not live work, and this example is not a measured delivery time.</p>
+  </div></section>
+
+  <section><div class="wrap">
+    <h2>Words for this page</h2>
+    <dl class="words">
+      <div><dt>Harness</dt><dd>The agent tool a member runs, such as Claude Code or Codex.</dd></div>
+      <div><dt>Scope</dt><dd>The link that connects one team to one repository and its dispatch labels.</dd></div>
+      <div><dt>Work item</dt><dd>One tracked piece of work from issue to review.</dd></div>
+      <div><dt>Approval</dt><dd>A recorded yes at a gate, such as plan approval or PR review.</dd></div>
+      <div><dt>Agent Mail</dt><dd>The team mailbox where agents coordinate and hand off work.</dd></div>
+      <div><dt>Supervisor</dt><dd>The outside watcher that repairs routine faults under delegation.</dd></div>
+      <div><dt>Audit</dt><dd>The ledger that records what the factory did and its limits.</dd></div>
+      <div><dt>CI</dt><dd>Automatic checks that run on a PR before merge.</dd></div>
+      <div><dt>PR</dt><dd>A pull request is a proposed change reviewed under repository policy.</dd></div>
+    </dl>
+  </div></section>
+
+  <section><div class="wrap">
+    <h2>What this page does not promise</h2>
+    <p>No time saving is measured yet, and the full cost of delivering a feature is not known. Deck can show estimates for Claude Code sessions when their data is available. A person still writes the goal, sets the limits, and decides publication. Deck runs on your own computer and does not replace GitHub.</p>
+    <p><a href="index.html">Back to the home page</a></p>
+  </div></section>
+</main>
+<footer class="site"><div class="wrap"><p>Plan mockup. Draft website copy. Not a deployed site.</p></div></footer>
+</body>
+</html>

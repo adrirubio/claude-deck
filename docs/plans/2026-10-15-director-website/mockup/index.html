@@ -3,220 +3,171 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Deck — Your AI team ships GitHub work. You keep the decisions.</title>
+<title>Claude Deck — Your backlog. Your AI team. Finished work.</title>
 <style>
-  :root{
-    --ink:#1c2420; --muted:#4c5a52; --line:#d8ded9; --paper:#ffffff;
-    --wash:#eef2ee; --green:#166534; --green-dark:#14532d; --amber:#92400e;
-    --radius:10px;
-  }
+  :root{--ink:#1c2420;--muted:#4c5a52;--line:#d8ded9;--paper:#ffffff;--wash:#eef2ee;--green:#166534;--green-dark:#14532d;--amber:#92400e;--radius:10px}
   *{box-sizing:border-box}
-  body{margin:0;color:var(--ink);background:var(--paper);
-    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55}
+  body{margin:0;color:var(--ink);background:var(--paper);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55}
   h1,h2,h3{font-family:"Iowan Old Style",Palatino,Georgia,serif;line-height:1.15;margin:0}
   a{color:var(--green-dark)}
   .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
   header.site{border-bottom:1px solid var(--line)}
   .bar{display:flex;justify-content:space-between;align-items:center;padding:16px 0;gap:16px;flex-wrap:wrap}
-  .brand{font-weight:700;font-size:19px;letter-spacing:.01em}
-  .brand span{color:var(--green)}
+  .brand{font-weight:700;font-size:19px}.brand span{color:var(--green)}
   nav a{margin-left:18px;text-decoration:none;color:var(--muted);font-size:15px}
   nav a:hover{color:var(--ink);text-decoration:underline}
-  .hero{padding:56px 0 40px;border-bottom:1px solid var(--line)}
-  .hero h1{font-size:42px;max-width:22ch;margin-bottom:18px}
-  .hero p.lede{font-size:19px;max-width:62ch;color:var(--ink);margin:0 0 14px}
-  .hero p.sub{color:var(--muted);max-width:62ch;margin:0 0 26px}
-  .actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:36px}
-  .btn{display:inline-block;padding:11px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px}
-  .btn-main{background:var(--green);color:#fff}
-  .btn-plain{border:1px solid var(--line);color:var(--ink);background:#fff}
-  .path{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
-  .path li{border:1px solid var(--line);border-radius:var(--radius);padding:12px;background:#fff}
-  .path b{display:block;font-size:13px;color:var(--green-dark);margin-bottom:6px}
-  .path span{font-size:14px;color:var(--muted)}
-  .split{display:grid;grid-template-columns:1fr 1fr;gap:28px}
-  section{padding:44px 0;border-bottom:1px solid var(--line)}
-  section h2{font-size:29px;margin-bottom:14px}
-  section p{max-width:68ch;margin:0 0 12px}
-  .note{color:var(--muted);font-size:14px}
-  .panel{background:var(--wash);border-radius:var(--radius);padding:20px}
-  .panel h3{font-size:18px;margin-bottom:10px}
-  .panel ul{margin:0;padding-left:20px}
-  .panel li{margin-bottom:6px}
-  ol.steps{max-width:68ch;padding-left:22px}
-  ol.steps li{margin-bottom:8px}
-  dl.words{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:18px 0 0}
+  .hero{padding:52px 0 36px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:40px;max-width:24ch;margin-bottom:14px}
+  .hero p{font-size:18px;max-width:60ch;margin:0 0 22px;color:var(--muted)}
+  .btn{display:inline-block;padding:11px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;background:var(--green);color:#fff}
+  .flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:stretch;margin-top:30px}
+  .flow .box{border:1px solid var(--line);border-radius:var(--radius);padding:16px;text-align:center}
+  .flow .box b{display:block;font-size:17px;margin-bottom:4px}
+  .flow .box span{color:var(--muted);font-size:14px}
+  .flow .arr{align-self:center;font-size:24px;color:var(--green);font-weight:700}
+  section{padding:42px 0;border-bottom:1px solid var(--line)}
+  section h2{font-size:28px;margin-bottom:8px}
+  section p.lead{max-width:62ch;margin:0 0 18px;color:var(--muted)}
+  figure{margin:0;background:var(--wash);border-radius:var(--radius);padding:18px}
+  figure svg{width:100%;height:auto;display:block}
+  figcaption{margin-top:12px;font-size:15px}
+  figcaption b{color:var(--green-dark)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  dl.words{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:16px 0 0}
   dl.words div{border-top:2px solid var(--green);padding-top:10px}
   dl.words dt{font-weight:700;margin-bottom:4px}
   dl.words dd{margin:0;color:var(--muted);font-size:15px}
-  .share{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
-  .share article{border:1px solid var(--line);border-radius:var(--radius);padding:18px}
-  .share h3{font-size:17px;margin-bottom:8px}
-  .share p{font-size:15px;color:var(--muted);margin:0}
-  .warn{border-left:4px solid var(--amber);padding:4px 0 4px 16px;margin-bottom:16px}
+  .note{color:var(--muted);font-size:14px}
   footer.site{padding:28px 0 40px;color:var(--muted);font-size:14px}
-  @media (max-width:820px){
-    .path{grid-template-columns:repeat(2,1fr)}
-    .split,.share{grid-template-columns:1fr}
-    .hero h1{font-size:32px}
+  .lbl{font:600 13px system-ui,sans-serif;fill:#1c2420}
+  .sub{font:12px system-ui,sans-serif;fill:#4c5a52}
+  /* Backlog: cards settle into order, 6s loop */
+  .b1{animation:settle 6s ease-in-out infinite}.b2{animation:settle 6s .5s ease-in-out infinite}.b3{animation:settle 6s 1s ease-in-out infinite}
+  @keyframes settle{0%,100%{transform:translateY(0)}15%{transform:translateY(-8px)}35%,80%{transform:translateY(0)}}
+  /* Team: roles light in turn, 8s loop */
+  .r1{animation:turn 8s infinite}.r2{animation:turn 8s 2s infinite}.r3{animation:turn 8s 4s infinite}.r4{animation:turn 8s 6s infinite}
+  @keyframes turn{0%,100%{opacity:.45}8%,30%{opacity:1}45%{opacity:.45}}
+  .workcard{animation:pass 8s ease-in-out infinite}
+  @keyframes pass{0%,100%{transform:translateX(0)}40%,70%{transform:translateX(118px)}}
+  /* Finished: record lines appear, 7s loop */
+  .l1{animation:linein 7s infinite}.l2{animation:linein 7s 1s infinite}.l3{animation:linein 7s 2s infinite}
+  @keyframes linein{0%,100%{opacity:1}10%{opacity:.15}35%,85%{opacity:1}}
+  .tick{animation:tickin 7s infinite}
+  @keyframes tickin{0%,100%{opacity:1}15%{opacity:.1}45%,85%{opacity:1}}
+  /* Decisions: dot pauses at the gate, then passes, 8s loop */
+  .dot{animation:travel 8s ease-in-out infinite}
+  @keyframes travel{0%{transform:translateX(0)}38%,58%{transform:translateX(150px)}88%,100%{transform:translateX(300px)}}
+  .gate{animation:gateopen 8s infinite;transform-origin:200px 86px}
+  @keyframes gateopen{0%,52%{transform:rotate(0deg)}68%,88%{transform:rotate(-38deg)}100%{transform:rotate(0deg)}}
+  @media (max-width:820px){.flow{grid-template-columns:1fr}.flow .arr{transform:rotate(90deg);justify-self:center}.grid2{grid-template-columns:1fr}.hero h1{font-size:31px}}
+  @media (prefers-reduced-motion: reduce){
+    .b1,.b2,.b3,.r1,.r2,.r3,.r4,.workcard,.l1,.l2,.l3,.tick,.dot,.gate{animation:none;opacity:1;transform:none}
   }
 </style>
 </head>
 <body>
-<header class="site">
-  <div class="wrap bar">
-    <div class="brand">Claude <span>Deck</span></div>
-    <nav>
-      <a href="#story">The factory story</a>
-      <a href="#decide">What you see and decide</a>
-      <a href="#share">Share Deck</a>
-      <a href="#limits">Limits and trust</a>
-      <a href="#operators">For operators</a>
-    </nav>
-  </div>
-</header>
-
+<header class="site"><div class="wrap bar">
+  <div class="brand">Claude <span>Deck</span></div>
+  <nav>
+    <a href="how-it-works.html">How it works</a>
+    <a href="#share">Share Deck</a>
+    <a href="#limits">Limits and trust</a>
+    <a href="#operators">For operators</a>
+  </nav>
+</div></header>
 <main>
-  <div class="hero">
-    <div class="wrap">
-      <h1>Your AI team ships GitHub work. You keep the decisions.</h1>
-      <p class="lede">Deck runs a team of AI agents that take GitHub issues to reviewed work, while the people in charge keep the key decisions.</p>
-      <p class="sub">One issue goes in. Reviewed work comes out. You see who owns each item, what waits for a person, and what the audit ledger recorded.</p>
-      <div class="actions">
-        <a class="btn btn-main" href="#share">Understand and share it</a>
-        <a class="btn btn-plain" href="#story">See one piece of work</a>
-      </div>
-      <ol class="path">
-        <li><b>1. Issue</b><span>You write the goal and order the backlog.</span></li>
-        <li><b>2. Plan</b><span>The owner proposes it. The Leader approves it.</span></li>
-        <li><b>3. Build</b><span>A member builds the change in its own workspace.</span></li>
-        <li><b>4. Review</b><span>A reviewer checks the exact version. Checks run.</span></li>
-        <li><b>5. Merge</b><span>The pull request merges under repository policy.</span></li>
-        <li><b>6. Record</b><span>The audit ledger keeps what happened.</span></li>
-      </ol>
+  <div class="hero"><div class="wrap">
+    <h1>Your backlog. Your AI team. Finished work.</h1>
+    <p>You shape the feature backlog, Deck's AI team builds and checks the work, and the key decisions stay with you.</p>
+    <a class="btn" href="how-it-works.html">See how it works</a>
+    <div class="flow" aria-label="Backlog, then AI team, then finished work">
+      <div class="box"><b>Backlog</b><span>The features you want, in your order.</span></div>
+      <div class="arr" aria-hidden="true">→</div>
+      <div class="box"><b>AI team</b><span>A Leader, members, and reviewers.</span></div>
+      <div class="arr" aria-hidden="true">→</div>
+      <div class="box"><b>Finished work</b><span>Checked work, with its record.</span></div>
     </div>
-  </div>
+  </div></div>
 
-  <section id="what">
-    <div class="wrap">
-      <h2>What Deck is</h2>
-      <p>Deck is a local workspace where a director runs AI agent teams on GitHub work. The director owns the backlog and sets the goal. The assigned owner proposes a plan and the designated Leader approves it. Members build the work, reviewers check it, and the Supervisor, when one is assigned, watches the factory and repairs routine faults under delegation.</p>
-      <p>The director sees progress on Overview and Work, tracks repositories and teams, checks the audit record, and still decides publication, budgets, models, and security stops. GitHub stays the home for issues, pull requests, and review.</p>
+  <section id="ideas"><div class="wrap">
+    <h2>The idea, in pictures</h2>
+    <p class="lead">Four short pictures. Each one teaches one idea.</p>
+    <div class="grid2">
+      <figure>
+        <svg viewBox="0 0 360 170" role="img" aria-label="Feature cards settle into an ordered list, first to third">
+          <g class="b1"><rect x="40" y="28" width="280" height="34" rx="7" fill="#ffffff" stroke="#166534" stroke-width="2"/><text class="lbl" x="56" y="50">1 · The feature you want first</text></g>
+          <g class="b2"><rect x="40" y="72" width="280" height="34" rx="7" fill="#ffffff" stroke="#d8ded9" stroke-width="2"/><text class="lbl" x="56" y="94">2 · The next one</text></g>
+          <g class="b3"><rect x="40" y="116" width="280" height="34" rx="7" fill="#ffffff" stroke="#d8ded9" stroke-width="2"/><text class="lbl" x="56" y="138">3 · Then the next</text></g>
+        </svg>
+        <figcaption><b>You shape the list.</b> Your backlog is the features you want built, in the order you want them.</figcaption>
+      </figure>
+      <figure>
+        <svg viewBox="0 0 360 170" role="img" aria-label="A Leader organises, members build, and a reviewer checks the work">
+          <g class="r1"><circle cx="55" cy="55" r="24" fill="#14532d"/><text x="55" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">L</text><text class="lbl" x="55" y="100" text-anchor="middle">Leader</text><text class="sub" x="55" y="116" text-anchor="middle">organises</text></g>
+          <g class="r2"><circle cx="150" cy="55" r="24" fill="#166534"/><text x="150" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">M</text><text class="lbl" x="150" y="100" text-anchor="middle">Members</text><text class="sub" x="150" y="116" text-anchor="middle">build</text></g>
+          <g class="r4"><circle cx="305" cy="55" r="24" fill="#92400e"/><text x="305" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">R</text><text class="lbl" x="305" y="100" text-anchor="middle">Reviewer</text><text class="sub" x="305" y="116" text-anchor="middle">checks</text></g>
+          <g class="workcard"><rect x="128" y="132" width="46" height="24" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/><text class="sub" x="151" y="148" text-anchor="middle">work</text></g>
+        </svg>
+        <figcaption><b>Clear roles.</b> The Leader organises the work and approves plans. Members build. Reviewers check work they did not build.</figcaption>
+      </figure>
+      <figure>
+        <svg viewBox="0 0 360 170" role="img" aria-label="Checked work returns with a record, and one gap in the record is shown honestly">
+          <rect x="30" y="45" width="120" height="80" rx="8" fill="#ffffff" stroke="#166534" stroke-width="2"/>
+          <path class="tick" d="M62 86 l18 18 l36 -40" fill="none" stroke="#166534" stroke-width="7" stroke-linecap="round"/>
+          <text class="lbl" x="90" y="148" text-anchor="middle">Checked work</text>
+          <g class="l1"><rect x="190" y="48" width="140" height="12" rx="6" fill="#4c5a52"/></g>
+          <g class="l2"><rect x="190" y="72" width="120" height="12" rx="6" fill="#4c5a52"/></g>
+          <g class="l3"><rect x="190" y="96" width="140" height="12" rx="6" fill="none" stroke="#92400e" stroke-width="2" stroke-dasharray="6 5"/></g>
+          <text class="lbl" x="260" y="135" text-anchor="middle">The record</text>
+          <text class="sub" x="260" y="151" text-anchor="middle">gaps shown, not hidden</text>
+        </svg>
+        <figcaption><b>Work comes back to you.</b> You see what is finished, what needs attention, and the record — including its gaps.</figcaption>
+      </figure>
+      <figure>
+        <svg viewBox="0 0 360 170" role="img" aria-label="Work pauses at a gate until the person in charge decides, then it passes">
+          <line x1="25" y1="86" x2="340" y2="86" stroke="#d8ded9" stroke-width="4"/>
+          <g class="gate"><rect x="196" y="38" width="8" height="48" rx="4" fill="#92400e"/></g>
+          <rect x="192" y="82" width="16" height="16" rx="3" fill="#1c2420"/>
+          <g class="dot"><circle cx="35" cy="86" r="13" fill="#166534"/></g>
+          <text class="lbl" x="200" y="24" text-anchor="middle">You decide</text>
+          <text class="sub" x="35" y="125" text-anchor="middle">work</text>
+          <text class="sub" x="320" y="125" text-anchor="middle">published</text>
+        </svg>
+        <figcaption><b>The key decisions stay yours.</b> Goals, priorities, budget, and publication. The team works within your limits.</figcaption>
+      </figure>
     </div>
-  </section>
+  </div></section>
 
-  <section id="story">
-    <div class="wrap">
-      <h2>One piece of work</h2>
-      <p>Follow one issue from goal to merged work.</p>
-      <ol class="steps">
-        <li>You write the issue and order the backlog.</li>
-        <li>The owner proposes a plan. The Leader approves it.</li>
-        <li>A member builds the change and opens a pull request.</li>
-        <li>A reviewer checks the exact version. Checks run.</li>
-        <li>The pull request merges under repository policy.</li>
-        <li>The audit ledger keeps the record.</li>
-      </ol>
-      <p class="note">This path is an example. It is not a measured delivery.</p>
-    </div>
-  </section>
+  <section id="words"><div class="wrap">
+    <h2>Six words carry the story</h2>
+    <dl class="words">
+      <div><dt>Backlog</dt><dd>The features you want built, in the order you want them.</dd></div>
+      <div><dt>Team</dt><dd>The AI agents working through your backlog.</dd></div>
+      <div><dt>Leader</dt><dd>The team member who organises the work and approves plans.</dd></div>
+      <div><dt>Member</dt><dd>An AI agent assigned to build part of the work.</dd></div>
+      <div><dt>Reviewer</dt><dd>Someone who checks work they did not build.</dd></div>
+      <div><dt>Director</dt><dd>You: the person who owns the goals, the list, and the final decisions.</dd></div>
+    </dl>
+  </div></section>
 
-  <section id="decide">
-    <div class="wrap">
-      <h2>What you see and decide</h2>
-      <div class="split">
-        <div class="panel">
-          <h3>What you see</h3>
-          <ul>
-            <li>Overview shows what needs you.</li>
-            <li>Work shows each owner and each waiting reason.</li>
-            <li>Repositories shows which backlog feeds each team.</li>
-            <li>Teams shows the roster and the named Leader.</li>
-            <li>Audit shows what the factory did, with its limits.</li>
-          </ul>
-        </div>
-        <div class="panel">
-          <h3>What stays yours</h3>
-          <ul>
-            <li>The goal and the backlog order.</li>
-            <li>Publication, budgets, and models.</li>
-            <li>Security stops.</li>
-            <li>The Leader approves agent plans inside those limits.</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </section>
+  <section id="share"><div class="wrap">
+    <h2>Share Deck</h2>
+    <p class="lead">Send this page. It is the brief. When you want the detail, read <a href="how-it-works.html">How it works</a>. Deck runs on your own computer.</p>
+  </div></section>
 
-  <section id="why">
-    <div class="wrap">
-      <h2>Why it matters</h2>
-      <p><strong>Control.</strong> You own the backlog and the retained decisions. The Leader approves plans inside your limits.</p>
-      <p><strong>Visibility.</strong> You see waiting work on one screen. You do not open each agent session to learn who waits.</p>
-      <p><strong>Safety gates.</strong> A plan needs Leader approval before build. A pull request follows repository policy before merge. A security stop stays with you.</p>
-      <p><strong>Cost, stated with its limit.</strong> The Usage screen shows Claude Code session estimates where Deck can read them. Factory delivery cost stays unknown. This site claims no saving that no trial has measured.</p>
-    </div>
-  </section>
+  <section id="limits"><div class="wrap">
+    <h2>Limits and trust</h2>
+    <p class="lead">Deck does not measure the full cost of a finished feature, and no trial has measured the time it saves you. A person still sets the goals and decides what gets published. Costs and records are shown with their limits.</p>
+  </div></section>
 
-  <section id="words">
-    <div class="wrap">
-      <h2>Words you need</h2>
-      <dl class="words">
-        <div><dt>Team</dt><dd>A saved roster of agent sessions that work as one unit.</dd></div>
-        <div><dt>Leader</dt><dd>The one team member who approves plans and picks the next work.</dd></div>
-        <div><dt>Member</dt><dd>One agent slot on a team that owns a piece of work.</dd></div>
-        <div><dt>Pull request</dt><dd>A proposed change reviewed under repository policy.</dd></div>
-        <div><dt>Audit ledger</dt><dd>The ledger that records what the factory did and its limits.</dd></div>
-      </dl>
-      <p class="note">The factory story page carries the full glossary of 15 words.</p>
-    </div>
-  </section>
-
-  <section id="share">
-    <div class="wrap">
-      <h2>Share it</h2>
-      <p>Brief your board or your team in one step. Each item stands alone.</p>
-      <div class="share">
-        <article>
-          <h3>Send the link</h3>
-          <p>The home page is the brief. The first screen carries the one sentence, the path, and the decisions.</p>
-        </article>
-        <article>
-          <h3>Send the one-page summary</h3>
-          <p>It carries the one sentence, the six steps, what you decide, and the limits.</p>
-        </article>
-        <article>
-          <h3>Show the video</h3>
-          <p>It walks the normal path in story order: queued, active, review, finished. It shows attention separately, as the exception that needs a person. Each state shows a different example issue. It ends on the Audit screen.</p>
-        </article>
-      </div>
-      <p class="note">The summary and the video use seeded example data. Each one says so.</p>
-    </div>
-  </section>
-
-  <section id="limits">
-    <div class="wrap">
-      <h2>What Deck does not promise</h2>
-      <div class="warn"><p>Deck does not promise a time saving. No trial measures director time saved.</p></div>
-      <div class="warn"><p>Deck does not work alone for you. A person writes the goal, sets the limits, and decides publication.</p></div>
-      <div class="warn"><p>Deck runs on your machine. An operator sets up the host first. Deck changes real local agent files.</p></div>
-      <div class="warn"><p>Deck does not replace GitHub. GitHub holds the issues, the pull requests, and the final record.</p></div>
-    </div>
-  </section>
-
-  <section id="operators">
-    <div class="wrap">
-      <h2>For operators</h2>
-      <p>An operator installs Deck, connects the agent tools, and turns on team automation under policy. Setup, harness detail, and autonomy steps live in the docs, not on this page.</p>
-    </div>
-  </section>
+  <section id="operators"><div class="wrap">
+    <h2>For operators</h2>
+    <p class="lead">Setup and day-to-day running live in the operator guides, not on this page.</p>
+  </div></section>
 </main>
-
-<footer class="site">
-  <div class="wrap">
-    <p>Claude Deck — a local workspace for AI agent teams on GitHub work. GitHub holds the issues, the pull requests, and the final record.</p>
-    <p>Plan mockup. This page shows draft website copy. It is not a deployed site.</p>
-  </div>
-</footer>
+<footer class="site"><div class="wrap">
+  <p><strong>Retell it:</strong> We choose and order the features we want. Our AI team works through them. We follow progress, and the decisions stay with us.</p>
+  <p>Plan mockup. Draft website copy. Not a deployed site.</p>
+</div></footer>
 </body>
 </html>
