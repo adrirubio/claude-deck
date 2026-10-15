@@ -1,6 +1,6 @@
 # Director docs plan and video concept
 
-For: issue #758 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, the revised `03-website-plan.md`, and both mockup pages on master.
+For: issue #765 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, the revised `03-website-plan.md`, and both mockup pages on master.
 
 This file plans two things. It plans the documentation for directors. It plans the product video concept. It produces neither one. Both stay later work.
 
@@ -9,8 +9,8 @@ Each claim names its evidence. A claim with no evidence does not enter the plan.
 ## Sources
 
 - `01-audit.md` records the current docs, page by page, with limits.
-- `02-factory-story.md` gives the one sentence, the three parts, the six-step "How it works" layer, the six top-level words, and the nine detail words.
-- `03-website-plan.md` gives the website pages, the graphical home copy, the four animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
+- `02-factory-story.md` gives the one sentence, the three parts, the eight-step "How it works" layer with parallel tracks and several teams, the six top-level words, and the nine detail words.
+- `03-website-plan.md` gives the website pages, the graphical home copy, the five animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
 - The existing docs live in `docs/guide/`, `docs/features/`, `docs/index.md`, and `docs/autonomy.md`.
 - Issue #758 gives the Director's video direction and the chosen production approach. Seeded screen states from the audit serve only the closing-segment capture list. They are not live records and not human trials.
 
@@ -38,7 +38,7 @@ Read the pages in this order. Each page answers one question.
 
 | Order | Page | New or changed | Purpose | Short outline |
 |---|---|---|---|---|
-| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the four home pictures as still images. A link to "How it works" for the detail. |
+| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the five home pictures as still images. A link to "How it works" for the detail. |
 | 2 | A first look at Overview | New director page | The director learns what needs a person | What "Needs you" means. Campaign progress in plain words. Which item waits for the director, and which waits for the team. |
 | 3 | A first look at Work | New director page | The director learns who owns each item | One row explained: owner, state, waiting reason, pull request link. The four normal states and the attention exception. |
 | 4 | A first look at Repositories and Teams | New director page | The director learns which backlog feeds which team | One scope explained in plain words. The roster, the named Leader, and the supervisor status. Repository count and work count. |
@@ -59,9 +59,9 @@ Screen limits that the pages must print:
 
 ### The "How it works" docs page
 
-The per-issue detail does not sit in the Start here path. It lives on one "How it works" page, placed after "What Deck is" and linked both ways: from Start here for directors who want depth, and from the technical documentation for operators who want the story behind the rules. The page carries the six steps, the decision at each step, the nine detail words, and the retell. It is the docs twin of the website's second page in `03-website-plan.md`, and it links onward to `docs/guide/operating-model.md` and the feature pages for depth.
+The detail follows the backlog through eight steps, then explains parallel tracks and several teams. It lives on a separate "How it works" page, linked from Start here and the technical docs, placed after "What Deck is". The page carries the eight steps, the decision at each step, the nine detail words, and the retell. It is the docs twin of the website's second page in `03-website-plan.md`, and it links onward to `docs/guide/operating-model.md` and the feature pages for depth.
 
-Evidence: the revised story marks its six-step layer "read this on the second page". `03-website-plan.md` gives the website the same split. The docs keep that split so a director meets the same shape in both places.
+Evidence: the revised story marks its eight-step layer "read this on the second page". `03-website-plan.md` gives the website the same split. The docs keep that split so a director meets the same shape in both places.
 
 ### What changes in the existing docs
 
@@ -136,17 +136,17 @@ Evidence for the script: the closing line and the three middle scenes restate th
 
 ### Animation storyboard
 
-Every scene except the closing segment is an animated concept picture. No scene shows a Deck screen, a screen label, or product UI. Scenes 2 to 5 reuse the four home-page animations from #757, rebuilt at video size. Each animation stays self-contained: one idea, ready to reuse.
+Every scene except the closing segment is an animated concept picture. No scene shows a Deck screen, a screen label, or product UI. The scenes are the website's React scene components (see `03-website-plan.md`, Technology and build), rendered here at video size. The story arc is: backlog, then parallel lanes, then many teams. Each scene stays self-contained: one idea.
 
 | Scene | Time | What the viewer sees | Motion and transition | One idea it teaches |
 |---|---|---|---|---|
 | 1. Opening | 0:00 | A soft pile of feature cards. The Deck name settles above them. | Let the cards settle as the opening sentence ends. Hold until the next scene. | Every team has a list. Deck gives it a team. |
 | 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready for the team". | You shape and order the list. |
-| 3. Meet the team | 0:42 | The #757 team animation: Leader, members, reviewer. A card of work passes from building to checking. | Roles light in turn with the narration. The work card travels across. | Members check their work. Someone else independently reviews it. |
-| 4. Finished work | 1:08 | The #757 finished-work animation: checked work beside its record, one record line dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
-| 5. You stay in charge | 1:32 | The #757 decision animation: work travels and stops at the closed "You decide" gate. | The work stops at the closed gate while the narrator says "waits for you". A separate approval cue then opens the gate. Approval never comes from elapsed time alone. | The key decisions stay yours. |
-| 6. Honest limits | 1:58 | The same three-part picture, quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
-| 7. Closing line | 2:22 | The three parts side by side: list, team, checked work. End card with the Deck name. | Parts slide together. Hold for the last line. | Backlog, team, finished work — with you in charge. |
+| 3. Meet the team — parallel lanes | 0:42 | The parallel-lanes scene: cards split into lanes; in each lane an owner drafts a plan, the Leader approves, the owner builds, a reviewer checks. Several lanes move at once. | Cards travel their lanes with small offsets, timed to the narration. | Members check their work. Someone else independently reviews it. |
+| 4. Finished work | 1:08 | Finished items land on the "finished" shelf beside their record, one record line drawn dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
+| 5. You stay in charge | 1:32 | The decision animation: work travels and stops at the closed "You decide" gate. The Director's moments (ready, publish) light up. | The work stops at the closed gate while the narrator says "waits for you". A separate approval cue then opens the gate. Approval never comes from elapsed time alone. | The key decisions stay yours. |
+| 6. Honest limits | 1:58 | The view begins to pull back: this team is one of several in one Deck, each with its own backlog (the many-teams scene), drawn quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
+| 7. Closing line | 2:22 | Zoomed out: several teams side by side, each with its list, lanes, and finished shelf. End card with the Deck name. | The wide view settles. Hold for the last line. | Backlog, team, finished work — with you in charge. |
 | 8. Closing segment (optional) | after 2:34, at most 10s | The only screens in the video. See its own section below. | Separate sequence. Swappable or cuttable. | A short look at the real product, labeled as examples. |
 
 Transitions: match cuts on the moving card between Scenes 2, 3, and 4, so one piece of work seems to travel. A soft fade into Scene 6 (the quiet scene) and out to the end card. No whip pans, no text flying at the viewer: the energy comes from the music and the steady motion, not from tricks.
@@ -213,7 +213,7 @@ The narrator is an AI voice. The video credits say so. The Director picks the vo
 
 The Director chose this approach. This section records it with its reasons.
 
-- **Video as code, with Remotion.** A Deck team writes the animated scenes as React code rendered to MP4. Agent-written scenes reuse the four #757 home animations, so the website and the video tell the story with the same pictures. Code gives exact, repeatable edits: a word, a timing, or a colour changes in one place and re-renders.
+- **Video as code, with Remotion.** A Deck team renders the website's React scene components to MP4 with Remotion. The same components run on the Astro site and in the video — one scene library, two outputs — so the website and the video tell the story with the same pictures. Code gives exact, repeatable edits: a word, a timing, or a colour changes in one place and re-renders.
 - **Narration with ElevenLabs.** The Director picks the voice. Its word timestamps drive the scene timing, so cuts land on sentences, not guesses.
 - **Music with Suno.** The Director generates the track in Suno's app from the prompt above, chooses among takes and the two alternative styles, and hands the file to the render.
 - **Optional texture clips only.** Short AI-generated atmosphere clips (for example Veo or Runway) may add texture where a scene needs it — a soft background drift, never a product claim, never a fake screen.
