@@ -1,6 +1,6 @@
 # Director docs plan and video concept
 
-For: row 744 under parent issue #745. This plan uses `01-audit.md`, `02-factory-story.md`, and `03-website-plan.md` on master.
+For: issue #744 under parent issue #745. This plan uses `01-audit.md`, `02-factory-story.md`, and `03-website-plan.md` on master.
 
 This file plans two things. It plans the documentation for directors. It plans the product video concept. It produces neither one. Both stay later work.
 
@@ -43,17 +43,19 @@ Read the pages in this order. Each page answers one question.
 | 3 | A first look at Work | New director page | The director learns who owns each item | One row explained: owner, state, waiting reason, pull request link. The four normal states and the attention exception. |
 | 4 | A first look at Repositories and Teams | New director page | The director learns which backlog feeds which team | One scope explained in plain words. The roster, the named Leader, and the supervisor status. Repository count and work count. |
 | 5 | A first look at Audit | New director page | The director learns what the ledger proves | Safe metrics in plain words. Coverage limits. The locked event list as an access gate, not a failure. Cost stays unknown. |
-| 6 | The decisions that are yours | New director page | The director learns the retained decisions | Goal and backlog order. Publication, budgets, models, security stops. The Leader approves agent plans inside those limits. Human review follows repository policy. |
-| 7 | Words you need | New director page | The director learns the 15 words | The glossary from the story, one short sentence per word. Each word links to the page that uses it. |
-| 8 | Limits and trust | New director page | The director learns what Deck does not promise | Local running and operator setup. Seeded example data. Locked Audit events. Usage session estimates beside unknown factory cost. No measured time saving. |
-| 9 | Share Deck from the docs | New director page | The director briefs a peer from the docs | The link, the one-page summary, and the video. Each item stands alone. |
+| 6 | A first look at Agent Mail | New director page | The director learns how the team coordinates | What Agent Mail holds: durable participants, structured mailboxes, context requests, and handoffs. Mail reads stay protected. This page uses words and a diagram. It holds no screen capture. |
+| 7 | A first look at Harnesses | New director page | The director learns which agent tools Deck can set up | What a harness is, in one sentence. The six agent tools by name. Setup and support in plain words. Account, model, and session readiness stay unknown here. Operator setup stays on the operator path. |
+| 8 | The decisions that are yours | New director page | The director learns the retained decisions | Goal and backlog order. Publication, budgets, models, security stops. The Leader approves agent plans inside those limits. Human review follows repository policy. |
+| 9 | Words you need | New director page | The director learns the 15 words | The glossary from the story, one short sentence per word. Each word links to the page that uses it. |
+| 10 | Limits and trust | New director page | The director learns what Deck does not promise | Local running and operator setup. Seeded example data. Locked Audit events. Usage session estimates beside unknown factory cost. No measured time saving. |
+| 11 | Share Deck from the docs | New director page | The director briefs a peer from the docs | The link, the one-page summary, and the video. Each item stands alone. |
 
 Evidence for the screen claims: `01-audit.md` records Overview with "Needs you" and campaign progress, Work with owners and waiting reasons, Teams with the roster and the named Leader, Repositories with enablement apart from intake, and Audit with safe metrics and locked events. `02-factory-story.md` gives the retained decisions. The glossary comes from the story, at 15 words.
 
 Screen limits that the pages must print:
 
-- Agent Mail holds no director page in this path. The only observed state stayed at participant loading. Evidence: `01-audit.md` records that state as an open observation limit. It proves no Mail failure and no docs defect. Add a Mail page only when a supported coordination state exists to show.
-- Harnesses gets one line on the operator path, not a director page. The screen shows setup and support. Account, model, and session readiness stay unknown without a separate check. Evidence: `docs/features/harnesses.md`.
+- The Agent Mail introduction rests on `docs/features/agent-mail.md`. That page describes durable participants, structured mailboxes, and protected Mail reads. The page holds no screen capture. The only observed screen state stayed at participant loading. Evidence: `01-audit.md` records that state as an open observation limit. It proves no Mail failure and no docs defect. Add a capture only when a supported coordination state exists to show.
+- The Harnesses introduction keeps the readiness limit in its first lines. The screen shows setup and support. Account, model, and session readiness stay unknown without a separate check. Evidence: `docs/features/harnesses.md`. Tool setup itself stays on the operator path.
 
 ### What changes in the existing docs
 
@@ -64,8 +66,8 @@ Screen limits that the pages must print:
 | `docs/guide/operating-model.md` | Keep the content. Add a plain summary at the top and link it from Start here | The page defines the factory and the roles. It needs revision for a director, not creation. Evidence: `01-audit.md` operating model finding. |
 | `docs/guide/quick-start.md` | Move it under For operators. No director page links to it as a first step | Its first step is a shell command. Evidence: `01-audit.md` quick start finding. |
 | `docs/features/dashboard.md`, `work.md`, `repositories.md`, `agent-teams.md` | Add one director line at the top of each: what the screen shows, and which decision it supports. Keep the operator depth below | The pages name counts and filters before the decision. Evidence: `01-audit.md` feature findings. |
-| `docs/features/agent-mail.md` | No director change in this plan | The page text stands. The loading observation is a product limit, not a docs defect. Evidence: `01-audit.md` Agent Mail finding. |
-| `docs/features/harnesses.md` | Keep on the operator path. Keep the readiness limit in the first lines | The page supports setup claims only. Evidence: `docs/features/harnesses.md`. |
+| `docs/features/agent-mail.md` | Link it from the new Agent Mail introduction. Add no capture and no director rewrite | The introduction rests on this page text. The loading observation is a product limit, not a docs defect. Evidence: `01-audit.md` Agent Mail finding. |
+| `docs/features/harnesses.md` | Link it from the new Harnesses introduction. Keep setup depth and the readiness limit on the operator path | The page supports setup claims only. Evidence: `docs/features/harnesses.md`. |
 | `docs/features/usage.md` | Add one director line: Usage shows Claude Code session estimates. Factory delivery cost stays unknown | The split prevents a false cost claim. Evidence: `02-factory-story.md` cost line and `docs/features/usage.md`. |
 | `docs/autonomy.md` | Keep on the operator path. No director page sends a reader here first | The opening suits an operator and the setup needs a host token. Evidence: `01-audit.md` autonomy finding. |
 | Sidebar in `docs/.vitepress/config.ts` | Add a Start here group for directors at the top of the guide sidebar. Keep Guide and Features below it | The sidebar links the operating model today but gives no director entry. Evidence: `docs/.vitepress/config.ts` guide sidebar and `01-audit.md`. |
@@ -87,44 +89,46 @@ Audience: a director who has never seen Deck, and the peer that director forward
 
 Message: your AI team ships GitHub work, and you keep the decisions.
 
-Length: two to three minutes. At the pace below, the script runs about two and a half minutes.
+Length: two to three minutes. The timing budget below gives a 150-second video: about 112 seconds of speech, 30 seconds of shot holds, and 8 seconds of pauses between sections.
 
-The video uses seeded example screens. Each shot says so in its caption where the data appears. The video claims no measured delivery and no time saving. Evidence: `03-website-plan.md` sets those limits for the clip.
+The video uses seeded example screens. Every screen shot carries one persistent label: "Example data — seeded screens. Not live records." The spoken script also states the limits. The video claims no measured delivery and no time saving. Evidence: `03-website-plan.md` sets those limits for the clip.
 
 ### Script draft
 
-Read the script aloud at the pace in the voice requirements. Times are guides for the editor.
+Read the script aloud at the pace in the voice requirements. The script, the shots, and the times match. The order is the normal path first, then attention as the exception, then the Audit close.
 
-**Opening, 0:00 to 0:20.** "This is Deck. Deck runs a team of AI agents that take GitHub issues to reviewed work. You write the goals. You keep the key decisions. In the next two minutes, you see one factory at work, on example data."
+**Opening, 0:00 to 0:20.** "This is Deck. Deck runs a team of AI agents that take GitHub issues to reviewed work. You write the goals. You keep the key decisions. You see this factory on example data, not live records."
 
-**The path, 0:20 to 1:00.** "You write an issue and order the backlog. The owner proposes a short plan. The Leader approves it. A member builds the change and opens a pull request. A reviewer checks the exact version, and checks run. The pull request merges under your repository policy. The audit ledger keeps the record."
+**The path, 0:20 to 1:20.** "Follow the normal path. You write an issue and order the backlog. That queued item still waits for an owner. The owner proposes a short plan, and the Leader approves it. A member builds the change. A reviewer checks the exact version, and checks run. A human review waits in review. The pull request merges under your repository policy."
 
-**What you see, 1:00 to 1:35.** "You do not open each agent session to learn who waits. Overview shows what needs you. Work shows each owner and each waiting reason. Teams shows the roster and the named Leader. When work needs a person, it waits in attention. That is the exception, not a step on the path."
+**What you see, 1:20 to 1:50.** "You do not open each agent session to learn who waits. Overview shows what needs you. Work shows each owner and each waiting reason. Teams shows the roster and the named Leader. When work stops or fails, it waits in attention. Attention is the exception, not a step on the path."
 
-**Your decisions, 1:35 to 2:05.** "The Leader approves agent plans inside your limits. Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. Deck runs on your machine, and an operator sets up the host. GitHub holds the issues, the pull requests, and the final record."
+**Your decisions, 1:50 to 2:10.** "The Leader approves agent plans inside your limits. Your decisions stay yours: the goal, the backlog order, publication, budgets, models, and security stops. Deck runs on your machine. An operator sets up the host. GitHub holds the issues, the pull requests, and the final record."
 
-**Close, 2:05 to 2:30.** "Deck shows session cost estimates where it can read them. The cost of a whole delivery stays unknown, and no trial yet measures time saved. So Deck makes one promise it can show: your team ships GitHub work in the open, and you keep the decisions. Send this link, send the one-page summary, or start with the story."
+**Close, 2:10 to 2:30.** "Each screen here shows a different example issue, in still seeded states. These pictures prove no delivery time and no saving. Usage shows Claude Code session cost estimates where Deck can read them. The cost of a whole delivery stays unknown. The audit ledger keeps the record, and this closing screen shows no event record for these issues. Your team ships GitHub work in the open, and you keep the decisions."
 
-Evidence for the script: the opening uses the story one sentence. The path follows Steps 1 to 6 in `02-factory-story.md`. The decisions match the retained decisions in `docs/guide/operating-model.md`. The close keeps the cost split from `docs/features/usage.md` and `docs/guide/factory-audit-and-metrics.md`.
+Timing budget: the spoken draft holds 262 words. At about 140 words per minute, speech takes about 112 seconds. Shot holds add 30 seconds. Section pauses add 8 seconds. The total is about 150 seconds, inside the two to three minute limit.
+
+Evidence for the script: the opening uses the story one sentence. The path follows Steps 1 to 6 in `02-factory-story.md`. Attention maps to escalated or failed work, not to human review. Evidence: `backend/app/services/factory_projection_service.py` keeps human review in the review state and attention for the stopped or failed states. The decisions match the retained decisions in `docs/guide/operating-model.md`. The close keeps the Claude Code cost split from `docs/features/usage.md` and `docs/guide/factory-audit-and-metrics.md`.
 
 ### Storyboard
 
-Each shot names the real Deck screen and the seeded state to capture. The seed holds one issue per state. Each state therefore shows a different issue. The narration states that limit where the states appear in sequence.
+Each shot names the real Deck screen and the seeded state to capture. The seed holds one issue per state. Each state therefore shows a different issue. The spoken close states that limit. The persistent seeded-data label sits on every screen shot.
 
 | Shot | Time | Screen | Seeded state to capture | Narration line it carries | Caption or limit on screen |
 |---|---|---|---|---|---|
-| 1 | 0:00 | Overview | Seeded counts with one item in each state | "This is Deck." | Example data. Not live records. |
+| 1 | 0:00 | Overview | Seeded counts with one item in each state | "This is Deck." | Persistent seeded-data label. |
 | 2 | 0:20 | Work, All filter | Queued item #105, "Add keyboard shortcuts", with no owner yet | "You write an issue and order the backlog." | The queued item waits for an owner. |
-| 3 | 0:35 | Teams | Seeded team "Release crew" with its named Leader and member slots | "The owner proposes a plan. The Leader approves it." | Seeded roster. Not a live team. |
-| 4 | 0:50 | Work, All filter | Active item #103, "Document the import format", with its owner | "A member builds the change." | One state, one example issue. |
-| 5 | 1:05 | Work, All filter | Review item #102, "Fix the settings page layout", with its pull request field | "A reviewer checks the exact version, and checks run." | Review follows repository policy. |
-| 6 | 1:20 | Overview | The "Needs you" area with campaign progress | "Overview shows what needs you." | Counts alone do not prove the summaries. |
-| 7 | 1:35 | Work, All filter | Attention item #101, "Add the CSV export button", stopped after its owner went idle | "When work needs a person, it waits in attention." | Attention is the exception, not a path step. |
-| 8 | 1:50 | Work, All filter | Finished item #104, "Rename the sync command", in merged state | "The pull request merges under your repository policy." | Example path. Not a measured delivery. |
-| 9 | 2:05 | Audit | Safe delivery metrics with the event list locked | "The audit ledger keeps the record." | Events stay locked. This shot shows no event record for these issues. |
-| 10 | 2:20 | Overview | The first-screen view from shot 1 | "You keep the decisions." | Send the link or the one-page summary. |
+| 3 | 0:33 | Teams | Seeded team "Release crew" with its named Leader and member slots | "The owner proposes a short plan, and the Leader approves it." | Seeded roster. Not a live team. |
+| 4 | 0:46 | Work, All filter | Active item #103, "Document the import format", with its owner | "A member builds the change." | One state, one example issue. |
+| 5 | 0:59 | Work, All filter | Review item #102, "Fix the settings page layout", with its pull request field | "A reviewer checks the exact version, and checks run." | A human review waits in review. |
+| 6 | 1:10 | Work, All filter | Finished item #104, "Rename the sync command", in merged state | "The pull request merges under your repository policy." | Example path. Not a measured delivery. |
+| 7 | 1:20 | Overview | The "Needs you" area with campaign progress | "Overview shows what needs you." | Counts alone do not prove the summaries. |
+| 8 | 1:35 | Work, All filter | Attention item #101, "Add the CSV export button", stopped after its owner went idle | "When work stops or fails, it waits in attention." | Attention is the stopped or failed exception. |
+| 9 | 1:50 | Teams | The "Release crew" roster with its named Leader | "The Leader approves agent plans inside your limits." | Seeded roster. Not a live team. |
+| 10 | 2:10 | Audit | Safe delivery metrics with the event list locked | "The audit ledger keeps the record." | This closing screen shows no event record for these issues. The video ends here. |
 
-Seed evidence: the test seed creates issues #101 to #105 in the attention, review, active, finished, and queued states, each with its own title. Evidence: `scripts/e2e/scenarios.py`. A fresh check of the test instance returned the same five states. The default Work filter hides finished work, so shots 2, 4, 5, 7, and 8 name the All filter. Evidence: `03-website-plan.md` records that filter rule from the audit review.
+Seed evidence: the test seed creates issues #101 to #105 in the attention, review, active, finished, and queued states, each with its own title. Evidence: `scripts/e2e/scenarios.py`. A fresh check of the test instance returned the same five states. The default Work filter hides finished work, so shots 2, 4, 5, 6, and 8 name the All filter. Evidence: `03-website-plan.md` records that filter rule from the audit review.
 
 Excluded shots:
 

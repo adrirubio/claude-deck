@@ -1,6 +1,6 @@
 # Director website campaign — summary and recommended changes
 
-For: row 744 under parent issue #745. This summary covers the four plan documents in this folder.
+For: issue #744 under parent issue #745. This summary covers the four plan documents in this folder.
 
 This README recommends changes. It grants no approval. The Director approves the campaign plan under #745. Publication stays a Director decision.
 
@@ -26,7 +26,7 @@ Do the changes in this order. Each line states the source and the decision the D
 5. **Add "Words you need".** Use the glossary of at most 15 words, one short sentence per word. Source: `02-factory-story.md`, "Glossary"; `01-audit.md`, top problem 3. Director: no decision beyond copy approval.
 6. **Add "What you see and decide".** Show each screen in director words, with the decision roles beside it. Source: `02-factory-story.md`, Steps 1 to 6; `03-website-plan.md`, page structure; `01-audit.md`, top problem 8. Director: confirm the retained decisions are correct.
 7. **Add "Limits and trust".** State the benefit with its limits. Usage shows Claude Code session estimates. Factory delivery cost stays unknown. Source: `03-website-plan.md`, "Limits and trust"; `01-audit.md`, top problem 9. Director: approve the limit wording.
-8. **Build the docs "Start here" path.** Nine short director pages, separate from the developer and operator pages. Source: `04-docs-and-video.md`, Part 1. Director: approve the docs structure.
+8. **Build the docs "Start here" path.** Eleven short director pages, separate from the developer and operator pages. Source: `04-docs-and-video.md`, Part 1. Director: approve the docs structure.
 9. **Produce the video.** A two to three minute concept with script, storyboard, and AI voice requirements. Source: `04-docs-and-video.md`, Part 2. Director: approve the budget, the AI voice choice, and publication.
 
 ## What each change needs from the Director
@@ -46,7 +46,7 @@ Do the changes in this order. Each line states the source and the decision the D
 
 The campaign leaves five questions open. Each question blocks the change named beside it.
 
-1. Is a human director trial needed before publication? All reviews so far are agent readings. No human director has read the story, the plan, or the mockup. This question blocks a final publication claim.
+1. Is a human director trial needed before publication? All reviews so far are agent readings. No human director trial is recorded for the story, the plan, or the mockup. This question blocks a final publication claim.
 2. When and how does the website change publish? The website repository deploys its whole root on a push to its main branch. A partial copy is not a safe publish. This question blocks change 1.
 3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 3.
 4. The mobile first screen shows only two of six steps in the mockup layout. Is that acceptable, or must all six steps fit the first mobile screen? This question blocks final home-page approval.
@@ -54,7 +54,7 @@ The campaign leaves five questions open. Each question blocks the change named b
 
 ## Limits that stay in force
 
-- Every screen state in this campaign is seeded example data. No capture shows live records.
+- Every isolated test capture in this campaign, and every planned new capture, uses seeded example data. No such capture shows live records. The older website screenshots keep the separate origin and age limits that `01-audit.md` records.
 - Factory delivery cost stays unknown. Usage shows Claude Code session estimates only.
 - No trial measures director time saved. No document in this folder claims a saving.
 - The mockup is a plan artifact. It is never deployed.
