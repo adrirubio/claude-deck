@@ -40,45 +40,58 @@
 <body>
 <header class="site"><div class="wrap bar">
   <div class="brand">Claude <span>Deck</span></div>
-  <nav><a href="index.html">Home</a><a href="index.html#share">Share Deck</a><a href="index.html#limits">Limits and trust</a><a href="index.html#operators">For operators</a></nav>
+  <nav><a href="index.html">Home</a><a href="index.html#share">Share Deck</a><a href="index.html#operators">For operators</a></nav>
 </div></header>
 <main>
   <div class="hero"><div class="wrap">
-    <h1>How it works: one piece of work, step by step</h1>
-    <p>Follow a small change through the team. This example explains who does what and where you decide; it does not show a timed delivery. The example is “Add a short help note to the welcome page”, from a GitHub issue to a merged pull request (PR).</p>
+    <h1>How it works: your backlog, through the team</h1>
+    <p>Follow your backlog through the team, in eight steps. This page explains who does what and where you decide; it does not show a timed delivery. One example item runs through it: “Add a short help note to the welcome page”, from a GitHub issue to a merged pull request (PR).</p>
   </div></div>
 
   <section><div class="wrap">
     <div class="step"><div class="num">1</div><div>
-      <h3>The Director writes the issue</h3>
-      <p>Choose the result, set its priority, and decide when it is ready to start.</p>
-      <div class="see"><p><b>What you see:</b> GitHub shows the issue and its place in the backlog. Deck does not replace GitHub.</p><p><b>Your decision:</b> the goal, the order, and the ready mark.</p></div>
+      <h3>The Director writes the backlog and marks it ready</h3>
+      <p>Choose the result for each item, set its priority, and decide when it is ready to start.</p>
+      <div class="see"><p><b>What you see:</b> GitHub shows the backlog and each item's place in it. Deck does not replace GitHub.</p><p><b>Your decision:</b> the goals, the order, and what is ready.</p></div>
     </div></div>
     <div class="step"><div class="num">2</div><div>
-      <h3>The owner proposes a plan. The Leader approves it.</h3>
-      <p>One owner is assigned. The owner proposes a short plan. The designated Leader approves it, and only then does building start.</p>
-      <div class="see"><p><b>What you see:</b> Overview shows progress and what needs you. Work shows the owner and the waiting reason. Teams shows the roster and the named Leader.</p><p><b>Your decision:</b> the outcome and the limits. The Leader approves agent plans inside them.</p></div>
+      <h3>The team works on the backlog items autonomously</h3>
+      <p>The team works through ready items without you steering each step. It follows your goals and limits, respects safety stops, and uses the plan approvals and reviews below.</p>
+      <div class="see"><p><b>What you see:</b> Overview shows progress and what needs a person. Work shows each item's progress and who owns it.</p><p><b>Your decision:</b> hold or pause the work, and change the limits.</p></div>
     </div></div>
     <div class="step"><div class="num">3</div><div>
-      <h3>A member does the work</h3>
-      <p>The member builds the change in a separate working copy for this job, runs the checks agreed for this work, and opens a PR — one proposed change.</p>
-      <div class="see"><p><b>What you see:</b> Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team.</p><p><b>Your decision:</b> none here, unless the team needs a decision only you can make, or a safety stop applies.</p></div>
+      <h3>Each item gets an agent owner, who writes the plan</h3>
+      <p>One owner is assigned to each item. The owner writes a short plan for it.</p>
+      <div class="see"><p><b>What you see:</b> Work shows the owner for each item. Teams shows the roster and the named Leader.</p><p><b>Your decision:</b> the outcome and the limits, not each plan.</p></div>
     </div></div>
     <div class="step"><div class="num">4</div><div>
-      <h3>Reviewers check the work</h3>
-      <p>An independent reviewer reads the exact version proposed. Findings go back to the owner, who fixes them on the same PR. Automatic checks (CI) run again on the new version.</p>
-      <div class="see"><p><b>What you see:</b> Work shows whether the item waits for review. Audit shows delivery measures with their limits.</p><p><b>Your decision:</b> If your rules call for your review, decide whether the change is ready. Passing review and checks does not authorize a merge.</p></div>
+      <h3>The Leader reviews and approves the plan</h3>
+      <p>Building starts only after the Leader approves. If changes are needed, the owner revises the plan first.</p>
+      <div class="see"><p><b>What you see:</b> Overview shows progress and what needs you.</p><p><b>Your decision:</b> none at this gate. The Leader approves inside your limits.</p></div>
     </div></div>
     <div class="step"><div class="num">5</div><div>
-      <h3>The Supervisor watches and helps — when you assign one</h3>
-      <p>The Supervisor is optional. When assigned, it fixes routine blockers inside the authority you gave it. When only you can decide, it explains what you need to decide and gives you the evidence.</p>
-      <div class="see"><p><b>What you see:</b> Overview shows whether the Supervisor is healthy, late, or absent.</p><p><b>Your decision:</b> Choose what the Supervisor may do. You still decide publication, budgets, AI models, and safety stops.</p></div>
+      <h3>The agent owner works on the item</h3>
+      <p>The owner builds in a separate working copy for this job, checks their own work, runs the checks agreed for this work, and opens a pull request — one proposed change.</p>
+      <div class="see"><p><b>What you see:</b> Work shows the owner, the state, and the link. Repositories shows which backlog feeds the team.</p><p><b>Your decision:</b> None here, unless the team needs a decision only you can make or a safety stop applies.</p></div>
     </div></div>
     <div class="step"><div class="num">6</div><div>
-      <h3>The PR merges, and the record stays</h3>
-      <p>The PR merges under your repository rules, after review and checks pass. The issue closes, and the audit record keeps what happened.</p>
-      <div class="see"><p><b>What you see:</b> Work shows the item finished. Audit shows the delivery history with its limits. Some audit detail sits behind an access gate.</p><p><b>Your decision:</b> accept the result and decide publication.</p></div>
+      <h3>A reviewer checks the work</h3>
+      <p>Someone who did not build the change reviews the exact version. Findings go back to the owner, and automatic checks run again on the new version.</p>
+      <div class="see"><p><b>What you see:</b> Work shows whether the item waits for review.</p><p><b>Your decision:</b> If your rules call for your review, decide whether the change is ready. Passing review and checks does not authorize a merge.</p></div>
     </div></div>
+    <div class="step"><div class="num">7</div><div>
+      <h3>The Leader and the Supervisor check it</h3>
+      <p>The Leader checks the result against the approved plan. When a Supervisor is assigned, it checks too. The Supervisor is optional — without one, the Leader reports to you directly.</p>
+      <div class="see"><p><b>What you see:</b> Overview shows whether a registered Supervisor is healthy, late, or absent.</p><p><b>Your decision:</b> Choose what the Supervisor may do. You still decide publication, budgets, AI models, and safety stops.</p></div>
+    </div></div>
+    <div class="step"><div class="num">8</div><div>
+      <h3>The work is merged</h3>
+      <p>The work merges under your repository rules, after the checks pass. In this example, the Supervisor does the merge under those rules. The item closes, and the record keeps what happened.</p>
+      <div class="see"><p><b>What you see:</b> Work shows the item finished. Audit shows the history with its limits. Some audit detail sits behind an access gate.</p><p><b>Your decision:</b> accept the result and decide publication.</p></div>
+    </div></div>
+    <h3>Parallel tracks, and several teams</h3>
+    <p>A team can have several owners and reviewers. With the right setting, they work on parallel tracks of the backlog at the same time, each track in its own workspace, coordinated by the Leader. A new backlog link starts at one item at a time — parallel tracks need a higher setting, and that setting is your choice.</p>
+    <p>One Deck can also run several teams in parallel, each working on a different project's backlog, with its own Leader and limits.</p>
     <p class="note">This example explains the workflow. Planned Deck screenshots use separate sample tasks; they do not show this feature moving through the team. They do not measure delivery time.</p>
   </div></section>
 
@@ -115,11 +128,7 @@
     </dl>
   </div></section>
 
-  <section><div class="wrap">
-    <h2>What this page does not promise</h2>
-    <p>No time saving is measured yet, and the full cost of delivering a feature is not known. Deck can show estimates for Claude Code sessions when their data is available. A person still writes the goal, sets the limits, and decides publication. Deck runs on your own computer and does not replace GitHub.</p>
-    <p><a href="index.html">Back to the home page</a></p>
-  </div></section>
+  <section><div class="wrap"><p><a href="index.html">Back to the home page</a></p></div></section>
 </main>
 <footer class="site"><div class="wrap"><p>Plan mockup. Draft website copy. Not a deployed site.</p></div></footer>
 </body>

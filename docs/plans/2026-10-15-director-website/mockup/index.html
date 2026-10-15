@@ -60,9 +60,16 @@
   @keyframes travel{0%{transform:translateX(0)}38%,58%{transform:translateX(150px)}88%,100%{transform:translateX(300px)}}
   .gate{animation:gateopen 8s infinite;transform-origin:200px 86px}
   @keyframes gateopen{0%,52%{transform:rotate(0deg)}68%,88%{transform:rotate(-38deg)}100%{transform:rotate(0deg)}}
+  .lane1{animation:lane 7s ease-in-out infinite}.lane2{animation:lane 7s 1.2s ease-in-out infinite}.lane3{animation:lane 7s 2.4s ease-in-out infinite}
+  @keyframes lane{0%{transform:translateX(0)}55%,80%{transform:translateX(172px)}100%{transform:translateX(0)}}
+  .mini{animation:mini 6s ease-in-out infinite}.mini2{animation:mini 6s 1.5s ease-in-out infinite}.mini3{animation:mini 6s 3s ease-in-out infinite}
+  @keyframes mini{0%,100%{transform:translateX(0)}50%{transform:translateX(26px)}}
   @media (max-width:820px){.flow{grid-template-columns:1fr}.flow .arr{transform:rotate(90deg);justify-self:center}.grid2{grid-template-columns:1fr}.hero h1{font-size:31px}}
   @media (prefers-reduced-motion: reduce){
-    .b1,.b2,.b3,.r1,.r2,.r3,.r4,.workcard,.l1,.l2,.l3,.tick,.gate{animation:none;opacity:1;transform:none}
+    .b1,.b2,.b3,.r1,.r2,.r3,.r4,.workcard,.l1,.l2,.l3,.tick,.gate,.mini,.mini2,.mini3{animation:none;opacity:1;transform:none}
+    .lane1{animation:none;opacity:1;transform:translateX(86px)}
+    .lane2{animation:none;opacity:1;transform:translateX(120px)}
+    .lane3{animation:none;opacity:1;transform:translateX(60px)}
     .dot{animation:none;opacity:1;transform:translateX(150px)}
   }
 </style>
@@ -73,7 +80,6 @@
   <nav>
     <a href="how-it-works.html">How it works</a>
     <a href="#share">Share Deck</a>
-    <a href="#limits">Limits and trust</a>
     <a href="#operators">For operators</a>
   </nav>
 </div></header>
@@ -97,13 +103,20 @@
         <figcaption><b>Choose what matters.</b></figcaption>
       </figure>
       <figure>
-        <svg viewBox="0 0 360 170" role="img" aria-label="A Leader organises, members build, and a reviewer checks the work">
-          <g class="r1"><circle cx="55" cy="55" r="24" fill="#14532d"/><text x="55" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">L</text><text class="lbl" x="55" y="100" text-anchor="middle">Leader</text><text class="sub" x="55" y="116" text-anchor="middle">organises</text></g>
-          <g class="r2"><circle cx="150" cy="55" r="24" fill="#166534"/><text x="150" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">M</text><text class="lbl" x="150" y="100" text-anchor="middle">Members</text><text class="sub" x="150" y="116" text-anchor="middle">build</text></g>
-          <g class="r4"><circle cx="305" cy="55" r="24" fill="#92400e"/><text x="305" y="60" text-anchor="middle" fill="#ffffff" font-weight="700">R</text><text class="lbl" x="305" y="100" text-anchor="middle">Reviewer</text><text class="sub" x="305" y="116" text-anchor="middle">checks</text></g>
-          <g class="workcard"><rect x="128" y="132" width="46" height="24" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/><text class="sub" x="151" y="148" text-anchor="middle">work</text></g>
+        <svg viewBox="0 0 360 190" role="img" aria-label="Several items move through the team at once on parallel lanes, coordinated by the Leader">
+          <circle cx="42" cy="95" r="22" fill="#14532d"/><text x="42" y="100" text-anchor="middle" fill="#ffffff" font-weight="700">L</text>
+          <line x1="70" y1="45" x2="325" y2="45" stroke="#d8ded9" stroke-width="3"/>
+          <line x1="70" y1="95" x2="325" y2="95" stroke="#d8ded9" stroke-width="3"/>
+          <line x1="70" y1="145" x2="325" y2="145" stroke="#d8ded9" stroke-width="3"/>
+          <g class="lane1"><rect x="78" y="33" width="42" height="24" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g>
+          <g class="lane2"><rect x="78" y="83" width="42" height="24" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g>
+          <g class="lane3"><rect x="78" y="133" width="42" height="24" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g>
+          <circle cx="318" cy="45" r="13" fill="#92400e"/><circle cx="318" cy="95" r="13" fill="#92400e"/><circle cx="318" cy="145" r="13" fill="#92400e"/>
+          <text class="sub" x="42" y="166" text-anchor="middle">Leader</text>
+          <text class="sub" x="42" y="182" text-anchor="middle">coordinates</text>
+          <text class="sub" x="318" y="182" text-anchor="middle">reviewers</text>
         </svg>
-        <figcaption><b>Your AI team builds and checks it.</b></figcaption>
+        <figcaption><b>Your AI team builds and checks it — several items at once.</b></figcaption>
       </figure>
       <figure>
         <svg viewBox="0 0 360 170" role="img" aria-label="Checked work returns with a record, and one gap in the record is shown honestly">
@@ -130,6 +143,15 @@
         </svg>
         <figcaption><b>You decide what gets published.</b> Work waits here for your decision.</figcaption>
       </figure>
+      <figure>
+        <svg viewBox="0 0 360 190" role="img" aria-label="Three small teams in one Deck, each with its own short backlog list">
+          <g><rect x="25" y="30" width="90" height="12" rx="6" fill="#166534"/><rect x="25" y="50" width="70" height="12" rx="6" fill="#4c5a52"/><g class="mini"><rect x="25" y="78" width="34" height="20" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g><text class="lbl" x="70" y="125" text-anchor="middle">Team one</text><text class="sub" x="70" y="141" text-anchor="middle">project A</text></g>
+          <g><rect x="140" y="30" width="80" height="12" rx="6" fill="#166534"/><rect x="140" y="50" width="90" height="12" rx="6" fill="#4c5a52"/><g class="mini2"><rect x="140" y="78" width="34" height="20" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g><text class="lbl" x="185" y="125" text-anchor="middle">Team two</text><text class="sub" x="185" y="141" text-anchor="middle">project B</text></g>
+          <g><rect x="255" y="30" width="70" height="12" rx="6" fill="#166534"/><rect x="255" y="50" width="80" height="12" rx="6" fill="#4c5a52"/><g class="mini3"><rect x="255" y="78" width="34" height="20" rx="5" fill="#ffffff" stroke="#166534" stroke-width="2"/></g><text class="lbl" x="295" y="125" text-anchor="middle">Team three</text><text class="sub" x="295" y="141" text-anchor="middle">project C</text></g>
+          <text class="sub" x="180" y="172" text-anchor="middle">one Deck, several teams</text>
+        </svg>
+        <figcaption><b>One Deck can run several teams, each on its own project.</b></figcaption>
+      </figure>
     </div>
   </div></section>
 
@@ -139,10 +161,6 @@
     <p class="lead">Send this page to someone you want to build with. When you want the detail, read <a href="how-it-works.html">How it works</a>.</p>
   </div></section>
 
-  <section id="limits"><div class="wrap">
-    <h2>Limits and trust</h2>
-    <p class="lead">Deck runs on your computer. Full delivery cost and time saved are not measured.</p>
-  </div></section>
 
   <section id="operators"><div class="wrap">
     <h2>For operators</h2>
