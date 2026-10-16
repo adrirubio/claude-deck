@@ -1,6 +1,6 @@
-# Website plan for claudedeck.org
+# Website plan for the Deck website
 
-For: issue #765 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, and `04-docs-and-video.md` on master.
+For: issue #768 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, and `04-docs-and-video.md` on master.
 
 Main action: **Understand and share it.** A director sees the graphical home page, understands the factory mostly through its animated pictures, and forwards one link, one page, or one short video. The detail lives on the second page, "How it works".
 
@@ -10,7 +10,8 @@ This plan names evidence for each claim. A claim with no evidence does not enter
 
 - `01-audit.md` records the current site, the docs, and the product screens.
 - `02-factory-story.md` gives the one sentence, the one paragraph, the roles, and the glossary.
-- `docs/guide/operating-model.md` defines the factory, the Director, the Leader, and the retained decisions.
+- `docs/guide/operating-model.md` defines the factory, the Director, the Leader, and the retained decisions. It is the source of truth for the two big figures below. Their static originals are `docs/public/images/operating-model/hierarchy.svg` and `docs/public/images/operating-model/factory.svg`.
+- Naming, per the Director: the product is called Deck. The tools team members run are called agent tools.
 - The website reference is a separate repository. This plan cites it as `website-ref` at commit `0c35f391759633c774b7cc4ace5c52b96dd53d12`. This plan does not change it.
 - An isolated test instance supplied fresh screen states for this plan. The states are seeded example data. They are not live records and not human trials.
 
@@ -35,7 +36,7 @@ Evidence: `01-audit.md` finds install steps and developer words on the first scr
 
 Purpose: a director understands and can share Deck after one graphical page.
 
-Sections, in order: first screen (the story sentence and the main action), the idea in pictures (five animated illustrations in the opening flow), Share Deck, For operators. Text stays at a few short lines. The pictures carry the story. The six words, the retell, and the operator paragraph live on "How it works".
+Sections, in order: first screen (the story sentence and the main action), the idea in pictures (five animated illustrations in the opening flow), who does what (the animated hierarchy of roles), what the factory is (the animated factory figure), Share Deck, For operators. Text stays at a few short lines. The pictures carry the story. The six words, the retell, and the operator paragraph live on "How it works".
 
 ### How it works
 
@@ -78,7 +79,7 @@ Evidence: the line is the revised story's one sentence. `02-factory-story.md` gi
 Five animated illustrations carry the story. Each one is self-contained: one idea, inline SVG and CSS, no Deck screenshots, no screen labels, no product UI. That keeps each one reusable as a video scene. Each one has a still version: under `prefers-reduced-motion`, the animation stops and the finished state of the picture stays on screen, with the same caption.
 
 1. **Backlog — you shape the list.** The viewer sees three feature cards settling into an ordered list, first to third. Motion: each card lifts slightly and settles back, in turn. Loop: 6 seconds, calm. Idea it teaches: the backlog is yours, ordered by you. Still version: the three cards at rest in order.
-2. **AI team — parallel tracks.** The viewer sees three lanes under one Leader, with a work card travelling down each lane toward its own reviewer. Motion: the three cards travel in turn, slightly offset, so several items are clearly moving at once. Loop: 7 seconds. Idea it teaches: several owners and reviewers can work parallel tracks of the backlog at the same time, coordinated by the Leader. Still version: the three cards rest part-way down their lanes. Evidence for "at the same time": `docs/guide/operating-model.md:30` (Director chooses implementer and verifier counts; concurrent-dispatch limits) and `docs/guide/supervised-factory-playbook.md:193` (one workspace per concurrent item). The concurrency-1 starting setting is stated on "How it works", not in this short home copy.
+2. **AI team — parallel tracks.** The viewer sees three lanes under one AI Leader, with a work card travelling down each lane toward its own AI reviewer. Motion: the three cards travel in turn, slightly offset, so several items are clearly moving at once. Loop: 7 seconds. Idea it teaches: several owners and reviewers can work parallel tracks of the backlog at the same time, coordinated by the Leader. Still version: the three cards rest part-way down their lanes. Evidence for "at the same time": `docs/guide/operating-model.md:30` (Director chooses implementer and verifier counts; concurrent-dispatch limits) and `docs/guide/supervised-factory-playbook.md:193` (one workspace per concurrent item). The concurrency-1 starting setting is stated on "How it works", not in this short home copy.
 3. **Finished work — work comes back to you.** The viewer sees checked work beside its record, with one record line drawn dashed. Motion: the check mark and the record lines appear in turn. Loop: 7 seconds. Idea it teaches: work returns for you to assess, and gaps in the record are shown, not hidden. Still version: checked work and the full record, gap line included.
 4. **People in charge deciding — the key decisions stay yours.** The viewer sees a dot of work travel, pause at a gate marked "You decide", and pass only when the gate opens. Motion: travel, a clear pause, then the gate lifts. Loop: 8 seconds. Idea it teaches: goals, priorities, budget, and publication stay with the Director. Still version: the dot rests beside the closed gate, with the caption "Work waits here for your decision", so the still itself teaches the decision idea.
 
@@ -91,6 +92,18 @@ Evidence: each caption restates one accepted claim from the revised story, with 
 One short caption per picture: "Choose what matters." / "Your AI team builds and checks it — several items at once." / "Review the result and its record." / "You decide what gets published." / "One Deck can run several teams, each on its own project." The full glossary (the six top-level words and the nine detail words) and the retell sit on "How it works", so the home text stays at a few short lines.
 
 Evidence: `02-factory-story.md` defines both word sets and gives the retell.
+
+### The two big figures
+
+After the five pictures, two large animated figures carry the two ideas a director most needs: who is who, and what the factory is. They join the home page; they replace nothing, and the first screen stays as above. Each figure is animated SVG built in code, in line with "Technology and build" below, and each is also a shared React scene the video reuses (see `04-docs-and-video.md`). Each builds once, as it scrolls into view. Under reduced motion, each shows its finished still version with the same caption.
+
+Three kinds of thing must read at a glance, each in its own visual language, with a small key above the first figure: a person (amber, a person icon), an AI agent (violet, an agent icon; optional helpers dashed and marked optional), and a computer system (slate, a gear icon). The figures keep the role names — Director, Supervisor, grooming helper, Leader, Implementers, Verifiers, Deck controller — each with one short plain description. The kind of each role is clear at first sight: the Director is you, the human; the Leader, Implementers, Verifiers and grooming helper are AI agents; the Supervisor box states that the role can be an AI agent or a person; the Deck controller and where the work lives are computer systems, not people or agents. On the home page, the system that holds the backlog, the work and the record carries a plain label, "Where your work lives"; that system is GitHub (`docs/guide/operating-model.md:19`, `:31`, `:47`). No field name or internal term from the static originals enters the copy: each is translated into plain words (for example, the campaign link, the next promised check, checking the exact finished version).
+
+6. **Who does what — the hierarchy of roles.** What the viewer sees: the Director at the top; the grooming helper and the Supervisor beside the Director, dashed and marked as optional help; the Leader below on the line of command; Implementers ×N and Verifiers ×N under the Leader; and, below a divider marked "Not ranks — computer systems", the Deck controller and where the work lives. Motion: the Director appears first, the optional helpers fade in, the line of command draws down to the Leader, then splits to the two stacks, which fan out to show several members; the systems settle last, below the divider. Timing: about 4 seconds, once, on scroll into view; no loop. One idea it teaches: one person in charge, a clear chain below that person, and systems that follow rules — they are not bosses. Still version: the complete chart, stacks fanned. Meaning and evidence: the line of command and the optional staff roles are `docs/guide/operating-model.md:27-28`; the Supervisor acts only within the Director's recorded limits and does not take the Leader's plan authority (`:29`); the Director chooses how many implementers and verifiers there are (`:30`); the controller and the work-keeping system are not ranks (`:31`); the grooming helper drafts backlog items and the Director decides (`:59`).
+
+7. **What the factory is — the factory figure.** What the viewer sees: a boundary labelled "The factory". Inside it: the Supervisor, the Deck controller, and the team (Leader, Implementers ×N, Verifiers ×N). Outside it: the Director and the grooming helper above, and where the work lives below. Motion: the boundary draws in; the inside parts appear; work dots travel through the team; a dot flows up as ready work in and down as finished work back; the Supervisor's check-in dot pulses gently. Timing: about 5 seconds to build on scroll into view, then only the flowing dots and the gentle pulse continue. One idea it teaches: the factory is the Supervisor, the Deck controller and the team working your backlog together, while you and your list stay outside it. Still version: the closed boundary with all parts in place and one dot on each flow. Meaning and evidence: the factory is the supervisor, the controller and the team working on the Director's backlog (`docs/guide/operating-model.md:38`); who sits inside and outside, and why, is the table at `:42-49`; the team works the backlog and returns finished work, the controller keeps the team inside its rules, and the Supervisor checks in (`:65`, `:88-90`, `:98-99`).
+
+Prototype note: drawing the lines and the boundary in the mockup animates stroke properties. The mockup is a prototype; it may show that effect, but it does not resolve the open animation constraint in `README.md` (question 7), and this plan grants no exception.
 
 ### Share Deck and For operators (home sections)
 
@@ -112,10 +125,10 @@ Sections, in order: the eight steps (each with copy, what you see, and your deci
 | 1. The Director writes the backlog and marks it ready | Choose the result, set its priority, decide when it is ready. | Written example only. No GitHub capture: GitHub is not a Deck screen. | Goals, order, ready decision. |
 | 2. The team works autonomously | The team works through ready items without you steering each step. It follows your goals and limits, respects safety stops, and uses the plan approvals and reviews below. | Overview ("Needs you", progress), Work (each item's progress and owner). | Hold or pause. Change the limits. |
 | 3. Agent owner writes the plan | Each item is assigned to an agent owner, who writes a short plan. | Work (owner per item), Teams (roster, named Leader). | Outcome and limits, not each plan. |
-| 4. Leader reviews and approves | Building starts only after the Leader approves the owner's plan. | Overview (campaign progress, team summaries). | None at this gate. |
+| 4. Leader reviews and approves | Building starts only after the AI Leader approves the agent owner's plan. | Overview (campaign progress, team summaries). | None at this gate. |
 | 5. Agent owner works | Builds in a separate working copy, checks own work, runs agreed checks, opens a PR. | Work (owner, state, PR link), Repositories (which backlog feeds the team). | None, unless a Director-only decision or safety stop applies. |
-| 6. Reviewer checks | Someone who did not build it reviews the exact version. Fixes stay on the same PR. CI runs again. | Work (waiting for review, PR field), Audit (measures with limits; event list locked). | If your rules call for your review, decide readiness. Passing checks authorize no merge. |
-| 7. Leader and Supervisor check | Leader checks against the approved plan. Supervisor also checks, when one is assigned (optional role). | Overview Supervisor state (seeded Healthy, from `01-audit.md` roster record), only when registered. | Choose what the Supervisor may do. Publication, budgets, models, safety stops. |
+| 6. Reviewer checks | An AI reviewer who did not build it reviews the exact version. Fixes stay on the same PR. CI runs again. | Work (waiting for review, PR field), Audit (measures with limits; event list locked). | If your rules call for your review, decide readiness. Passing checks authorize no merge. |
+| 7. Leader and Supervisor check | Leader checks against the approved plan. Supervisor also checks, when one is assigned (optional role; an AI agent or a person). | Overview Supervisor state (seeded Healthy, from `01-audit.md` roster record), only when registered. | Choose what the Supervisor may do. Publication, budgets, models, safety stops. |
 | 8. The work is merged | Merges under repository policy. In this example the Supervisor merges. The item closes. | Work (finished; All filter), Audit (history with limits; events locked). | Accept the result. Decide publication. |
 
 After the steps: **Parallel tracks** — several owners and reviewers can work at the same time, coordinated by the Leader, each track in its own workspace. Plain limit: a new backlog link starts at one item at a time; parallel tracks need a higher setting, and that setting is the Director's choice. **Several teams** — one Deck can run several teams in parallel, each on a different project's backlog.
@@ -150,7 +163,7 @@ Evidence: the headings use the story terms. The operator key sentence matches th
 
 ## Screenshots and short clips each section needs
 
-Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images. The graphical home page needs no screenshot: its five animated illustrations carry the story, and they hold no screen detail. Screenshots belong to "How it works", Share Deck, and For operators.
+Each request names the real Deck screen and the seeded state to capture. Capture new images from the tested source. Do not reuse the old site images. The graphical home page needs no screenshot: its five animated illustrations and two big figures carry the story, and they hold no screen detail. Screenshots belong to "How it works", Share Deck, and For operators.
 
 The old images freeze older versions. Evidence: `01-audit.md` records the two main images at version 3.0.0 and six feature previews with a v2.0.0 footer. The tested source reports version 3.1.0.
 
@@ -158,7 +171,7 @@ Seed evidence: the test seed holds five different issues, one per work state. Ev
 
 | Section | Screen to capture | Seeded state to show | What the director learns | Limit to print with the image |
 |---|---|---|---|---|
-| Home, the idea in pictures | No screenshot. Five animated illustrations (inline SVG and CSS). | No seeded state. No screen detail in any illustration. | Backlog, team, finished work, and retained decisions, mostly through the pictures | Each illustration is a concept picture, not a product screen. Its still version serves reduced motion. |
+| Home, the idea in pictures, who does what, and what the factory is | No screenshot. Five animated illustrations and two big animated figures (inline SVG and CSS). | No seeded state. No screen detail in any illustration. | Backlog, team, finished work, and retained decisions, mostly through the pictures | Each illustration is a concept picture, not a product screen. Its still version serves reduced motion. |
 | How it works, Steps 2 and 3 | Overview and Teams | Overview seeded counts with one item in each state: queued, active, review, attention, finished. Teams seeded team "Release crew" with a named Leader and its member slots. | Work waits in named states, and a team is a roster with one Leader | Seeded example data. Not live records. Seeded roster, not a live team. |
 | How it works, Steps 2, 5 and 8 | Work | Five seeded work items, one item per state, shown with the All filter. Four items name an owner. The queued item, #105 "Add keyboard shortcuts", has no owner yet. | Each state exists at once, and the queued item still waits for an owner | Seeded example data. The default Work filter hides finished work, so the capture names the All filter. The path is an example, not a measured delivery. |
 | How it works, Step 2 | Overview | The "Needs you" area with campaign progress and team summaries | The screen puts the director decision first | Browser observation from the audit. Counts alone do not prove the summaries. |
@@ -169,7 +182,7 @@ Seed evidence: the test seed holds five different issues, one per work state. Ev
 | How it works, Step 6 | Agent Mail | No public capture. The only observed state stayed at participant loading. | No director claim rests on this screen yet | Keep this state in the evidence limits. Add a public capture only when a supported coordination state exists. The limit proves no Mail failure and no docs defect. |
 | Share it | Overview, Work, and Audit, as a clip | The seeded stills for the normal path in story order: queued, active, review, finished. One separate attention still. One closing Audit still with safe metrics and events locked. Each state shows a different seeded issue. | The director sees the normal path, the exception that needs a person, and the ledger screen that closes the story | Narrated example over static states. No single seeded issue moves through all states. The Audit still shows no event record for these issues. Not a measured delivery time. |
 
-Short clips: the video itself is planned under issue #758. This plan supplies its reusable scenes: the five screen-free home illustrations, each one idea, ready to rebuild as video scenes. The seeded screen stills above stay available for a short closing segment only. Any state sequence still carries its limit: each state shows a different seeded issue, and no single seeded issue moves through all states. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout.
+Short clips: the video itself is planned under issue #758. This plan supplies its reusable scenes: the five screen-free home illustrations and the two big figures, each one idea, ready to rebuild as video scenes. The seeded screen stills above stay available for a short closing segment only. Any state sequence still carries its limit: each state shows a different seeded issue, and no single seeded issue moves through all states. Evidence: `backend/app/services/factory_projection_service.py` maps attention to escalated or failed work, and the seed gives issue #101 an owner idle timeout.
 
 Still open: Usage cost. No image in this plan shows a cost total as proof. Evidence: `01-audit.md` records the old Usage image with zero totals, and `docs/guide/factory-audit-and-metrics.md` keeps factory cost unknown. The cost copy above states the limit in words instead.
 
@@ -189,7 +202,7 @@ Move to the docs, and link from "How it works" and For operators:
 - Harness readiness detail and per-tool setup. Explain agent-tool setup on For operators.
 - Audit event access detail. Explain access to Audit events on How it works, with a link to the operator guide.
 
-Keep on the home page: the story sentence, five pictures with short captions, the share line, and the For operators link. The glossary, the retell, the operator paragraph, and screens in director words live on "How it works".
+Keep on the home page: the story sentence, five pictures with short captions, the two big figures, the share line, and the For operators link. The glossary, the retell, the operator paragraph, and screens in director words live on "How it works".
 
 ## How a director shares Deck
 
@@ -197,7 +210,7 @@ Three ways. Each way stands alone.
 
 1. **A link.** The director sends the home page link. The first screen carries the one sentence, the three-part flow, and the link to the detail. The peer needs no setup and no account to read it.
 2. **A one-page summary.** The director sends one page with the one sentence, the three parts, what the director decides, and the limits. The summary prints cleanly and forwards as a document.
-3. **The video.** The director shows the short video planned under issue #758. It tells the same three-part story, reuses the home pictures as scenes, and keeps any screen shots to a short, replaceable closing segment.
+3. **The video.** The director shows the short video planned under issue #758. It tells the same three-part story, reuses the home pictures and the two big figures as scenes, and keeps any screen shots to a short, replaceable closing segment.
 
 Evidence: `01-audit.md` finds only Docs and GitHub links today, and no forwardable brief. The three items above close that gap. Each item uses only claims from `02-factory-story.md`.
 
@@ -220,12 +233,14 @@ Unresolved constraint, for the Director to decide before the build uses those ef
 
 ### Animation storyboard (website)
 
-The scroll story, matched to the story's eight steps and the five home pictures. Each part names its still version for reduced motion.
+The scroll story, matched to the story's eight steps, the five home pictures, and the two big figures. Each part names its still version for reduced motion.
 
 1. **Hero, "your backlog".** Feature cards drop into a priority stack. A "ready" mark lands, and the cards flow toward the team. Steps 1–2; the backlog picture. Still: the ordered stack with the ready mark.
 2. **The team at work (scroll).** Cards split into parallel lanes. In each lane: an owner drafts a plan, the Leader approves it, the owner builds, a reviewer checks, the Leader and the Supervisor (when assigned) check, and the item lands on a "finished" shelf. Several lanes move at once. Steps 3–8; the parallel-lanes and finished-work pictures. Still: cards part-way down their lanes, one item on the finished shelf.
 3. **Zoom out, many teams.** The view pulls back. This team becomes one of several teams in one Deck, each with its own project backlog. The several-teams picture. Still: the three team groups at rest.
 4. **You decide.** The Director's moments — marking work ready, and publishing — light up along the way. The decision picture. Still: work resting beside the closed decision gate.
+5. **Who does what.** The hierarchy figure builds from the Director down the line of command, the stacks fan out, and the systems settle below their divider (full storyboard under "The two big figures" above). Still: the complete chart.
+6. **What the factory is.** The boundary draws in around the Supervisor, the Deck controller and the team; work flows in ready and back finished; the check-in dot pulses (full storyboard above). Still: the closed boundary with a dot on each flow.
 
 ### Order of the next work
 
@@ -236,20 +251,22 @@ The scroll story, matched to the story's eight steps and the five home pictures.
 
 ## The mockup
 
-The mockup shows the draft copy and concept pictures for review. It does not test the Astro build or human understanding. The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
+The mockup shows the draft copy and concept pictures for review. It does not test the Astro build or human understanding. The mockup has two pages. `mockup/index.html` shows the graphical home page with the five animated illustrations and the two big figures built in. `mockup/how-it-works.html` shows the second page with the eight steps. The home page links to the second page, and the second page links back.
 
-Each page is one self-contained HTML file. Each uses inline CSS and inline SVG only. Neither makes an external request. Neither holds a script. Under `prefers-reduced-motion`, every animation stops and each illustration shows its still version.
+Each page is one self-contained HTML file. Each uses inline CSS and inline SVG. Neither makes an external request. The home page holds one small inline script, with no external source: it starts each big figure's build when the figure scrolls into view. The figures' base styles are the complete still, and motion exists only when the reader allows motion and scripting is on. Reduced motion and scripting-off views show the complete chart, fanned stacks, and one stationary dot on each flow. On narrow screens each big figure uses a stacked layout with larger text, keeping the same boundary and relationships. A work dot moves along the team track. In the still version, it rests on that track. The second page holds no script. Under `prefers-reduced-motion`, every animation stops and each illustration and figure shows its still version.
 
-A critic opens both pages in a browser, on desktop and mobile widths and with reduced motion on, and confirms: "How it works" follows the eight steps, parallel tracks and several teams are clear to a non-technical product person, both removed sections are gone, and the copy reads naturally.
+A critic opens both pages in a browser, on desktop and mobile widths and with reduced motion on, and confirms: "How it works" follows the eight steps, parallel tracks and several teams are clear to a non-technical product person, both big figures read clearly with people, AI team members and computer systems told apart at a glance and their meaning matching `docs/guide/operating-model.md`, both removed sections are gone, and the copy reads naturally.
 
 Both mockup pages are plan artifacts. They are never deployed. No step in this plan copies them to the website repository.
 
 Checks, with commands. The build notes record each command and its result.
 
-- External requests: `grep -En 'https?://|url\(|@import|<link|src=|fetch\(|XMLHttpRequest|<script|<iframe|srcset|action='` on both files. Require no matches, except two exempt forms only: the exact SVG namespace string, and `url(` followed by `#`. List every exempt match in the build notes.
+- External requests: `grep -En 'https?://|url\(|@import|<link|src=|fetch\(|XMLHttpRequest|<iframe|srcset|action='` on both files. Require no matches, except two exempt forms only: the exact SVG namespace string, and `url(` followed by `#`. List every exempt match in the build notes. An inline script with no `src` is allowed on the home page; a script source is not.
 - Reduced motion: `grep -n 'prefers-reduced-motion'` in both files. Each illustration must have its still state in that block.
 - Link: `grep -n 'how-it-works.html'` in `mockup/index.html`, then serve the mockup folder locally and require HTTP 200 for both pages.
 - Home word check: extract the home page visible copy and run `grep -Eio 'github|\bprs?\b|pull requests?|\bissues?\b|\bci\b|\bmerg[a-z]*|\bbranch[a-z]*|\blabel[a-z]*'`. It must print nothing.
+- Naming check: run a case-insensitive count grep for the product's old first name on the six changed files. Report every remaining match and why it remains. The product is called Deck, and member tools are agent tools.
+- Internal terms: grep the copy for the static figures' field names and internal terms. It must hold none; each one is translated into plain words.
 
 ## What this plan does not promise
 

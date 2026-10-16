@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Deck — How it works</title>
+<title>Deck — How it works</title>
 <style>
   :root{--ink:#1c2420;--muted:#4c5a52;--line:#d8ded9;--paper:#ffffff;--wash:#eef2ee;--green:#166534;--green-dark:#14532d;--amber:#92400e;--radius:10px}
   *{box-sizing:border-box}
@@ -39,23 +39,23 @@
 </head>
 <body>
 <header class="site"><div class="wrap bar">
-  <div class="brand">Claude <span>Deck</span></div>
+  <div class="brand">Deck</div>
   <nav><a href="index.html">Home</a><a href="index.html#share">Share Deck</a><a href="index.html#operators">For operators</a></nav>
 </div></header>
 <main>
   <div class="hero"><div class="wrap">
     <h1>How it works: your backlog, through the team</h1>
-    <p>Follow your backlog through the team, in eight steps. This page explains who does what and where you decide; it does not show a timed delivery. One example item runs through it: “Add a short help note to the welcome page”, from a GitHub issue to a merged pull request (PR).</p>
+    <p>Follow your backlog through the team, in eight steps. You are the Director, the human in charge; the team members below are AI agents. This page explains who does what and where you decide; it does not show a timed delivery. One example item runs through it: “Add a short help note to the welcome page”, from a GitHub issue to a merged pull request (PR).</p>
   </div></div>
 
   <section><div class="wrap">
     <div class="step"><div class="num">1</div><div>
       <h3>The Director writes the backlog and marks it ready</h3>
       <p>Choose the result for each item, set its priority, and decide when it is ready to start.</p>
-      <div class="see"><p><b>What you see:</b> GitHub shows the backlog and each item's place in it. Deck does not replace GitHub.</p><p><b>Your decision:</b> the goals, the order, and what is ready.</p></div>
+      <div class="see"><p><b>What you see:</b> GitHub, a computer system, shows the backlog and each item's place in it. Deck does not replace GitHub.</p><p><b>Your decision:</b> the goals, the order, and what is ready.</p></div>
     </div></div>
     <div class="step"><div class="num">2</div><div>
-      <h3>The team works on the backlog items autonomously</h3>
+      <h3>The AI team works on the backlog items autonomously</h3>
       <p>The team works through ready items without you steering each step. It follows your goals and limits, respects safety stops, and uses the plan approvals and reviews below.</p>
       <div class="see"><p><b>What you see:</b> Overview shows progress and what needs a person. Work shows each item's progress and who owns it.</p><p><b>Your decision:</b> hold or pause the work, and change the limits.</p></div>
     </div></div>
@@ -66,22 +66,22 @@
     </div></div>
     <div class="step"><div class="num">4</div><div>
       <h3>The Leader reviews and approves the plan</h3>
-      <p>Building starts only after the Leader approves. If changes are needed, the owner revises the plan first.</p>
+      <p>Building starts only after the Leader, an AI agent, approves. If changes are needed, the agent owner revises the plan first.</p>
       <div class="see"><p><b>What you see:</b> Overview shows progress and what needs you.</p><p><b>Your decision:</b> none at this gate. The Leader approves inside your limits.</p></div>
     </div></div>
     <div class="step"><div class="num">5</div><div>
       <h3>The agent owner works on the item</h3>
-      <p>The owner builds in a separate working copy for this job, checks their own work, runs the checks agreed for this work, and opens a pull request — one proposed change.</p>
+      <p>The agent owner builds in a separate working copy for this job, checks their own work, runs the checks agreed for this work, and opens a pull request — one proposed change.</p>
       <div class="see"><p><b>What you see:</b> Work shows the owner, the state, and the link. Repositories shows which backlog feeds the team.</p><p><b>Your decision:</b> None here, unless the team needs a decision only you can make or a safety stop applies.</p></div>
     </div></div>
     <div class="step"><div class="num">6</div><div>
-      <h3>A reviewer checks the work</h3>
-      <p>Someone who did not build the change reviews the exact version. Findings go back to the owner, and automatic checks run again on the new version.</p>
+      <h3>An AI reviewer checks the work</h3>
+      <p>An AI reviewer who did not build the change reviews the exact version. Findings go back to the agent owner, and automatic checks run again on the new version.</p>
       <div class="see"><p><b>What you see:</b> Work shows whether the item waits for review.</p><p><b>Your decision:</b> If your rules call for your review, decide whether the change is ready. Passing review and checks does not authorize a merge.</p></div>
     </div></div>
     <div class="step"><div class="num">7</div><div>
       <h3>The Leader and the Supervisor check it</h3>
-      <p>The Leader checks the result against the approved plan. When a Supervisor is assigned, it checks too. The Supervisor is optional — without one, the Leader reports to you directly.</p>
+      <p>The Leader checks the result against the approved plan. When a Supervisor is assigned — an AI agent or a person — that Supervisor checks too. The Supervisor is optional — without one, the Leader reports to you directly.</p>
       <div class="see"><p><b>What you see:</b> Overview shows whether a registered Supervisor is healthy, late, or absent.</p><p><b>Your decision:</b> Choose what the Supervisor may do. You still decide publication, budgets, AI models, and safety stops.</p></div>
     </div></div>
     <div class="step"><div class="num">8</div><div>
@@ -90,7 +90,7 @@
       <div class="see"><p><b>What you see:</b> Work shows the item finished. Audit shows the history with its limits. Some audit detail sits behind an access gate.</p><p><b>Your decision:</b> accept the result and decide publication.</p></div>
     </div></div>
     <h3>Parallel tracks, and several teams</h3>
-    <p>A team can have several owners and reviewers. With the right setting, they work on parallel tracks of the backlog at the same time, each track in its own workspace, coordinated by the Leader. A new backlog link starts at one item at a time — parallel tracks need a higher setting, and that setting is your choice.</p>
+    <p>A team can have several agent owners and AI reviewers. With the right setting, they work on parallel tracks of the backlog at the same time, each track in its own workspace, coordinated by the Leader. A new backlog link starts at one item at a time — parallel tracks need a higher setting, and that setting is your choice.</p>
     <p>One Deck can also run several teams in parallel, each working on a different project's backlog, with its own Leader and limits.</p>
     <p class="note">This example explains the workflow. Planned Deck screenshots use separate sample tasks; they do not show this feature moving through the team. They do not measure delivery time.</p>
   </div></section>
@@ -100,9 +100,9 @@
     <dl class="words">
       <div><dt>Backlog</dt><dd>The features you want built, in the order you want them.</dd></div>
       <div><dt>Team</dt><dd>The AI agents working through your backlog.</dd></div>
-      <div><dt>Leader</dt><dd>The team member who organises the work and approves plans.</dd></div>
+      <div><dt>Leader</dt><dd>An AI agent who organises the work and approves plans.</dd></div>
       <div><dt>Member</dt><dd>An AI agent assigned to build part of the work.</dd></div>
-      <div><dt>Reviewer</dt><dd>Someone who checks work they did not build.</dd></div>
+      <div><dt>Reviewer</dt><dd>An AI agent who checks work they did not build.</dd></div>
       <div><dt>Director</dt><dd>You: the person who owns the goals, the list, and the final decisions.</dd></div>
     </dl>
     <p><strong>Retell it:</strong> We choose and order the features we want. Our AI team works through them: the Leader organises the work, members build it, and reviewers check it. We follow progress and see what needs us. We keep the decisions about goals, priorities, budget, and publication.</p>
@@ -116,12 +116,12 @@
   <section><div class="wrap">
     <h2>Words for this page</h2>
     <dl class="words">
-      <div><dt>Harness</dt><dd>The agent tool a member runs, such as Claude Code or Codex.</dd></div>
+      <div><dt>Harness</dt><dd>The agent tool a member runs.</dd></div>
       <div><dt>Scope</dt><dd>The link that connects one team to one repository and its dispatch labels.</dd></div>
       <div><dt>Work item</dt><dd>One tracked piece of work from issue to review.</dd></div>
       <div><dt>Approval</dt><dd>A recorded yes at a gate, such as plan approval or PR review.</dd></div>
       <div><dt>Agent Mail</dt><dd>The team mailbox where agents coordinate and hand off work.</dd></div>
-      <div><dt>Supervisor</dt><dd>The outside watcher that repairs routine faults under delegation.</dd></div>
+      <div><dt>Supervisor</dt><dd>The outside watcher — an AI agent or a person — that repairs routine faults under delegation.</dd></div>
       <div><dt>Audit</dt><dd>The ledger that records what the factory did and its limits.</dd></div>
       <div><dt>CI</dt><dd>Automatic checks that run on a PR before merge.</dd></div>
       <div><dt>PR</dt><dd>A pull request is a proposed change reviewed under repository policy.</dd></div>

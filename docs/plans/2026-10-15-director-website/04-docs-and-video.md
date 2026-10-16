@@ -1,6 +1,6 @@
 # Director docs plan and video concept
 
-For: issue #765 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, the revised `03-website-plan.md`, and both mockup pages on master.
+For: issue #768 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, the revised `03-website-plan.md`, and both mockup pages on master.
 
 This file plans two things. It plans the documentation for directors. It plans the product video concept. It produces neither one. Both stay later work.
 
@@ -10,7 +10,7 @@ Each claim names its evidence. A claim with no evidence does not enter the plan.
 
 - `01-audit.md` records the current docs, page by page, with limits.
 - `02-factory-story.md` gives the one sentence, the three parts, the eight-step "How it works" layer with parallel tracks and several teams, the six top-level words, and the nine detail words.
-- `03-website-plan.md` gives the website pages, the graphical home copy, the five animation concepts, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
+- `03-website-plan.md` gives the website pages, the graphical home copy, the five animation concepts, the two big figures, and the share ways. `mockup/index.html` and `mockup/how-it-works.html` show the two pages.
 - The existing docs live in `docs/guide/`, `docs/features/`, `docs/index.md`, and `docs/autonomy.md`.
 - Issue #758 gives the Director's video direction and the chosen production approach. Seeded screen states from the audit serve only the closing-segment capture list. They are not live records and not human trials.
 
@@ -38,7 +38,7 @@ Read the pages in this order. Each page answers one question.
 
 | Order | Page | New or changed | Purpose | Short outline |
 |---|---|---|---|---|
-| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the five home pictures as still images. A link to "How it works" for the detail. |
+| 1 | What Deck is | New director page | The director learns the factory in two minutes | Opens with the story: backlog, AI team, finished work. The one sentence and the three short parts, with the five home pictures and the two big figures as still images. A link to "How it works" for the detail. |
 | 2 | A first look at Overview | New director page | The director learns what needs a person | What "Needs you" means. Campaign progress in plain words. Which item waits for the director, and which waits for the team. |
 | 3 | A first look at Work | New director page | The director learns who owns each item | One row explained: owner, state, waiting reason, pull request link. The four normal states and the attention exception. |
 | 4 | A first look at Repositories and Teams | New director page | The director learns which backlog feeds which team | One scope explained in plain words. The roster, the named Leader, and the supervisor status. Repository count and work count. |
@@ -74,7 +74,7 @@ Evidence: the revised story marks its eight-step layer "read this on the second 
 | `docs/features/dashboard.md`, `work.md`, `repositories.md`, `agent-teams.md` | Add one director line at the top of each: what the screen shows, and which decision it supports. Keep the operator depth below | The pages name counts and filters before the decision. Evidence: `01-audit.md` feature findings. |
 | `docs/features/agent-mail.md` | Link it from the new Agent Mail introduction. Add no capture and no director rewrite | The introduction rests on this page text. The loading observation is a product limit, not a docs defect. Evidence: `01-audit.md` Agent Mail finding. |
 | `docs/features/harnesses.md` | Link it from the new Harnesses introduction. Keep setup depth and the readiness limit on the operator path | The page supports setup claims only. Evidence: `docs/features/harnesses.md`. |
-| `docs/features/usage.md` | Add one director line: Usage shows Claude Code session estimates. Factory delivery cost stays unknown | The split prevents a false cost claim. Evidence: `02-factory-story.md` cost line and `docs/features/usage.md`. |
+| `docs/features/usage.md` | Add one director line: Usage shows estimates for one supported agent tool's sessions. Factory delivery cost stays unknown | The split prevents a false cost claim. Evidence: `02-factory-story.md` cost line and `docs/features/usage.md`. |
 | `docs/autonomy.md` | Keep on the operator path. No director page sends a reader here first | The opening suits an operator and the setup needs a host token. Evidence: `01-audit.md` autonomy finding. |
 | Sidebar in `docs/.vitepress/config.ts` | Add a Start here group for directors at the top of the guide sidebar. Keep Guide and Features below it | The sidebar links the operating model today but gives no director entry. Evidence: `docs/.vitepress/config.ts` guide sidebar and `01-audit.md`. |
 
@@ -136,16 +136,16 @@ Evidence for the script: the closing line and the three middle scenes restate th
 
 ### Animation storyboard
 
-Every scene except the closing segment is an animated concept picture. No scene shows a Deck screen, a screen label, or product UI. The scenes are the website's React scene components (see `03-website-plan.md`, Technology and build), rendered here at video size. The story arc is: backlog, then parallel lanes, then many teams. Each scene stays self-contained: one idea.
+Every scene except the closing segment is an animated concept picture. No scene shows a Deck screen, a screen label, or product UI. The scenes are the website's React scene components (see `03-website-plan.md`, Technology and build), rendered here at video size. That includes the two big home figures: the hierarchy of roles carries Scene 3, and the factory figure carries the zoomed-out Scenes 6 and 7. The story arc is: backlog, then parallel lanes, then many teams. Each scene stays self-contained: one idea.
 
 | Scene | Time | What the viewer sees | Motion and transition | One idea it teaches |
 |---|---|---|---|---|
 | 1. Opening | 0:00 | A soft pile of feature cards. The Deck name settles above them. | Let the cards settle as the opening sentence ends. Hold until the next scene. | Every team has a list. Deck gives it a team. |
 | 2. The backlog | 0:18 | The #757 backlog animation: three feature cards settling into order, first to third. | Cards lift and settle in turn. The top card glows gently on "ready for the team". | You shape and order the list. |
-| 3. Meet the team — parallel lanes | 0:42 | The parallel-lanes scene: cards split into lanes; in each lane an owner drafts a plan, the Leader approves, the owner builds, a reviewer checks. Several lanes move at once. | Cards travel their lanes with small offsets, timed to the narration. | Members check their work. Someone else independently reviews it. |
+| 3. Meet the team — parallel lanes | 0:42 | The hierarchy figure builds first (Director, Leader, the two stacks), then the parallel-lanes scene: cards split into lanes; in each lane an owner drafts a plan, the Leader approves, the owner builds, a reviewer checks. Several lanes move at once. | Cards travel their lanes with small offsets, timed to the narration. | Members check their work. Someone else independently reviews it. |
 | 4. Finished work | 1:08 | Finished items land on the "finished" shelf beside their record, one record line drawn dashed. | Check mark draws in. Record lines appear. The dashed gap line pulses once, calmly. | Work returns with its record, gaps shown. |
 | 5. You stay in charge | 1:32 | The decision animation: work travels and stops at the closed "You decide" gate. The Director's moments (ready, publish) light up. | The work stops at the closed gate while the narrator says "waits for you". A separate approval cue then opens the gate. Approval never comes from elapsed time alone. | The key decisions stay yours. |
-| 6. Honest limits | 1:58 | The view begins to pull back: this team is one of several in one Deck, each with its own backlog (the many-teams scene), drawn quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
+| 6. Honest limits | 1:58 | The view begins to pull back to the factory figure, boundary and all: this team is one of several in one Deck, each with its own backlog (the many-teams scene), drawn quieter. A small house outline marks "your own computer". A dotted line marks "not measured yet". | Motion slows. Music drops under the words. | Local running. Unmeasured cost, stated plainly. |
 | 7. Closing line | 2:22 | Zoomed out: several teams side by side, each with its list, lanes, and finished shelf. End card with the Deck name. | The wide view settles. Hold for the last line. | Backlog, team, finished work — with you in charge. |
 | 8. Closing segment (optional) | after 2:34, at most 10s | The only screens in the video. See its own section below. | Separate sequence. Swappable or cuttable. | A short look at the real product, labeled as examples. |
 
@@ -206,7 +206,7 @@ The narrator is an AI voice. The video credits say so. The Director picks the vo
 
 - Tone: warm, friendly, and clear — a good colleague explaining over coffee. Confident on the story, gentle on the limits, never salesy. No excitement words beyond the script. Smile in the voice, not hype.
 - Pace: about 140 words per minute, with a breath at each scene change. Slower on the decision list ("The goals. The priorities. The budget.") and on the limits. Word timestamps from the voice render drive the scene timing, so generate the voice first, then lock the cuts.
-- Pronunciation: Deck — "deck", one syllable. Claude Deck — "clawd deck", kept together. Leader — "the Leader", stress on "lead". Reviewer — plain. Backlog — "BACK-log". Do not spell out abbreviations: the script holds none.
+- Pronunciation: Deck — "deck", one syllable. Leader — "the Leader", stress on "lead". Reviewer — plain. Backlog — "BACK-log". Do not spell out abbreviations: the script holds none.
 - Rules: read every limit line in full, at the same warmth as the claims. One voice for the whole video. The voice reads the approved script only — no ad-libbed benefits.
 
 ### Production approach
