@@ -41,12 +41,9 @@ The workflow file lives only on the preview branch, so it cannot affect the live
 
 1. **Foundation.** Create the Astro project on the preview branch, carry the existing `docs/` through to `dist/docs/` unchanged, add the preview workflow and a page-check job (HTML, local links, no external requests, no "Claude", no "backlog" on the home page). Deliverable: a near-empty site live on the preview URL, the docs reachable as today.
 
-2. **Scenes, one by one, on a gallery page** (`/scenes`, not linked from the site):
-   - **The factory from outside:** the Director and an AI helper with GitHub, the Director with Deck, ready features flowing into a factory with several AI teams, finished work flowing back.
-   - **Inside the factory:** parallel lanes, one feature colour and cap shape per lane.
-   - **The hierarchy of roles:** people, AI agents and systems.
-   - **The factory figure:** the boundary, what is inside and outside it.
-   - **Several teams in one Deck.**
+2. **Scenes, one by one, on a gallery page** (`/scenes`, not linked from the site). Two scenes, as the Director decided after the scene reviews (see below):
+   - **The factory from outside:** GitHub; you, the Director, and your AI assistants; the factory, with Deck and several AI teams inside; ready features flowing in, finished work flowing back.
+   - **Inside the factory:** one AI team per feature, each in its feature's colour and cap shape, working at its own pace through the same steps.
 
    For each scene: a written storyboard (what the viewer sees, motion, timing, easing, the one idea it teaches), the scroll-driven animation, the still version for reduced motion, and a **short screen recording** sent to the Director. The Director approves each scene or asks for another round. No scene enters a page before approval.
 
@@ -75,6 +72,18 @@ The workflow file lives only on the preview branch, so it cannot affect the live
 1. **Preview access: A, unlisted.** Pages carry `noindex`, and the address is not linked anywhere.
 2. **Pages: the website-plan team** writes the page copy and C1 reviews it, as in the plan campaign. The Supervisor builds the scenes, the motion and the site, and leads the quality pass.
 3. **Docs stay as they are** in this build. The docs rework is later work.
+
+## The Director's decisions after the scene reviews (2026-10-16)
+
+1. **Two scenes are enough.** The draft keeps "the factory from outside" and "inside the factory". The hierarchy of roles, the factory figure and "several teams in one Deck" are dropped, because the four figures were not different enough. The pages use these two scenes only.
+2. **The hero plays on its own.** On the home page, the outside scene plays its story once, in 8 seconds, when it comes into view, then only the flows loop. Elsewhere, scroll drives the scenes.
+3. **The factory is Deck and the AI teams.** Deck is inside the factory. Supervision is the Director's, with AI assistants, from outside the factory, like grooming the features; no Supervisor stands in the factory. The docs follow in #775.
+4. **The outside scene labels each part with a title and what it is:**
+   - **GitHub** — holds the features and finished work, outside the factory
+   - **You (as the factory Director) and your AI assistants** — own the features, prepare team rosters, perform factory supervision
+   - **Deck** — the factory infrastructure, team communication, production dashboard
+   - **AI Teams** — your selection of team roles, each with your selection of AI harnesses and AI models
+5. **No "lane" on the site.** Deck uses the word for something else. Inside the factory, "each feature gets its own team"; teams work at their own pace, on different features or projects, and work is sometimes sent back a step (review to build, approval to plan).
 
 ## Out of scope
 
