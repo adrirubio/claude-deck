@@ -60,6 +60,19 @@ The Director answered the open questions on #745 (2026-10-15 and 2026-10-16).
 7. **Animation rule:** smooth at 60 fps, measured on the build. DrawSVG and MorphSVG may animate SVG illustrations.
 8. **"What this plan does not promise":** removed from the plan.
 
+## Decisions after approval (2026-10-16)
+
+The Director approved the plan on #745, then decided the style and these changes. The build applies them to every page and mockup.
+
+1. **Style:** option C, "Floor" (`style/`).
+2. **Two pictures:** the hero shows the factory from outside; the second scene shows the inside.
+3. **Plurals:** "Your features. Your AI teams. Finished products." and plural backlogs and teams in the copy.
+4. **No "backlog" on the home page.** Say "features". "Backlog" may appear on How it works and other pages.
+5. **Feature colours:** each lane, its AI agents' caps and its work items show one feature colour and cap shape.
+6. **Navigation:** "For operators" becomes "Technical information"; "Share Deck" becomes "Quick tour".
+7. **The main button:** "Take the quick tour" (not "Understand and share it"). It links to the Quick tour page.
+8. **GitHub is named** in the outside picture.
+
 ## Limits that stay in force
 
 - Every isolated test capture in this campaign, and every planned new capture, uses seeded example data. No such capture shows live records. The older website screenshots keep the separate origin and age limits that `01-audit.md` records.
