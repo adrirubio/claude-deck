@@ -37,7 +37,7 @@ Page copy:
 
 > # Your features. Your AI teams. Finished products.
 >
-> You choose the features worth building. Your AI teams plan, build, and check them — and the decisions that matter stay with you.
+> Choose what to build. Let your AI teams get to work.
 >
 > [Main button] Take the quick tour
 >
@@ -47,9 +47,9 @@ Placement note: the main button links to `/quick-tour/`; the secondary link goes
 
 Alt text for the hero scene:
 
-> An animated view of the factory from outside: your ready features flow in from GitHub, AI teams work inside with Deck, and finished work flows back, while you and your AI assistants watch over it all from outside.
+> Ready features flow from GitHub into Deck and its AI teams. Finished work returns to GitHub. You and your AI assistants supervise from outside the factory.
 
-Evidence: you choose and order the features and mark them ready — `docs/guide/operating-model.md:17` and `:53-57`. AI teams plan, build, and check under an AI Leader — `docs/guide/operating-model.md:27` and `:89`. The decisions that matter stay with the Director — `docs/guide/operating-model.md:17` and `:91`.
+Evidence: you choose and order the features and mark them ready — `docs/guide/operating-model.md:17` and `:53-57`. AI teams then do the work under an AI Leader — `docs/guide/operating-model.md:27` and `:89`.
 
 ## 2. Inside the factory
 
@@ -57,13 +57,13 @@ Page copy:
 
 > ## Inside the factory
 >
-> Scroll on, and step inside. Every feature travels the same careful path — a plan first, then building, checking, and one last look before it joins your finished products. And if something is not right, it goes back a step and tries again.
+> Step inside to see how your AI teams turn features into finished work.
 
 Placement note: the second scene, "inside the factory", sits under this lead-in and plays as the reader scrolls, as approved. Its fixed captions and six step labels stay as they are.
 
 Alt text for the inside scene:
 
-> An animated look inside the factory: several AI teams, each in its own feature's colour, carry their features step by step from a first plan to finished work, each team moving at its own pace.
+> AI teams take features from plan to finished work at their own pace. Each feature has its own team and colour.
 
 Evidence: the scene, its six steps, and work sometimes being sent back a step are the Director's approved scene decisions — `docs/superpowers/specs/2026-10-16-website-build-design.md:44-46` and `:86`. Several teams in one Deck, each on its own features — `docs/features/repositories.md:3` and `docs/features/work.md:3`.
 
@@ -73,13 +73,15 @@ Page copy:
 
 > ## What stays yours
 >
-> The factory works to your brief. You, the Director, choose the features, shape the teams that work on them, and keep an eye on the floor.
+> You, the Director, choose the features and who builds them.
 >
-> Nothing counts as finished until you accept it. The teams do the building; the deciding stays with you.
+> You supervise the factory with your AI assistants.
+>
+> You decide whether the results meet your goals.
 
 Placement note: plain text only; no scene or screenshot sits in this section.
 
-Evidence: you choose the features and own the outcome — `docs/guide/operating-model.md:17` and `:53`. You shape the teams: the Director chooses the roster and how many builders and checkers each team has — `docs/guide/operating-model.md:30` and `:46`. Supervising the factory from outside is yours, with your AI assistants — `docs/superpowers/specs/2026-10-16-website-build-design.md:80` and `:83`. Accepting the result and approving publication stay with you — `docs/guide/operating-model.md:91` and `:97`.
+Evidence: you choose the features and who builds them — you own the outcome and the features (`docs/guide/operating-model.md:17` and `:53`) and choose the roster and how many builders and checkers each team has (`:30` and `:46`). Supervising the factory from outside is yours, with your AI assistants — `docs/superpowers/specs/2026-10-16-website-build-design.md:80` and `:83`. Whether results meet your goals is your call: you own the outcome and set the acceptance conditions — `docs/guide/operating-model.md:17` and `:53-57`.
 
 ## 4. Closing
 
