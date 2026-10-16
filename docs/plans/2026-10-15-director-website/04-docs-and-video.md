@@ -47,8 +47,7 @@ Read the pages in this order. Each page answers one question.
 | 7 | A first look at Harnesses | New director page | The director learns which agent tools Deck can set up | What a harness is, in one sentence. The six agent tools by name. Setup and support in plain words. Account, model, and session readiness stay unknown here. Operator setup stays on the operator path. |
 | 8 | The decisions that are yours | New director page | The director learns the retained decisions | Goal and backlog order. Publication, budgets, models, security stops. The Leader approves agent plans inside those limits. Human review follows repository policy. |
 | 9 | Words you need | New director page | The director learns the story words | The six top-level words first, then the nine "How it works" words, one short sentence per word. Each word links to the page that uses it. |
-| 10 | Limits and trust | New director page | The director learns what Deck does not promise | Local running and operator setup. Seeded example data. Locked Audit events. Usage session estimates beside unknown factory cost. No measured time saving. |
-| 11 | Share Deck from the docs | New director page | The director briefs a peer from the docs | The link, the one-page summary, and the video. Each item stands alone. |
+| 10 | Share Deck from the docs | New director page | The director briefs a peer from the docs | The link, the one-page summary, and the video. Each item stands alone. |
 
 Evidence for the screen claims: `01-audit.md` records Overview with "Needs you" and campaign progress, Work with owners and waiting reasons, Teams with the roster and the named Leader, Repositories with enablement apart from intake, and Audit with safe metrics and locked events. `02-factory-story.md` gives the retained decisions. The glossary comes from the story: six top-level words, then nine detail words.
 
@@ -235,12 +234,3 @@ Checks for this concept (run on the draft, and again on the final storyboard):
 
 Producing the video stays later work. The first step is a 20-second prototype under a separate issue. It proves the render path, the voice timing, and the music fit before the full film is built.
 
-## What this plan does not promise
-
-This plan does not produce the docs pages or the video. Both stay later work, after the Director approves this plan under the parent issue.
-
-This plan does not promise that seeded screens prove live value. Each shot and page carries its seeded-data limit.
-
-This plan does not promise a human verdict. The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded.
-
-This plan keeps factory delivery cost unknown and claims no time saving. Evidence: `docs/guide/factory-audit-and-metrics.md` and `02-factory-story.md`.

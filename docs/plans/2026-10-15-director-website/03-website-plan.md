@@ -103,7 +103,7 @@ Three kinds of thing must read at a glance, each in its own visual language, wit
 
 7. **What the factory is — the factory figure.** What the viewer sees: a boundary labelled "The factory". Inside it: the Supervisor, the Deck controller, and the team (Leader, Implementers ×N, Verifiers ×N). Outside it: the Director and the grooming helper above, and where the work lives below. Motion: the boundary draws in; the inside parts appear; work dots travel through the team; a dot flows up as ready work in and down as finished work back; the Supervisor's check-in dot pulses gently. Timing: about 5 seconds to build on scroll into view, then only the flowing dots and the gentle pulse continue. One idea it teaches: the factory is the Supervisor, the Deck controller and the team working your backlog together, while you and your list stay outside it. Still version: the closed boundary with all parts in place and one dot on each flow. Meaning and evidence: the factory is the supervisor, the controller and the team working on the Director's backlog (`docs/guide/operating-model.md:38`); who sits inside and outside, and why, is the table at `:42-49`; the team works the backlog and returns finished work, the controller keeps the team inside its rules, and the Supervisor checks in (`:65`, `:88-90`, `:98-99`).
 
-Prototype note: drawing the lines and the boundary in the mockup animates stroke properties. The mockup is a prototype; it may show that effect, but it does not resolve the open animation constraint in `README.md` (question 7), and this plan grants no exception.
+Prototype note: drawing the lines and the boundary in the mockup animates stroke properties. The mockup is a prototype; the Director allowed that effect on SVG illustrations (`README.md`, Director decisions, item 7).
 
 ### Share Deck and For operators (home sections)
 
@@ -227,9 +227,8 @@ Planning only: nothing is built under this plan. Every tool below is the Directo
 - **Graphics: animated SVG built in code.** The Director chose code-built SVG over editor-made Rive or Lottie files, so the team can write and change the graphics exactly.
 - **Supporting tools.** Lenis for smooth scrolling. The View Transitions API for page-to-page transitions. An optional, light WebGL backdrop (Three.js) in the hero only — kept only if it stays fast against the targets below; it is not promised.
 - **One component library.** Each scene is a React component. Astro shows the same component on the site, and Remotion renders the same component in the video (see `04-docs-and-video.md`, Production approach). One scene, two outputs.
-- **Standards, stated as targets.** A still version of every scene for reduced motion. A target of 60 fps, using transform and opacity only. No layout shift as a build rule. A Lighthouse target above 95. Animations start when their section is visible. These are targets for the build, not measured results.
+- **Standards, stated as targets.** A still version of every scene for reduced motion. A target of 60 fps, measured on the build. Transform and opacity are the default; DrawSVG and MorphSVG may animate SVG illustrations (the Director's decision, 2026-10-16). No layout shift as a build rule. A Lighthouse target above 95. Animations start when their section is visible. These are targets for the build, not measured results.
 
-Unresolved constraint, for the Director to decide before the build uses those effects: The Director selected DrawSVG and MorphSVG and also specified transform-and-opacity-only animation. Drawing and morphing change other SVG properties. The implementation plan must reconcile these requirements before using those effects; this plan grants no exception. Evidence for what the plugins animate: [DrawSVGPlugin](https://gsap.com/docs/v3/Plugins/DrawSVGPlugin/) and [MorphSVGPlugin](https://gsap.com/docs/v3/Plugins/MorphSVGPlugin/).
 
 ### Animation storyboard (website)
 
@@ -267,14 +266,4 @@ Checks, with commands. The build notes record each command and its result.
 - Home word check: extract the home page visible copy and run `grep -Eio 'github|\bprs?\b|pull requests?|\bissues?\b|\bci\b|\bmerg[a-z]*|\bbranch[a-z]*|\blabel[a-z]*'`. It must print nothing.
 - Naming check: run a case-insensitive count grep for the product's old first name on the six changed files. Report every remaining match and why it remains. The product is called Deck, and member tools are agent tools.
 - Internal terms: grep the copy for the static figures' field names and internal terms. It must hold none; each one is translated into plain words.
-
-## What this plan does not promise
-
-This plan does not promise a published site. Publication stays a Director decision under the parent issue.
-
-This plan does not promise that seeded screens prove live value. Each capture carries its seeded-data limit.
-
-This plan does not promise a human verdict. A critic reads the mockup as a director. No human director trial has run.
-
-This plan keeps factory delivery cost unknown and claims no time saving. Evidence: `docs/guide/factory-audit-and-metrics.md` and `02-factory-story.md`.
 
