@@ -164,7 +164,7 @@ Page copy:
 
 Screenshot: Work. Seeded state: the merged item in the list, shown with the All filter. Caption and alt text:
 
-> Work, with example data: a merged item in the finished list, shown with the All filter.
+> Work, with example data: a merged item shown with the All filter.
 
 Evidence: human review and merge follow repository policy — `docs/guide/index.md:13`; human review and merge gates link to the proposed change, and passing checks alone do not prove review acceptance — `docs/features/agent-teams.md:207-214`. Work may merge into an integration branch before a later promotion — `docs/guide/supervised-factory-playbook.md:150-154`. The seeded merged item — `scripts/e2e/scenarios.py:225-226`; finished as a tracking state — `docs/features/work.md:5`. The All-filter capture instruction comes from the screenshot list in `docs/plans/2026-10-15-director-website/03-website-plan.md:176` (the steps 2, 5 and 8 Work row). Approving publication stays with the Director — `docs/guide/operating-model.md:91` and `:97`.
 
