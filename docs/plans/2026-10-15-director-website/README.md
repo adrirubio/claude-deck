@@ -30,7 +30,7 @@ Scoped checklist, by stage:
 5. **Fix the wrong facts and make new captures** for "How it works" and the video closing segment. Six harnesses, not five. Source: `03-website-plan.md`, screenshot list; `01-audit.md`, top problems 6 and 7. Director: approve public use of seeded captures, with the label.
 6. **Move operator content to For operators and the docs.** Source: `03-website-plan.md`, "What to remove"; `01-audit.md`, top problems 2 and 5. Director: approve the split.
 7. **Build the docs "Start here" path**, opening with the story, with its own "How it works" page. Source: `04-docs-and-video.md`, Part 1. Director: approve the docs structure.
-8. **Produce the final animations** as shared React scenes, reused on the home page and in the video. The two big figures are scenes in the same library. Source: `03-website-plan.md`, animation concepts and storyboard; `04-docs-and-video.md`, storyboard. Director: Claude Opus 5.5 produces them (answered — see open questions). Approve the style frames first.
+8. **Produce the final animations** as shared React scenes, reused on the home page and in the video. The two big figures are scenes in the same library. Source: `03-website-plan.md`, animation concepts and storyboard; `04-docs-and-video.md`, storyboard. Director: the Supervisor, an AI agent, produces them (answered — see open questions). Approve the style frames first.
 9. **Produce the video as code**, starting with the 20-second prototype under issue #760. Remotion renders the shared scenes, ElevenLabs narrates, Suno supplies the music. Source: `04-docs-and-video.md`, Part 2. Director: choose the voice, generate the Suno track, check the licences, approve the budget and publication.
 
 ## What each change needs from the Director
@@ -49,7 +49,7 @@ Scoped checklist, by stage:
 
 ## Open questions for the Director
 
-Seven questions remain open. The producer decision is answered: Claude Opus 5.5 (recorded in issue #765).
+Seven questions remain open. The producer decision is answered: the Supervisor, an AI agent, produces the animations and the video.
 
 1. Is a human director trial needed before publication? The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded. This question blocks a final publication claim.
 2. When does the website change publish? The plan specifies a preview branch and deployment of `dist/` only. The build must verify that route. The Director decides when to publish. This blocks production publication. The preview build follows plan and style approval.
