@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deck — style option C, revised</title>
+<style>
+/*FONTS:iserif:400,400i;isans:400,500,600*/
+:root{--fog:#ECEFF1;--graphite:#1C2A31;--steel:#9DAEB6;--belt:#CDD6DA;--ai:#1E8C76;--ai2:#5FC1A9;--human:#E3962B;--muted:#56666E}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--fog);color:var(--graphite);font-family:"Instrument Sans",system-ui,sans-serif;font-size:18px;line-height:1.55}
+a{color:inherit}
+.wrap{max-width:1240px;margin:0 auto;padding:0 40px}
+header.top{display:flex;align-items:center;justify-content:space-between;padding:26px 0}
+.logo{font-family:"Instrument Serif";font-size:32px;line-height:1;letter-spacing:-.01em}
+nav a{margin-left:28px;text-decoration:none;font-weight:500;font-size:16px;color:var(--muted)}
+nav a:hover,nav a:focus-visible{color:var(--graphite)}
+:focus-visible{outline:2px solid var(--ai);outline-offset:3px;border-radius:4px}
+
+.hero{display:grid;grid-template-columns:7fr 5fr;gap:12px 48px;align-items:end;padding:24px 0 40px}
+.hero .iso{grid-column:1 / -1;margin-top:8px}
+h1{font-family:"Instrument Serif";font-weight:400;font-size:clamp(46px,6vw,88px);line-height:.94;letter-spacing:-.02em;margin:0}
+h1 em{font-style:italic;color:var(--ai)}
+.lede{font-size:20px;max-width:30ch;color:#2E3D44;margin:0 0 30px}
+.btn{display:inline-block;background:var(--graphite);color:#fff;font-weight:600;text-decoration:none;padding:15px 24px;border-radius:10px;font-size:17px}
+.quiet{margin-left:20px;font-weight:600;text-decoration:none;border-bottom:2px solid var(--human)}
+.iso{width:100%;height:auto;display:block}
+.tag{font-family:"Instrument Sans";font-weight:600;font-size:18px;fill:var(--graphite);paint-order:stroke;stroke:#ECEFF1;stroke-width:5px;stroke-linejoin:round}
+.tag-s{font-family:"Instrument Sans";font-weight:400;font-size:15px;fill:var(--muted);paint-order:stroke;stroke:#ECEFF1;stroke-width:4px}
+
+.lanes{padding:56px 0 90px;border-top:1px solid #d3dade}
+.lanes h2{font-family:"Instrument Serif";font-weight:400;font-size:clamp(38px,4vw,60px);line-height:1;letter-spacing:-.015em;margin:0 0 14px;max-width:20ch}
+.lanes p.sub{color:#2E3D44;max-width:58ch;margin:0 0 10px}
+.legend{display:flex;flex-wrap:wrap;gap:28px;margin-top:8px;font-size:15px;color:#2E3D44}
+.legend span{display:inline-flex;align-items:center;gap:10px;white-space:nowrap}
+.sw{width:18px;height:18px;border-radius:4px;display:inline-block}
+footer{padding:24px 0 48px;color:var(--muted);font-size:14px}
+@media (max-width:900px){.wrap{padding:0 20px}.hero{grid-template-columns:1fr}nav{display:none}.quiet{display:inline-block;margin:14px 0 0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top"><div class="logo">Deck</div><nav><a href="#">How it works</a><a href="#">Quick tour</a><a href="#">Technical information</a></nav></header>
+
+<section class="hero">
+  <h1>Your features.<br>Your <em>AI teams.</em><br>Finished products.</h1>
+  <div>
+    <p class="lede">You choose the features, Deck's AI teams build and check the work, and the key decisions stay with you.</p>
+    <a class="btn" href="#">Take the quick tour</a><a class="quiet" href="#">How it works</a>
+  </div>
+  <svg id="hero" class="iso" viewBox="0 0 760 520" role="img" aria-label="The factory from outside. You and your AI helper prepare your features in GitHub. You set up and run your AI teams in Deck. Ready work flows from GitHub into the factory, where several AI teams work in parallel, and finished work flows back to GitHub."></svg>
+</section>
+
+<section class="lanes" aria-labelledby="lh">
+  <h2 id="lh">Inside the factory, each AI team works on several features at once</h2>
+  <p class="sub">Each lane carries one feature, in its own colour. An agent owner plans and builds it, the AI Leader approves the plan, an AI reviewer checks the work, and the Leader and the Supervisor check it before it merges.</p>
+  <div class="legend">
+    <span><i class="sw" style="background:#E3962B"></i>You, the Director</span>
+    <span><i class="sw" style="background:#1E8C76"></i>An AI agent</span>
+    <span><i class="sw" style="background:linear-gradient(90deg,#E3962B 50%,#1E8C76 50%)"></i>The Supervisor: an AI agent or a person</span>
+    <span><i class="sw" style="background:linear-gradient(90deg,#2E7DD7 33%,#8E5BD8 33% 66%,#D0577B 66%)"></i>One colour and shape per feature</span>
+    <span><i class="sw" style="background:#9DAEB6"></i>Deck, the system that runs the floor</span>
+  </div>
+  <svg id="lanes" class="iso" viewBox="0 0 1160 600" role="img" aria-label="Three conveyor lanes in perspective, one per feature, each in its own colour. Each lane passes six stations in order: the agent owner plans, the AI Leader approves, the agent owner builds, an AI reviewer checks, the Leader and the Supervisor check, and the work is merged. The three items are at different stations."></svg>
+</section>
+<footer>Style option C, "Floor", revised. A style frame for choosing the art direction, not a deployed site.</footer>
+</div>
+
+<script>
+(function(){
+  var NS='http://www.w3.org/2000/svg', C=Math.cos(Math.PI/6), S=Math.sin(Math.PI/6);
+  var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function P(o,x,y,z){return [o.x+(x-y)*C*o.k, o.y+(x+y)*S*o.k-z*o.k]}
+  function el(n,a,p){var e=document.createElementNS(NS,n);for(var k in a)e.setAttribute(k,a[k]);(p||null)&&p.appendChild(e);return e}
+  function poly(g,o,pts,fill,stroke){return el('polygon',{points:pts.map(function(q){return P(o,q[0],q[1],q[2]).join(',')}).join(' '),fill:fill,stroke:stroke||'none','stroke-width':stroke?1:0,'stroke-linejoin':'round'},g)}
+  function shade(hex,f){var n=parseInt(hex.slice(1),16),r=n>>16,g=n>>8&255,b=n&255;function c(v){return Math.max(0,Math.min(255,Math.round(v*f)))}return'#'+((1<<24)|(c(r)<<16)|(c(g)<<8)|c(b)).toString(16).slice(1)}
+  function box(g,o,x,y,z,w,d,h,col){
+    poly(g,o,[[x,y+d,z],[x+w,y+d,z],[x+w,y+d,z+h],[x,y+d,z+h]],shade(col,.78));
+    poly(g,o,[[x+w,y,z],[x+w,y+d,z],[x+w,y+d,z+h],[x+w,y,z+h]],shade(col,.9));
+    poly(g,o,[[x,y,z+h],[x+w,y,z+h],[x+w,y+d,z+h],[x,y+d,z+h]],col);
+  }
+  function person(g,o,x,y,col){ // a cylinder body and a head: a human
+    var b=P(o,x,y,0),t=P(o,x,y,34),k=o.k;
+    el('ellipse',{cx:b[0],cy:b[1],rx:9*k,ry:4.5*k,fill:shade(col,.7)},g);
+    el('rect',{x:b[0]-9*k,y:t[1],width:18*k,height:b[1]-t[1],fill:shade(col,.85)},g);
+    el('ellipse',{cx:t[0],cy:t[1],rx:9*k,ry:4.5*k,fill:col},g);
+    var h=P(o,x,y,46);el('circle',{cx:h[0],cy:h[1],r:7.5*k,fill:col},g);
+  }
+  var FEAT=[['#2E7DD7','cube'],['#8E5BD8','pyramid'],['#D0577B','cylinder']];
+  function agent(g,o,x,y,col,lane){ // a verdigris body (an AI agent) with a feature-coloured cap
+    box(g,o,x-8,y-8,0,16,16,30,col);
+    var f=lane==null?['#5FC1A9','cube']:FEAT[lane%FEAT.length], c=f[0];
+    if(f[1]==='cube'){box(g,o,x-6,y-6,30,12,12,10,c)}
+    else if(f[1]==='pyramid'){var t=[x,y,44];poly(g,o,[[x-7,y+7,30],[x+7,y+7,30],t],shade(c,.8));poly(g,o,[[x+7,y-7,30],[x+7,y+7,30],t],shade(c,.92));poly(g,o,[[x-7,y-7,30],[x+7,y-7,30],t],c)}
+    else {var b=P(o,x,y,30),tp=P(o,x,y,40),k=o.k;el('rect',{x:b[0]-7*k,y:tp[1],width:14*k,height:b[1]-tp[1],fill:shade(c,.85)},g);el('ellipse',{cx:b[0],cy:b[1],rx:7*k,ry:3.5*k,fill:shade(c,.85)},g);el('ellipse',{cx:tp[0],cy:tp[1],rx:7*k,ry:3.5*k,fill:c},g)}
+  }
+  function callout(g,o,x,y,z,s,dx,dy,cls){var a=P(o,x,y,z);var bx=a[0]+dx,by=a[1]+dy;el('line',{x1:a[0],y1:a[1],x2:bx,y2:by-5,stroke:'#56666E','stroke-width':1.2},g);el('circle',{cx:a[0],cy:a[1],r:2.5,fill:'#56666E'},g);var t=el('text',{x:bx,y:by+12,'class':cls||'tag','text-anchor':dx<0?'end':'start'},g);t.textContent=s;return t}
+  function text(g,o,x,y,z,s,cls,anchor){var q=P(o,x,y,z);var t=el('text',{x:q[0],y:q[1],'class':cls,'text-anchor':anchor||'middle'},g);t.textContent=s;return t}
+  function floor(svg,o,L,lanes,stations,labels){
+    var g=el('g',{},svg);
+    // floor slab (system)
+    box(g,o,-30,-30,-14,L+150,lanes*70+40,14,'#D9E0E3');
+    for(var i=0;i<lanes;i++){
+      var y=i*70;
+      box(g,o,0,y,0,L,26,6,'#9DAEB6');               // belt frame (system)
+      poly(g,o,[[0,y+3,6.2],[L,y+3,6.2],[L,y+23,6.2],[0,y+23,6.2]],'#C2CDD2'); // belt surface
+      poly(g,o,[[0,y+11,6.4],[L,y+11,6.4],[L,y+15,6.4],[0,y+15,6.4]],FEAT[i%3][0]); // the feature's colour
+      stations.forEach(function(sx,j){
+        var col=labels&&labels[j]==='sup'?'split':'#1E8C76';
+        if(col==='split'){person(g,o,sx,y+44,'#E3962B');agent(g,o,sx+26,y+44,'#1E8C76',i)}
+        else if(labels&&labels[j]==='done'){box(g,o,sx-12,y+34,0,24,20,18,'#9DAEB6')}
+        else agent(g,o,sx,y+44,col,i);
+      });
+    }
+    return g;
+  }
+  function items(svg,o,L,lanes,phase,stations){
+    var g=el('g',{},svg);
+    for(var i=0;i<lanes;i++){
+      var gi=el('g',{},g), y=i*70;
+      box(gi,o,0,y+5,6,22,16,16,'#F4F6F7'); box(gi,o,4,y+9,22,14,8,1.5,FEAT[i%3][0]);
+      var start=phase[i], dx=C*o.k, dy=S*o.k;
+      if(!reduce){
+        var kf=[],steps=stations.length;
+        for(var s=0;s<=steps;s++){var sx=s<steps?stations[s]-11:L-24; kf.push({transform:'translate('+(sx*dx)+'px,'+(sx*dy)+'px)',offset:s/steps});}
+        gi.animate(kf,{duration:9000,iterations:Infinity,easing:'ease-in-out',delay:-start*9000});
+      } else {var sx=stations[Math.floor(start*stations.length)]-11; gi.setAttribute('transform','translate('+(sx*dx)+','+(sx*dy)+')')}
+    }
+  }
+  // HERO: the factory from outside
+  var h=document.getElementById('hero'), oh={x:330,y:120,k:1.18};
+  var gh=el('g',{},h);
+  box(gh,oh,-40,-40,-12,640,420,12,'#D9E0E3');                       // the ground
+  // GitHub: a system that holds the feature lists
+  box(gh,oh,0,0,0,150,130,46,'#33434B');
+  [[18,16],[18,56],[18,96]].forEach(function(r,i){box(gh,oh,r[0],r[1],46,112,22,4,i===0?'#F4F6F7':'#C9D3D8')});
+  callout(h,oh,0,60,46,'GitHub holds your feature lists',-60,-40);
+  // the grooming helper (AI) next to GitHub
+  agent(gh,oh,40,190,'#1E8C76'); callout(h,oh,32,190,40,'Your AI helper prepares them',-70,10);
+  // you, the Director
+  person(gh,oh,200,210,'#E3962B'); callout(h,oh,192,212,40,'You, the Director',-60,70);
+  // Deck: the console where you set up and run the teams
+  box(gh,oh,170,270,0,90,60,26,'#9DAEB6'); box(gh,oh,182,278,26,66,10,26,'#1C2A31'); box(gh,oh,186,280,30,58,2,18,'#5FC1A9');
+  callout(h,oh,170,300,14,'Deck sets up and runs your AI teams',-50,40);
+  // the factory: low walls, several teams inside
+  var fx=330,fy=0,fw=230,fd=330;
+  box(gh,oh,fx,fy,0,fw,fd,4,'#E9EEF0');
+  [[fx,fy,fw,8],[fx,fy,8,fd]].forEach(function(w){box(gh,oh,w[0],w[1],4,w[2],w[3],12,'#9DAEB6')});
+  [0,1].forEach(function(t){
+    var ty=fy+30+t*150;
+    box(gh,oh,fx+30,ty,4,170,16,5,'#9DAEB6');
+    box(gh,oh,fx+30,ty+6,9.2,170,4,0.4,FEAT[t*2%3][0]);
+    [70,120,170].forEach(function(ax){agent(gh,oh,fx+ax-10,ty+40,'#1E8C76',t*2)});
+    text(h,oh,fx+115,ty+92,6,t===0?'AI team, project A':'AI team, project B','tag-s');
+  });
+  [[fx,fy+fd-8,fw,8],[fx+fw-8,fy,8,fd]].forEach(function(w){box(gh,oh,w[0],w[1],4,w[2],w[3],12,'#B7C4CA')});
+  callout(h,oh,fx+fw,fy,16,'The factory: several AI teams at work',20,-50);
+  // flows: ready work in, finished work back, Deck runs the factory
+  function lane(x1,y1,x2,y2,col){var a=P(oh,x1,y1,1),b=P(oh,x2,y2,1);el('line',{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:col,'stroke-width':3.5,'stroke-dasharray':'2 8','stroke-linecap':'round'},h)}
+  function mover(x1,y1,x2,y2,col,delay){var g=el('g',{},h);box(g,oh,x1,y1-6,1,14,12,12,col);var dx=(x2-x1),dy=(y2-y1),sx=(dx-dy)*C*oh.k,sy=(dx+dy)*S*oh.k;
+    if(!reduce)g.animate([{transform:'translate(0,0)',opacity:0},{opacity:1,offset:.12},{opacity:1,offset:.88},{transform:'translate('+sx+'px,'+sy+'px)',opacity:0}],{duration:4200,iterations:Infinity,delay:delay});
+    else g.setAttribute('transform','translate('+sx/2+','+sy/2+')')}
+  lane(150,40,330,40,'#1E8C76'); lane(330,100,150,100,'#E3962B'); lane(260,300,330,300,'#1C2A31'); lane(70,170,70,130,'#1E8C76'); lane(200,230,200,270,'#E3962B');
+  callout(h,oh,250,40,2,'Ready features flow in',10,-56,'tag-s'); callout(h,oh,250,100,2,'Finished work flows back',30,26,'tag-s');
+  [0,1400,2800].forEach(function(d){mover(150,46,330,46,'#F4F6F7',d)});
+  [700,2100,3500].forEach(function(d){mover(330,106,150,106,'#E3962B',d)});
+  // LANES
+  var l=document.getElementById('lanes'), ol={x:250,y:120,k:1.25};
+  var st2=[80,200,320,440,560,680], lab=['ai','ai','ai','ai','sup','done'];
+  floor(l,ol,740,3,st2,lab);
+  var names=[['Plan','agent owner'],['Approve','AI Leader'],['Build','agent owner'],['Review','AI reviewer'],['Check','Leader and Supervisor'],['Merged','done']];
+  names.forEach(function(n,j){text(l,ol,st2[j],-40,10,(j+1)+'  '+n[0],'tag');text(l,ol,st2[j]+14,-40,-6,n[1],'tag-s')});
+  items(l,ol,740,3,[0,.34,.67],st2);
+  function fit(){[h,l].forEach(function(svg){var b=svg.getBBox(),p=18;svg.setAttribute('viewBox',[b.x-p,b.y-p,b.width+2*p,b.height+2*p].join(' '))})}
+  fit(); if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);
+})();
+</script>
+</body>
+</html>
