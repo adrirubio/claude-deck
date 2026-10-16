@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Deck — Your backlog. Your AI team. Finished work.</title>
+<title>Deck — Your backlog. Your AI team. Finished work.</title>
 <style>
   :root{--ink:#1c2420;--muted:#4c5a52;--line:#d8ded9;--paper:#ffffff;--wash:#eef2ee;--green:#166534;--green-dark:#14532d;--amber:#92400e;--radius:10px}
   *{box-sizing:border-box}
@@ -64,6 +64,30 @@
   @keyframes lane{0%{transform:translateX(0)}55%,80%{transform:translateX(172px)}100%{transform:translateX(0)}}
   .mini{animation:mini 6s ease-in-out infinite}.mini2{animation:mini 6s 1.5s ease-in-out infinite}.mini3{animation:mini 6s 3s ease-in-out infinite}
   @keyframes mini{0%,100%{transform:translateX(0)}50%{transform:translateX(26px)}}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}
+  .legend span{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13.5px;background:#fff}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:7px}
+  .bigfig .t{font:700 19px system-ui,sans-serif}
+  .bigfig .s{font:13.5px system-ui,sans-serif}
+  .bigfig .k{font:700 11px system-ui,sans-serif;letter-spacing:.6px}
+  html.js .bigfig .st{opacity:0;transform:translateY(12px);transition:opacity .55s ease,transform .55s ease}
+  html.js .bigfig.seen .st{opacity:1;transform:none}
+  html.js .bigfig .d1{transition-delay:.05s}html.js .bigfig .d2{transition-delay:.4s}html.js .bigfig .d3{transition-delay:.75s}html.js .bigfig .d4{transition-delay:1.1s}html.js .bigfig .d5{transition-delay:1.45s}html.js .bigfig .d6{transition-delay:1.8s}html.js .bigfig .d7{transition-delay:2.15s}
+  html.js .bigfig .draw{stroke-dasharray:100;stroke-dashoffset:100;transition:stroke-dashoffset .9s ease}
+  html.js .bigfig.seen .draw{stroke-dashoffset:0}
+  html.js .bigfig .fanA,html.js .bigfig .fanB{transition:transform .7s ease 1.6s}
+  html.js .bigfig.seen .fanA{transform:translate(-6px,-6px)}
+  html.js .bigfig.seen .fanB{transform:translate(6px,-6px)}
+  .flowdot{opacity:0}
+  .bigfig.seen .fd-up{animation:fdup 3s linear infinite}
+  .bigfig.seen .fd-down{animation:fddown 3s linear infinite}
+  .bigfig.seen .fd-across{animation:fdacross 4.5s linear infinite}
+  @keyframes fdup{0%{transform:translateY(0);opacity:0}15%{opacity:1}85%{opacity:1}100%{transform:translateY(-30px);opacity:0}}
+  @keyframes fddown{0%{transform:translateY(0);opacity:0}15%{opacity:1}85%{opacity:1}100%{transform:translateY(30px);opacity:0}}
+  @keyframes fdacross{0%{transform:translateX(0);opacity:0}10%{opacity:1}90%{opacity:1}100%{transform:translateX(400px);opacity:0}}
+  .pulse{transform-box:fill-box;transform-origin:center}
+  .bigfig.seen .pulse{animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.8);opacity:.4}}
   @media (max-width:820px){.flow{grid-template-columns:1fr}.flow .arr{transform:rotate(90deg);justify-self:center}.grid2{grid-template-columns:1fr}.hero h1{font-size:31px}}
   @media (prefers-reduced-motion: reduce){
     .b1,.b2,.b3,.r1,.r2,.r3,.r4,.workcard,.l1,.l2,.l3,.tick,.gate,.mini,.mini2,.mini3{animation:none;opacity:1;transform:none}
@@ -71,12 +95,18 @@
     .lane2{animation:none;opacity:1;transform:translateX(120px)}
     .lane3{animation:none;opacity:1;transform:translateX(60px)}
     .dot{animation:none;opacity:1;transform:translateX(150px)}
+    .bigfig .st{animation:none;opacity:1;transform:none;transition:none}
+    .bigfig .draw{stroke-dashoffset:0;transition:none}
+    .bigfig .fanA{transform:translate(-6px,-6px)}
+    .bigfig .fanB{transform:translate(6px,-6px)}
+    .flowdot,.pulse{animation:none;opacity:1;transform:none}
   }
 </style>
+<script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
 <header class="site"><div class="wrap bar">
-  <div class="brand">Claude <span>Deck</span></div>
+  <div class="brand">Deck</div>
   <nav>
     <a href="how-it-works.html">How it works</a>
     <a href="#share">Share Deck</a>
@@ -156,6 +186,174 @@
   </div></section>
 
 
+  <section id="who"><div class="wrap">
+    <h2>Who does what</h2>
+    <p class="lead">One person is in charge. The AI team members work in a clear chain under that person. The computer systems follow fixed rules — they are not bosses. One role, the Supervisor, can be an AI agent or a person.</p>
+    <div class="legend" aria-label="Key to the colours">
+      <span><i class="sw" style="background:#b45309"></i>A person</span>
+      <span><i class="sw" style="background:#6d28d9"></i>An AI team member</span>
+      <span><i class="sw" style="background:#334155"></i>A computer system</span>
+    </div>
+    <figure class="bigfig" id="fig-hierarchy">
+      <svg viewBox="0 0 580 560" role="img" aria-label="Who answers to whom: the Director at the top, optional helpers beside the Director, the Leader below, then any number of builders and checkers, with two computer systems at the bottom">
+        <defs>
+          <symbol id="h-person" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z"/></symbol>
+          <symbol id="h-agent" viewBox="0 0 24 24"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/><circle cx="8.5" cy="12.5" r="2.1" fill="#fff"/><circle cx="15.5" cy="12.5" r="2.1" fill="#fff"/></symbol>
+          <symbol id="h-sys" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="3.4 3.35"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></symbol>
+        </defs>
+        <path class="draw d4" pathLength="100" d="M290 86 L290 246" stroke="#1c2420" stroke-width="3" fill="none"/>
+        <path class="draw d2" pathLength="100" d="M205 86 L205 100 L150 100 L150 118" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="6 4" fill="none"/>
+        <path class="draw d2" pathLength="100" d="M375 86 L375 100 L430 100 L430 118" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="6 4" fill="none"/>
+        <path class="draw d6" pathLength="100" d="M290 330 L290 344 L150 344 L150 358 M290 344 L430 344 L430 358" stroke="#1c2420" stroke-width="3" fill="none"/>
+        <g class="st d1">
+          <rect x="140" y="14" width="300" height="72" rx="12" fill="#fef3c7" stroke="#b45309" stroke-width="2.5"/>
+          <use href="#h-person" x="154" y="24" width="24" height="24" fill="#b45309"/>
+          <text class="t" x="186" y="44" fill="#78350f">Director</text>
+          <text class="s" x="154" y="60" fill="#78350f">You — own the result and the backlog.</text><text class="s" x="154" y="77" fill="#78350f">You decide.</text>
+        </g>
+        <g class="st d3">
+          <rect x="14" y="118" width="272" height="100" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+          <use href="#h-agent" x="28" y="128" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="57" y="146" fill="#4c1d95">Grooming helper</text>
+          <text class="k" x="28" y="166" fill="#6d28d9">AI TEAM MEMBER · OPTIONAL HELP</text>
+          <text class="s" x="28" y="186" fill="#4c1d95">Drafts backlog items.</text>
+          <text class="s" x="28" y="204" fill="#4c1d95">No authority — you decide.</text>
+        </g>
+        <g class="st d3">
+          <rect x="294" y="118" width="272" height="100" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+          <use href="#h-agent" x="308" y="128" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="337" y="146" fill="#4c1d95">Supervisor</text><use href="#h-person" x="540" y="128" width="18" height="18" fill="#b45309"/>
+          <text class="k" x="308" y="166" fill="#6d28d9">OPTIONAL · AI AGENT OR A PERSON</text>
+          <text class="s" x="308" y="186" fill="#4c1d95">Acts for you only within limits</text>
+          <text class="s" x="308" y="204" fill="#4c1d95">you set. Keeps the factory running.</text>
+        </g>
+        <text class="k st d4" x="298" y="240" fill="#1c2420">LINE OF COMMAND</text>
+        <g class="st d5">
+          <rect x="140" y="246" width="300" height="84" rx="12" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+          <use href="#h-agent" x="154" y="256" width="22" height="22" fill="#6d28d9"/>
+          <text class="t" x="184" y="275" fill="#4c1d95">Leader</text>
+          <text class="s" x="154" y="298" fill="#4c1d95">Reads the ready backlog, approves</text>
+          <text class="s" x="154" y="316" fill="#4c1d95">the plans, and picks the next work.</text>
+        </g>
+        <g class="st d6">
+          <rect class="fanA" x="20" y="358" width="266" height="84" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+          <rect x="14" y="358" width="272" height="84" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+          <use href="#h-agent" x="28" y="368" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="57" y="386" fill="#4c1d95">Implementers ×N</text>
+          <text class="k" x="28" y="406" fill="#6d28d9">AI TEAM MEMBERS · ANY NUMBER</text>
+          <text class="s" x="28" y="426" fill="#4c1d95">Build the work, in parallel.</text>
+        </g>
+        <g class="st d6">
+          <rect class="fanB" x="294" y="358" width="266" height="84" rx="10" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+          <rect x="294" y="358" width="272" height="84" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+          <use href="#h-agent" x="308" y="368" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="337" y="386" fill="#4c1d95">Verifiers ×N</text>
+          <text class="k" x="308" y="406" fill="#6d28d9">AI TEAM MEMBERS · ANY NUMBER</text>
+          <text class="s" x="308" y="426" fill="#4c1d95">Check work they did not build.</text>
+        </g>
+        <g class="st d7">
+          <line x1="14" y1="462" x2="566" y2="462" stroke="#aab5ae" stroke-width="1.5"/>
+          <rect x="165" y="452" width="250" height="20" fill="#eef2ee"/>
+          <text class="k" x="290" y="466" text-anchor="middle" fill="#4c5a52">NOT RANKS — COMPUTER SYSTEMS</text>
+          <rect x="14" y="478" width="272" height="72" rx="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+          <use href="#h-sys" x="28" y="488" width="21" height="21" fill="#334155" color="#334155"/>
+          <text class="t" x="57" y="506" fill="#1e293b">Deck controller</text>
+          <text class="s" x="28" y="530" fill="#1e293b">Enforces the rules for everyone.</text>
+          <rect x="294" y="478" width="272" height="72" rx="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+          <use href="#h-sys" x="308" y="488" width="21" height="21" fill="#334155" color="#334155"/>
+          <text class="t" x="337" y="506" fill="#1e293b">Where your work lives</text>
+          <text class="s" x="308" y="530" fill="#1e293b">Holds your backlog and the record.</text>
+        </g>
+      </svg>
+      <figcaption><b>One person in charge, a clear chain, and systems that follow rules — not bosses.</b></figcaption>
+    </figure>
+  </div></section>
+
+  <section id="factory"><div class="wrap">
+    <h2>What the factory is</h2>
+    <p class="lead">The factory is everything inside the line: the Supervisor, the Deck controller and the team, working together on your backlog. You, your optional helper and the place your work lives stay outside it.</p>
+    <figure class="bigfig" id="fig-factory">
+      <svg viewBox="0 0 580 596" role="img" aria-label="The factory boundary: the Supervisor, the Deck controller and the team inside it; the Director, the grooming helper and the place the work lives outside it; work flows in ready and back out finished">
+        <defs>
+          <symbol id="f-person" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="4.6"/><path d="M2.5 23c0-5.6 4.3-9.4 9.5-9.4s9.5 3.8 9.5 9.4z"/></symbol>
+          <symbol id="f-agent" viewBox="0 0 24 24"><rect x="11" y="1.5" width="2" height="4"/><circle cx="12" cy="2" r="2"/><rect x="2.5" y="5.5" width="19" height="15.5" rx="4.5"/><circle cx="8.5" cy="12.5" r="2.1" fill="#fff"/><circle cx="15.5" cy="12.5" r="2.1" fill="#fff"/></symbol>
+          <symbol id="f-sys" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="5" stroke-dasharray="3.4 3.35"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></symbol>
+          <marker id="f-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#166534"/></marker>
+          <marker id="f-arrv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6d28d9"/></marker>
+        </defs>
+        <g class="st d1">
+          <rect x="14" y="12" width="272" height="88" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2.5"/>
+          <use href="#f-person" x="28" y="22" width="21" height="21" fill="#b45309"/>
+          <text class="t" x="57" y="40" fill="#78350f">Director</text>
+          <text class="k" x="28" y="60" fill="#b45309">A PERSON · OUTSIDE THE FACTORY</text>
+          <text class="s" x="28" y="80" fill="#78350f">You own the backlog and decide.</text>
+        </g>
+        <g class="st d1">
+          <rect x="294" y="12" width="272" height="88" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+          <use href="#f-agent" x="308" y="22" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="337" y="40" fill="#4c1d95">Grooming helper</text>
+          <text class="k" x="308" y="60" fill="#6d28d9">OPTIONAL · OUTSIDE THE FACTORY</text>
+          <text class="s" x="308" y="80" fill="#4c1d95">Drafts items. You decide.</text>
+        </g>
+        <rect class="draw st d2" pathLength="100" x="34" y="124" width="512" height="328" rx="16" fill="#f7faf7" stroke="#1c2420" stroke-width="2.5"/>
+        <path class="draw d3" pathLength="100" d="M90 100 L90 146" stroke="#6d28d9" stroke-width="2.2" fill="none" marker-end="url(#f-arrv)"/>
+        <g class="st d2">
+          <rect x="54" y="112" width="150" height="24" rx="5" fill="#1c2420"/>
+          <text x="129" y="128" text-anchor="middle" fill="#ffffff" style="font:700 13px system-ui,sans-serif;letter-spacing:1px">THE FACTORY</text>
+        </g>
+        <g class="st d3">
+          <rect x="54" y="150" width="238" height="92" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2" stroke-dasharray="6 3"/>
+          <use href="#f-agent" x="68" y="160" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="97" y="178" fill="#4c1d95">Supervisor</text>
+          <use href="#f-person" x="238" y="159" width="17" height="17" fill="#b45309"/><circle class="pulse" cx="272" cy="168" r="6" fill="#6d28d9"/>
+          <text class="k" x="68" y="198" fill="#6d28d9">OPTIONAL · AI AGENT OR A PERSON</text>
+          <text class="s" x="68" y="218" fill="#4c1d95">Checks in regularly. Acts only</text>
+          <text class="s" x="68" y="234" fill="#4c1d95">within limits the Director set.</text>
+        </g>
+        <g class="st d3">
+          <rect x="302" y="150" width="238" height="92" rx="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+          <use href="#f-sys" x="316" y="160" width="21" height="21" fill="#334155" color="#334155"/>
+          <text class="t" x="345" y="178" fill="#1e293b">Deck controller</text>
+          <text class="k" x="316" y="198" fill="#334155">A COMPUTER SYSTEM</text>
+          <text class="s" x="316" y="218" fill="#1e293b">Keeps the team inside the</text>
+          <text class="s" x="316" y="234" fill="#1e293b">rules. Hands out ready work.</text>
+        </g>
+        <g class="st d4">
+          <rect x="54" y="258" width="486" height="178" rx="12" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+          <use href="#f-agent" x="68" y="268" width="21" height="21" fill="#6d28d9"/>
+          <text class="t" x="97" y="286" fill="#4c1d95">The team</text>
+          <text class="k" x="68" y="306" fill="#6d28d9">AI TEAM MEMBERS</text>
+          <rect x="68" y="318" width="140" height="66" rx="8" fill="#ffffff" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="80" y="344" fill="#4c1d95" style="font:700 16px system-ui,sans-serif">Leader</text>
+          <text class="s" x="80" y="366" fill="#4c1d95">approves plans</text>
+          <rect x="222" y="318" width="150" height="66" rx="8" fill="#ffffff" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="234" y="344" fill="#4c1d95" style="font:700 16px system-ui,sans-serif">Implementers ×N</text>
+          <text class="s" x="234" y="366" fill="#4c1d95">build the work</text>
+          <rect x="386" y="318" width="140" height="66" rx="8" fill="#ffffff" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="398" y="344" fill="#4c1d95" style="font:700 16px system-ui,sans-serif">Verifiers ×N</text>
+          <text class="s" x="398" y="366" fill="#4c1d95">check the work</text>
+          <line x1="76" y1="410" x2="518" y2="410" stroke="#c4b5fd" stroke-width="3"/>
+          <circle class="flowdot fd-across" cx="76" cy="410" r="7" fill="#166534"/>
+          <text class="s" x="297" y="430" text-anchor="middle" fill="#4c1d95">work travels through the team</text>
+        </g>
+        <path class="draw d5" pathLength="100" d="M180 492 L180 458" stroke="#166534" stroke-width="2.5" fill="none" marker-end="url(#f-arr)"/>
+        <path class="draw d5" pathLength="100" d="M400 458 L400 492" stroke="#166534" stroke-width="2.5" fill="none" marker-end="url(#f-arr)"/>
+        <circle class="flowdot fd-up" cx="180" cy="490" r="6" fill="#166534"/>
+        <circle class="flowdot fd-down" cx="400" cy="460" r="6" fill="#166534"/>
+        <text class="s st d5" x="192" y="480" fill="#14532d">ready work in</text>
+        <text class="s st d5" x="412" y="480" fill="#14532d">finished work back</text>
+        <g class="st d6">
+          <rect x="14" y="496" width="552" height="84" rx="10" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+          <use href="#f-sys" x="28" y="506" width="21" height="21" fill="#334155" color="#334155"/>
+          <text class="t" x="57" y="524" fill="#1e293b">Where your work lives</text>
+          <text class="k" x="28" y="544" fill="#334155">A COMPUTER SYSTEM · OUTSIDE THE FACTORY</text>
+          <text class="s" x="28" y="564" fill="#1e293b">Holds your backlog and the record. Finished work returns here.</text>
+        </g>
+      </svg>
+      <figcaption><b>Inside the line, the factory works your list. Outside it, you stay in charge of the list itself.</b></figcaption>
+    </figure>
+  </div></section>
+
   <section id="share"><div class="wrap">
     <h2>Share Deck</h2>
     <p class="lead">Send this page to someone you want to build with. When you want the detail, read <a href="how-it-works.html">How it works</a>.</p>
@@ -170,5 +368,14 @@
 <footer class="site"><div class="wrap">
   <p>Plan mockup. Draft website copy. Not a deployed site.</p>
 </div></footer>
+<script>
+document.documentElement.classList.add('js');
+(function(){
+  var figs=document.querySelectorAll('.bigfig');
+  if(!('IntersectionObserver' in window)){figs.forEach(function(f){f.classList.add('seen')});return;}
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('seen');io.unobserve(e.target);}})},{threshold:0.25});
+  figs.forEach(function(f){io.observe(f);});
+})();
+</script>
 </body>
 </html>
