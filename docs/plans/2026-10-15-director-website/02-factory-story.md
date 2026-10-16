@@ -101,7 +101,7 @@ Decision that stays with the Director: none at this gate. The Leader approves ag
 
 ### Step 5. The agent owner works on the item
 
-The agent owner builds the change in a leased workspace. A leased workspace is a separate working copy that only this job may use. The owner checks their own work, runs the checks agreed for this work, and opens a pull request (PR). A PR is one proposed change. Repository policy sets its review rule. Evidence: `docs/guide/operating-model.md` gives implementation to team members under the Leader. `docs/guide/index.md` states human PR review and merge follow repository policy.
+The agent owner builds the change in a separate working copy reserved for this job. The owner checks their own work, runs the checks agreed for this work, and opens a pull request (PR). A PR is one proposed change. Repository policy sets its review rule. Evidence: `docs/guide/operating-model.md` gives implementation to team members under the Leader. `docs/guide/index.md` states human PR review and merge follow repository policy.
 
 What the Director sees: Work shows the owner, the state, and the PR link. Repositories shows which backlog feeds the team. Evidence: the audit at `01-audit.md` records Work with PR fields and Repositories with enablement and intake.
 
