@@ -1,4 +1,4 @@
-# Website plan for claudedeck.org
+# Website plan for the Deck website
 
 For: issue #768 under parent issue #745. This revision uses `01-audit.md`, the revised `02-factory-story.md`, and `04-docs-and-video.md` on master.
 
