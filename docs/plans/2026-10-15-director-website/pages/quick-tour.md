@@ -6,7 +6,7 @@ This file is the complete copy for the Quick tour page, in page order, ready for
 
 Planned route mapping for the builder (Leader-confirmed 2026-10-16; intended destinations, not yet live routes): Home `/`, How it works `/how-it-works/`, Quick tour `/quick-tour/`, Technical information `/technical-information/`.
 
-Every stop shows one seeded Deck screenshot carrying this label on the image: "Example data — seeded screens. Not live records." Crop every capture to the relevant state, and crop out harness names, old product branding, and unrelated technical chrome; keep the seeded label visible, and do not invent UI labels. The roughly two-minute read is a design target for the copy length, not a measured result; the visible copy is budgeted at 400 words at most, not counting alt text.
+Every stop shows one seeded Deck screenshot carrying this label on the image: "Example data — seeded screens. Not live records." Crop every capture to the relevant state, and crop out harness names, old product branding, and unrelated technical chrome; keep the seeded label visible, and do not invent UI labels. The roughly two-minute read is a design target for the copy length, not a measured result; all supplied visible text, including the six on-image labels, is budgeted at 400 words at most; alt text and builder notes sit outside that count.
 
 ## Page title
 
@@ -32,7 +32,7 @@ Page copy:
 >
 > Six short stops to see what Deck looks like, and what you would do in it.
 >
-> The tour starts in GitHub, where you, the Director, write your features and mark them ready. Inside Deck, it looks like this. The pictures use different example items to show each stage.
+> You, the Director, write your features in GitHub and mark them ready. These pictures show different example items inside Deck.
 
 Placement note: no screenshot sits in the intro. Writing features happens in GitHub, outside Deck, so no Deck screen is invented for it.
 
@@ -50,7 +50,7 @@ Page copy:
 
 Screenshot: Repositories. Seeded state: the three seeded connections, with new work paused on two of them. Caption:
 
-> Repositories, with example data: three connections between feature lists and teams; new work is paused on two of them.
+> Repositories, with example data: three connections; new work is paused on two.
 
 Alt text:
 
@@ -64,7 +64,7 @@ Page copy:
 
 > ### 2. Choose who is on each team
 >
-> Each team has a roster you prepare: its AI Leader, its agent owners and AI reviewers, and the agent tools and models each one uses.
+> Each team has a roster you prepare: its AI Leader, agent owners and AI reviewers, each with their own tools and models.
 
 Screenshot: Teams. Seeded state: the "Release crew" roster, with its named Leader and member slots. Caption:
 
@@ -100,17 +100,17 @@ Page copy:
 
 > ### 4. Work in progress
 >
-> Every feature has a named agent owner and a clear state. With several features on the go, several AI teams work side by side, each at its own pace.
+> Each feature gets its own AI team, working at its own pace. Work shows who is assigned and what is waiting.
 
-Screenshot: Work. Seeded state: work items with their owners and states, one of them active. Caption:
+Screenshot: Work. Seeded state: work items in mixed states, including one active item and the queued item with no owner yet. Caption:
 
-> Work in progress, with example data: each item shows its owner and state.
+> Work, with example data: assigned features and a feature waiting for an owner.
 
 Alt text:
 
-> The Work screen with example data, listing features with their agent owners and current states.
+> The Work screen lists example features, their states, and their assigned owners. One queued feature has no owner yet.
 
-Evidence: work rows show owner, state and waiting reason — `docs/plans/2026-10-15-director-website/01-audit.md:38` and `docs/features/work.md:5`. One AI team per feature, teams at their own pace — `docs/superpowers/specs/2026-10-16-website-build-design.md:46` and `:86`.
+Evidence: mixed-team work items with their current state — `docs/features/work.md:3`; the seeded queued item with no owner — `scripts/e2e/scenarios.py:227-228`; this mixed-state capture — `docs/plans/2026-10-15-director-website/03-website-plan.md:176`.
 
 ### Stop 5 — When work waits for a person
 
@@ -118,7 +118,7 @@ Page copy:
 
 > ### 5. When work waits for a person
 >
-> An AI reviewer checks work they did not build. When your own rules ask for it, work like this waits for your review instead.
+> An AI reviewer checks work they did not build. Your rules may ask for your review too.
 
 Screenshot: Work. Seeded state: the seeded item waiting for human review under that team's rules. The picture illustrates the second sentence, not the AI reviewer's own check. Caption:
 
@@ -128,7 +128,7 @@ Alt text:
 
 > The Work screen with example data, showing an item whose state says it is waiting for human review.
 
-Evidence: the seeded waiting-for-human-review item — `scripts/e2e/scenarios.py:218-220`. Building and checking are separate roles — `docs/guide/operating-model.md:18` and `:27`.
+Evidence: the seeded waiting-for-human-review item — `scripts/e2e/scenarios.py:218-220`. Building and checking are separate roles — `docs/guide/operating-model.md:18` and `:27`. Human review stays separate from agent plan approval — `docs/features/work.md:13`; human review and merge gates — `docs/features/agent-teams.md:207-214`; merge under the repository rules — `docs/guide/supervised-factory-playbook.md:154`.
 
 ### Stop 6 — Finished work, back in GitHub
 
@@ -136,7 +136,7 @@ Page copy:
 
 > ### 6. Finished work, back in GitHub
 >
-> Once the required reviews and checks are complete, finished work is merged under your project's rules and returns to GitHub, ready to publish when you are.
+> After the required reviews and checks, work can merge under your project's rules. You decide when it is ready to publish.
 
 Screenshot: Work. Seeded state: the merged item in the list, shown with the All filter. Caption:
 
@@ -146,7 +146,7 @@ Alt text:
 
 > The Work screen with example data, showing a merged item in the mixed-state All view.
 
-Evidence: human review and merge follow repository policy — `docs/guide/index.md:13`; passing checks alone do not prove review acceptance — `docs/features/agent-teams.md:207-214`. The seeded merged item — `scripts/e2e/scenarios.py:225-226`; the All filter as the mixed-state view — `frontend/src/features/factory/filters.tsx:40-45`, with the capture instruction at `docs/plans/2026-10-15-director-website/03-website-plan.md:176`. Approving publication stays with the Director — `docs/guide/operating-model.md:91`.
+Evidence: human review and merge follow repository policy — `docs/guide/index.md:13`; passing checks alone do not prove review acceptance — `docs/features/agent-teams.md:207-214`. The seeded merged item — `scripts/e2e/scenarios.py:225-226`; the All filter as the mixed-state view — `frontend/src/features/factory/filters.tsx:40-45`, with the capture instruction at `docs/plans/2026-10-15-director-website/03-website-plan.md:176`. Approving publication stays with the Director — `docs/guide/operating-model.md:91`. Work may merge into an integration branch before a later promotion, so merging does not by itself mean the work is ready to publish — `docs/guide/supervised-factory-playbook.md:150-154`.
 
 ## 3. Share the tour
 
@@ -156,7 +156,7 @@ Page copy:
 >
 > Send this tour to a colleague:
 >
-> "Worth a look: Deck — your features, planned, built and checked by your AI teams."
+> "Worth a look: Deck — your features, built and checked by AI teams."
 >
 > Prefer to watch? A short video of Deck in action will join this page later.
 
@@ -170,7 +170,7 @@ Page copy:
 
 > ## Next
 >
-> Want the full story? Read How it works. Setting Deck up? Start with Technical information.
+> Want the full story? Read How it works. Setting up? Try Technical information.
 >
 > [Link] How it works
 >
