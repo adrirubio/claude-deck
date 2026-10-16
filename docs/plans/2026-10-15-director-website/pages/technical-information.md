@@ -100,7 +100,7 @@ Page copy:
 > Autonomy stays off until you turn it on for a team. To get ready:
 >
 > 1. Give Deck access to GitHub from the environment where it runs.
-> 2. Prepare each team roster, and name its AI Leader.
+> 2. Prepare each team roster, choose its AI Leader, and launch the Leader as the guide explains.
 > 3. Choose the GitHub repository Deck should watch.
 > 4. Mark your features ready in GitHub when they can start.
 > 5. Choose how finished work may merge, and set finite limits for automated work.
@@ -113,7 +113,7 @@ Page copy:
 
 Placement note: the links go to `/docs/autonomy` and `/docs/features/agent-teams`, in that order.
 
-Evidence: autonomy is off until it is turned on for a team, and a watched repository can be paused separately — `docs/autonomy.md:3`. GitHub access from Deck's environment, a named AI Leader, a watched repository, and ready features starting work — `docs/autonomy.md:7-10`. The merge choice and finite limits come before autonomy is turned on, once rosters and watched repositories are ready — `docs/autonomy.md:11`. Human review and merge stay visible and separate from automatic checks — `docs/features/agent-teams.md:207-214`.
+Evidence: autonomy is off until it is turned on for a team, and a watched repository can be paused separately — `docs/autonomy.md:3`. GitHub access from Deck's environment, a chosen and launched AI Leader, a watched repository, and ready features starting work — `docs/autonomy.md:7-10`, with the launch prerequisite at `docs/autonomy.md:8`. The merge choice and finite limits come before autonomy is turned on, once rosters and watched repositories are ready — `docs/autonomy.md:11`. Human review and merge stay visible and separate from automatic checks — `docs/features/agent-teams.md:207-214`.
 
 ## 6. Where to go next
 
@@ -121,7 +121,7 @@ Page copy:
 
 > ## Where to go next
 >
-> Start at the docs home for the full guides. For the source code, use the "View product source" action on the docs home; it leads onward from there.
+> Start at the docs home for the full guides. For the source code, choose “View product source” there.
 >
 > [Link] Docs home
 >
