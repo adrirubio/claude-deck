@@ -47,17 +47,18 @@ Scoped checklist, by stage:
 | Final animations | Style-frame approval (producer already answered) | The home page and video hold concept pictures only. |
 | Video | Voice choice, the generated Suno track, licence checks, budget, publication approval | The share kit holds pages and text only. |
 
-## Open questions for the Director
+## Director decisions
 
-Seven questions remain open. The producer decision is answered: the Supervisor, an AI agent, produces the animations and the video.
+The Director answered the open questions on #745 (2026-10-15 and 2026-10-16).
 
-1. Is a human director trial needed before publication? The Director reviewed the earlier plan and requested these revisions. Agents checked the revised artifacts. No separate human comprehension trial is recorded. This question blocks a final publication claim.
-2. When does the website change publish? The plan specifies a preview branch and deployment of `dist/` only. The build must verify that route. The Director decides when to publish. This blocks production publication. The preview build follows plan and style approval.
-3. May public captures use seeded data, with the label on each image? Every fresh capture in this campaign uses seeded example states. This question blocks change 5 and the video closing segment.
-4. Agent Mail stayed at "Loading participants..." in two agent checks. Investigate that state before any Mail capture or Mail claim. This question blocks any Mail image.
-5. What is the production budget? Items to check: the ElevenLabs plan, the Suno plan, the Remotion licence, agent time (measured by the #760 prototype), and optional AI texture clips. This question blocks changes 8 and 9.
-6. What are the commercial-use licence terms of Remotion, ElevenLabs, and Suno on the plans the Director will use? Check the commercial-use terms for the chosen plans before production spending. Keep the results with the project. Publication stays a separate Director decision. This question blocks change 9.
-7. How should the animation constraint be reconciled? The Director selected DrawSVG and MorphSVG and also specified transform-and-opacity-only animation. Drawing and morphing change other SVG properties. The implementation plan must reconcile these requirements before using those effects; this plan grants no exception. This needs a Director decision before the build uses those effects.
+1. **Human trial before publication:** the Director reviews a production-like draft website on a preview URL before anything is published.
+2. **When to publish:** when the Director is happy with that draft.
+3. **Seeded captures:** yes, public captures may use seeded example data, with the label on each image.
+4. **Agent Mail "Loading participants...":** investigated. Agent Mail asks for the Director key first, and the list says "Loading participants..." while the key dialog waits. It is a misleading label, not a failure (filed as #763). Mail captures are taken with the key entered.
+5. **Who produces the animations and the video:** the Supervisor, an AI agent. Budget items to check: the ElevenLabs plan, the Suno plan, the Remotion licence, agent time (measured by the #760 prototype), and optional AI texture clips.
+6. **Licence terms:** the Director makes sure the Remotion, ElevenLabs and Suno subscriptions cover the commercial use.
+7. **Animation rule:** smooth at 60 fps, measured on the build. DrawSVG and MorphSVG may animate SVG illustrations.
+8. **"What this plan does not promise":** removed from the plan.
 
 ## Limits that stay in force
 
