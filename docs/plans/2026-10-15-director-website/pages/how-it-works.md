@@ -6,7 +6,7 @@ This file is the complete copy for the How it works page, in page order, ready f
 
 Planned route mapping for the builder (Leader-confirmed 2026-10-16; the three newer routes are intended destinations, not yet live routes): Home `/`, How it works `/how-it-works/`, Quick tour `/quick-tour/`, Technical information `/technical-information/`.
 
-One example feature runs through the steps: adding a short help note to a welcome page. The screenshots show seeded example screens in the states named; each picture shows a different seeded item, so together they illustrate the states rather than showing one live feature moving. Every screenshot carries this label on the image: "Example data — seeded screens. Not live records."
+One example feature runs through the steps: adding a short help note to a welcome page. The screenshots show seeded example screens in the states named; each picture shows a different seeded item, so together they illustrate the states rather than showing one live feature moving. Every screenshot carries this label on the image: "Example data — seeded screens. Not live records." Crop every capture to the relevant state, and crop out harness names, old product branding, and unrelated technical chrome; keep the seeded label visible, and do not invent UI labels.
 
 ## Page title
 
@@ -30,9 +30,9 @@ Page copy:
 
 > # How it works
 >
-> Follow one feature on its way through the factory — from the moment you mark it ready to finished work you can use. Our example along the way: adding a short help note to a welcome page.
+> Follow one feature through the factory, from ready to finished. Our example: adding a short help note to a welcome page. The pictures use different example items to show each stage.
 
-Evidence: the eight steps below are the story's "How it works" layer, updated to the Director's current decisions; the example feature is the one the story uses (`docs/plans/2026-10-15-director-website/02-factory-story.md`, "How it works" layer).
+Evidence: the eight steps below are the story's "How it works" layer, updated to the Director's current decisions; the example feature is the one the story uses (`docs/plans/2026-10-15-director-website/02-factory-story.md:64-68`).
 
 ## 2. The steps
 
@@ -62,7 +62,7 @@ Page copy:
 
 > ### 2. The AI teams work on their own
 >
-> From there, the teams work through the ready features without you steering every step. They follow your goals and limits, and they stop and surface anything that needs a decision from you.
+> From there, the teams work through the ready features without you steering every step. They follow your goals and limits, and pause work that needs your decision and bring it to you.
 >
 > **Your call:** pause the work, or change the limits, whenever you like.
 
@@ -84,7 +84,7 @@ Page copy:
 
 Screenshot: Teams. Seeded state: the "Release crew" roster, with its named Leader and member slots. Caption and alt text:
 
-> A team roster, with example data: every feature gets a named owner.
+> A team roster, with example data: its AI Leader and team members.
 
 Evidence: agents propose the plan and the Leader decides — `docs/guide/index.md:13` and `docs/guide/operating-model.md:89`. The seeded roster and named Leader — `docs/plans/2026-10-15-director-website/01-audit.md:40`.
 
@@ -100,7 +100,7 @@ Page copy:
 
 Screenshot: Overview. Seeded state: campaign progress and team summaries. Caption and alt text:
 
-> Campaign progress, with example data: plans are approved before building starts.
+> The Overview, with example data: campaign progress and team summaries.
 
 Evidence: the Leader approves plans and selects the next work — `docs/guide/operating-model.md:89`. Campaign progress and team summaries on Overview — `docs/plans/2026-10-15-director-website/01-audit.md:37`, with the same builder note as step 2.
 
@@ -126,15 +126,15 @@ Page copy:
 
 > ### 6. An AI reviewer checks
 >
-> An AI reviewer who did not build the feature gives it a fresh, independent check. Anything they question goes back to the agent owner to fix.
+> An AI reviewer who did not build the feature gives it a fresh, independent check. Their questions and suggested changes go back to the agent owner.
 >
 > **Your call:** if your own rules ask you to review as well, that review is yours.
 
-Screenshot: Work. Seeded state: one item waiting for review. Caption and alt text:
+Screenshot: Work. Seeded state: the seeded item waiting for human review under that team's rules. The picture illustrates the "Your call" line, not the AI reviewer's check itself. Caption and alt text:
 
-> Waiting for review, with example data: work pauses until the check is done.
+> Waiting for human review, with example data: under this team's rules, this item waits for a person.
 
-Evidence: implementers build and verifiers check as separate roles — `docs/guide/operating-model.md:18`, `:27` and `:30`. Work shows whether an item waits for review — `docs/plans/2026-10-15-director-website/01-audit.md:38`.
+Evidence: implementers build and verifiers check as separate roles — `docs/guide/operating-model.md:18`, `:27` and `:30`. The seeded waiting-for-human-review item — `scripts/e2e/scenarios.py:218-220`. Work rows show owners and waiting reasons — `docs/plans/2026-10-15-director-website/01-audit.md:38`.
 
 ### Step 7 — The AI Leader checks, with your supervision
 
@@ -148,7 +148,7 @@ Page copy:
 
 Screenshot: Overview. Seeded state: team summaries with anything that needs you. Caption and alt text:
 
-> Team summaries, with example data: finished work is checked before it moves on.
+> Team summaries, with example data: progress, and the decisions that need you.
 
 Evidence: the Leader acts on the work while the Director keeps the retained decisions — `docs/guide/operating-model.md:65`, `:89` and `:91`. Supervision sits with you and your AI assistants, outside the factory — `docs/superpowers/specs/2026-10-16-website-build-design.md:80`.
 
@@ -158,23 +158,23 @@ Page copy:
 
 > ### 8. Merged, and back to GitHub
 >
-> When the checks pass, the finished work is merged and goes back to GitHub. Our help note is now part of the welcome page — one feature, all the way through.
+> Once the required reviews and checks are complete, the work can be merged under your project's rules and returned to GitHub. In our example, the merged help note becomes part of the welcome page.
 >
 > **Your call:** you decide whether the results meet your goals, and when to publish.
 
-Screenshot: Work. Seeded state: the finished item, shown with the All filter. Caption and alt text:
+Screenshot: Work. Seeded state: the merged item in the list, shown with the All filter. Caption and alt text:
 
-> Finished work, with example data: the feature is done and recorded.
+> Work, with example data: a merged item in the finished list, shown with the All filter.
 
-Evidence: merged work goes back to GitHub, which holds the final record — `docs/superpowers/specs/2026-10-16-website-build-design.md:82` and `docs/guide/operating-model.md:47`. Work shows the finished state with the All filter — `docs/plans/2026-10-15-director-website/01-audit.md:38`. Approving publication stays with the Director — `docs/guide/operating-model.md:91` and `:97`.
+Evidence: human review and merge follow repository policy — `docs/guide/index.md:13`; human review and merge gates link to the proposed change, and passing checks alone do not prove review acceptance — `docs/features/agent-teams.md:207-214`. Work may merge into an integration branch before a later promotion — `docs/guide/supervised-factory-playbook.md:150-154`. The seeded merged item — `scripts/e2e/scenarios.py:225-226`; finished as a tracking state — `docs/features/work.md:5`. The All-filter capture instruction comes from the screenshot list in `docs/plans/2026-10-15-director-website/03-website-plan.md:176` (the steps 2, 5 and 8 Work row). Approving publication stays with the Director — `docs/guide/operating-model.md:91` and `:97`.
 
 ### Sent back a step
 
 Page copy:
 
-> Work does not always travel in a straight line. A question at review can send a feature back to building, and a question about the plan can send it back to planning — as many times as it takes to get it right.
+> Work does not always travel in a straight line. A review can send work back for changes. A question about the plan can send it back to planning. The team works within the limits you set.
 
-Evidence: work is sometimes sent back a step (review to build, approval to plan) — `docs/superpowers/specs/2026-10-16-website-build-design.md:86`.
+Evidence: work is sometimes sent back a step (review to build, approval to plan) — `docs/superpowers/specs/2026-10-16-website-build-design.md:86`; work runs under chosen merge policy and finite budgets — `docs/autonomy.md:11`.
 
 ## 3. Several AI teams at once
 
@@ -210,19 +210,15 @@ Page copy:
 >
 > **Many AI harnesses, your choice of models.** Deck works with six different AI harnesses — the agent tools your team members run. Every role in a team gets its own harness and its own model, so a team can mix model families.
 >
-> **Adversarial reviews.** The AI reviewer is a different agent from the one who built the work — fresh eyes, every time. And because each role carries its own model choice, you can give the reviewer role a different model family from the builder's, so the check comes from a genuinely different point of view.
+> **Adversarial reviews.** The AI reviewer is a different agent from the one who built the work — another agent whose job is to challenge it. And because each role carries its own model choice, you can give the reviewer role a different model family from the builder's, for a second perspective on the same work.
 >
 > **Team communication.** Your AI team members talk to each other through Deck as they work — asking questions, sharing context, and handing work over. When a decision is yours, they can reach you the same way.
 >
 > **The production dashboard.** One overview keeps the whole factory in view: what needs you first, and how every team's work is going.
 
-Screenshot for "Many AI harnesses": Harnesses. Seeded state: the six harness cards with their setup and support labels. Caption and alt text:
+Placement note: this section carries no screenshot of its own. For "The production dashboard", reuse the step 2 Overview capture; do not build a second dashboard image.
 
-> Six harness choices, with example data: pick per role, not per team.
-
-Placement note: for "The production dashboard", reuse the step 2 Overview capture; do not build a second dashboard image.
-
-Evidence: six harness cards — `docs/features/harnesses.md:3`. Each team slot stores its own provider, launch mode and provider options — `docs/features/agent-teams.md`, "What A Team Contains"; each role carries your selection of AI harnesses and AI models — `docs/superpowers/specs/2026-10-16-website-build-design.md:85`. Review is a separate role from building — `docs/guide/operating-model.md:18` and `:27`. Team communication through structured mailboxes for context requests, handoffs and replies — `docs/features/agent-mail.md:3`; "Deck — team communication, production dashboard" — `docs/superpowers/specs/2026-10-16-website-build-design.md:84`. "Needs you" and team summaries on Overview — `docs/plans/2026-10-15-director-website/01-audit.md:37`, with the counts at `docs/features/dashboard.md:7`. Builder note: the copy states that a different model family is a choice you can make for the reviewer role; it makes no claim about how many more problems any review finds.
+Evidence: six harness cards — `docs/features/harnesses.md:3`. Each team slot stores its own provider, launch mode and provider options — `docs/features/agent-teams.md:39-50`; each role carries your selection of AI harnesses and AI models — `docs/superpowers/specs/2026-10-16-website-build-design.md:85`. Review is a separate role from building — `docs/guide/operating-model.md:18` and `:27`. Team communication through structured mailboxes for context requests, handoffs and replies — `docs/features/agent-mail.md:3`; "Deck — team communication, production dashboard" — `docs/superpowers/specs/2026-10-16-website-build-design.md:84`. "Needs you" and team summaries on Overview — `docs/plans/2026-10-15-director-website/01-audit.md:37`, with the counts at `docs/features/dashboard.md:7`. Builder note: the copy states that a different model family is a choice you can make for the reviewer role; it makes no claim about how many more problems any review finds.
 
 ## 6. Words on this page
 
@@ -237,7 +233,7 @@ Page copy:
 > - **AI reviewer** — an AI agent who checks work they did not build.
 > - **Harness** — the agent tool a team member runs.
 > - **Factory** — Deck and your AI teams, working together.
-> - **Merged** — finished work joined into the main shared version, back in GitHub.
+> - **Merged** — finished work joined into the project's shared version on GitHub.
 
 Evidence: each entry restates, in one plain sentence, a word the copy above uses, with the evidence already given for that word's claim.
 
