@@ -1,6 +1,6 @@
 # Website build: a draft site on a preview URL
 
-Date: 2026-10-16. Status: design for the Director's review.
+Date: 2026-10-16. Status: approved by the Director on 2026-10-16, with the decisions below.
 
 ## Goal
 
@@ -61,7 +61,7 @@ The workflow file lives only on the preview branch, so it cannot affect the live
 ## Who does the work
 
 - **The Supervisor (an AI agent)** builds the scenes and the motion, as the Director decided (#745, question 5), and leads the quality pass.
-- **The website-plan team** (Leader, researcher, critic) can take the page copy and the critic's review of each page, in the same way as the plan campaign, if the Director wants it. Otherwise the Supervisor builds the pages too, and the critic reviews them.
+- **The website-plan team** (Leader, researcher, critic) writes the page copy and the critic reviews each page, in the same way as the plan campaign.
 
 ## Rules that carry over
 
@@ -70,11 +70,11 @@ The workflow file lives only on the preview branch, so it cannot affect the live
 - No publication without the Director's approval.
 - Seeded example data only, labelled on each image.
 
-## Decisions for the Director
+## The Director's decisions (2026-10-16)
 
-1. Preview access: **A (unlisted)** or **B (Cloudflare Access)**.
-2. Pages: the **website-plan team** writes the page copy and reviews it, or the **Supervisor** does it all.
-3. Confirm that the docs stay as they are in this build, and the docs rework comes later.
+1. **Preview access: A, unlisted.** Pages carry `noindex`, and the address is not linked anywhere.
+2. **Pages: the website-plan team** writes the page copy and C1 reviews it, as in the plan campaign. The Supervisor builds the scenes, the motion and the site, and leads the quality pass.
+3. **Docs stay as they are** in this build. The docs rework is later work.
 
 ## Out of scope
 
