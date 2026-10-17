@@ -19,7 +19,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tomlkit>=0.13.2",
     "pytest-asyncio>=0.24.0",
-    "mcp>=1.2.0,<2",
+    "mcp>=1.2.0,<3",
     "apscheduler>=3.10.4",
 ]
 
