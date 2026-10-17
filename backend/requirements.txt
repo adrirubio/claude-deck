@@ -38,7 +38,7 @@ cryptography==50.0.0
     # via
     #   claude-code-registry-backend
     #   pyjwt
-fastapi==0.136.3
+fastapi==0.143.0
     # via claude-code-registry-backend
 greenlet==3.5.1
     # via sqlalchemy
