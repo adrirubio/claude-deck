@@ -442,7 +442,7 @@ command output or settings screenshot next to each item.
    (`:261`), **enabled/disabled state**, and whether an installation is
    recorded (`:262`). Enabled/disabled is a state to *preserve*, not
    normalize away. In App mode Deck resolves the installation per
-   owner/repo only for enabled targets (`agent_teams.py:2535`;
+   owner/repo only for enabled targets (`backend/app/api/v1/agent_teams.py:2535`;
    resolution itself in `backend/app/services/github_app_auth_service.py:162`)
    and mints repository-scoped tokens from it (`:203`), so plan the
    destination grant + re-resolution for **enabled** App scopes, and the
