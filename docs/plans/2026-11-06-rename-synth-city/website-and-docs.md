@@ -358,6 +358,19 @@ not run that search as a ban across all built output: the generated VitePress
 documentation carried into `dist/docs/` legitimately consists of `.html` files
 and must not be rejected by it.
 
+### 4.7 The product name at first mention (Director decision, 2026-11-06)
+
+A preliminary trademark screening found that **Albiex** and the full name **Albiex Synth City** are clear in Nice classes 9 and 42. **Synth City** used on its own carries a moderate risk, because other projects use the name. To keep the product clearly Albiex's, the Director set this rule. It applies to the website pages, the docs, the README and the release notes:
+
+- **The first time a page or document names the product in its text, use the full name "Albiex Synth City".** The logo does not count, because it is an image.
+- **After the first mention, "Synth City" alone is fine.**
+- **Page titles** (the browser tab and the share metadata) use the full name.
+- **Never name a package, a command or a repository just `synthcity`.** The Python package `synthcity` on PyPI belongs to an unrelated library. Use `albiex` or `albiex-synth-city`, and keep the repository name `albiexai/synth-city`.
+
+**In the approved mockup today:** How it works opens with "Synth City runs two loops…", and Home first names the product in the scene caption and key ("Synth City control"). The port changes the first textual mention on each page to "Albiex Synth City", for example "Albiex Synth City runs two loops…".
+
+**Acceptance check:** in the built output of each of the three pages, and in each renamed docs page, the first occurrence of "Synth City" in the visible text is preceded by "Albiex". The `<title>` contains "Albiex Synth City".
+
 ## 5. The docs rename
 
 The public documentation is renamed in its source, the product repository, and then
