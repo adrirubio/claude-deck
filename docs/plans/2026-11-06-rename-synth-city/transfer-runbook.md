@@ -63,10 +63,12 @@ None of these is satisfied by this document. Each needs a named human owner.
    in this folder). GitHub requires create-repository permission in the
    target organisation before a transfer can start (§5). Because our move
    combines transfer **and** rename in one step, the acting operator must
-   additionally be an **owner of the destination organisation**: GitHub's
-   renaming documentation requires organisation-owner (or repository-admin)
-   rights for the rename, so admin-plus-create on the source alone is not
-   sufficient for the combined operation (§5).
+   additionally be an **owner of the destination organisation**:
+   *Transferring a repository*'s own combined-transfer steps carry the
+   optional new "Repository name" field and route that rename through the
+   renaming rules (§5 item 1), under which only a destination-organisation
+   owner may perform this combined step — so admin-plus-create on the
+   source alone is not sufficient.
 2. **Trademark search.** The campaign requires a trademark search for
    "Albiex" and "Synth City" **before launch** (campaign `README.md`,
    Director phase 0). This runbook does not strengthen that into a decided
@@ -83,16 +85,27 @@ None of these is satisfied by this document. Each needs a named human owner.
    (#789) plans are merged, so the team transferring knows which old names
    inside the product are handled by the code rename and which are handled
    by GitHub redirects. The website plan (#792) is already merged.
-5. **Freeze windows agreed (one per repository).** A named person declares
-   a short freeze for each repository separately, from its pre-transfer
-   snapshot (§7 step 3) until its own phase-A checks (§10.1) pass: no
-   merges, no releases, and no Deck-dispatched work *except* the specific
-   bounded verification actions listed in §10 for that repository's phase
-   (read-only API comparisons, scratch-clone probes on disposable branches,
-   and the explicitly named workflow validations). The freeze is a
-   coordination rule, not a bypass: no freeze exception may waive Director
+5. **Freeze windows agreed (one per repository), with one release
+   predicate used everywhere in this runbook.** A named person declares a
+   short freeze per repository from its pre-transfer snapshot (§7 step 3).
+   During a freeze: no merges, no releases, and no Deck-dispatched work
+   *except* the specific bounded verification actions listed in §10 for
+   that repository's phase. **Release predicate (the single definition
+   §9 and §10 use):** the *website* freeze lifts when its phase A rows all
+   record *passed* or *skipped/not-applicable* and every applicable row
+   passed; the *product* freeze lifts when its phase A **and** phase B
+   rows are all *passed/skipped*, **except** that a phase B row this
+   runbook explicitly marks deferrable (currently B3, B5 and website A13) may instead
+   carry an **explicitly recorded deferral** — named owner, reason, and
+   completion date/gate, accepted in writing by the freeze owner — and
+   then counts as *deferred (not passed)* for the purpose of lifting the
+   freeze while remaining an open obligation until it actually passes.
+   No other row may be deferred this way, a deferred row is never called
+   passed, and no freeze exception or deferral may waive Director
    approval, a factory pause or HOLD, ownership or lease gates,
-   independent review, or the configured merge policy.
+   independent review, or the configured merge policy. Phase C gates
+   Deck dispatches only; phase D is gated solely by its own Director
+   approval (§10.4) and never gates either freeze.
 6. **No name collisions in `albiexai`.** The organisation must not already
    contain `synth-city`, `synth-city-website`, or a fork of either project
    in the same fork network. GitHub refuses a transfer when the target
@@ -124,10 +137,14 @@ marked **check on the day** in §7 and §10.
 1. **Preconditions (verified).** The person transferring needs admin access
    to the repository and permission to create repositories in the target
    organisation. The target must not already hold a repository with the
-   same name or a fork in the same network. The name can be changed as
-   part of the same transfer; the rename half additionally requires an
-   organisation owner or a repository admin, so for this combined move
-   the acting operator must be an owner of `albiexai` (§3 item 1).
+   same name or a fork in the same network. *Transferring a repository*
+   itself notes that the repository name can be changed while
+   transferring (its transfer steps include the optional new
+   "Repository name" field) and points to the renaming rules for that
+   half; applying those rules to our combined transfer-and-rename, only
+   an owner of the destination organisation `albiexai` may perform the
+   step, so the acting operator must be an `albiexai` owner (§3 item 1).
+   Admin-plus-create on the source alone is therefore insufficient here.
 2. **What travels (verified).** Issues, pull requests, wiki, stars and
    watchers move with the repository. Webhooks, services, secrets and
    deploy keys stay associated. Commit history and contributions are
@@ -145,7 +162,7 @@ marked **check on the day** in §7 and §10.
    fork-clone forms).
 4. **The one destructive mistake (verified).** Creating a new repository
    (or fork) at the old location `adrirubio/claude-deck` **permanently
-   deletes the redirects**. This is why §9 step 4 forbids recreating
+   deletes the redirects**. This is why §9's never-recreate rule forbids recreating
    either old repository, forever, including as a placeholder or a mirror.
 5. **Assignees change on personal → organisation moves (verified).** Issue
    assignments to people who are members of the new organisation stay;
@@ -171,8 +188,8 @@ marked **check on the day** in §7 and §10.
    pair is refused by GitHub. Neither repository's tracked tree at the
    pins publishes a Marketplace action (no action manifest is offered for
    others to consume in either tree); whether the clone/Actions-use
-   thresholds are crossed is a live check-on-the-day item. Either way the
-   §9 step 4 rule (never recreate) applies, and retirement would further
+   thresholds are crossed is a live check-on-the-day item. Either way §9's
+   never-recreate rule applies, and retirement would further
    constrain any transfer-back under the identical name (§11).
 
 ## 6. Current state (what the transfer must preserve)
@@ -334,6 +351,12 @@ migration procedure (§7 steps 6–8, §10 phase C) is built on:
   `adrirubio` therefore does not, by itself, prove any grant on
   `albiexai`; the destination installation must be granted and resolved
   for the new owner/name when a scope uses App mode.
+- Scopes are listed and changed only through supported endpoints:
+  list per preset (`backend/app/api/v1/agent_teams.py:2453`,
+  `GET /presets/{preset_id}/github-scopes`, handler `:2457`) and update
+  (`:2508`, `PATCH /github-scopes/{scope_id}`, operator-gated at
+  `:2512`) — or the UI built on them. There is no other supported write
+  path in this runbook.
 - Scope identity changes are guarded, not free-text edits: the update
   path computes an identity change from owner/name/path/base-ref
   (`backend/app/api/v1/agent_teams.py:2522`), treats an auth-mode change
@@ -341,6 +364,16 @@ migration procedure (§7 steps 6–8, §10 phase C) is built on:
   (`:2531`, `:2558`), and refuses with `scope_identity_in_use` (`:2551`),
   `scope_auth_in_use` (`:2553`) or `scope_workspace_authority_in_use`
   (`:2563`) while the scope is still in use.
+- **Enabled and disabled scopes deliberately behave differently** and
+  both states must be preserved: App resolution during an update runs
+  only when the target state is enabled (`resolve_app` requires
+  `target_enabled`, `:2535`–`:2538`); on a **disabled** scope's identity
+  change the stored installation is cleared so the scope keeps its
+  preference with the installation deliberately *unresolved for later
+  activation* (`:2572`–`:2575`). A disabled scope may therefore cross
+  the transfer still disabled, with no destination installation resolved,
+  until a separately authorized activation/readiness step. Nobody enables
+  a dormant scope merely to satisfy a readback or a smoke check.
 - "In use" is wider than "a dispatch is running":
   `_scope_identity_in_use` (`:634`) blocks on any leased workspace
   (`:635`) and on work items in `pending`, `dispatched`, `verifying`,
@@ -403,13 +436,18 @@ command output or settings screenshot next to each item.
    (a) GitHub App installations targeting either repository
    (Settings → Integrations → GitHub Apps). (b) **Deck's own GitHub App
    path:** with Deck admin access, list every `TeamGithubScope` whose
-   stored owner/name is either old repository
-   (`backend/app/models/database.py:243`), recording each scope's
-   `github_auth_mode` (`:261`) and whether an installation is recorded
-   (`:262`). In App mode Deck resolves the installation per owner/repo
-   (`backend/app/services/github_app_auth_service.py:162`) and mints
-   repository-scoped tokens from it (`:203`), so plan explicitly for a
-   destination grant + re-resolution under `albiexai/…` (§10 phase C).
+   stored owner/name is either old repository (supported list endpoint
+   `backend/app/api/v1/agent_teams.py:2453`), recording per scope its
+   identity (`backend/app/models/database.py:243`), `github_auth_mode`
+   (`:261`), **enabled/disabled state**, and whether an installation is
+   recorded (`:262`). Enabled/disabled is a state to *preserve*, not
+   normalize away. In App mode Deck resolves the installation per
+   owner/repo only for enabled targets (`agent_teams.py:2535`;
+   resolution itself in `backend/app/services/github_app_auth_service.py:162`)
+   and mints repository-scoped tokens from it (`:203`), so plan the
+   destination grant + re-resolution for **enabled** App scopes, and the
+   deliberate leave-unresolved path for **disabled** ones (§6.3,
+   §10 phase C).
    The Claude Code workflow (`.github/workflows/claude.yml:35`, secret at
    `:37`) is a separate workflow consumer, kept inventoried under
    workflow secrets — it is not evidence about any App installation.
@@ -419,14 +457,17 @@ command output or settings screenshot next to each item.
    (merged `website-and-docs.md` assigns this record to #790). Before any
    transfer, capture as protected/day-of records: the Pages project
    currently serving production and the deploy command that targets it
-   (`website:.github/workflows/deploy.yml:21`), the **verified
-   known-good deployment** (its deployment identifier/URL and the commit
-   it was built from — the thing a rollback would return to), the custom
-   domains attached and their DNS targets, and any redirect rules already
-   live. Record the Director's still-open choice: keep serving from the
-   existing `claude-deck-website` project through cutover, or pre-create
-   a `synth-city-website` project and switch at the separately authorized
-   go-live. Do not alter website files, push, or deploy as part of this
+   (`website:.github/workflows/deploy.yml:21`); **within that project**,
+   its current successful **production** deployment (identifier/URL and
+   source commit — the only kind of deployment that is an eligible
+   rollback target, §11.2); the custom domains associated with the
+   project and their DNS targets; and any redirect rules already live.
+   Record the Director's still-open choice — keep serving from the
+   existing `claude-deck-website` project (same-project rollback then
+   applies) or pre-create a `synth-city-website` project and switch at
+   the separately authorized go-live (recovery is then routing back to
+   the retained old project, §11.2) — **together with the supported
+   recovery path chosen for that branch**, before publication. Do not alter website files, push, or deploy as part of this
    recording step; a `master` push deploys production (§6.2).
 8. **Quiesce Deck scopes properly — pausing new dispatches is not
    enough.** For every scope inventoried in step 6(b): stop admitting new
@@ -483,8 +524,11 @@ the transfer gates**:
 - **Phase A (per repository, immediate):** proves that one transfer
   landed intact. Passing phase A for the website repository — and only
   phase A — permits the second (product) transfer.
-- **Phase B (product repository):** the product-only checks. Passing
-  phase A + B releases the product repository's freeze for ordinary work.
+- **Phase B (product-only checks):** CodeQL, Release-workflow and
+  Discussions checks that exist only on the product. The product freeze
+  is released exactly by the §3 item 5 release predicate (phase A + phase
+  B passed/skipped, with B3/B5 (and website A13) allowed as explicitly recorded deferrals
+  instead — *deferred*, never passed).
 - **Phase C (cross-repository / Deck):** scope migration and factory
   readback. Real Deck dispatches stay paused until phase C passes.
 - **Phase D (publication, separately authorized):** the website go-live
@@ -493,8 +537,11 @@ the transfer gates**:
   **both** transfers and their checks, per the merged website plan
   (`website-and-docs.md` §9: no merge of the new pages into website
   `master` before transfer verification, because that merge is the
-  deployment). Phase D rows are recorded as *skipped/not-applicable
-  (later launch gate)* during the transfer day, never as passed.
+  deployment). Timing is the Director's: phase D **may** follow on the
+  same cutover day once phases A–C and that separate approval are in
+  place (the campaign's own Phase 3 does exactly this); this runbook
+  imposes no different-day requirement. Until that approval exists,
+  phase D rows record *skipped (later launch gate)*, never passed.
 
 Sequence, in order:
 
@@ -509,12 +556,18 @@ Sequence, in order:
    §7 step 8). Confirm no Actions runs in progress and the §7 step 3 product
    snapshot is current.
 5. **Product transfer:** same flow, renamed to `synth-city`.
-6. **§10 phase A, then phase B, for the product repository.** Passing
-   both lifts the product freeze for ordinary (non-Deck-dispatch) work.
+6. **§10 phase A, then phase B, for the product repository.** The
+   product freeze lifts exactly when the §3 item 5 release predicate is
+   satisfied (A + B passed/skipped, B3/B5 permitted as recorded
+   deferrals). The website freeze likewise lifts on its own predicate
+   (website phase A) — each freeze is released by the one definition in
+   §3 item 5, not by any other phrasing in this runbook.
 7. **§10 phase C:** Deck scope migration and bounded smoke validations.
    Passing phase C unpauses real Deck dispatches.
-8. **Stop.** Publication (phase D) happens only under its own Director
-   approval on its own schedule; the old site keeps serving meanwhile.
+8. **Stop — unless the Director separately approves phase D now.**
+   Publication needs its own Director approval; with it, phase D may
+   follow immediately on the same day, and without it the old site keeps
+   serving and phase D waits. The decision is the Director's.
 
 The never-recreate rule binds at steps 2 and 5 and forever after: do not
 create a repository **or fork** at either old address, including a fork
@@ -555,14 +608,19 @@ configuration.
 ## 10. Verification, split by phase (each phase gates something different)
 
 Every row compares against the per-repository §7 step 3 snapshot and ends
-in exactly one recorded outcome: **passed**, **failed**, or
+in exactly one recorded outcome: **passed**, **failed**,
 **skipped/not-applicable** (with the reason — e.g. "Discussions off on
-this repository", "later launch gate"). Skipped is never recorded as
-passed. "Basis" distinguishes documented GitHub behaviour (§5) from
-**check on the day** — things this document deliberately does not claim.
-A written exception accepted by a named human can release a *freeze*; it
-can never waive Director approval, a HOLD or factory pause, ownership or
-lease gates, independent review, or the configured merge policy.
+this repository", "later launch gate"), or — only for rows this section
+explicitly marks deferrable (B3, B5, A13) — **deferred** (named owner,
+reason, completion date/gate, freeze owner's written acceptance).
+Skipped and deferred are never recorded as passed, and a deferred row
+remains an open obligation after any freeze it gated has lifted under
+the §3 item 5 release predicate. "Basis" distinguishes documented GitHub
+behaviour (§5) from **check on the day** — things this document
+deliberately does not claim. A written exception accepted by a named
+human can release a *freeze* only as §3 item 5 defines; it can never
+waive Director approval, a HOLD or factory pause, ownership or lease
+gates, independent review, or the configured merge policy.
 
 ### 10.1 Phase A — immediate post-transfer checks (run for each repository right after its transfer)
 
@@ -582,22 +640,25 @@ publication.
 | A8 | Deploy keys and webhooks match the admin snapshot by identity/target. **No replay here:** replaying a delivery re-fires the consumer and is a real action, validated in phase C only against a named, expected effect | Associated per §5 item 2; inventory **check on the day** | Settings → Deploy keys/Webhooks, compare only |
 | A9 | Collaborators and organisation-default permissions: intended people hold intended roles, nothing silently widened/narrowed | Documented §5 item 6 | Settings → Collaborators and teams vs snapshot |
 | A10 | Nothing exists at the old address: it redirects, does not 404, and is not a fresh repo/fork | Documented §5 item 4 | Open the old URL |
+| A11 | **Tags** complete vs this repo's snapshot — and separately **Releases and assets** complete (list compared; for the product also download one pre-transfer asset). Tag refs are live refs: compare the snapshot's captured ref list against a fresh live `git ls-remote --tags` of the **new** remote (a commit pin does not freeze tag refs). Record honestly per repository (website: whatever its own snapshot holds, including "no tags/releases observed") | Git data §5 item 2; release objects compared independently, never inferred from tags | Live `git ls-remote --tags <new-url>` + releases endpoint (Appendix A) |
+| A12 | Issues and pull requests preserved for **this** repository: counts compared with correct counting (the snapshot's `open_issues_count` includes PRs; compare issues-only and PRs separately), one sampled issue and one sampled PR open correctly (product: the fork-PR head/base detail is B1) | Documented §5 items 2, 5 | Issue/PR search + endpoints (Appendix A) vs snapshot |
+| A13 | Wiki access/content re-checked for **this** repository (a planning-time lookup failure was an observation, not proof of absence). Also, **website repository only:** bounded check-pages validation — an already-planned pull request exercises `website:.github/workflows/check-pages.yml:3` (read-only, no deploy), or the row records a clearly owned **deferral** to the first post-freeze website PR (named owner/gate; deferrable row). Product repository: *skipped/not-applicable (no check-pages workflow)* | **Check on the day** | Wiki tab + wiki git-remote probe; website: that PR's check-pages result or the deferral record |
+| A14 | Effective Actions permission policy compared for **this** repository: repository policy vs snapshot, and the destination organisation `albiexai` policy read and recorded as the new applicable org policy (the source owner is a personal account, so there is no source-org policy to compare — record that as *not applicable*, never as an empty policy). Absent vs unreadable recorded per line | **Check on the day** | Admin token: repo + `orgs/albiexai` Actions permissions endpoints |
 
-### 10.2 Phase B — product-repository checks (after product phase A)
+### 10.2 Phase B — product-only checks (after product phase A)
 
-Gates: lifting the product freeze for ordinary (non-Deck-dispatch) work.
+Generic per-repository comparisons (tags/Releases, issues/PRs, wiki,
+Actions policies) live in phase A (rows A11–A14) so **both** repositories
+get them. Phase B holds only what is genuinely product-specific. Gates:
+the product freeze, via the single §3 item 5 release predicate.
 
 | # | Check | Basis | How |
 |---|---|---|---|
-| B1 | All snapshot forks (8 observed 2026-11-06) still upstream-connected, incl. `juanrubio/claude-deck`; one open fork PR's head/base resolve | Documented §5 item 2 | Forks endpoint + open that PR |
-| B2 | **Tags** complete vs snapshot — and, separately, **Releases and assets** complete (list compared; one pre-transfer asset downloads) | Git data §5 item 2; release objects compared independently, never inferred from tags | `git ls-remote --tags` at the pin + releases endpoint (Appendix A) |
-| B3 | Issues and PRs compared with correct counting (snapshot's `open_issues_count` includes PRs; compare issues-only and PRs separately); cleared assignees (non-`albiexai` members) listed for tidy-up | Documented §5 items 2, 5 | Issues/PR search vs snapshot |
-| B4 | Discussions present on the new home and the §8 announcement still pinned; banner link resolves | **Campaign requirement, check on the day** — not a documented guarantee (§5 item 2) | Open Discussions + README |
-| B5 | Wiki access/content re-checked for this repository (the planning-time lookup failure was an observation, not proof of absence) | **Check on the day** | Wiki tab + wiki git remote probe |
-| B6 | Effective repository Actions permission policy and applicable organisation Actions policy compared with the admin snapshot (absent vs unreadable recorded) | **Check on the day** (403 at planning time, §6.1) | Admin token, Actions permissions endpoints |
-| B7 | Product workflow *source* unchanged by the move and one bounded validation run observed: a pull request opened for an already-planned change exercises the PR-triggered `factory-checks` (`.github/workflows/factory-checks.yml:3` — PR-triggered, not manually dispatchable). If no legitimate PR exists, record this as *deferred to first post-freeze PR*, not passed. No empty "no-op push" is used as a test | Runner behaviour **check on the day** | That PR's hosted checks |
-| B8 | Release workflow validated by dry run: `workflow_dispatch` with `dry_run=true` (`.github/workflows/release.yml:14`), supplying the required full 40-char commit and a version whose four version files agree, as the workflow itself enforces (`:6` inputs, `:56`–`:74` checks). **Precise expectation:** dry run still *uploads Actions artifacts* for review (`:126`); only tag creation and Release publication are skipped (conditional at `:136`) — it does not "publish nothing" | **Check on the day** | Actions → Release → Run workflow; confirm artifact present, no tag/Release created |
-| B9 | CodeQL: either (a) a **separately authorized non-docs change** on a PR or push to `master`/`release/v3.1` produces a fresh completed analysis visible under Security → Code scanning, or (b) the row is recorded as a **deferred gate** with a named owner/date. A docs-only PR cannot satisfy this (`.github/workflows/codeql.yml:8` ignores `docs/**`, `*.md`), and waiting for the weekly schedule (`:10`) may exceed the freeze — deferred is honest, passed-by-assumption is not | **Check on the day** | Security tab shows the run's commit and date, or the deferred record exists |
+| B1 | Fork detail beyond A4: every snapshot fork (8 observed 2026-11-06, incl. `juanrubio/claude-deck`) still names the product as upstream and one open fork PR's head/base resolve; assignees cleared by the personal→organisation move (non-`albiexai` members) listed for tidy-up | Documented §5 items 2, 5 | Forks endpoint + open that PR; assignee compare vs snapshot |
+| B2 | Discussions present on the new home and the §8 announcement still pinned; banner link resolves (product-only: website `has_discussions=false`) | **Campaign requirement, check on the day** — not a documented guarantee (§5 item 2) | Open Discussions + README |
+| B3 | *(Deferrable.)* One bounded product workflow validation: a pull request opened for an already-planned change exercises the PR-triggered `factory-checks` (`.github/workflows/factory-checks.yml:3` — PR-triggered, not manually dispatchable). If no legitimate PR exists during the freeze, record an explicit **deferral** to the first post-freeze PR (named owner/gate) — deferred, not passed. No empty "no-op push" is used as a test | Runner behaviour **check on the day** | That PR's hosted checks, or the deferral record |
+| B4 | Release workflow validated by dry run: `workflow_dispatch` with `dry_run=true` (`.github/workflows/release.yml:14`), supplying the required full 40-char commit and a version whose four version files agree, as the workflow itself enforces (`:6` inputs, `:56`–`:74` checks). **Precise expectation:** dry run still *uploads Actions artifacts* for review (`:126`); only tag creation and Release publication are skipped (conditional at `:136`) — it does not "publish nothing" | **Check on the day** | Actions → Release → Run workflow; confirm artifact present, no tag/Release created |
+| B5 | *(Deferrable.)* CodeQL: either (a) a **separately authorized non-docs change** on a PR or push to `master`/`release/v3.1` produces a fresh completed analysis visible under Security → Code scanning, or (b) an explicit **deferral** is recorded (named owner, completion gate). A docs-only PR cannot satisfy this (`.github/workflows/codeql.yml:8` ignores `docs/**`, `*.md`), and waiting for the weekly schedule (`:10`) may exceed the freeze — deferred is honest, passed-by-assumption is not | **Check on the day** | Security tab shows the run's commit and date, or the deferral record exists |
 
 ### 10.3 Phase C — cross-repository and Deck checks (after phase B)
 
@@ -605,17 +666,19 @@ Gates: unpausing real Deck dispatches.
 
 | # | Check | Basis | How |
 |---|---|---|---|
-| C1 | Deck scope migration completed through the **supported scope API/UI only** for every scope inventoried in §7 step 6(b): quiescence re-verified immediately before the edit (no leased workspace/work in the guard states, no residual lease authority — `backend/app/api/v1/agent_teams.py:634`, `:684`); in App mode the destination installation is granted on `albiexai` and resolved for the new owner/name (`backend/app/services/github_app_auth_service.py:162`) as part of the update; any `scope_identity_in_use` / `scope_auth_in_use` / `scope_workspace_authority_in_use` refusal (`:2551`, `:2553`, `:2563`) stops the phase — never worked around by force-release or database edits | **Check on the day** (runtime records) | Deck admin UI/API; refusal codes recorded verbatim if hit |
-| C2 | Readback: re-read each updated scope through Deck and confirm owner/name/path/base-ref, auth mode and (App mode) installation now name the destination; policies, labels and limits unchanged from the §7 inventory unless separately decided | **Check on the day** | Scope readback screenshot/API response in operator evidence |
+| C1 | Deck scope migration completed through the **supported scope API/UI only** (list `backend/app/api/v1/agent_teams.py:2453`; update `PATCH` `:2508`, operator-gated `:2512`) for every scope inventoried in §7 step 6(b), preserving each scope's enabled/disabled state. Quiescence is re-verified immediately before each edit (`backend/app/api/v1/agent_teams.py:634`, `backend/app/api/v1/agent_teams.py:684`). **Enabled App scopes:** destination installation granted on `albiexai` and resolved for the new owner/name during the update (resolution runs for enabled targets, `backend/app/api/v1/agent_teams.py:2535`; `resolve_installation` in `backend/app/services/github_app_auth_service.py:162`). **Disabled App scopes:** identity updated while remaining disabled; the installation is expected to end **cleared/unresolved for later activation** (`backend/app/api/v1/agent_teams.py:2572`), which is a correct outcome, not a failure — resolution waits for a separately authorized activation/readiness step, and nobody enables a dormant scope to satisfy this row. Any refusal — `scope_identity_in_use` (`backend/app/api/v1/agent_teams.py:2551`), `scope_auth_in_use` (`backend/app/api/v1/agent_teams.py:2553`), `scope_workspace_authority_in_use` (`backend/app/api/v1/agent_teams.py:2563`) — stops the phase; never worked around by force-release or database edits | **Check on the day** (runtime records) | Deck admin UI/API; refusal codes recorded verbatim if hit |
+| C2 | Readback per scope through the list endpoint (`backend/app/api/v1/agent_teams.py:2453`): confirm owner/name/path/base-ref and auth mode name the destination, **enabled/disabled state is unchanged**, and policies/labels/limits match the §7 inventory unless separately decided. Installation readback differs by state, and both count as passed when they match their path: *enabled* App scope — destination installation resolved and recorded; *disabled* App scope — installation recorded as unresolved-by-design (§6.3), with activation left to its own later authorized step. The C3 smoke may ride only on an already-enabled scope; it must never be the reason a dormant scope gets enabled | **Check on the day** | Scope readback (list response) in operator evidence, per scope, state annotated |
 | C3 | Bounded factory smoke **after** C1–C2: exactly one pre-agreed, explicitly bounded action whose expected effect is written down in advance (for example one triage-only dispatch of a designated throwaway issue that must clone from `albiexai/synth-city`, report `triaging`, and stop). It is a real dispatch with real effects, not a no-op; scope it so its full effect list is acceptable. Only its exact expected outcome counts as passed | **Check on the day** | Deck operator runs it; observe the named outcome end-to-end |
-| C4 | Third-party GitHub App installations from §7 step 6(a) are granted on `albiexai` where still wanted. Validation is per actual consumer with a bounded expected effect (for example, for the Claude Code workflow: one `@claude` comment on a designated test issue, expecting exactly one workflow run using the repository secret, `.github/workflows/claude.yml:15`, `:35`). A generic webhook "replay" is **not** a validation method (it re-delivers to live consumers); redelivery happens only for a named hook whose consumer's expected reaction is written down first | **Check on the day** (grants are per-owner) | Settings → Integrations + the one bounded trigger per consumer |
+| C4 | Two separate validations, kept distinct. **(i) Third-party GitHub App installations** (§7 step 6(a)): granted on `albiexai` where still wanted; proven per app by its Settings visibility plus, only where a safe trigger exists, one pre-written bounded expected effect. **(ii) The Claude Code *workflow*** (not an App; `.github/workflows/claude.yml:35`): validated separately with one tightly bounded trigger — a single `@claude` comment on a designated throwaway test issue whose text asks only for a read-only one-line confirmation (no file changes, no PR operations), expecting exactly one workflow run and exactly one reply on that issue, after which the test issue is closed — because this workflow can run an agent with real reach, the prompt bound, not the run count, is the safety property. Webhook "replay" is not a validation method for either (it re-delivers to live consumers); redelivery only for a named hook with its consumer's expected reaction written down first | **Check on the day** (grants are per-owner) | Settings → Integrations; (i) per-app evidence, (ii) the single bounded workflow run |
 | C5 | Documentation-publishing flow rehearsed **without publishing**: in an isolated *disposable* copy of both checkouts (never the live sibling layout), with the publishing script's inputs first updated under their own approved change — today `scripts/deploy-docs.sh` still targets the old sibling directory (`:7`) and deletes/replaces that tree's `docs/` (`:19`), and the playbook names the old remotes (`DOCUMENTATION_PUBLISHING.md:41`). The local rehearsal stops after build + copy-into-the-disposable-copy + diff review; the script's printed commit/push steps and any real deploy are explicitly excluded | **Check on the day** | Disposable copies only; record the reviewed diff, discard the copies |
 
-### 10.4 Phase D — publication checks (separately authorized, later launch gate)
+### 10.4 Phase D — publication checks (separately authorized; timing is the Director's)
 
-Not part of transfer day. Each row stays *skipped (later launch gate)*
-until the Director's separate go-live approval, and planning-time text
-here grants no deployment authority:
+Phase D requires its own Director go-live approval on top of phases
+A–C; with that approval it **may run on the same cutover day** — this
+runbook imposes no different-day requirement. Until that approval
+exists, each row stays *skipped (later launch gate)*, and planning-time
+text here grants no deployment authority:
 
 | # | Check | Basis | How |
 |---|---|---|---|
@@ -677,39 +740,66 @@ authorizers. This section supplies the planning content; executing any
 step needs its named authorization. No website file is altered and
 nothing is deployed by this document.
 
-**Day-of records required before phase D (from §7 step 7):** serving
-Pages project and deploy target; known-good deployment identifier/URL +
-source commit; attached custom domains and DNS targets; live redirect
-rules; the Director's project choice (keep `claude-deck-website` project
-vs new `synth-city-website` project). Without these records, phase D does
-not start.
+**Day-of records required before phase D (from §7 step 7):** the serving
+Pages **project**; the **eligible rollback target inside that project** —
+a prior *successful production* deployment, because a Cloudflare Pages
+rollback selects a previous production deployment **within its own
+project** and preview deployments are not valid targets ([Cloudflare
+Pages rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/));
+the source commit that deployment was built from; the **chosen supported
+recovery path** for the Director's project choice (below); attached
+custom domains with their Pages association state and DNS targets; and
+live redirect rules. Without these records, phase D does not start. The
+precedent this section implements is the merged website plan's delegation
+(`website-and-docs.md:576`, in this folder), whose rollback reference is
+the build design's "previous deployment in Cloudflare Pages"
+(`docs/superpowers/specs/2026-10-16-website-build-design.md:56`) — which
+is only ever a *same-project* mechanism.
 
-**Recovery order if a phase D deployment is wrong** (each step stops for
-its authorizer; layers recover independently — a content revert cannot
-undo a project/domain change):
+**Recovery paths when a phase D deployment is wrong** (pick by the
+recorded project choice; each step stops for its authorizer; layers
+recover independently — a content revert cannot undo a project/domain
+change):
 
-1. **Content layer — return to the known-good deployment.** Preferred:
-   restore/redeploy the recorded known-good Cloudflare deployment
-   (the mechanism named in the website build design). Alternative: a
-   reviewed revert of the cutover merge on website `master` — valid only
-   while the workflow and Pages project it deploys through are themselves
-   unchanged and known-good, and requiring the same release-owner approval
-   as a publication, because that push is itself a production deploy
-   (`website:.github/workflows/deploy.yml:3`).
+1. **Same-project rollback** *(only when production stayed in the
+   originally serving project, e.g. `claude-deck-website`):* roll back to
+   the recorded eligible prior **production** deployment in that project
+   (Deployments → "Rollback to this deployment"). Alternative within the
+   same branch of the choice: a reviewed revert of the cutover merge on
+   website `master` — valid only while the workflow and project it
+   deploys through are themselves unchanged and known-good, and requiring
+   the same release-owner approval as a publication, because that push is
+   itself a production deploy (`website:.github/workflows/deploy.yml:3`).
    *Authorizer: the named website release owner for that day.*
-2. **Project layer — wrong project serving.** Point production back to
-   the project recorded as serving before cutover (deploy-target/DNS
-   change in Cloudflare), without touching repository content.
+2. **Route back to the retained old project** *(when the Director chose a
+   NEW project, e.g. `synth-city-website`):* the old project's deployments
+   are **not** rollback targets inside the new project. Recovery is
+   routing, not rollback: re-associate the serving custom domain(s) with
+   the retained old project and restore its DNS targets, or — only under
+   a separate explicit authorization — redeploy the known-good artifact
+   into the new project. Do not describe either as a "rollback".
    *Authorizer: Director or the named Cloudflare account owner.*
-3. **Domain/redirect layer.** If `albiex.org` attachment or the
-   `claudedeck.org` every-path 301s misbehave: remove/fix the redirect
-   rule first (old domain serves as before), then correct DNS targets.
+3. **Domain/redirect layer (applies under either choice):** changing a
+   deploy target or DNS record does **not** by itself establish a Pages
+   custom-domain association — the domain must be associated with the
+   project in Pages (a bare CNAME without association fails, e.g. with a
+   522), and a domain whose activation/reactivation is still pending can
+   error until ready ([Cloudflare Pages custom
+   domains](https://developers.cloudflare.com/pages/configuration/custom-domains/)).
+   Equally, removing a redirect rule does not prove "the old domain
+   serves as before" if its attachment or DNS changed. Choose the
+   redirect/DNS corrections from the **recorded** pre-cutover state (no
+   unconditional order is asserted here), and claim recovery only once
+   the selected project's domain attachment, DNS resolution and TLS
+   serving are all verified live.
    *Authorizer: Director or the named DNS owner.*
 4. **Validate after any layer's recovery:** the live site serves the
-   known-good revision, one docs path and one asset resolve on the
-   serving domain, and (once re-enabled) a sample old-domain path 301s to
-   the same path on the new domain. Record which deployment is now
-   known-good before lifting the incident hold.
+   known-good revision *from the recorded serving project*, one docs path
+   and one asset resolve with valid TLS on the serving domain, and (once
+   re-enabled) a sample old-domain path 301s to the same path on the new
+   domain. Record which project + production deployment is now known-good
+   — and which recovery path (1 or 2) applies to it — before lifting the
+   incident hold.
 
 A website-layer problem is never, by itself, a reason to transfer a
 repository back: the GitHub transfer does not move `claudedeck.org`
@@ -761,16 +851,29 @@ gh api --paginate "repos/$REPO/releases"           # Releases + asset names/size
 gh api --paginate "repos/$REPO/actions/secrets"    # names only, never values
 gh api --paginate "repos/$REPO/actions/variables"  # variables: name list for
                                   # publication; values only in protected evidence
-gh api "repos/$REPO/environments"
-gh api "repos/$REPO/actions/permissions"           # admin; plus the ORG policy:
-gh api "orgs/<owner>/actions/permissions"          # admin, per owner
-gh api "repos/$REPO/rulesets"
+gh api --paginate "repos/$REPO/environments"
+gh api "repos/$REPO/actions/permissions"           # admin: repository Actions policy
+gh api "orgs/albiexai/actions/permissions"         # admin — DESTINATION org only.
+                                  # The source owner (adrirubio) is personal:
+                                  # orgs/adrirubio is NOT an empty policy, it is
+                                  # not applicable; record exactly that.
+gh api --paginate "repos/$REPO/rulesets"
 gh api "repos/$REPO/branches/<default>/protection" # admin
-gh api "repos/$REPO/keys"                          # admin (deploy keys)
+gh api --paginate "repos/$REPO/keys"               # admin (deploy keys)
 gh api --paginate "repos/$REPO/hooks"              # admin; URLs stay protected
-gh api "repos/$REPO/installation"                  # App installation (Deck resolves
-                                  # the same thing in github_app_auth_service.py:162)
-git ls-remote --tags "https://github.com/$REPO.git"
+gh api --paginate "repos/$REPO/issues?state=open"  # INCLUDES PRs; issues-only =
+                                  # drop items with pull_request set (A12 compare)
+gh api --paginate "repos/$REPO/pulls?state=open"   # PRs compared separately
+git ls-remote --tags "https://github.com/$REPO.git"  # LIVE refs, captured before
+                                  # and after; a commit pin does not freeze them
+# NO "repos/$REPO/installation" line here, deliberately: that endpoint returns
+# the installation for the AUTHENTICATED APP and requires the App's own JWT
+# (GitHub REST: Get a repository installation for the authenticated app; Deck
+# builds that JWT in github_app_auth_service.py:164). A `gh` admin token does
+# not authenticate as the App, so it cannot inventory installations. Full App
+# inventory: Settings -> Integrations -> GitHub Apps (per repository). Deck's
+# own installation: observe only via Deck's supported resolution/readback
+# (C1/C2). Never paste App credentials into evidence.
 git ls-remote "https://github.com/$REPO.wiki.git" HEAD   # observation only (§6.1)
 ```
 
@@ -823,8 +926,21 @@ checkout can re-verify from source and which must be re-observed live.
   https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository
   (redirect scope; `git remote set-url` guidance; do-not-reuse-the-old-name
   warning; hosted-action exception).
+- GitHub REST — *Get a repository installation for the authenticated app*:
+  https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app
+  (why Appendix A has no `gh` installation line: authenticated-App JWT only).
+- Cloudflare Pages — *Rollbacks*:
+  https://developers.cloudflare.com/pages/configuration/rollbacks/
+  (rollback selects a prior successful production deployment in the same
+  project; preview deployments are not targets — §11.2).
+- Cloudflare Pages — *Custom domains*:
+  https://developers.cloudflare.com/pages/configuration/custom-domains/
+  (domain must be associated with the project in Pages; a bare CNAME
+  without association fails — §11.2).
 - Parent and issue record: #787 (campaign), #790 (this runbook's brief),
-  `README.md` and `website-and-docs.md` in this folder.
+  `README.md` and `website-and-docs.md` in this folder (delegation at
+  `website-and-docs.md:576`), and the build-design rollback precedent
+  (`docs/superpowers/specs/2026-10-16-website-build-design.md:56`).
 
 *Limits of this document, stated plainly: it is a source-reviewed plan. No
 transfer was rehearsed against a throwaway repository (recommended before
