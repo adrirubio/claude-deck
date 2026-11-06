@@ -91,21 +91,30 @@ None of these is satisfied by this document. Each needs a named human owner.
    During a freeze: no merges, no releases, and no Deck-dispatched work
    *except* the specific bounded verification actions listed in §10 for
    that repository's phase. **Release predicate (the single definition
-   §9 and §10 use):** the *website* freeze lifts when its phase A rows all
-   record *passed* or *skipped/not-applicable* and every applicable row
-   passed; the *product* freeze lifts when its phase A **and** phase B
-   rows are all *passed/skipped*, **except** that a phase B row this
-   runbook explicitly marks deferrable (currently B3, B5 and website A13) may instead
-   carry an **explicitly recorded deferral** — named owner, reason, and
-   completion date/gate, accepted in writing by the freeze owner — and
-   then counts as *deferred (not passed)* for the purpose of lifting the
-   freeze while remaining an open obligation until it actually passes.
-   No other row may be deferred this way, a deferred row is never called
-   passed, and no freeze exception or deferral may waive Director
-   approval, a factory pause or HOLD, ownership or lease gates,
-   independent review, or the configured merge policy. Phase C gates
-   Deck dispatches only; phase D is gated solely by its own Director
-   approval (§10.4) and never gates either freeze.
+   §9 and §10 use; the two repositories have separate conditions):**
+   *Website condition* — every applicable mandatory phase A row for the
+   website records *passed*, every non-applicable row records
+   *skipped/not-applicable*, and **only** the standalone website
+   check-pages row (A14) may instead carry an **explicitly recorded
+   deferral** (named owner, reason, completion date/gate, accepted in
+   writing by the freeze owner). Satisfying the website condition both
+   lifts the website freeze **and** permits the product transfer (§9,
+   §10.1 use this same condition, word for word in effect).
+   *Product condition* — every applicable mandatory phase A (for the
+   product) and phase B row records *passed*, non-applicable rows record
+   *skipped/not-applicable*, and **only** rows B3 and B5 may instead carry
+   explicitly recorded deferrals of the same form. No website row appears
+   in the product condition, and no product B row appears in the website
+   condition. *Passed*, *skipped/not-applicable* and *deferred* are three
+   distinct outcomes: a deferred row satisfies only the progression rule
+   above, is never called passed, and remains an open obligation until it
+   actually passes; no other row may be deferred. No freeze exception or
+   deferral may waive Director approval, a factory pause or HOLD,
+   ownership or lease gates, independent review, or the configured merge
+   policy. Phase C gates Deck dispatches only. Phase D requires **its
+   transfer/check prerequisites (phases A–C) plus its own separate
+   Director approval** (§10.4); it never gates either freeze, and no
+   freeze exception may replace either of phase D's two requirements.
 6. **No name collisions in `albiexai`.** The organisation must not already
    contain `synth-city`, `synth-city-website`, or a fork of either project
    in the same fork network. GitHub refuses a transfer when the target
@@ -522,13 +531,15 @@ phases (§10) gate four different things, and **publication is never one of
 the transfer gates**:
 
 - **Phase A (per repository, immediate):** proves that one transfer
-  landed intact. Passing phase A for the website repository — and only
-  phase A — permits the second (product) transfer.
+  landed intact. The **website condition** of the §3 item 5 release
+  predicate (mandatory website A rows passed, A14 permitted as an
+  explicitly recorded deferral instead) — and only that condition —
+  permits the second (product) transfer.
 - **Phase B (product-only checks):** CodeQL, Release-workflow and
   Discussions checks that exist only on the product. The product freeze
-  is released exactly by the §3 item 5 release predicate (phase A + phase
-  B passed/skipped, with B3/B5 (and website A13) allowed as explicitly recorded deferrals
-  instead — *deferred*, never passed).
+  is released exactly by the **product condition** of the same §3 item 5
+  predicate (product A + B passed/skipped, with only B3/B5 allowed as
+  explicitly recorded deferrals instead — *deferred*, never passed).
 - **Phase C (cross-repository / Deck):** scope migration and factory
   readback. Real Deck dispatches stay paused until phase C passes.
 - **Phase D (publication, separately authorized):** the website go-live
@@ -550,18 +561,23 @@ Sequence, in order:
 2. **Website transfer:** Settings → General → Danger Zone → Transfer
    ownership to `albiexai`, renamed to `synth-city-website` in the same
    step, performed by an `albiexai` owner (§3 item 1).
-3. **§10 phase A for the website repository.** Any failure stops the day
-   (§11); the product transfer does not start.
+3. **§10 phase A for the website repository.** The product transfer may
+   start only when the **website condition** of §3 item 5 is satisfied
+   (mandatory website A rows passed; A14 passed or explicitly deferred).
+   Any *failed* mandatory row stops the day (§11) and the product
+   transfer does not start; a properly recorded A14 deferral does not.
 4. **Product freeze on** (including Deck scope quiescence verified as in
    §7 step 8). Confirm no Actions runs in progress and the §7 step 3 product
    snapshot is current.
 5. **Product transfer:** same flow, renamed to `synth-city`.
 6. **§10 phase A, then phase B, for the product repository.** The
-   product freeze lifts exactly when the §3 item 5 release predicate is
-   satisfied (A + B passed/skipped, B3/B5 permitted as recorded
-   deferrals). The website freeze likewise lifts on its own predicate
-   (website phase A) — each freeze is released by the one definition in
-   §3 item 5, not by any other phrasing in this runbook.
+   product freeze lifts exactly when the **product condition** of §3
+   item 5 is satisfied (product A + B passed/skipped; only B3/B5
+   permitted as recorded deferrals — no website row belongs to this
+   condition). The website freeze lifted earlier on the separate
+   **website condition** of the same predicate. Each freeze is released
+   by its own condition in the one definition in §3 item 5, and by no
+   other phrasing in this runbook.
 7. **§10 phase C:** Deck scope migration and bounded smoke validations.
    Passing phase C unpauses real Deck dispatches.
 8. **Stop — unless the Director separately approves phase D now.**
@@ -611,7 +627,7 @@ Every row compares against the per-repository §7 step 3 snapshot and ends
 in exactly one recorded outcome: **passed**, **failed**,
 **skipped/not-applicable** (with the reason — e.g. "Discussions off on
 this repository", "later launch gate"), or — only for rows this section
-explicitly marks deferrable (B3, B5, A13) — **deferred** (named owner,
+explicitly marks deferrable (A14 and B3, B5) — **deferred** (named owner,
 reason, completion date/gate, freeze owner's written acceptance).
 Skipped and deferred are never recorded as passed, and a deferred row
 remains an open obligation after any freeze it gated has lifted under
@@ -624,9 +640,12 @@ gates, independent review, or the configured merge policy.
 
 ### 10.1 Phase A — immediate post-transfer checks (run for each repository right after its transfer)
 
-Gates: website phase A passing **permits the product transfer**; product
-phase A passing is required before phase B. Nothing in phase A involves
-publication.
+Gates: the **website condition** of §3 item 5 (mandatory website A rows
+passed; A14 passed or explicitly deferred) **permits the product
+transfer** and lifts the website freeze; product phase A rows passing
+(or skipped where non-applicable) are required before phase B, with the
+product freeze itself released by the product condition in §10.2.
+Nothing in phase A involves publication.
 
 | # | Check (this repository only) | Basis | How |
 |---|---|---|---|
@@ -642,13 +661,14 @@ publication.
 | A10 | Nothing exists at the old address: it redirects, does not 404, and is not a fresh repo/fork | Documented §5 item 4 | Open the old URL |
 | A11 | **Tags** complete vs this repo's snapshot — and separately **Releases and assets** complete (list compared; for the product also download one pre-transfer asset). Tag refs are live refs: compare the snapshot's captured ref list against a fresh live `git ls-remote --tags` of the **new** remote (a commit pin does not freeze tag refs). Record honestly per repository (website: whatever its own snapshot holds, including "no tags/releases observed") | Git data §5 item 2; release objects compared independently, never inferred from tags | Live `git ls-remote --tags <new-url>` + releases endpoint (Appendix A) |
 | A12 | Issues and pull requests preserved for **this** repository: counts compared with correct counting (the snapshot's `open_issues_count` includes PRs; compare issues-only and PRs separately), one sampled issue and one sampled PR open correctly (product: the fork-PR head/base detail is B1) | Documented §5 items 2, 5 | Issue/PR search + endpoints (Appendix A) vs snapshot |
-| A13 | Wiki access/content re-checked for **this** repository (a planning-time lookup failure was an observation, not proof of absence). Also, **website repository only:** bounded check-pages validation — an already-planned pull request exercises `website:.github/workflows/check-pages.yml:3` (read-only, no deploy), or the row records a clearly owned **deferral** to the first post-freeze website PR (named owner/gate; deferrable row). Product repository: *skipped/not-applicable (no check-pages workflow)* | **Check on the day** | Wiki tab + wiki git-remote probe; website: that PR's check-pages result or the deferral record |
-| A14 | Effective Actions permission policy compared for **this** repository: repository policy vs snapshot, and the destination organisation `albiexai` policy read and recorded as the new applicable org policy (the source owner is a personal account, so there is no source-org policy to compare — record that as *not applicable*, never as an empty policy). Absent vs unreadable recorded per line | **Check on the day** | Admin token: repo + `orgs/albiexai` Actions permissions endpoints |
+| A13 | *(Non-deferrable.)* Wiki access/content verified for **this** repository: wiki state matches the snapshot, and any wiki pages open on the new home. A planning-time lookup failure was an observation, not proof of absence — so an outcome of *passed (verified absent)* is only recordable after this check actually runs (tab + git-remote probe both consulted). This row can never be deferred and is never not-applicable while `has_wiki` is on | **Check on the day** | Wiki tab + wiki git-remote probe, per repository |
+| A14 | *(Deferrable — website only.)* Bounded website check-pages validation: an already-planned pull request exercises `website:.github/workflows/check-pages.yml:3` (read-only, no deploy) and its result is observed; **or** this row alone records an explicit **deferral** to the first post-freeze website PR (named owner, reason, gate). Product repository: *skipped/not-applicable (no check-pages workflow)* — that N/A applies to this workflow row only and says nothing about A13. Worked example of the four unambiguous outcomes: product A13 *passed*, product A14 *skipped/not-applicable*, website A13 *passed*, website A14 *deferred* — a valid record in which the website condition (§3 item 5) is satisfied | **Check on the day** | That PR's check-pages result, or the deferral record |
+| A15 | Effective Actions permission policy compared for **this** repository: repository policy vs snapshot, and the destination organisation `albiexai` policy read and recorded as the new applicable org policy (the source owner is a personal account, so there is no source-org policy to compare — record that as *not applicable*, never as an empty policy). Absent vs unreadable recorded per line | **Check on the day** | Admin token: repo + `orgs/albiexai` Actions permissions endpoints |
 
 ### 10.2 Phase B — product-only checks (after product phase A)
 
 Generic per-repository comparisons (tags/Releases, issues/PRs, wiki,
-Actions policies) live in phase A (rows A11–A14) so **both** repositories
+Actions policies) live in phase A (rows A11–A15) so **both** repositories
 get them. Phase B holds only what is genuinely product-specific. Gates:
 the product freeze, via the single §3 item 5 release predicate.
 
