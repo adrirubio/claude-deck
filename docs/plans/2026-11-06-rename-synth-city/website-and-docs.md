@@ -334,7 +334,7 @@ product pin. Do not port any source form in the middle column literally.
 | `/` (proposed home route) | Home header/footer logos `href="#"` (`home-street-v7b.html:165`, `:244`); How it works and Technical logos `href="home-street-v6.html"` (absent file; `how-it-works.html:238`, `:317`, `technical-information.html:207`, `:268`) | Plan-proposed route (section 4.2) |
 | `/how-it-works/` (proposed) | Nav/footer links `href="how-it-works.html"` on all three pages (for example `home-street-v7b.html:166`, `:245`) | Plan-proposed route; literal source form is the mockup filename |
 | `/technical-information/` (proposed) | Nav/footer links `href="technical-information.html"` on all three pages (for example `home-street-v7b.html:166`) | Plan-proposed route; literal source form is the mockup filename |
-| Product GitHub repository (post-transfer `albiexai/synth-city` address) | Nav "Open source on GitHub", GitHub pills, hero and closing buttons, footer nav — all `href="#"` (`home-street-v7b.html:166`, `:168`, `:179`, `:234`, `:245`; `how-it-works.html:239`, `:241`, `:318`; `technical-information.html:207` area nav, pill, `:268` footer) | Transfer target from section 1; until the transfer, the old repository address is the live one, and after it GitHub redirects bridge the change (section 8) — final pages link the new address directly |
+| Product GitHub repository (post-transfer `albiexai/synth-city` address) | Nav "Open source on GitHub", GitHub pills, hero and closing buttons, footer nav — all `href="#"` (`home-street-v7b.html:166`, `:168`, `:179`, `:234`, `:245`; `how-it-works.html:239`, `:241`, `:318`; `technical-information.html:208`, `:210`, `:269`) | Transfer target from section 1; until the transfer, the old repository address is the live one, and after it GitHub redirects bridge the change (section 8) — final pages link the new address directly |
 | `/docs/` (docs home) | "Docs home" (`technical-information.html:261`) | `docs/index.md` |
 | `/docs/guide/installation` | "installation guide" (`technical-information.html:224`), "Read the installation guide" (`:232`), "Installation guide" (`:261`) | `docs/guide/installation.md` |
 | `/docs/guide/quick-start` | "Quick start" (`technical-information.html:261`) | `docs/guide/quick-start.md` |
@@ -344,11 +344,19 @@ product pin. Do not port any source form in the middle column literally.
 | `/docs/autonomy` | "Read the autonomy guide" (`technical-information.html:255`), "Autonomy guide" (`:261`) | `docs/autonomy.md`, sidebar link `/autonomy` at `docs/.vitepress/config.ts:39` |
 | `/docs/features/agent-teams` | "Read the Teams guide" (`technical-information.html:255`), "Teams guide" (`:261`) | `docs/features/agent-teams.md` |
 
-Same-page anchors in the mockup (for example hero buttons to `#street`, `#tour`,
-`#start`) are deliberate in-page links, not placeholders; they port as the
-equivalent section anchors on the Astro pages. The acceptance check is simple:
-after the port, a search for `href="#"` and for `.html` page links in the built
-output returns nothing outside deliberate same-page anchors.
+Deliberate same-page links in the mockup are only the skip links and the stage
+links — `href="#main"` at [mockup] `v7d/home-street-v7b.html:163`,
+`v7d/technical-information.html:205`, and `v7d/how-it-works.html:236`, plus the
+five stage links `#stage-plan`, `#stage-build`, `#stage-review`,
+`#stage-verify`, `#stage-merged` at `v7d/how-it-works.html:285`. Those port as
+the equivalent anchors on the Astro pages; extracting every `href` fragment from
+the three supplied files yields no others beyond the `href="#"` placeholders
+mapped above. The acceptance check is scoped accordingly: in the built output of
+**the three new Astro pages only**, a search for `href="#"` and for obsolete
+mockup `.html` page links returns nothing outside those deliberate anchors. Do
+not run that search as a ban across all built output: the generated VitePress
+documentation carried into `dist/docs/` legitimately consists of `.html` files
+and must not be rejected by it.
 
 ## 5. The docs rename
 
@@ -674,21 +682,28 @@ The full cutover belongs to the transfer runbook (#790) and the release plan
    (section 7).
 5. `albiex.org` DNS pointed at Cloudflare; the every-path redirect from
    `claudedeck.org` prepared but not yet switched on.
-6. **Production workflow cutover, then merge.** Merely merging an Astro project
-   under the current workflow would deploy the repository root, not the built
-   pages ([website] `deploy.yml:21`). The authorized cutover therefore updates
-   the production workflow on `master` to build the same approved source the
-   Director reviewed, carry the generated documentation into `dist/docs/` (the
-   current generated `docs/` tree at the repository root, produced by the
-   section 3 copy path), and deploy `dist/` to the verified production Pages
-   project — the production workflow change the approved build design already
-   requires at publication ([product] build design `:56`). Only then merge the
-   preview branch to website `master`. Require evidence that the production
+6. **One reviewed cutover merge to `master` — never a workflow-only push first.**
+   The production workflow triggers on every `master` push and checks out that
+   pushed revision ([website] `deploy.yml:3-5`, `:14`), and today's `master` has
+   no Astro project. A separate workflow-first push would therefore start the new
+   build before its Astro source exists and risks an unintended intermediate
+   production run. So: prepare the production workflow change on the
+   preview/release-candidate branch, and land workflow, Astro source, build
+   inputs, and generated documentation together in **one** reviewed, authorized
+   cutover merge/update to `master`, after steps 3–5. That single resulting
+   revision is what builds and deploys: it builds the same approved source the
+   Director reviewed, carries the generated documentation into `dist/docs/` (the
+   generated `docs/` tree produced by the section 3 copy path), and deploys
+   `dist/` to the verified production Pages project — the production workflow
+   change the approved build design requires at publication ([product] build
+   design `:56`), sequenced as one revision so no intermediate deploy can occur.
+   If #790 instead designs a gated multi-step transition, it must explicitly
+   prevent intermediate production deploys; do not instruct or perform a separate
+   triggering workflow-only `master` push. Require evidence that the production
    output matches the reviewed preview artifact (same source commit and build
    inputs; compare the deployed file list and page checksums against the preview
-   build). Transfer and publication gates from steps 3–5 remain in force. Live
-   checks on `albiex.org`: home, How it works, Technical information, `/docs/`
-   and one changed docs page.
+   build). Live checks on `albiex.org`: home, How it works, Technical
+   information, `/docs/` and one changed docs page.
 7. `claudedeck.org` redirect switched on; old-address spot checks (`/`, a docs
    page, a screenshot asset) land on the same paths at `albiex.org` with a
    successful final response.
@@ -794,11 +809,12 @@ reviewer should check them on the exact preview build that will be merged:
    (including handler-loaded assets); the separate preview workflow (section
    7 item 4) — not the production workflow — produced the exact build the
    Director approved, with no hand-edits after approval and the production
-   `master` trigger preserved until cutover; and at cutover the updated
-   production workflow (section 9.2 step 6) built that same approved source,
-   carried the generated docs into `dist/docs/`, deployed `dist/` to the verified
-   production project, and produced output evidenced to match the reviewed
-   preview artifact.
+   `master` trigger preserved until cutover; and at cutover the production
+   workflow change landed in the same single reviewed `master` revision as the
+   Astro source and generated docs (section 9.2 step 6 — no separate
+   workflow-only push), built that approved source, carried the generated docs
+   into `dist/docs/`, deployed `dist/` to the verified production project, and
+   produced output evidenced to match the reviewed preview artifact.
 6. The redirect checks in section 9.2 step 7 pass on the live domains, the
    pre-transfer announcement (step 3) demonstrably preceded the transfer, and
    the publication gate (section 9.1) was observed: no `master` merge before
