@@ -135,8 +135,10 @@ Three facts in that path matter for the rename:
 
 The supplied reference set (source identity and checksums in Appendix A) contains
 exactly what #792 describes. The three pages are single-file HTML mockups with
-inline CSS and an inline copy of the hero script; they are design sources to port,
-not files to publish as-is.
+inline CSS. Home and How it works also embed an inline copy of the street scene
+script; Technical information has only its small menu script
+([mockup] `v7d/technical-information.html:274-279`) and no scene. They are design
+sources to port, not files to publish as-is.
 
 | Supplied file | What it is (verified) |
 |---|---|
@@ -147,7 +149,7 @@ not files to publish as-is.
 | [mockup] `v7d/assets/brand/` | The three brand files the pages actually use: `albiex-logo-compact.svg`, `favicon.svg`, `apple-touch-icon.png` |
 | [mockup] `v7d/assets/icons/` | Four third-party tool icons plus `icons-credits.json` recording source, CC0-1.0 licence, and trademark flags for each |
 | [mockup] `v7d/assets/tour/` (plus one duplicate at `v7d/assets/work-active.png`) | Five seeded product captures: `overview.png`, `teams.png`, `work-active.png`, `work-merged.png`, `work-review.png` (section 6.1) |
-| [brand] `brand-package-v2/` | Seven logo/icon SVGs, three production PNGs, `BRAND-GUIDE.md`, preview and QA files. The QA report records valid XML, globally unique ids, and only approved palette colours in every SVG (`QA-REPORT.txt:1-16`) |
+| [brand] `brand-package-v2/` | Seven logo/icon SVGs plus `favicon.svg` (eight SVG files total), three production PNGs, `BRAND-GUIDE.md`, preview and QA files. The QA report records valid XML, globally unique ids, and only approved palette colours in every SVG (`QA-REPORT.txt:1-16`) |
 | [brand] `brand-package-v2-brief.md` | The brief that produced v2, including why v1's violet/magenta look was replaced (line 9) and the Director's palette choice on 2026-11-06 (line 18) |
 
 Verified against #792 point by point:
@@ -155,8 +157,8 @@ Verified against #792 point by point:
 - **Three pages, named as in #792.** Navigation on every page is "How it works" and
   "Technical information" plus a GitHub link (for example [mockup]
   `v7d/home-street-v7b.html:166`). No fourth page exists in v7d; the earlier
-  round's Quick tour is not part of this design (section 10, question 2 is
-  therefore reduced to confirming its retirement).
+  round's Quick tour is not part of this design (recorded under "Answered by the
+  supplied sources" in section 10; no Quick tour decision remains open).
 - **Transit enamel palette, with exact values.** The brand guide defines seven
   colours — Ink `#101A26`, Slate `#3D5A80`, Dusk `#5B7896`, Horizon `#E9B98A`,
   Signal vermilion `#E4572E`, Sodium `#F5C77A`, Paper `#F7F5F0` — each with a
@@ -182,10 +184,12 @@ Verified against #792 point by point:
   `:888`, `:890`) — and How it works mounts one animated scene plus two stills
   ([mockup] `v7d/how-it-works.html:941-944`). Reduced-motion readers get a still:
   the script checks `prefers-reduced-motion` and listens for changes
-  ([mockup] `v7d/street-v7b.js:399`, `:605`). The stage formerly called "Check"
-  is "Verify" in every reader-visible label (steps list at
-  `v7d/home-street-v7b.html:196`; aria label at `:195`); the word survives only as
-  an internal variable name in the script, which no reader sees.
+  ([mockup] `v7d/street-v7b.js:399`, `:605`). Every reader-visible stage label
+  already says "Verify" — no visible Check-to-Verify correction is part of the
+  port (steps and aria label at `v7d/home-street-v7b.html:195-196`, hall name at
+  `:303`; How it works at `v7d/how-it-works.html:284-287`, `:376`). The word
+  `check` survives only as an internal variable name in the script, which no
+  reader sees and which does not establish visible wording.
 - **Outer loop, inner loop, loop diagram.** The outer loop is four numbered steps
   (backlog, rosters, rules, autonomy) each ending in a "Your call" line
   ([mockup] `v7d/how-it-works.html:251-264`). The inner-loop diagram has wide
@@ -197,10 +201,15 @@ Verified against #792 point by point:
   `#loop-desc` on the same line for readers who cannot see the figure.
 - **Technical claims spot-checked.** The page's minimums — Python 3.11+, Node.js
   22.12+ ([mockup] `v7d/technical-information.html:223`) — agree with the product's
-  own installation guide ([product] `docs/guide/installation.md:11-12`). Its tool
-  list (four icon tools plus Pi and Muse Code as text, line 238) matches the
-  harnesses the current site names. Its docs links are still placeholders
-  (section 4.6).
+  own installation guide ([product] `docs/guide/installation.md:11-12`). Its
+  six-tool list (four icon tools plus Pi and Muse Code as text, line 238) matches
+  the pinned product's current harness support — six harness cards
+  ([product] `docs/features/harnesses.md:3`), Muse Code among them
+  (`harnesses.md:7`, dedicated section at `:19-25`), and the six provider ids in
+  code ([product] `frontend/src/types/agentTeams.ts:3`). Do not confuse that with
+  the older public website, which still names only five tools and omits Muse
+  Code ([website] `index.html:111`, `:349`). Its docs links are still
+  placeholders (section 4.6).
 
 Older material stays background only: the earlier approved build design
 ([product] `docs/superpowers/specs/2026-10-16-website-build-design.md:7`) and its
@@ -213,8 +222,9 @@ for these files instructs planning the port into Astro pages, and the earlier
 Director-approved build design specified Astro with static output, animated scenes
 as components, and the generated `docs/` carried through unchanged ([product]
 `docs/superpowers/specs/2026-10-16-website-build-design.md:22`, `:42`). No Astro
-source exists in the website repository today (section 4.4 of the previous
-checkpoint; [website] `README.md:48-52`), so the first implementation step is that
+source exists in the website repository at its pin — its own README lists static
+HTML as the stack ([website] `README.md:48-52`) and a whole-tree listing shows no
+`package.json` or Astro configuration — so the first implementation step is that
 design's foundation phase: create the Astro project on a preview branch, keep
 serving `docs/` unchanged, and add the preview deploy — only then port the pages.
 
@@ -224,16 +234,21 @@ serving `docs/` unchanged, and add the preview deploy — only then port the pag
 | `v7d/home-street-v7b.html` | Home page (`/`) | Sections in mockup order; hero headline is the primary visual, not the logo ([brand] `BRAND-GUIDE.md:29`) |
 | `v7d/how-it-works.html` | `/how-it-works/` | Keep outer-loop order, stage anchors (`#stage-plan` … `#stage-merged`, line 285), and the glossary |
 | `v7d/technical-information.html` | `/technical-information/` | Wire every placeholder link to the renamed docs (section 4.6) |
-| `v7d/street-v7b.js` (`mountStreet`) | One scene component used by all six mounts (home 3, How it works 3) | Import the standalone file once; delete the per-page inlined copies. Preserve: unique prefixes, pause/play on animated mounts only, `animate:false` stills with their exact crops and still-moments, phone crop behaviour, and the reduced-motion path |
+| `v7d/street-v7b.js` (`mountStreet`) | One shared scene module/component used by all six mounts (home 3, How it works 3) | Planned extraction work, not existing reuse: neither animated page loads the standalone file (no script `src`); both embed their own inline copy. Extract those two copies — with the standalone file as the canonical source — into one shared module; keep each page's own menu initialization separate (Technical information's only script is that menu code). Preserve: unique prefixes, pause/play on animated mounts only, `animate:false` stills with their exact crops and still-moments, phone crop behaviour, and the reduced-motion path |
 | Loop diagram (wide + tall SVG, `how-it-works.html:287`) | One diagram component rendering both variants | Extract from the single-line SVG into maintainable markup without changing geometry, labels, colours, or the `#loop-desc` text alternative |
 | `v7d/assets/tour/*.png` | Website public assets, same placements as the mockup | `teams.png` and `overview.png` on How it works (lines 258, 264), `work-active.png` on home (line 205) and How it works (line 291); `work-merged.png` and `work-review.png` are supplied but unused in the mockup pages — place only if the Director's review asks, otherwise do not ship unused captures. Retakes per section 6.1 |
 | `v7d/assets/icons/*.svg` + credits | Tool-icon row on home and Technical information | Keep `icons-credits.json` provenance with the assets (CC0-1.0 icon files; the logos themselves remain their owners' trademarks, as each page footer already notes) |
 | `v7d/assets/brand/*` | Replaced by the full brand mapping in section 4.4 | The mockup's three files are a subset of the package |
 
-Final page URLs are therefore `/`, `/how-it-works/`, and `/technical-information/`,
-taken from the mockup filenames and navigation labels. The implementation team
-records that list in the website repository; the redirect rules in section 8 assume
-exactly these paths plus the unchanged `/docs/`.
+The proposed clean Astro routes are `/`, `/how-it-works/`, and
+`/technical-information/`. Be exact about their status: these are this plan's
+port choice, derived from the navigation labels — they are **not** paths supplied
+by the source, whose literal links are mockup filenames (`how-it-works.html`,
+`technical-information.html`, and the stale `home-street-v6.html` for home;
+section 4.6). The implementation team records the final route list in the website
+repository; the redirect rules in section 8 assume these proposed routes plus the
+unchanged `/docs/`, and must be re-checked if the Director's preview review
+changes any route.
 
 ### 4.3 What happens to today's landing-page content
 
@@ -289,10 +304,12 @@ the port, none of which change the design:
    Wire GitHub to the post-transfer repository and docs links to the renamed
    `/docs/` pages; the port is not done while any `href="#"` survives outside a
    deliberate same-page anchor.
-3. **Duplicated code.** The street script and the full stylesheet are inlined in
-   each page (the script is roughly 640 lines per page). The Astro port imports
-   `street-v7b.js` and the shared CSS once (section 4.2); keeping the copies would
-   guarantee drift.
+3. **Duplicated code.** All three pages repeat the shared CSS. Home and How it
+   works also repeat the street scene script inline (roughly 640 lines in each of
+   those two pages); neither loads `street-v7b.js` by reference. Extract those
+   two scene copies into one shared module and the CSS into one shared
+   stylesheet (section 4.2); keep each page's menu initialization. Keeping the
+   copies would guarantee drift.
 4. **Duplicate capture file.** `assets/work-active.png` is byte-identical to
    `assets/tour/work-active.png` (same SHA-256, Appendix A). Ship one.
 5. **External font loading.** Covered in section 4.2: self-host the four families
@@ -304,6 +321,34 @@ the port, none of which change the design:
    the guide is separate: the assets "have not been trademark-cleared"
    (`BRAND-GUIDE.md:3`, `:68`), which joins the campaign's Phase 0 trademark
    search (campaign `README.md:53`) as a before-launch item (section 10).
+
+### 4.6 Link map: every placeholder and draft route, with its destination
+
+This is the complete wiring list promised in sections 4.1–4.3. Destinations in
+the docs use the existing VitePress routes under the unchanged `/docs/` base
+([product] `docs/.vitepress/config.ts:7`); each destination file exists at the
+product pin. Do not port any source form in the middle column literally.
+
+| Destination | Source occurrences ([mockup]) | Destination evidence ([product]) |
+|---|---|---|
+| `/` (proposed home route) | Home header/footer logos `href="#"` (`home-street-v7b.html:165`, `:244`); How it works and Technical logos `href="home-street-v6.html"` (absent file; `how-it-works.html:238`, `:317`, `technical-information.html:207`, `:268`) | Plan-proposed route (section 4.2) |
+| `/how-it-works/` (proposed) | Nav/footer links `href="how-it-works.html"` on all three pages (for example `home-street-v7b.html:166`, `:245`) | Plan-proposed route; literal source form is the mockup filename |
+| `/technical-information/` (proposed) | Nav/footer links `href="technical-information.html"` on all three pages (for example `home-street-v7b.html:166`) | Plan-proposed route; literal source form is the mockup filename |
+| Product GitHub repository (post-transfer `albiexai/synth-city` address) | Nav "Open source on GitHub", GitHub pills, hero and closing buttons, footer nav — all `href="#"` (`home-street-v7b.html:166`, `:168`, `:179`, `:234`, `:245`; `how-it-works.html:239`, `:241`, `:318`; `technical-information.html:207` area nav, pill, `:268` footer) | Transfer target from section 1; until the transfer, the old repository address is the live one, and after it GitHub redirects bridge the change (section 8) — final pages link the new address directly |
+| `/docs/` (docs home) | "Docs home" (`technical-information.html:261`) | `docs/index.md` |
+| `/docs/guide/installation` | "installation guide" (`technical-information.html:224`), "Read the installation guide" (`:232`), "Installation guide" (`:261`) | `docs/guide/installation.md` |
+| `/docs/guide/quick-start` | "Quick start" (`technical-information.html:261`) | `docs/guide/quick-start.md` |
+| `/docs/features/harnesses` | "Read the harness guide" (`technical-information.html:241`), "Harness guide" (`:261`) | `docs/features/harnesses.md` |
+| `/docs/features/agent-mail` | "Read the Agent Mail guide" (`technical-information.html:247`) | `docs/features/agent-mail.md` |
+| `/docs/features/agent-bridge` | "Read the Agent Bridge guide" (`technical-information.html:247`) | `docs/features/agent-bridge.md` |
+| `/docs/autonomy` | "Read the autonomy guide" (`technical-information.html:255`), "Autonomy guide" (`:261`) | `docs/autonomy.md`, sidebar link `/autonomy` at `docs/.vitepress/config.ts:39` |
+| `/docs/features/agent-teams` | "Read the Teams guide" (`technical-information.html:255`), "Teams guide" (`:261`) | `docs/features/agent-teams.md` |
+
+Same-page anchors in the mockup (for example hero buttons to `#street`, `#tour`,
+`#start`) are deliberate in-page links, not placeholders; they port as the
+equivalent section anchors on the Astro pages. The acceptance check is simple:
+after the port, a search for `href="#"` and for `.html` page links in the built
+output returns nothing outside deliberate same-page anchors.
 
 ## 5. The docs rename
 
@@ -513,7 +558,7 @@ build must keep an equivalent check pointed at the built output of all three
 pages, including handler-loaded assets.
 
 **For Synth City,** the deploy target stays Cloudflare Pages — nothing in the
-campaign decisions moves hosting — but three things around it change, and the
+campaign decisions moves hosting — but four things around it change, and the
 implementation plan must schedule them as separate, checkable steps:
 
 1. **Domain attachment.** `albiex.org` is pointed at Cloudflare and attached to the
@@ -629,9 +674,21 @@ The full cutover belongs to the transfer runbook (#790) and the release plan
    (section 7).
 5. `albiex.org` DNS pointed at Cloudflare; the every-path redirect from
    `claudedeck.org` prepared but not yet switched on.
-6. Preview branch merged to website `master` (this deploys), generated docs commit
-   included; live checks on `albiex.org`: home, How it works, Technical
-   information, `/docs/` and one changed docs page.
+6. **Production workflow cutover, then merge.** Merely merging an Astro project
+   under the current workflow would deploy the repository root, not the built
+   pages ([website] `deploy.yml:21`). The authorized cutover therefore updates
+   the production workflow on `master` to build the same approved source the
+   Director reviewed, carry the generated documentation into `dist/docs/` (the
+   current generated `docs/` tree at the repository root, produced by the
+   section 3 copy path), and deploy `dist/` to the verified production Pages
+   project — the production workflow change the approved build design already
+   requires at publication ([product] build design `:56`). Only then merge the
+   preview branch to website `master`. Require evidence that the production
+   output matches the reviewed preview artifact (same source commit and build
+   inputs; compare the deployed file list and page checksums against the preview
+   build). Transfer and publication gates from steps 3–5 remain in force. Live
+   checks on `albiex.org`: home, How it works, Technical information, `/docs/`
+   and one changed docs page.
 7. `claudedeck.org` redirect switched on; old-address spot checks (`/`, a docs
    page, a screenshot asset) land on the same paths at `albiex.org` with a
    successful final response.
@@ -734,10 +791,14 @@ reviewer should check them on the exact preview build that will be merged:
    the website README's screenshot provenance record names the new source commit
    and checksums; no capture shows a live (non-synthetic) workspace.
 5. The page-check workflow passes on the built output of all three pages
-   (including handler-loaded assets), and the separate preview workflow (section
+   (including handler-loaded assets); the separate preview workflow (section
    7 item 4) — not the production workflow — produced the exact build the
    Director approved, with no hand-edits after approval and the production
-   `master` trigger preserved until cutover.
+   `master` trigger preserved until cutover; and at cutover the updated
+   production workflow (section 9.2 step 6) built that same approved source,
+   carried the generated docs into `dist/docs/`, deployed `dist/` to the verified
+   production project, and produced output evidenced to match the reviewed
+   preview artifact.
 6. The redirect checks in section 9.2 step 7 pass on the live domains, the
    pre-transfer announcement (step 3) demonstrably preceded the transfer, and
    the publication gate (section 9.1) was observed: no `master` merge before
@@ -745,9 +806,14 @@ reviewer should check them on the exact preview build that will be merged:
 
 ## Appendix A. How the numbers in this document were measured
 
-All commands ran on 2026-11-06 at the pinned commits in section 2. [product]
-commands run in a `claude-deck` checkout; [website] commands in a
-`claude-deck-website` checkout.
+All commands ran on 2026-11-06 at the pinned commits in section 2. Run them in
+checkouts actually at those pinned revisions — [product]
+`c4daece7b300e2d07b884a75adf6ef8f99950389`, [website]
+`0c35f391759633c774b7cc4ace5c52b96dd53d12` — not in whatever checkout is at hand:
+check out the pinned revision first (for example `git checkout <pinned commit>`),
+or select files with `git ls-tree -r --name-only <pinned commit>` and pass the
+revision to `git grep` (`git grep … <pinned commit> -- <paths>`). Counts from any
+other revision are a different measurement.
 
 Supplied-source identity (SHA-256, measured 2026-11-06; filenames as supplied, no
 private absolute paths):
