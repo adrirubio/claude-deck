@@ -1,13 +1,22 @@
 # Website and docs plan: Synth City at albiex.org
 
-**Status: reviewable draft checkpoint, not a finished plan.** Everything that can be
-checked against the two repositories today is written and cited below. Everything that
-depends on the approved website mockup (called "v7d") is marked **UNVERIFIED**, because
-the mockup files are not in either repository and have not reached this team yet. The
-Director holds those files (issue #792). When they arrive, the marked sections must be
-checked against them before anyone treats this document as complete. Do not use any
-older mockup in the repositories as a substitute: the older files describe a different
-design round.
+**Status: verified against the supplied mockup files; ready for independent review.**
+An earlier checkpoint of this document was written before the approved website
+mockup (called "v7d") and brand package v2 reached the team, and marked everything
+mockup-dependent UNVERIFIED. Those files have since been supplied as a read-only
+reference outside the repositories, identified by the bound Supervisor through
+the route issue #792 requires and accepted by the team Leader as the approved
+source handoff. Source identity (filenames and SHA-256 checksums, Appendix A) is
+recorded separately from this document's own content checks, which verify the
+plan against those identified files, file by file (section 4). The `v7b`
+basenames inside the packet are filenames only; they do not imply a different
+approval version from the Supervisor-identified v7d packet. Two limits remain, stated where they apply: the
+mockup pages were inspected as source and their captures viewed directly, but no
+browser rendering check was performed by the author — that is the Director preview
+step in section 9 — and the brand guide is an internal draft whose trademark
+clearance is still outstanding (section 10). Do not use any older mockup in the
+repositories as a substitute for v7d: the older files describe a different design
+round.
 
 **What this document does.** It plans how the approved mockup becomes the published
 website at `albiex.org`, how the public documentation is renamed, which product
@@ -47,6 +56,16 @@ commits, measured on 2026-11-06:
 |---|---|---|
 | **[product]** | `adrirubio/claude-deck` (becomes `albiexai/synth-city`) | `c4daece7b300e2d07b884a75adf6ef8f99950389` |
 | **[website]** | `adrirubio/claude-deck-website` (becomes `albiexai/synth-city-website`) | `0c35f391759633c774b7cc4ace5c52b96dd53d12` |
+| **[mockup]** | Supplied v7d reference files, held outside both repositories (read-only) | SHA-256 checksums in Appendix A |
+| **[brand]** | Supplied `brand-package-v2/` in the same reference set | `BRAND-GUIDE.md` checksum in Appendix A |
+
+The [mockup] and [brand] files are cited by path and line, like repository files.
+They are not copied into either repository by this plan: the mockup pages are
+throwaway design sources, and the brand assets enter the repositories only during
+implementation, through the asset mapping in section 4.4. Whoever implements this
+plan needs authorized access to the same reference files at the checksums recorded
+in Appendix A; if the checksums differ, the supplied copy is not the copy this plan
+was verified against.
 
 Counts below come from whole-repository `git grep` and `git ls-files` runs at those
 commits, not from sampling. Appendix A lists the commands so anyone can reproduce
@@ -101,118 +120,190 @@ Three facts in that path matter for the rename:
    ([product] `scripts/deploy-docs.sh:19-20`). Nobody may hand-edit files there
    ([website] `README.md:24`). Every docs rename change belongs in the product
    repository source.
-3. **The copy script expects the two checkouts to be sibling folders named exactly
-   `claude-deck` and `claude-deck-website`** ([product] `scripts/deploy-docs.sh:7`,
-   `DOCUMENTATION_PUBLISHING.md:27`). After the transfer and rename, fresh clones
-   will naturally be named `synth-city` and `synth-city-website`, and the script
+3. **The copy script hard-codes the website checkout's folder name.** It derives
+   the product root from its own location, so the product folder may be named
+   anything, but the neighbouring website folder must be exactly
+   `claude-deck-website` ([product] `scripts/deploy-docs.sh:4-7`); the playbook
+   additionally prescribes both folder names for readers setting up a machine
+   (`DOCUMENTATION_PUBLISHING.md:27`). After the transfer and rename, a fresh
+   website clone will naturally be named `synth-city-website`, and the script
    will fail until it is updated. Section 5 covers this.
 
 ## 4. The new website: three pages from the approved mockup
 
-### 4.1 What the mockup is, and what we cannot yet check
+### 4.1 What was supplied, verified file by file
 
-Issue #792 describes the approved mockup as three pages — **home**, **How it works**,
-and **Technical information** — with the **Transit enamel palette** (the approved
-colour set), the **brand package v2 logo**, an animated **"signal works" hero**
-(the large opening scene at the top of the home page) containing **agent diamonds**
-(diamond-shaped markers for the AI agents) and a **Verify stage**, and a How it works
-story told as an **outer loop and an inner loop with a loop diagram**.
+The supplied reference set (source identity and checksums in Appendix A) contains
+exactly what #792 describes. The three pages are single-file HTML mockups with
+inline CSS and an inline copy of the hero script; they are design sources to port,
+not files to publish as-is.
 
-**UNVERIFIED.** None of those files are in either repository. A whole-repository
-search at the pinned product commit finds the mockup only as a mention — the campaign
-plan item that created this work (campaign `README.md:62`). The website repository at
-its pin contains the current live landing page, not the mockup. So this section does
-two different jobs, and keeps them separate:
+| Supplied file | What it is (verified) |
+|---|---|
+| [mockup] `v7d/home-street-v7b.html` (892 lines) | Home page. Title "Albiex Synth City: Scale product velocity with self-directing AI teams" (line 4), hero headline at line 175; animated street hero plus two still scenes; Work capture; tool icons row |
+| [mockup] `v7d/how-it-works.html` (955 lines) | How it works. Outer loop in four steps (lines 251–264), inner loop with animated street, stage links, and the loop diagram in wide and tall variants (line 287) |
+| [mockup] `v7d/technical-information.html` (279 lines) | Technical information: requirements, install steps, harness connection, next-step docs links (headings at lines 216–261) |
+| [mockup] `v7d/street-v7b.js` | The animated "signal works" hero as a reusable function, `mountStreet(svg, opts)`. Its header comment (lines 1–18) is the API contract: unique prefix per scene, still moments, caller-chosen crops, pause/play button, stage callback, and a no-animation mode |
+| [mockup] `v7d/assets/brand/` | The three brand files the pages actually use: `albiex-logo-compact.svg`, `favicon.svg`, `apple-touch-icon.png` |
+| [mockup] `v7d/assets/icons/` | Four third-party tool icons plus `icons-credits.json` recording source, CC0-1.0 licence, and trademark flags for each |
+| [mockup] `v7d/assets/tour/` (plus one duplicate at `v7d/assets/work-active.png`) | Five seeded product captures: `overview.png`, `teams.png`, `work-active.png`, `work-merged.png`, `work-review.png` (section 6.1) |
+| [brand] `brand-package-v2/` | Seven logo/icon SVGs, three production PNGs, `BRAND-GUIDE.md`, preview and QA files. The QA report records valid XML, globally unique ids, and only approved palette colours in every SVG (`QA-REPORT.txt:1-16`) |
+| [brand] `brand-package-v2-brief.md` | The brief that produced v2, including why v1's violet/magenta look was replaced (line 9) and the Director's palette choice on 2026-11-06 (line 18) |
 
-- It maps each mockup requirement, as #792 words it, to the place it must land and to
-  the evidence that will prove it landed. That mapping is usable today.
-- It does **not** state any colour value, logo file, animation timing, or diagram
-  content. Those can only come from the v7d files. Any future draft that contains
-  such values without citing the supplied files should be rejected in review.
+Verified against #792 point by point:
 
-A note on older material: the repositories contain an earlier approved website build
-design with its own style and scenes ([product]
-`docs/superpowers/specs/2026-10-16-website-build-design.md:7`) and page copy for
-four pages including a Quick tour ([product]
-`docs/plans/2026-10-15-director-website/pages/`). That round predates the rename and
-the v7d mockup. It is useful background for technology choices (section 4.4) but it
-is **not** the design source for Synth City, and its four-page list does not override
-the three pages named in #792. If the Director wants the Quick tour page kept, that
-is an open question in section 10, not something this plan decides.
+- **Three pages, named as in #792.** Navigation on every page is "How it works" and
+  "Technical information" plus a GitHub link (for example [mockup]
+  `v7d/home-street-v7b.html:166`). No fourth page exists in v7d; the earlier
+  round's Quick tour is not part of this design (section 10, question 2 is
+  therefore reduced to confirming its retirement).
+- **Transit enamel palette, with exact values.** The brand guide defines seven
+  colours — Ink `#101A26`, Slate `#3D5A80`, Dusk `#5B7896`, Horizon `#E9B98A`,
+  Signal vermilion `#E4572E`, Sodium `#F5C77A`, Paper `#F7F5F0` — each with a
+  restricted job ([brand] `BRAND-GUIDE.md:13-21`), and rules that bind the port:
+  vermilion is the sole accent, no violet/magenta/cyan/glow/neon, flat colours in
+  artwork, and no Horizon arc in compact logos or icons
+  (`BRAND-GUIDE.md:25-28`). The pages additionally use a separate website role
+  system (human amber `#D97706`, AI teal `#0D9488`, steel, plus per-team colours);
+  the guide explicitly reserves those for the website and forbids leaking them
+  into brand artwork (`BRAND-GUIDE.md:31-38`). The port must keep the two systems
+  apart: brand files stay palette-only, page components may use role colours.
+- **Logo.** Pages use the compact lockup, `assets/brand/albiex-logo-compact.svg`,
+  at 44 px in the header and 40 px in the footer, with alt text "Albiex Synth
+  City" ([mockup] `v7d/home-street-v7b.html:165`, `:244`; same pattern on the
+  other pages). That matches the guide's header sizing rule — 40 px minimum,
+  height-based placement ([brand] `BRAND-GUIDE.md:46-47`, `:56`).
+- **"Signal works" hero, agent diamonds, Verify.** The street scene moves three
+  feature parcels, each escorted by one diamond-shaped agent, through four halls
+  named Plan, Build, Review, Verify, then sends finished parcels back to GitHub by
+  rail while the Director supervises by wire ([mockup] `v7d/street-v7b.js:1-7`;
+  hall names at `v7d/street-v7b.js:53`). The home page mounts it three times — one animated hero with a
+  pause/play button and two stills ([mockup] `v7d/home-street-v7b.html:880`,
+  `:888`, `:890`) — and How it works mounts one animated scene plus two stills
+  ([mockup] `v7d/how-it-works.html:941-944`). Reduced-motion readers get a still:
+  the script checks `prefers-reduced-motion` and listens for changes
+  ([mockup] `v7d/street-v7b.js:399`, `:605`). The stage formerly called "Check"
+  is "Verify" in every reader-visible label (steps list at
+  `v7d/home-street-v7b.html:196`; aria label at `:195`); the word survives only as
+  an internal variable name in the script, which no reader sees.
+- **Outer loop, inner loop, loop diagram.** The outer loop is four numbered steps
+  (backlog, rosters, rules, autonomy) each ending in a "Your call" line
+  ([mockup] `v7d/how-it-works.html:251-264`). The inner-loop diagram has wide
+  (1200×460) and tall (400×1000) SVG variants with five stage nodes, forward
+  arrows, three named send-back paths ("Changes requested", "A question about the
+  plan", "More changes requested"), a dashed "next ready feature" return, and a
+  "Your reserved decisions wait here" callout on Verify — all on one very long
+  line ([mockup] `v7d/how-it-works.html:287`), with a full text description in
+  `#loop-desc` on the same line for readers who cannot see the figure.
+- **Technical claims spot-checked.** The page's minimums — Python 3.11+, Node.js
+  22.12+ ([mockup] `v7d/technical-information.html:223`) — agree with the product's
+  own installation guide ([product] `docs/guide/installation.md:11-12`). Its tool
+  list (four icon tools plus Pi and Muse Code as text, line 238) matches the
+  harnesses the current site names. Its docs links are still placeholders
+  (section 4.6).
 
-### 4.2 Requirement-by-requirement port map
+Older material stays background only: the earlier approved build design
+([product] `docs/superpowers/specs/2026-10-16-website-build-design.md:7`) and its
+four page drafts predate v7d and must not be mixed into the port.
 
-"Port" means rebuilding what the mockup shows as real website pages in the website
-repository, keeping its look, words, and behaviour. Each row names where the
-requirement lands, what replaces today's equivalent, and how a reviewer will check it
-once the files exist.
+### 4.2 Astro port map
 
-| Mockup requirement (#792) | Lands on | Replaces today | Checked when v7d arrives by |
-|---|---|---|---|
-| Transit enamel palette | All three pages: shared colour definitions, then page styles | Current landing colours defined inline, e.g. background and accent hex values at [website] `index.html:33-44` and rules in `styles.css` | Comparing every colour token in the built pages against the palette file in the brand package; no other hex values present |
-| Brand package v2 logo | Header of all pages; social-share image; favicon set | [website] `assets/logo-dark.png` used at `index.html:65` and as share image at `index.html:19`; `favicon.ico` at `index.html:11`; `assets/apple-touch-icon.png` at `index.html:12` | File-for-file match with the supplied logo files (names, sizes, dark/light variants); alt text reads "Synth City" |
-| "Signal works" hero | Home page, top section | Static headline hero, [website] `index.html:84-144` | Scene content, motion, and still (reduced-motion) version match the mockup; headline names Synth City |
-| Agent diamonds | Inside the hero scene, as the agent markers | Nothing equivalent exists today | Diamonds present with the same meaning, labels, and motion as the mockup; each diamond's label is readable without motion |
-| Verify stage | Inside the hero scene, as one named stage of the work flow | Nothing equivalent exists today | Stage name, position in the flow, and description match the mockup; wording agrees with the product's own stage names in the docs |
-| Outer loop / inner loop story | How it works page, main narrative | No such page exists today; today's landing page explains features in cards, e.g. [website] `index.html:282-288` | Page tells the same two-loop story in the same order; no extra loop or stage invented |
-| Loop diagram | How it works page, central figure | Nothing equivalent exists today | Diagram structure, labels, and captions match the mockup file; a text alternative describes the same loops for readers who cannot see the figure |
-| Technical information page | Third page: architecture, requirements, links into `/docs/` | Nothing equivalent; technical readers today go straight to `/docs/` ([website] `index.html:73`) | Page content matches the mockup outline; every technical claim traces to the renamed docs, not to new unsupported claims |
+The target is Astro in the website repository: #792 names Astro, the supply note
+for these files instructs planning the port into Astro pages, and the earlier
+Director-approved build design specified Astro with static output, animated scenes
+as components, and the generated `docs/` carried through unchanged ([product]
+`docs/superpowers/specs/2026-10-16-website-build-design.md:22`, `:42`). No Astro
+source exists in the website repository today (section 4.4 of the previous
+checkpoint; [website] `README.md:48-52`), so the first implementation step is that
+design's foundation phase: create the Astro project on a preview branch, keep
+serving `docs/` unchanged, and add the preview deploy — only then port the pages.
+
+| Mockup source | Astro target | Port notes |
+|---|---|---|
+| Shared `<head>`, tokens, header, footer (near-identical in all three files; tokens at `home-street-v7b.html:10-13`) | One layout component + one shared stylesheet with the design tokens | Deduplicate: the three files repeat the same CSS. Tokens include the role colours and four font stacks (Newsreader, Hanken Grotesk, JetBrains Mono, Chakra Petch). Self-host the fonts: the mockup loads Google Fonts (`home-street-v7b.html:7-8`), but the approved build design requires self-hosted fonts and no external requests ([product] build design `:27`) |
+| `v7d/home-street-v7b.html` | Home page (`/`) | Sections in mockup order; hero headline is the primary visual, not the logo ([brand] `BRAND-GUIDE.md:29`) |
+| `v7d/how-it-works.html` | `/how-it-works/` | Keep outer-loop order, stage anchors (`#stage-plan` … `#stage-merged`, line 285), and the glossary |
+| `v7d/technical-information.html` | `/technical-information/` | Wire every placeholder link to the renamed docs (section 4.6) |
+| `v7d/street-v7b.js` (`mountStreet`) | One scene component used by all six mounts (home 3, How it works 3) | Import the standalone file once; delete the per-page inlined copies. Preserve: unique prefixes, pause/play on animated mounts only, `animate:false` stills with their exact crops and still-moments, phone crop behaviour, and the reduced-motion path |
+| Loop diagram (wide + tall SVG, `how-it-works.html:287`) | One diagram component rendering both variants | Extract from the single-line SVG into maintainable markup without changing geometry, labels, colours, or the `#loop-desc` text alternative |
+| `v7d/assets/tour/*.png` | Website public assets, same placements as the mockup | `teams.png` and `overview.png` on How it works (lines 258, 264), `work-active.png` on home (line 205) and How it works (line 291); `work-merged.png` and `work-review.png` are supplied but unused in the mockup pages — place only if the Director's review asks, otherwise do not ship unused captures. Retakes per section 6.1 |
+| `v7d/assets/icons/*.svg` + credits | Tool-icon row on home and Technical information | Keep `icons-credits.json` provenance with the assets (CC0-1.0 icon files; the logos themselves remain their owners' trademarks, as each page footer already notes) |
+| `v7d/assets/brand/*` | Replaced by the full brand mapping in section 4.4 | The mockup's three files are a subset of the package |
+
+Final page URLs are therefore `/`, `/how-it-works/`, and `/technical-information/`,
+taken from the mockup filenames and navigation labels. The implementation team
+records that list in the website repository; the redirect rules in section 8 assume
+exactly these paths plus the unchanged `/docs/`.
 
 ### 4.3 What happens to today's landing-page content
 
-The current landing page is one long page: hero, value points, audience, screenshots,
-feature cards that link into `/docs/`, and install instructions. Renaming it in place
-would mean at least the title ([website] `index.html:6`), the description and share
-metadata (`index.html:7`, `index.html:15-19`), the header logo and name
-(`index.html:65-66`), the hero headline (`index.html:100-101`), and product name
-mentions throughout — 23 old-name lines in `index.html` and 1 in `styles.css` at the
-pin (Appendix A). But the mockup is a different design, not a re-skin of this page,
-so the plan is:
+Nothing from today's single-page site carries over automatically. The three v7d
+pages already contain their own hero, explanation, tool row, captures, and install
+entry points, so the old page (title at [website] `index.html:6`, hero at
+`index.html:100-101`, 23 old-name lines in `index.html` and 1 in `styles.css`) is
+retired whole at cutover, not renamed in place. Three things must survive the
+retirement in the new pages, and the mockup already provides anchors for each: the
+GitHub entry point (nav and hero buttons, currently `href="#"` placeholders), the
+install path (Technical information), and links into `/docs/` (the "Where to go
+next" list, [mockup] `v7d/technical-information.html:261`, also placeholders).
+Section 4.6 lists every placeholder that must be wired.
 
-1. Build the three mockup pages as the new site (section 4.2). Do not stretch the
-   old single-page layout to fit them.
-2. Carry over only what the mockup or the Director asks for: the install entry point,
-   the GitHub link, and the links into `/docs/` must survive in some form, because
-   readers and search results depend on them. The old page's GitHub links point at
-   the pre-transfer address (7 `adrirubio` lines across [website] `index.html` and
-   `README.md`); after the transfer they must point at `albiexai/synth-city`
-   directly rather than relying on GitHub's redirect forever.
-3. Keep `/docs/` serving at the same path throughout. The new pages link to it; the
-   docs themselves are renamed in their source repository (section 5), not as part
-   of the page build.
+### 4.4 Brand asset mapping (brand package v2 → destinations)
 
-**UNVERIFIED** until the mockup arrives: exact page URLs (for example whether
-How it works lives at `/how-it-works/`), the navigation labels, and which of today's
-sections, if any, the mockup already absorbs. The implementation team must take
-these from the supplied files and record the final URL list in the website
-repository, because the redirect map in section 8 depends on it.
+The package supplies more than the mockup uses. Every supplied production asset has
+a destination; test sheets (`PREVIEW.html`, `header-size-test.png`,
+`favicon-size-test.png`, `BRAND-OVERVIEW.png`) are QA references and are never
+shipped ([brand] `BRAND-GUIDE.md:80-82`).
 
-### 4.4 Technology for the new pages: an open decision with evidence
+| Brand asset | Destination | Notes |
+|---|---|---|
+| `albiex-logo-compact.svg` | Website header (44 px) and footer (40 px), as in the mockup | Light-background lockup; clear space per `BRAND-GUIDE.md:60` |
+| `albiex-logo-compact-dark.svg` | Docs header | The docs theme is forced dark ([product] `docs/.vitepress/config.ts:6`), replacing `docs/public/logo-dark.png`; VitePress logo config changes from PNG to this SVG |
+| `albiex-logo.svg`, `albiex-logo-dark.svg` | Social-share/large placements and any light/dark hero-adjacent use at 300 px+ | Only the full logos may carry the Horizon arc (`BRAND-GUIDE.md:18`) |
+| `albiex-logo-stacked.svg` | Vertical placements (for example README or about surfaces) at 180 px+ | Light only; no dark stacked variant is supplied |
+| `albiex-icon.svg`, `albiex-icon-mono.svg` | Standalone marks (app, README, partner slots) | Mono is Ink-only for single-colour contexts |
+| `favicon.svg`, `favicon-32.png` | Website and docs favicons | Replaces [website] `favicon.ico` and [product] `docs/public/favicon.ico`; the SVG is optimised for 16/32 px, so no separate 16 px PNG is needed |
+| `apple-touch-icon.png` (180×180) | Website and product touch icons | Replaces both current `apple-touch-icon.png` files |
+| `icon-512.png` | App/README icon | New; product README can adopt it during the product rename |
 
-Issue #792 says to port the mockup "into the website repository's Astro pages".
-Astro is a static-site builder: authors write page components, and the tool outputs
-plain web files. **Today no Astro source exists in the website repository**: at the
-pin it contains static HTML and CSS plus the generated docs (204 tracked files; no
-`package.json`, no Astro configuration; its own README lists the stack as static
-HTML with Tailwind via CDN, [website] `README.md:48-52`). So "the Astro pages" do not
-exist yet to port into. There are two honest readings, and the Director (or the
-mockup files themselves, if they arrive as an Astro project) must settle which one
-applies:
+Two product-side adaptations belong to the rename implementation campaign, not the
+website build, and are recorded here so they are not lost: the app ships PNG logos
+([product] `frontend/public/logo-dark.png`, `logo-light.png`) and PNG favicons at
+16/32 px, while the brand package is SVG-first — the frontend asset references must
+change to the supplied SVGs (or Director-approved rasters derived from them), and
+the light-variant need maps to `albiex-logo-compact.svg`, the dark to
+`albiex-logo-compact-dark.svg`.
 
-| Option | What it means | Evidence for it | Cost and risk |
-|---|---|---|---|
-| **A. Adopt Astro in the website repo** | Create the Astro project the earlier build design already specified: Astro with static output in `dist/`, animated scenes as components, existing `docs/` carried through unchanged | The Director-approved build design chose exactly this stack and layout ([product] `docs/superpowers/specs/2026-10-16-website-build-design.md:22`, foundation phase at line 42), and #792's wording assumes Astro pages | A new build step in the deploy workflow (today it deploys the repo as-is, [website] `deploy.yml:21`); every existing safeguard (page checks) must be re-pointed at the build output |
-| **B. Stay with static HTML/CSS/JS** | Hand-build the three pages the way the current landing page is built | Zero new tooling; the current deploy path needs no change | The animated hero and loop diagram must be hand-rolled; keeping three pages consistent without components is more error-prone, and it contradicts #792's Astro wording |
+### 4.5 Mockup defects the port must fix (do not copy blindly)
 
-This plan records option A as the assumption that best fits the written sources, and
-lists the confirmation as Director open question 3 (section 10). Whichever option is
-chosen, two constraints from the earlier design round still describe good practice
-and cost nothing to keep: build on a preview branch with a private-enough preview
-URL first, because a merge to website `master` is publication ([product]
-`docs/superpowers/specs/2026-10-16-website-build-design.md:14-15`), and keep serving
-the generated docs at the same URLs during the build (same file, line 16). The
-preview-branch pattern also fits the campaign's own record: draft first, Director
-reviews, publish after the transfer gate (section 9).
+The mockup is a design source, not production code. Verified defects to fix during
+the port, none of which change the design:
+
+1. **Stale home links.** How it works and Technical information link their logos to
+   `home-street-v6.html`, a file that does not exist in the supplied set (the home
+   file is `home-street-v7b.html`): [mockup] `v7d/how-it-works.html:238`, `:317`,
+   `v7d/technical-information.html:207`, `:268`. In Astro these become `/`.
+2. **Placeholder links.** `href="#"` appears 7 times on home, 3 on How it works,
+   and 16 on Technical information — including every GitHub button and every docs
+   link on the Technical page (`technical-information.html:224`, `:232`, `:261`).
+   Wire GitHub to the post-transfer repository and docs links to the renamed
+   `/docs/` pages; the port is not done while any `href="#"` survives outside a
+   deliberate same-page anchor.
+3. **Duplicated code.** The street script and the full stylesheet are inlined in
+   each page (the script is roughly 640 lines per page). The Astro port imports
+   `street-v7b.js` and the shared CSS once (section 4.2); keeping the copies would
+   guarantee drift.
+4. **Duplicate capture file.** `assets/work-active.png` is byte-identical to
+   `assets/tour/work-active.png` (same SHA-256, Appendix A). Ship one.
+5. **External font loading.** Covered in section 4.2: self-host the four families
+   instead of the Google Fonts links, per the approved build design.
+6. **Confidentiality wording in brand sources is stale.** The guide and brief say
+   to keep the name confidential until launch ([brand] `BRAND-GUIDE.md:3`), but
+   the Director's campaign decision makes the rename public (campaign
+   `README.md:20`); the current decision governs. What remains a real gate from
+   the guide is separate: the assets "have not been trademark-cleared"
+   (`BRAND-GUIDE.md:3`, `:68`), which joins the campaign's Phase 0 trademark
+   search (campaign `README.md:53`) as a before-launch item (section 10).
 
 ## 5. The docs rename
 
@@ -227,15 +318,24 @@ configuration excludes `plans/**`, `superpowers/**`, and `deploy/**`
 ([product] `docs/.vitepress/config.ts:8-12`). What remains — the rename surface for
 this section — is **56 Markdown files** (22 under `docs/api/`, 22 under
 `docs/features/`, 9 under `docs/guide/`, 3 at the `docs/` root), plus the site-wide
-assets in `docs/public/`. Within those 56 files, **69 lines in 22 files** still use
-an old name (`Claude Deck`, `claude-deck`, `claude_deck`, or `claudedeck.org`;
-Appendix A). That is the text-rename workload for the public docs. It is deliberately
-smaller than the whole-repository count that the inventory in #788 will produce:
-dated plans and other history keep their original names and stay out of the public
-build.
+assets in `docs/public/`. A narrow four-pattern search (`Claude Deck`,
+`claude-deck`, `claude_deck`, `claudedeck.org`, case-insensitive) finds **69 lines
+in 22 files**. That is a baseline, not the whole workload: the broader classified
+searches below are what the docs rename must actually work through, in step with
+the whole-repository inventory in #788 and the identifier decisions in #789. The
+sets overlap, so they are never added together.
 
-On top of the page text, the site chrome (the frame every docs page shares) carries
-the old name in specific configuration lines:
+| Search set (public docs only) | Lines / files | How the rename treats it |
+|---|---|---|
+| Four-pattern baseline above | 69 / 22 | Product-name text to rename, except history and deliberate rename explanations |
+| Bare `Deck` as a word (case-sensitive) | 151 / 27 | Includes every "Claude Deck" line plus the short product name used alone, for example "Start Deck…" ([product] `docs/guide/quick-start.md:3`). Classify line by line with #788's rules: product short name renames, ordinary English does not |
+| `deck_` tool names | 24 / 8 | Runtime identifiers, for example the tool list at [product] `docs/features/agent-mail.md:71`. New prefix and alias period come from #789; during the window the docs must keep the old names working as documented aliases |
+| `claude_registry` / `.claude-registry` paths | 10 / 5 | Runtime identifiers in install and API examples, for example [product] `docs/api/agent-bridge.md:103-104` and `docs/changelog.md:21`. Migrate per #789, keeping old-install instructions usable |
+| `CLAUDE_DECK` environment names | 4 / 2 | Runtime identifiers; same #789 treatment (subset of the baseline set) |
+| `Claude Code` / `claude-code` (third-party harness) | 90 / 30 | **Keep.** These name a real external product the agents run, not this product; never rename them mechanically |
+
+On top of the page text, the shared header and footer (the frame every docs page
+shares) carries the old name in specific configuration lines:
 
 | What a reader sees | Source line to change |
 |---|---|
@@ -247,26 +347,36 @@ the old name in specific configuration lines:
 | "Product source" nav link to the old GitHub address | [product] `docs/.vitepress/config.ts:26-27` |
 | GitHub icon link and "edit this page" link pattern | [product] `docs/.vitepress/config.ts:111`, `config.ts:119` |
 | Docs home hero name and source button | [product] `docs/index.md:4`, `docs/index.md:12-13` |
+| Footer copyright line "Claude Deck Contributors" | [product] `docs/.vitepress/config.ts:125` |
 
 The five operating-model diagrams in `docs/public/images/operating-model/` are text
-inside SVG files, so they can be checked exactly: three of them contain the word
-"Deck" as a label (`factory.svg` 1, `hierarchy.svg` 1, `modes.svg` 4 occurrences;
+inside SVG files, so they can be checked exactly: three of them contain visible
+"Deck" labels (`factory.svg` 1, `hierarchy.svg` 1, `modes.svg` 3 visible labels at
+lines 12, 23 and 48, plus a fourth source occurrence in a comment at line 20;
 Appendix A). Those labels are part of the docs rename, not of the capture retakes in
 section 6, because they are source files a person edits, not screenshots.
 
 ### 5.2 Order of work
 
 1. **Wait for the vocabulary.** The exact new names for identifiers that appear in
-   the docs (install commands, file paths, environment variables) are decided by the
-   compatibility design in #789. Until it merges, docs-rename drafting must either
-   use only the already-decided names from section 1 ("Synth City", "Albiex",
-   `albiex.org`, `albiexai/synth-city`) or mark identifier examples as provisional.
-   Section 9 lists this as a hard reconciliation gate.
+   the docs (install commands, file paths, environment variables, `deck_` tools)
+   are decided by the compatibility design in #789. Until it merges, docs-rename
+   drafting must either use only the already-decided names from section 1
+   ("Synth City", "Albiex", `albiex.org`, `albiexai/synth-city`) or mark identifier
+   examples as provisional. Section 9 lists this as a hard reconciliation gate.
+   The renamed docs must keep existing installs working through the
+   Director-approved deprecation window: supported old identifier examples,
+   documented compatibility aliases, old-install paths, and migration guidance
+   approved by #789 stay in the docs, clearly marked as compatibility material —
+   they are not rename leftovers. The campaign already requires old names and
+   `deck_` aliases to keep working during the window (campaign `README.md:27-29`,
+   `README.md:42`).
 2. **Edit the source**: the 56 public Markdown files, the configuration lines in
-   the table above, the SVG labels, and the logo/favicon files once brand package
-   v2 supplies replacements.
-3. **Fix the sibling-folder trap before the transfer, or as part of it.** The
-   publishing script hard-codes the neighbour folder name `claude-deck-website`
+   the table above, the SVG labels, and the logo/favicon files, replaced from the
+   supplied brand package v2 per section 4.4.
+3. **Fix the hard-coded website folder name before the transfer, or as part of
+   it.** The publishing script hard-codes the neighbour folder name
+   `claude-deck-website`
    ([product] `scripts/deploy-docs.sh:7`) and the playbook tells readers to clone
    `adrirubio/claude-deck` and `adrirubio/claude-deck-website` side by side
    ([product] `DOCUMENTATION_PUBLISHING.md:41-42`). The rename implementation must
@@ -290,43 +400,71 @@ section 6, because they are source files a person edits, not screenshots.
   section 8 is a domain change, not a path redesign.
 - Page URLs inside the docs stay unless a page is genuinely renamed for content
   reasons; a product rename alone is not a reason to break a bookmarked docs URL.
-- Dated plans, old release notes, and other history keep the old name. They are
-  already excluded from the public build, so leaving them costs nothing and keeps
-  the record honest.
+- History keeps the old name, in two different places. The three excluded
+  directories (`docs/plans/`, `docs/superpowers/`, `docs/deploy/`) stay out of
+  the public build entirely ([product] `docs/.vitepress/config.ts:8-12`). But
+  `docs/changelog.md` is one of the 56 public files and is linked in the docs
+  sidebar ([product] `docs/.vitepress/config.ts:46`), and the pinned website
+  serves it as `docs/changelog.html`: its historical entries remain published
+  under their historical names. Do not rewrite released changelog entries; only
+  new entries use the new name.
 
 ## 6. Captures to retake
 
 A capture must be retaken when a reader can see the old product name, old logo, or
 old interface wording in it. Text inside screenshots cannot be searched, so this
-list is built from where each picture is used and what it shows, and every item must
-be eyeballed once at retake time. Two timing facts govern the whole section:
-captures of the product interface can only be retaken **after** the renamed product
-exists (the implementation campaign that follows these plans), because today the
-interface still titles itself "Claude Deck" ([product] `frontend/index.html:9`);
-and captures must come from the isolated test instance with synthetic example data,
-the same practice the current website screenshots already document
-([website] `README.md:33`) — never from a live working instance.
+list is built from where each picture is used and what it shows, and every item
+must be visually checked once at retake time. Two timing facts govern the whole
+section: captures of the product interface can only be retaken **after** the
+renamed product exists (the implementation campaign that follows these plans),
+because today the interface still titles itself "Claude Deck"
+([product] `frontend/index.html:9`); and new captures are required to come from
+the isolated test instance with synthetic example data, never from a live working
+instance. That isolation is a requirement for the retakes, not a demonstrated fact
+about every existing capture: the current website record documents synthetic
+example records for its two showcase screenshots only ([website] `README.md:33`),
+and a seeded-data banner on an image is not by itself proof of capture isolation.
 
-### 6.1 Website repository captures (all retake or replace)
+### 6.1 Captures in the new design and in today's website repository
 
-All eight screenshots are referenced from the landing page — two as the main
-showcase ([website] `index.html:263`, `index.html:272`) and six in feature-card
-previews (`index.html:426`, `index.html:451`, `index.html:478`, `index.html:506`,
-`index.html:533`, `index.html:560`). In the three-page design their placements
-change (**UNVERIFIED**: which captures the mockup uses, and where, comes from the
-v7d files), but any of them that survives needs a retake under the new name, and
-any that does not survive must be deleted rather than left orphaned.
+The new design does not reuse today's eight landing-page screenshots; it uses the
+supplied tour captures. Used, duplicate, and unused supplied captures must be
+treated differently. All five tour PNGs were visually checked for this plan; the
+"Deck" wordings below are raster text baked into the images, not page captions.
+
+| Supplied capture ([mockup] `v7d/assets/`) | Used where | Visible "Deck" text | Action |
+|---|---|---|---|
+| `tour/overview.png` | How it works, outer-loop step 4 (`how-it-works.html:264`) | Yes — "so Deck shows only the work it has seen" in the progress card | **Retake** from the renamed product |
+| `tour/teams.png` | How it works, outer-loop step 2 (`how-it-works.html:258`) | None visible | Re-verify against the renamed interface at implementation; retake if any shown wording changed |
+| `tour/work-active.png` | How it works inner loop (`how-it-works.html:291`) and, as the byte-identical duplicate `assets/work-active.png`, the home page (`home-street-v7b.html:205`) | None visible | Ship one copy only; same re-verification as above |
+| `tour/work-merged.png` | Not referenced by any supplied page | None visible | Ship only if the Director's preview review adds a placement; otherwise leave unshipped |
+| `tour/work-review.png` | Not referenced by any supplied page | Yes — "Deck record updated" in the detail card | **Retake before any use**; do not ship as supplied |
+
+Today's eight website screenshots are all referenced from the current landing
+page — two as the main showcase ([website] `index.html:263`, `index.html:272`) and
+six in feature-card previews (`index.html:426`, `index.html:451`, `index.html:478`,
+`index.html:506`, `index.html:533`, `index.html:560`). Their public paths
+(`/assets/screenshot-*.png`) may be linked from outside this site, and section 8
+promises every old path a same-path redirect. A redirect to a deleted file is a
+broken promise, so the rule for cutover is: **retain an appropriately replaced
+image at each supported old public path, or define an explicit compatibility
+mapping for that path and test that the final response is a successful (200)
+image.** Deleting an old capture path requires checking old external URLs, not
+just current page references, and is not mandated by this plan. Renaming a capture
+file (for example the `cc-bridge` name) is likewise not mandated here; filename
+classification belongs to #788/#789, and any rename needs the same retained-route
+treatment.
 
 | File ([website] `assets/`) | Shows | Action |
 |---|---|---|
-| `screenshot-overview.png` | Overview page, synthetic records | Retake after product rename; keep the synthetic-data caption practice from `index.html:276-278` |
-| `screenshot-work.png` | Work page, synthetic issues | Retake; same caption practice |
-| `screenshot-cc-bridge.png` | Agent Bridge sessions | Retake if the new design keeps the feature preview; note the old "CC" filename also goes away with the rename |
-| `screenshot-config.png` | Configuration editor | Retake if kept |
-| `screenshot-hooks.png` | Hooks & permissions | Retake if kept |
-| `screenshot-mcp.png` | MCP servers | Retake if kept |
-| `screenshot-sessions.png` | Session transcripts | Retake if kept |
-| `screenshot-usage.png` | Provider status & usage | Retake if kept |
+| `screenshot-overview.png` | Overview page, synthetic records | Serve a retaken image at this same public path, or map it per the rule above; keep the synthetic-data caption practice from `index.html:276-278` |
+| `screenshot-work.png` | Work page, synthetic issues | Same retained-route treatment |
+| `screenshot-cc-bridge.png` | Agent Bridge sessions | Same retained-route treatment; no filename change is mandated by this plan |
+| `screenshot-config.png` | Configuration editor | Same retained-route treatment |
+| `screenshot-hooks.png` | Hooks & permissions | Same retained-route treatment |
+| `screenshot-mcp.png` | MCP servers | Same retained-route treatment |
+| `screenshot-sessions.png` | Session transcripts | Same retained-route treatment |
+| `screenshot-usage.png` | Provider status & usage | Same retained-route treatment |
 | `logo-dark.png`, `apple-touch-icon.png`, `favicon.ico` (repo root) | Old logo and icons | Replace from brand package v2; do not redraw by hand |
 
 The website README currently records checksums for the two showcase screenshots
@@ -341,10 +479,10 @@ the finished files.
 
 | File ([product]) | Used for | Action |
 |---|---|---|
-| `screenshots/dashboard.png`, `screenshots/cc-bridge.png`, `screenshots/config.png`, `screenshots/mcp-servers.png`, `screenshots/sessions.png`, `screenshots/skills.png`, `screenshots/usage-tracking.png` | Product README showcase pictures (7 files) | Retake all 7 from the renamed interface on the isolated test instance |
-| `frontend/public/logo-dark.png`, `frontend/public/logo-light.png` | Logo inside the app itself | Replace from brand package v2 (the app ships both variants; the package must supply both, or the gap is a Director question) |
-| `frontend/public/favicon-16.png`, `frontend/public/favicon-32.png`, `frontend/public/apple-touch-icon.png` | App icons | Replace from brand package v2 |
-| `docs/public/logo-dark.png`, `docs/public/favicon.ico` | Docs header logo and icon (section 5.1) | Replace from brand package v2 |
+| `screenshots/dashboard.png`, `screenshots/cc-bridge.png`, `screenshots/config.png`, `screenshots/mcp-servers.png`, `screenshots/sessions.png`, `screenshots/skills.png`, `screenshots/usage-tracking.png` | Product README showcase pictures (7 files, embedded at [product] `README.md:126`, `:131`, `:136`, `:141`) | Retake all 7 from the renamed interface on the isolated test instance |
+| `frontend/public/logo-dark.png`, `frontend/public/logo-light.png` | Logo inside the app, selected by theme at [product] `frontend/src/components/layout/Header.tsx:42` | Brand package v2 supplies light/dark logos as SVG, not these PNG names (section 4.4): the implementation must either point the app at the supplied SVGs or derive approved rasters from them — conversion or asset-reference work, not a missing design decision |
+| `frontend/public/favicon-16.png`, `frontend/public/favicon-32.png`, `frontend/public/apple-touch-icon.png` | App icons, linked at [product] `frontend/index.html:5-7` | Package supplies `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `icon-512.png` — no `favicon-16.png` or `.ico`. Update the icon links to the supplied set or derive the missing sizes from the supplied SVG |
+| `docs/public/logo-dark.png`, `docs/public/favicon.ico` | Docs header logo and icon (section 5.1) | Replace per section 4.4 (`albiex-logo-compact-dark.svg`, `favicon.svg`); no `.ico` is supplied, so the docs icon link changes type |
 
 ### 6.3 What is not retaken
 
@@ -360,14 +498,19 @@ re-enters section 6.1 — reuse by copying is not allowed without a retake.
 **Today,** the site deploys to Cloudflare Pages, project `claude-deck-website`,
 whenever the website repository's `master` branch moves ([website]
 `.github/workflows/deploy.yml:3-5`, deploy command at `deploy.yml:21`). The deploy
-uses that repository's own GitHub secrets for Cloudflare (`deploy.yml:19-20`); the
-playbook is explicit that no Cloudflare token belongs on a publisher's machine or in
-either repository ([product] `DOCUMENTATION_PUBLISHING.md:105`,
-`DOCUMENTATION_PUBLISHING.md:130`). A pull-request check already validates the
-landing page's HTML and local links ([website] `.github/workflows/check-pages.yml`);
-whatever replaces the landing page must keep an equivalent check, pointed at the
-three new pages (and at build output instead of source files, if option A in
-section 4.4 is chosen).
+uses that repository's own GitHub secrets for Cloudflare (`deploy.yml:19-20`).
+The normal workflow keeps Cloudflare credentials in GitHub Actions secrets, and no
+token is needed on the publishing machine for that path ([product]
+`DOCUMENTATION_PUBLISHING.md:105`). A direct Wrangler deployment from a machine is
+a separate, specifically-needed option in the playbook
+(`DOCUMENTATION_PUBLISHING.md:121-130`): it requires separate authorization and
+authentication, and credentials must never be put in either repository or in shell
+history. A pull-request check parses the current `index.html` and verifies that
+its local `href`/`src` targets exist ([website]
+`.github/workflows/check-pages.yml:24-44`); it does not validate rendered
+behaviour, and it does not see image paths loaded by click handlers. The Astro
+build must keep an equivalent check pointed at the built output of all three
+pages, including handler-loaded assets.
 
 **For Synth City,** the deploy target stays Cloudflare Pages — nothing in the
 campaign decisions moves hosting — but three things around it change, and the
@@ -375,8 +518,8 @@ implementation plan must schedule them as separate, checkable steps:
 
 1. **Domain attachment.** `albiex.org` is pointed at Cloudflare and attached to the
    Pages project only at cutover (campaign `README.md:52` plans the DNS move;
-   section 9 fixes its position in the order). The `pages.dev` preview addresses
-   are used for Director review before that, never linked publicly.
+   section 9 fixes its position in the order). Director review before that uses a
+   preview deployment (item 4 below), never the production address.
 2. **Project and repository names.** The deploy command names the Pages project
    `claude-deck-website`, and the workflow lives in a repository that will be
    transferred and renamed. Whether the Pages project itself is renamed is a
@@ -388,11 +531,34 @@ implementation plan must schedule them as separate, checkable steps:
    deploys to the wrong project — or fails silently because secrets did not survive
    the transfer — is the main cutover risk in this section, and #790 owns the
    checklist that prevents it.
-3. **Rollback stays a revert.** The existing recovery practice — revert the website
-   commit on `master` and let the same workflow republish the restored files
-   ([product] `DOCUMENTATION_PUBLISHING.md:134`, [website] `README.md:46`) — works
-   unchanged after the rename and should be rehearsed once on the preview branch
-   before cutover day.
+3. **Rollback is scoped, and each layer needs its own recovery.** A website
+   `master` revert only recovers content when the workflow and Pages project it
+   deploys through are unchanged and known-good; it cannot undo Cloudflare
+   project, domain, or redirect changes. The existing practice also carries its
+   own gate: because a `master` push deploys production, the revert push needs
+   the same release-owner approval as a publication ([website] `README.md:46`,
+   [product] `DOCUMENTATION_PUBLISHING.md:134`). The earlier build design instead
+   names the previous Cloudflare deployment as the publication rollback
+   ([product] `docs/superpowers/specs/2026-10-16-website-build-design.md:56`).
+   This plan therefore requires #790 to specify, before cutover: the verified
+   known-good deployment to return to, the infrastructure and redirect recovery
+   steps, and who may authorize each one. Rehearsing a revert on a preview branch
+   is useful practice; it does not prove production rollback works.
+4. **A separate preview build and deploy must be created; it does not exist
+   today.** The pinned production workflow triggers only on `master` and deploys
+   the repository root ([website] `deploy.yml:3-5`, `:21`). The implementation
+   adds a preview workflow on a named non-production branch that builds the Astro
+   output (`dist/`) and deploys it to a non-production Pages target, following
+   the concrete precedent in the earlier build design — a preview-branch
+   workflow deploying `dist` to a branch preview address, with the workflow file
+   living only on that branch so it cannot affect production ([product] build
+   design `:31-33`, foundation at `:42`) — while preserving the production
+   trigger untouched until the approved cutover. That precedent is a plan to
+   build, not an existing capability. Access wording must stay exact: **an
+   unlisted preview is public to anyone who knows its URL; use `noindex`, or
+   obtain the owner's approval for access protection** (the two options and their
+   costs are spelled out at build design `:35-38`; the earlier round's choice
+   does not silently select the access option for this build).
 
 No deploy of the new site happens under this plan. Building, transferring, and
 publishing are separate authorized steps in later phases (campaign `README.md:64-68`).
@@ -408,11 +574,16 @@ are needed, with different owners:
 | Old GitHub addresses | `adrirubio/claude-deck` and `adrirubio/claude-deck-website` web, git, and API addresses redirect to the transferred repositories automatically **because the repositories are transferred, not recreated** | Campaign `README.md:24-25`; transfer mechanics and their checks belong to the runbook in #790 — this plan only depends on the result |
 | Links inside our own pages | Our own pages and docs link directly to the new addresses instead of leaning on either redirect above | This plan: counts and locations below |
 
-For the third kind, the measured scope at the pins is small and exact: 12 lines in
-6 public docs files link to `adrirubio/claude-deck`, plus the configuration links in
-section 5.1, 6 lines across the product README and publishing playbook, and 7 lines
-across the website landing page and README (Appendix A). Each becomes
-`albiexai/synth-city` (or `-website`) during the rename edits. Metadata that names
+For the third kind, the measured scope at the pins is small and exact, counting
+only actual repository paths (`adrirubio/claude-deck` or
+`adrirubio/claude-deck-website`): 12 lines in 6 public docs files, plus the
+configuration links in section 5.1, 5 lines across the product README and
+publishing playbook, and 6 lines across the website landing page and README
+(Appendix A). Each becomes `albiexai/synth-city` (or `-website`) during the rename
+edits. Links to a person's GitHub profile are not repository addresses and are
+preserved as author attribution — the "Built by Adrian" credits at [product]
+`README.md:268` and [website] `index.html:662` keep pointing at the personal
+profile; never rewrite a profile link into a repository link. Metadata that names
 the old domain as the site's own address — today the landing page's share URL and
 share image ([website] `index.html:18-19`) — becomes `albiex.org` in the new pages,
 and the product README's website line ([product] `README.md:3`) follows.
@@ -432,32 +603,44 @@ The new website is published only after the `albiexai` organisation exists and b
 repositories are transferred (campaign `README.md:19`). Concretely, that means no
 merge of the new pages — and no regenerated docs commit — into the website
 repository's `master` before the transfer is verified, because that merge is the
-deployment (section 3, fact 1). Drafts live on a preview branch with an unlisted
-preview address for the Director's review.
+deployment (section 3, fact 1). Drafts live on the non-production preview branch
+and preview deployment planned in section 7 item 4. An unlisted preview is public
+to anyone who knows its URL; use `noindex`, or obtain the owner's approval for
+access protection — do not describe an unlisted preview as private.
 
 ### 9.2 Cutover order for the website and docs parts
 
 The full cutover belongs to the transfer runbook (#790) and the release plan
 (#791); only the website-and-docs steps are sequenced here, in dependency order:
 
-1. Three pages built on a preview branch; captures retaken; Director reviews the
-   preview and approves the exact build.
+1. Three pages built on the preview branch with the separate preview deploy
+   (section 7 item 4); captures retaken; Director reviews the preview and
+   approves the exact build.
 2. Docs renamed in the product source; publishing script and playbooks updated for
    the new repository names (section 5.2, step 3); generated docs rebuilt and the
    diff reviewed, still unmerged.
-3. Organisation created; both repositories transferred and renamed; #790's
+3. **Pre-transfer announcement (already decided; owned by #791).** Before any
+   transfer, a pinned Discussion and a README banner on the old repository
+   announce "Claude Deck is becoming Synth City" with the date and what changes
+   (campaign `README.md:26`). This is a prerequisite, not a sequencing choice
+   left to #791.
+4. Organisation created; both repositories transferred and renamed; #790's
    post-transfer checks pass, including website-repo secrets and the Pages project
    (section 7).
-4. `albiex.org` DNS pointed at Cloudflare; the every-path redirect from
+5. `albiex.org` DNS pointed at Cloudflare; the every-path redirect from
    `claudedeck.org` prepared but not yet switched on.
-5. Preview branch merged to website `master` (this deploys), generated docs commit
+6. Preview branch merged to website `master` (this deploys), generated docs commit
    included; live checks on `albiex.org`: home, How it works, Technical
    information, `/docs/` and one changed docs page.
-6. `claudedeck.org` redirect switched on; old-address spot checks (`/`, a docs
-   page, a screenshot asset) land on the same paths at `albiex.org`.
-7. Announcement and release steps proceed under #791. If any check in steps 5–6
-   fails, revert the website `master` commit (section 7, rollback) and stop; do
-   not improvise fixes on the live branch.
+7. `claudedeck.org` redirect switched on; old-address spot checks (`/`, a docs
+   page, a screenshot asset) land on the same paths at `albiex.org` with a
+   successful final response.
+8. Launch announcement and release steps proceed under #791, after the live
+   checks — distinct from the pre-transfer announcement in step 3. If any check
+   in steps 6–7 fails: **stop**, and execute only the recovery that is authorized
+   for the layer that failed (section 7 item 3 — content revert with its
+   publication approval, previous known-good deployment, or #790's
+   infrastructure/redirect recovery). Do not improvise fixes on the live branch.
 
 ### 9.3 Reconciliation with the unfinished plan documents
 
@@ -473,35 +656,46 @@ document:
 | #788 inventory of every old-name occurrence | The docs-rename scope in section 5.1 was measured independently for the public docs only; the inventory's whole-repository classification is the authority for anything outside that subset, and any public-docs file it classifies differently must be reconciled |
 | #789 compatibility design | New identifier names used inside docs examples and install text (section 5.2, step 1); nothing in the docs may document an identifier under a name #789 did not choose |
 | #790 transfer runbook | Secrets, Pages project, DNS and redirect mechanics and their verification steps (sections 7–9); if the runbook orders DNS or redirects differently, the runbook wins |
-| #791 release and announcement | Release number and wording anywhere the site mentions versions; announcement timing relative to step 6 above; the README banner and pinned discussion that point readers to the new site |
+| #791 release and announcement | Release number and wording anywhere the site mentions versions, and launch-announcement timing after the live checks. The pre-transfer banner and pinned Discussion are **not** deferred to this reconciliation: they are already decided and sit at step 3 of section 9.2 |
 
 ## 10. Open questions for the Director
 
-This plan does not decide any of these. Each needs the Director's answer (or the
-supplied mockup files, where noted) before the affected work can finish:
+This plan does not decide any of these. Questions the supplied sources already
+answered are recorded first so they are not re-asked; the rest still need the
+Director.
 
-1. **Supply of the v7d mockup and brand package v2.** The files themselves — three
-   pages, palette, logo set — are the missing evidence for every UNVERIFIED mark in
-   section 4. Which channel delivers them to the team, and in what form (static
-   files, or a project the website build starts from)?
-2. **Page list.** #792 names three pages. The earlier approved round also had a
-   Quick tour page with finished copy ([product]
-   `docs/plans/2026-10-15-director-website/pages/quick-tour.md`). Is Quick tour
-   dropped, folded into How it works, or kept as a fourth page?
-3. **Technology confirmation.** Astro in the website repository (option A,
-   section 4.4), as the earlier approved design specified and #792 assumes — or
-   stay with hand-written static files (option B)? If the mockup arrives as an
-   Astro project, that answers this by itself.
-4. **Logo variants.** The product ships dark and light logos
-   ([product] `frontend/public/logo-dark.png`, `logo-light.png`); the website and
-   docs today use only dark. Does brand package v2 supply both variants and the
-   full icon set listed in section 6?
-5. **Release number and deprecation window** (already open in #787): only needed
-   here where website or docs copy mentions versions or upgrade paths; the site
-   copy must not name a version before this is decided.
-6. **Go-live approval.** The Director reviews the full draft on the preview address
-   and approves the exact build before step 5 of section 9.2 — confirmed practice
-   from the earlier round ([product]
+**Answered by the supplied sources (no longer open):** the mockup and brand
+package arrived as static reference files (section 4.1), so the port builds the
+Astro source from them; the page list is the mockup's three pages, with no Quick
+tour (reviving the earlier round's Quick tour copy would be a new Director
+decision, not part of this port); Astro is required by #792 and specified by the
+approved build design — any proposal to deviate from Astro is a change request
+needing its own authority, and the supplied files' format alone cannot authorize
+one; the package supplies light/dark full and compact SVG logos, and the missing
+PNG/ICO slots are conversion or asset-reference work (sections 4.4, 6.2), not an
+open design decision.
+
+**Still open for the Director:**
+
+1. **Trademark clearance before launch.** The brand guide is a supplied internal
+   draft that states the assets have not been trademark-cleared and that a
+   separate name/logo similarity check and legal review remain necessary
+   ([brand] `BRAND-GUIDE.md:3`, `:64-68`, attributed here as a supplied claim,
+   not as clearance this plan has performed). Together with the campaign's Phase
+   0 trademark search (campaign `README.md:53`), this must close before launch.
+   The guide's older confidentiality wording is superseded by the campaign's
+   public-rename decision (campaign `README.md:20`) and creates no approval rule.
+2. **Release number and deprecation window** (already open in #787): needed here
+   where website or docs copy mentions versions, upgrade paths, or how long old
+   identifiers remain documented (section 5.2). Site copy must not name a version
+   before this is decided.
+3. **Preview access choice.** An unlisted preview is public to anyone who knows
+   its URL; use `noindex`, or obtain the owner's approval for access protection
+   (section 7 item 4). The earlier round's choice does not select this build's
+   option.
+4. **Go-live approval.** The Director reviews the full draft on the preview
+   deployment and approves the exact build before step 6 of section 9.2 —
+   confirmed practice from the earlier round ([product]
    `docs/superpowers/specs/2026-10-16-website-build-design.md:54-56`), restated
    here so the approval is never assumed from a merge.
 
@@ -510,25 +704,44 @@ supplied mockup files, where noted) before the affected work can finish:
 Whoever builds this can call the work done only when all of the following hold. The
 reviewer should check them on the exact preview build that will be merged:
 
-1. Every UNVERIFIED mark in section 4 has been replaced by a comparison against the
-   supplied v7d files, and the comparison notes (palette tokens, logo files, hero
-   and diagram behaviour) are recorded in the website repository.
-2. The three pages contain no "Claude Deck", `claude-deck`, or `claudedeck.org`
-   text except where the copy deliberately explains the rename ("formerly Claude
-   Deck"), and no colour, logo, or wording that is absent from the brand package.
-3. The public docs build from the renamed source with zero old-name lines in the 56
-   public Markdown files outside deliberate rename explanations and history, and
-   the generated copy in the website repo matches a fresh build from the recorded
-   source commit.
-4. Every capture in sections 6.1–6.2 has been retaken or replaced, or deleted with
-   its references; the website README's screenshot provenance record names the new
-   source commit and checksums; no capture shows a live (non-synthetic) workspace.
-5. The page-check workflow passes on the new pages, and the deploy workflow on the
-   preview branch produces the site the Director approved — same files, no
-   hand-edits after approval.
-6. The redirect checks in section 9.2 step 6 pass on the live domains, and the
-   publication gate (section 9.1) was observed: no `master` merge before transfer
-   verification.
+1. The built pages have been compared element by element against the
+   Supervisor-identified v7d files at the checksums in Appendix A (palette and
+   role-colour tokens, logo files and sizes, hero and diagram content and
+   behaviour, page copy and order), and the comparison notes are recorded in the
+   website repository. Every defect in section 4.5 is fixed: no stale
+   `home-street-v6.html` links, no surviving `href="#"` placeholders, no
+   duplicated scene code or duplicate capture file, fonts self-hosted.
+2. Page design tokens and logo usage match the approved brand guidance (Transit
+   enamel for brand artwork; website role colours only in page UI, per
+   [brand] `BRAND-GUIDE.md:31-38`), and page copy and scene content match the
+   approved mockup plus cited product facts. This is not a literal ban on every
+   other colour or word: colours inside product captures and illustrations, and
+   adjustments required for accessibility (for example contrast or focus
+   treatment), are permitted where they serve the mockup's content and are noted
+   in the comparison record. No unexplained "Claude Deck" branding remains
+   outside deliberate rename explanations.
+3. The public docs build from the renamed source with **no unexplained old
+   branding** in the 56 public Markdown files. Explicitly allowed and tested
+   instead of removed: documented compatibility aliases, supported old
+   identifier examples, old-install paths, and migration guidance approved by
+   #789, kept usable through the Director-approved deprecation window; historical
+   changelog entries under their historical names; and third-party Claude Code
+   references. The generated copy in the website repo matches a fresh build from
+   the recorded source commit.
+4. Every capture in sections 6.1–6.2 has been retaken or replaced as listed; each
+   supported old public screenshot path either serves its replaced image or an
+   approved compatibility mapping whose final response was tested successful;
+   the website README's screenshot provenance record names the new source commit
+   and checksums; no capture shows a live (non-synthetic) workspace.
+5. The page-check workflow passes on the built output of all three pages
+   (including handler-loaded assets), and the separate preview workflow (section
+   7 item 4) — not the production workflow — produced the exact build the
+   Director approved, with no hand-edits after approval and the production
+   `master` trigger preserved until cutover.
+6. The redirect checks in section 9.2 step 7 pass on the live domains, the
+   pre-transfer announcement (step 3) demonstrably preceded the transfer, and
+   the publication gate (section 9.1) was observed: no `master` merge before
+   transfer verification.
 
 ## Appendix A. How the numbers in this document were measured
 
@@ -536,26 +749,60 @@ All commands ran on 2026-11-06 at the pinned commits in section 2. [product]
 commands run in a `claude-deck` checkout; [website] commands in a
 `claude-deck-website` checkout.
 
+Supplied-source identity (SHA-256, measured 2026-11-06; filenames as supplied, no
+private absolute paths):
+
+| Supplied file | SHA-256 |
+|---|---|
+| `v7d/home-street-v7b.html` | `95a29c48b7e7e03f251bee80a2fdac7efcd9109170a391651332b36b2b9bb483` |
+| `v7d/how-it-works.html` | `9616013b22029082642fc94eacfcae66ad44f189a6ebdc7a1e7db217ad19b4e0` |
+| `v7d/technical-information.html` | `33c1dce6c56cab615ed7e6217840919f1d861ff0834ffc2203897afc3b972fd0` |
+| `v7d/street-v7b.js` | `70bcff7bf1c363679d47f7d42ddfba9b1e1961bee13a325141e361ffa5e327be` |
+| `brand-package-v2/BRAND-GUIDE.md` | `0cbec51cb6434aba6d4fca62d7667274bf31b05abfe939c129646f24e4612b30` |
+| `v7d/assets/tour/overview.png` | `ff1b13917c072007e23e9226f778127eb677b2d4839de4ee505de27f176706a9` |
+| `v7d/assets/tour/teams.png` | `c7b08710ae32f56d67e6c808c111d3e94f072277ee4a174d7d034643d8f7372c` |
+| `v7d/assets/tour/work-active.png` = `v7d/assets/work-active.png` | `e3b6b841afb59a56d6681999521ce27a3cd8c2d077f44b910ce7511581a851f7` |
+| `v7d/assets/tour/work-merged.png` | `aea52d7122c32d1fae099d73ad0d92b1c244cf5cac688c82f453a9166ddc96a9` |
+| `v7d/assets/tour/work-review.png` | `09fcbedadcc11cffb5b091c3d7c528f9b440796680e16d588e2485777fb3c729` |
+
+The three files in `v7d/assets/brand/` match their `brand-package-v2/`
+counterparts byte for byte (verified by checksum comparison during this plan's
+inspection; re-run `sha256sum` on both copies to reproduce).
+
 ```bash
-# Public docs surface (section 5.1): 56 files
-git ls-files docs | grep '\.md$' | grep -v -E '^docs/(plans|superpowers|deploy)/' | wc -l
+# Reproducible public-docs file selection (used by every count below).
+# Verified at the pin: no selected filename contains a space.
+files=$(git ls-files docs | grep '\.md$' | grep -v -E '^docs/(plans|superpowers|deploy)/')
+printf '%s\n' "$files" | wc -l        # 56 files (section 5.1)
 
-# Old-name lines in those files (section 5.1): 69 lines in 22 files
-git grep -I -i -c -E 'Claude Deck|claude-deck|claude_deck|claudedeck\.org' -- <those 56 files>
+# Narrow baseline (section 5.1): 69 lines in 22 files
+git grep -I -i -c -E 'Claude Deck|claude-deck|claude_deck|claudedeck\.org' -- $files
 
-# "Deck" labels inside the operating-model SVGs (section 5.1)
+# Broader classified sets (section 5.1); overlaps expected, never summed
+git grep -I -c -E '\bDeck\b' -- $files                    # 151 lines, 27 files
+git grep -I -c -E '\bdeck_[a-z]' -- $files                # 24 lines, 8 files
+git grep -I -c -E 'claude_registry|\.claude-registry' -- $files   # 10 lines, 5 files
+git grep -I -c -E 'CLAUDE_DECK' -- $files                 # 4 lines, 2 files
+git grep -I -c -E 'Claude Code|claude-code' -- $files     # 90 lines, 30 files (keep)
+
+# "Deck" occurrences inside the operating-model SVGs (section 5.1)
 grep -o -i 'Claude Deck\|Deck' docs/public/images/operating-model/*.svg | sort | uniq -c
+grep -n -i 'deck' docs/public/images/operating-model/modes.svg   # labels :12 :23 :48, comment :20
 
-# Mockup presence check (section 4.1): only the campaign README matches
+# Was any approved v7d source already in the product repo at the pin? Raw matches:
+#   docs/plans/2026-11-06-rename-synth-city/README.md  (the campaign mention)
+#   docs/plans/2026-10-15-director-website/style/index.html  (false positive: encoded data)
+#   integrations/pi-agent-mail/package-lock.json  (false positive: integrity string)
+# Classified result: no approved v7d source identified in either repository.
 git grep -I -i -l -E 'v7d|Transit enamel|signal works|agent diamonds'
 
 # Landing-page old-name lines (section 4.3) [website]: index.html 23, styles.css 1, README.md 7
 git grep -I -i -c -E 'Claude Deck|claude-deck|claudedeck\.org' -- index.html styles.css README.md
 
-# Transfer-sensitive GitHub links (section 8)
-git grep -I -i -c 'adrirubio/claude-deck' -- <public docs files>   # [product] 12 lines, 6 files
-git grep -I -i -c 'adrirubio' -- README.md DOCUMENTATION_PUBLISHING.md   # [product] 6 lines
-git grep -I -i -c 'adrirubio' -- index.html README.md              # [website] 7 lines
+# Transfer-sensitive repository-path links only (section 8); profile links excluded
+git grep -I -i -c 'adrirubio/claude-deck' -- $files                  # [product] 12 lines, 6 files
+git grep -I -i -c 'adrirubio/claude-deck' -- README.md DOCUMENTATION_PUBLISHING.md   # [product] 5 lines
+git grep -I -i -c 'adrirubio/claude-deck' -- index.html README.md    # [website] 6 lines
 
 # Capture and asset lists (section 6)
 git ls-files screenshots frontend/public docs/public               # [product]
@@ -563,10 +810,16 @@ git ls-files assets                                                # [website] 1
 
 # Redirect configuration today (section 8): no matches in either repository
 git ls-files | grep -i '_redirects\|_headers'
+
+# Supplied-source checks (section 4; run in the supplied reference set)
+sha256sum v7d/home-street-v7b.html v7d/how-it-works.html \
+  v7d/technical-information.html v7d/street-v7b.js brand-package-v2/BRAND-GUIDE.md
+grep -n 'mountStreet(document' v7d/*.html        # six mounts, section 4.1
+grep -o 'href="#"' v7d/*.html | cut -d: -f1 | sort | uniq -c   # placeholders: 7 home, 3 how, 16 technical (section 4.5)
 ```
 
-Remaining source limit, stated plainly: the v7d mockup and brand package v2 files
-were not available to this team when this draft was written, and no route to them
-existed in the team's authorized context at first (later supply is being arranged
-outside this document — see issue #792 for the current source status). Every claim
-that depends on those files is marked UNVERIFIED above rather than guessed.
+Remaining limits, stated plainly: the mockup pages were verified as source and
+the five tour captures by direct visual inspection; no browser motion or
+accessibility trial was run by the author, and no deployed behaviour was tested.
+Brand licensing and trademark statements are attributed supplied claims from the
+brand guide, not clearance performed for this plan (section 10).
