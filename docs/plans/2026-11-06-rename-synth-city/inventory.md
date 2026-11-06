@@ -1,13 +1,14 @@
-# Old-name inventory: every occurrence at the pinned commit
+# Albiex Synth City rename: inventory of every old-name occurrence
 
 **Issue:** #788. **Source pin:** `94cb599a98d60281db824fc8e726d841acdb46a0` (master as merged through PR #794). **Scope:** this file only; it plans no code change.
-**Parent:** #787. **Next consumer:** #789 (compatibility design) reads the runtime-identifier class and the `deck_` supplemental set from here.
+**Parent:** #787. **Next consumer:** #789 (compatibility design) reads the runtime-identifier class (section 4.1) plus the supplemental compatibility index (section 3.4), which cross-references the runtime families listed in sections 5.1, 5.2, 5.3, 5.4 and the package name excluded in 5.6.
 
 ## Summary for the reader
 
+This inventory supports the rename to **Albiex Synth City**. Naming presentation in this document follows the Director rule recorded later in merged PR #797 (`website-and-docs.md` section 4.7 at merge `9895f49b5074e621dadd0d62390fb974647be40b`): first current mention uses the full name, page titles use the full name, later "Synth City" is allowed, and no package, command or repository is named bare `synthcity` (`albiexai/synth-city` remains decided). That rule post-dates the measurement pin below; quoted excerpts and titles in the tables are preserved exactly as measured at the pin and are not rewritten to manufacture compliance.
 A case-insensitive search for the six old-name strings in tracked text files finds **1,596 matching lines** (1,728 non-overlapping occurrences) in **255 distinct files** at the pin. Every one of those lines is listed exactly once, in exactly one of four classes, in the tables in section 4. Separate searches in section 5 cover the short name `Deck`, joined spellings such as `claudedeck.org`, the `deck_` names, filenames, one binary archive, and the Claude Code references that stay. Nothing in section 5 is added into the headline total.
 The one-sentence version: most old-name text is documentation and dated planning records that either rename as ordinary docs or stay untouched as history; the compatibility risk is concentrated in the much smaller runtime-identifier class (environment variables, the MCP server name, headers and markers, database and backup paths, package names, storage keys).
-This inventory file itself did not exist at the pin, so its own old-name mentions are not counted. If master moves, every number here must be re-derived at the new pin; they are measurements of `94cb599a98d6`, not constants.
+This inventory file itself did not exist at the pin, so its own old-name mentions are not counted. The approved re-pin condition applied before the inventory run: had master moved before that run, measurement would have stopped and re-pinned instead of mixing commits. Master later moved for PR #797; that later presentation policy is cited separately above and no count in this document mixes the two commits. Every number below is a measurement of `94cb599a98d6`, not a constant.
 
 ## 1. Method
 
@@ -26,11 +27,11 @@ git grep -I -n -i -E 'Claude Deck|claude-deck|claude_deck|CLAUDE_DECK|claude_reg
 The classified atom is the matching **line**, not the file. A mixed file appears in several class tables, once per (file, class) pair, and the line-number lists in those rows never overlap. All occurrences on one line inherit that line's class. Tests are applied in this fixed precedence order:
 
 1. **History to keep** — dated planning records (`docs/plans/**`, `docs/superpowers/**`, including this rename campaign's own dated folder, which is a record of the rename and is not mechanically rewritten), released-version changelog entries (section 4.4 lists the current-pointer lines that stay in docs instead), and the one-off rollout, validation, soak and handoff records under `docs/deploy/` (the current Lane B operating note, `docs/deploy/product-lane-b-factory.md`, stays in docs). A historical line is history even when its wording is user-facing.
-2. **Runtime identifier** — the matched string itself functions, in an executable, configuration, data or test-contract context, as a name current installs or agents depend on: environment variables, the MCP server name, HTTP headers and content markers, database and backup paths, package names, browser storage keys, stored label values, release artifact filenames, unit names and paths. A prose mention of such a name (a sentence in a manual, a comment, a docstring) is **not** runtime; it falls through to the tests below. A match that occurs only inside a displayed web link is likewise copy, or test-fixture data, not a runtime dependency. That is why the same environment variable can be runtime in `backend/app/config.py` and docs in a guide — section 3's term-by-class matrix keeps those mentions findable for #789.
-3. **User-facing copy** — the old product name presented as current copy to a person or an agent: interface text and titles, generated prompts and error messages, the root `README.md` product prose, `launch-posts.md`, and the documentation home page (`docs/index.md`).
-4. **Docs** — everything else: manuals and guides, code comments and docstrings, test descriptions, and changelog pointer lines that are maintained with the current tree.
+2. **Runtime identifier** — the matched string itself functions, in an executable, configuration, data or test-contract context, as a name current installs or agents depend on: environment variables, the MCP server name, HTTP headers and content markers, database and backup paths, package names, browser storage keys, stored label values, release artifact filenames, unit names and paths. It also includes machine-recognized strings that code or tests search or match against, even when their shape is prose (searched markers and test prompt prefixes/predicates). A prose mention of such a name (a sentence in a manual, a comment, an internal docstring) is **not** runtime; it falls through to the tests below. A match that occurs only inside a displayed web link is likewise copy, or test-fixture data, not a runtime dependency. That is why the same environment variable can be runtime in `backend/app/config.py` and docs in a guide — section 3's term-by-class matrix keeps those mentions findable for #789.
+3. **User-facing copy** — the old product name presented as current copy to a person or an agent: interface text and titles, generated prompts, log and error messages, confirmation-dialog text, emitted agent-facing tool descriptions, the root `README.md` product prose, `launch-posts.md`, and the documentation home page (`docs/index.md`). A function docstring counts here, not in docs, when the product exports it as a public tool description presented to agents.
+4. **Docs** — everything else: manuals and guides, code comments and internal docstrings that are not emitted as tool descriptions, test descriptions, and changelog pointer lines that are maintained with the current tree.
 
-Two judgement calls are recorded so a reviewer can disagree precisely. First, the OpenCode plugin marker string (defined at `backend/app/services/agent_mail_install_service.py:65`, written into installed plugins at `:582`, asserted at `backend/tests/agent_mail/test_install.py:381`) is spaced prose in shape but functions as a searched marker, so those three lines are runtime. Second, `launch-posts.md` is outward marketing copy rather than a release record, so it is user-facing even though the posts are old.
+Judgement calls are recorded so a reviewer can disagree precisely. (1) Machine-recognized prose-shaped strings are runtime: the OpenCode plugin marker (defined at `backend/app/services/agent_mail_install_service.py:65`, written at `:582`, asserted at `backend/tests/agent_mail/test_install.py:381`) and the e2e prompt prefix/predicate (`scripts/e2e-agent-mail-same-repo-codex.sh:31`, searched with `rg -qF` at `:148` and `:152`; the permission-prompt predicate at `:88` triggering `:89`). (2) Displayed or emitted copy is user-facing even when it embeds identifiers: the warning at `backend/app/services/instance_identity.py:95` (the lookup is `:115`), the `mailConfirm` confirmation strings at `frontend/src/features/agent-mail/mailSetup.ts:193`, `:220`, `:239` (rendered at `frontend/src/features/agent-mail/HarnessMailSetup.tsx:132`), and the public MCP tool descriptions at `backend/mcp_shim/agent_mail_server.py:358`, `:386`, `:885`, `:1182` and in the generated `integrations/pi-agent-mail/manifest.ts` (exported by `integrations/pi-agent-mail/sync_manifest.py:21` and registered at `integrations/pi-agent-mail/extension.ts:36`). (3) `launch-posts.md` is outward marketing copy rather than a release record, so it is user-facing even though the posts are old.
 
 ## 2. Reconciling the earlier counts
 
@@ -51,9 +52,9 @@ No mode/unit pair reproduces the brief exactly; it is closest to case-sensitive 
 
 | Class | Matching lines | Occurrences | Distinct files |
 |---|---:|---:|---:|
-| runtime | 379 | 406 | 94 |
-| user-facing | 160 | 160 | 51 |
-| docs | 164 | 179 | 47 |
+| runtime | 377 | 400 | 93 |
+| user-facing | 170 | 174 | 53 |
+| docs | 156 | 171 | 46 |
 | history | 893 | 983 | 95 |
 | **Primary total (files as union)** | **1,596** | **1,728** | **255** |
 
@@ -63,10 +64,10 @@ The per-class file counts sum to more than the union because mixed files appear 
 
 | Term | Occurrences | Lines | Files | Runtime | User-facing | Docs | History |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Claude Deck (spaced, any case) | 527 | 506 | 124 | 3 | 120 | 68 | 336 |
-| claude-deck (hyphen, any case) | 808 | 755 | 163 | 238 | 38 | 80 | 452 |
+| Claude Deck (spaced, any case) | 527 | 506 | 124 | 4 | 125 | 62 | 336 |
+| claude-deck (hyphen, any case) | 808 | 755 | 163 | 236 | 42 | 78 | 452 |
 | claude_deck (snake, other cases) | 10 | 10 | 4 | 0 | 0 | 0 | 10 |
-| CLAUDE_DECK (uppercase) | 296 | 274 | 59 | 158 | 2 | 12 | 124 |
+| CLAUDE_DECK (uppercase) | 296 | 274 | 59 | 153 | 7 | 12 | 124 |
 | claude_registry | 66 | 55 | 20 | 1 | 0 | 14 | 51 |
 | .claude-registry | 21 | 21 | 12 | 6 | 0 | 5 | 10 |
 
@@ -77,13 +78,25 @@ Term rows overlap: one line can carry two terms, so term line counts need not su
 The runtime class contains 16 distinct `CLAUDE_DECK_*` environment names: `CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN`, `CLAUDE_DECK_INSTANCE_ACCENT`, `CLAUDE_DECK_INSTANCE_ID`, `CLAUDE_DECK_INSTANCE_NAME`, `CLAUDE_DECK_MAIL_OPT_IN`, `CLAUDE_DECK_MAIL_PYTHON`, `CLAUDE_DECK_MAIL_SHIM`, `CLAUDE_DECK_MAIL_TOKEN`, `CLAUDE_DECK_PROVIDER`, `CLAUDE_DECK_TEAM_PRESET_ID`, `CLAUDE_DECK_TEAM_PRESET_NAME`, `CLAUDE_DECK_TEAM_SLOT_COLOR`, `CLAUDE_DECK_TEAM_SLOT_ID`, `CLAUDE_DECK_TEAM_SLOT_NAME`, `CLAUDE_DECK_TEAM_SLOT_ROLE`, `CLAUDE_DECK_URL`.
 Other runtime groups, each traceable through the section 4.1 line lists: the MCP server name `claude-deck-mail` (defined at `backend/app/services/agent_mail_install_service.py:34`); the `X-Claude-Deck-Terminal-Token` header (for example `backend/app/api/v1/agent_bridge/router.py:384`); the stored labels `claude-deck-ready` and `claude-deck-design` (for example `backend/app/models/database.py:246`); the database file in `database_url` (`backend/app/config.py:30`) and the `~/.claude-registry` paths (for example `backend/app/config.py:33`); package names (`docs/package.json:2`, `integrations/pi-agent-mail/package.json:2`); browser storage keys (for example `frontend/src/contexts/ProviderContext.tsx:16`); release artifact filenames (`.github/workflows/release.yml:102`); and the product-factory unit names and install paths under `scripts/product-factory/`. Prose mentions of these same names in manuals are in docs by the precedence rule; section 3.2 shows how many there are per term.
 
+### 3.4 Supplemental compatibility index (for #789)
+
+These families are runtime evidence outside the six primary terms. They stay in section 5 with their own totals; this index only prevents #789 from reading section 4.1 as the whole compatibility surface. #789 assesses rename, compatibility and migration needs per family.
+
+| Supplemental family | Representative evidence | Listed in | What #789 assesses |
+|---|---|---|---|
+| Bare-Deck headers and trailers (`X-Deck-Operator-Token`, `X-Deck-Session-Token`, `Deck-Agent-Slot`, `Deck-Work-Item`) | `frontend/src/features/agent-mail/api.ts:22`; `backend/mcp_shim/agent_mail_server.py:125`; `backend/app/services/github_dispatch_service.py:1448` | 5.1 | Whether headers gain new names with old headers still read, and how new commit trailers coexist with trailers already in history |
+| Joined export and old domain (`ClaudeDeckAgentMailPlugin`, `claudedeck.org`) | `backend/app/services/agent_mail_install_service.py:599`; `README.md:3` | 5.2 | Generated plugin export compatibility for installed plugins; domain redirects (with #790/#792) |
+| `deck_` Agent Mail tools and other `deck_` tokens | definitions from `backend/mcp_shim/agent_mail_server.py:357` onward | 5.3 | The Director-decided new tool prefix with old names as aliases for the 36 tools; the 46 other tokens individually |
+| systemd unit filenames | `scripts/product-factory/claude-deck-product.service` and siblings | 5.4 | Unit rename, enable/state migration and references between units |
+| Product package name excluded from the keep-list (`claude-code-registry-backend`) | `backend/pyproject.toml:2`; `backend/uv.lock:188` | 5.6 exclusion | Package rename and lockfile regeneration; never bare `synthcity` (the `website-and-docs.md` section 4.7 rule noted above) |
+
 ## 4. The classified primary lines
 
 Each table below has one row per (file, class). "Line numbers" lists every counted line for that row, compressed into ranges; expanding a class's ranges reproduces exactly that class's share of the raw search output (section 6).
 
-### 4.1 Runtime identifiers — 379 lines, 406 occurrences, 94 files
+### 4.1 Runtime identifiers — 377 lines, 400 occurrences, 93 files
 
-These are the only lines whose exact strings current consumers read. #789 must give each identifier family here a new name, a fallback and a first-start behaviour; lines that merely mention these names in prose are not in this table.
+These are the six-term lines whose exact strings current consumers read. Runtime families that sit outside the six primary terms are indexed in section 3.4 and listed in section 5; they are not in this table and not in its counts. #789 assesses each family here and there for whether it needs a new name, a fallback/alias, or a first-start migration; not every test-only name necessarily needs all three. Lines that merely mention these names in prose are not in this table.
 
 | File | Lines | Occurrences | Line numbers | Example (first listed line) |
 |---|---:|---:|---|---|
@@ -100,7 +113,7 @@ These are the only lines whose exact strings current consumers read. #789 must g
 | `backend/app/services/backup_service.py` | 1 | 1 | 73 | backup_dir = get_user_home() / ".claude-registry" / "backups" |
 | `backend/app/services/github_approval_service.py` | 1 | 1 | 69 | _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00" |
 | `backend/app/services/github_workspace_service.py` | 1 | 1 | 260 | return f"{slug}{suffix}@claude-deck.local" |
-| `backend/app/services/instance_identity.py` | 5 | 5 | 79, 95, 107, 110, 115 | return hashlib.sha256(f"claude-deck:{hostname}".encode("utf-8")).hexdigest()[:12] |
+| `backend/app/services/instance_identity.py` | 4 | 4 | 79, 107, 110, 115 | return hashlib.sha256(f"claude-deck:{hostname}".encode("utf-8")).hexdigest()[:12] |
 | `backend/app/services/mcp_service.py` | 2 | 2 | 600, 865 | "clientInfo": {"name": "claude-deck-test", "version": "1.0.0"}, |
 | `backend/app/services/pi_mail_readiness.py` | 5 | 5 | 45-49 | "CLAUDE_DECK_MAIL_OPT_IN": "1", |
 | `backend/app/services/providers/opencode_cli.py` | 1 | 1 | 39 | "agent_mail_plugin": str(home / "plugins" / "claude-deck-agent-mail.js"), |
@@ -133,7 +146,6 @@ These are the only lines whose exact strings current consumers read. #789 must g
 | `frontend/e2e/lane-c/unlock.spec.ts` | 1 | 1 | 9 | const KEY_STORAGE = 'claude-deck.agent-teams.operator-token' |
 | `frontend/e2e/lane-d/harness-mail-setup.spec.ts` | 1 | 1 | 34 | \|\| !await page.evaluate(() => sessionStorage.getItem('claude-deck.agent-teams.operator-token'))) { |
 | `frontend/src/contexts/ProviderContext.tsx` | 1 | 1 | 16 | const STORAGE_KEY = 'claude-deck:selected-provider' |
-| `frontend/src/features/agent-mail/mailSetup.ts` | 3 | 7 | 193, 220, 239 | const server = 'claude-deck-mail' |
 | `frontend/src/features/agent-teams/ScopeSettingsDialogs.tsx` | 4 | 4 | 104-105, 194-195 | dispatch_label: 'claude-deck-ready', |
 | `frontend/src/features/agent-teams/operatorAuth.ts` | 1 | 1 | 1 | const OPERATOR_TOKEN_KEY = 'claude-deck.agent-teams.operator-token' |
 | `frontend/src/features/cc-bridge/api.ts` | 1 | 1 | 43 | headers.set('X-Claude-Deck-Terminal-Token', token) |
@@ -167,7 +179,7 @@ These are the only lines whose exact strings current consumers read. #789 must g
 | `integrations/pi-agent-mail/tests/extension-activity.test.ts` | 4 | 4 | 19-21, 82 | DECK_TEST_PANE_PID: String(process.pid), CLAUDE_DECK_MAIL_OPT_IN: '1', |
 | `integrations/pi-agent-mail/tests/pi-runtime.test.ts` | 8 | 8 | 16-17, 51-52, 57-58, 79-80 | const previous = process.env.CLAUDE_DECK_MAIL_OPT_IN |
 | `scripts/deploy-docs.sh` | 1 | 1 | 7 | WEBSITE_DIR="$REPO_ROOT/../claude-deck-website" |
-| `scripts/e2e-agent-mail-same-repo-codex.sh` | 1 | 1 | 32 | TMP_DIR="${TMPDIR:-/tmp}/claude-deck-agent-mail-e2e-${RUN_ID}" |
+| `scripts/e2e-agent-mail-same-repo-codex.sh` | 3 | 3 | 31-32, 88 | INBOX_NUDGE_PREFIX='Claude Deck Agent Mail: please call 'deck_check_inbox' |
 | `scripts/e2e-instance.sh` | 6 | 8 | 50, 54, 130, 169, 201, 229 | if [[ -n "${CLAUDE_DECK_URL:-}" && "$CLAUDE_DECK_URL" != "$INSTANCE_URL" ]]; then |
 | `scripts/e2e/scenarios.py` | 6 | 6 | 618-623 | "CLAUDE_DECK_TEAM_PRESET_ID": str(RELEASE_TEAM), |
 | `scripts/generate-pi-mail-manifest.py` | 4 | 4 | 15-16, 21, 23 | previous = os.environ.get("CLAUDE_DECK_PROVIDER") |
@@ -182,7 +194,7 @@ These are the only lines whose exact strings current consumers read. #789 must g
 | `scripts/product-factory/product-supervisor` | 3 | 3 | 4, 49, 118 | BASE=pathlib.Path('/opt/claude-deck-product'); OPS=pathlib.Path('/home/deckproductctl/work/operations'); STATE=BASE/'state'; API='http://127.0.0.1:801… |
 | `scripts/product-factory/productctl` | 4 | 4 | 4, 32, 46, 61 | BASE=pathlib.Path('/opt/claude-deck-product');STATE=BASE/'state';WORK=pathlib.Path('/home/deckproductctl/work');URL='http://127.0.0.1:8011';ENV=BASE/'… |
 
-### 4.2 User-facing copy — 160 lines, 160 occurrences, 51 files
+### 4.2 User-facing copy — 170 lines, 174 occurrences, 53 files
 
 Current copy a person or an agent reads as the product speaking. These lines take the new product name directly; none of them is a compatibility surface by itself, although tests that assert the visible title appear here because they pin this copy.
 
@@ -198,9 +210,10 @@ Current copy a person or an agent reads as the product speaking. These lines tak
 | `backend/app/services/github_approval_service.py` | 2 | 2 | 884, 900 | "Claude Deck approved continuation: call " |
 | `backend/app/services/github_dispatch_service.py` | 7 | 7 | 1377, 1380, 1401, 1446, 1508, 1883, 3289 | body = f"{body[:12000]}\n\n[Issue body truncated by Claude Deck.]" |
 | `backend/app/services/github_verification_service.py` | 1 | 1 | 571 | "Claude Deck provenance\n" |
+| `backend/app/services/instance_identity.py` | 1 | 1 | 95 | "Unsupported CLAUDE_DECK_INSTANCE_ACCENT=%r; using hostname-derived accent", |
 | `backend/app/services/oauth_service.py` | 1 | 1 | 128 | "client_name": f"Claude Deck - {server_name}", |
 | `backend/app/services/runtime_environment.py` | 1 | 1 | 10 | "No agent CLIs detected. Claude Deck must run in the same environment where " |
-| `backend/mcp_shim/agent_mail_server.py` | 3 | 3 | 53, 119, 224 | "suggestion": "Continue without mailbox coordination, or ask the user to start Claude Deck.", |
+| `backend/mcp_shim/agent_mail_server.py` | 7 | 7 | 53, 119, 224, 358, 386, 885, 1182 | "suggestion": "Continue without mailbox coordination, or ask the user to start Claude Deck.", |
 | `backend/mcp_shim/git_credential_helper.py` | 3 | 3 | 45, 50, 66 | raise RuntimeError(f"Claude Deck refused credential request ({response.status})") |
 | `backend/pyproject.toml` | 1 | 1 | 4 | description = "Backend API for Claude Deck" |
 | `backend/tests/agent_teams/test_github_verification_service.py` | 1 | 1 | 1493 | "Claude Deck provenance\n" |
@@ -216,7 +229,7 @@ Current copy a person or an agent reads as the product speaking. These lines tak
 | `frontend/src/features/agent-mail/AgentMailPage.tsx` | 1 | 1 | 340 | : 'Start or resume an agent in a repository, then have it call deck_whoami once so Claude Deck can attach it to a participant.'} |
 | `frontend/src/features/agent-mail/ComposeDialog.tsx` | 2 | 2 | 86, 91 | : '${member.display_name} is offline. This message will be stored for later; Claude Deck cannot wake a live session.' |
 | `frontend/src/features/agent-mail/actorAuth.ts` | 1 | 1 | 43 | description: 'Claude Deck browser session', |
-| `frontend/src/features/agent-mail/mailSetup.ts` | 16 | 16 | 218, 228, 230, 237, 240, 247, 249-250, 256, 258, 266, 268, 274, 277, 284, 287 | description: 'A backup is attempted before Claude Deck installs the Codex MCP server and lifecycle hooks.', |
+| `frontend/src/features/agent-mail/mailSetup.ts` | 19 | 23 | 193, 218, 220, 228, 230, 237, 239-240, 247, 249-250, 256, 258, 266, 268, 274, 277, 284, 287 | const server = 'claude-deck-mail' |
 | `frontend/src/features/agent-teams/AgentTeamsHelpDialog.tsx` | 1 | 1 | 100 | <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline"… |
 | `frontend/src/features/agent-teams/OperatorTokenDialog.tsx` | 1 | 1 | 13 | const INSTALLATION_GUIDE_URL = 'https://github.com/adrirubio/claude-deck/blob/master/docs/guide/installation.md' |
 | `frontend/src/features/cc-bridge/CCBridgePage.tsx` | 1 | 1 | 430 | {agentCliWarning} Run Claude Deck natively on the host where Claude Code, Codex, Copilot, or OpenCode are installed. |
@@ -231,18 +244,19 @@ Current copy a person or an agent reads as the product speaking. These lines tak
 | `frontend/tests/instance-document-title.test.tsx` | 5 | 5 | 23, 28, 37, 39, 46 | expect(document.title).toBe("Claude Deck"); |
 | `frontend/tests/needs-a-look.test.tsx` | 1 | 1 | 66 | expect(screen.getByRole("link", { name: "Open claude-deck-website #2" })).toHaveAttribute("href", "/work/7"); |
 | `frontend/tests/provider-operations.test.tsx` | 2 | 2 | 163, 170 | expect(document.title).toBe('Configuration · Codex CLI · Claude Deck') |
+| `integrations/pi-agent-mail/manifest.ts` | 4 | 4 | 430, 439, 739, 1301 | "description": "List all local Agent Mail participants Claude Deck knows about, including member\n ids, display names, roles, repos, team slots, chart… |
 | `launch-posts.md` | 38 | 38 | 1, 9, 58, 61, 72, 94, 107, 111, 130, 139-141, 144, 148, 166, 180, 183, 210, 219, 223, 236, 242, 245, 261, 271, 274, 278, 285, 300, 323, 334, 344, 350, 353, 368, 372, 379, 389 | # Claude Deck Launch Posts |
 | `scripts/build.sh` | 1 | 1 | 10 | echo "Building Claude Deck for production..." |
 | `scripts/deploy-docs.sh` | 1 | 1 | 10 | echo "Error: claude-deck-website not found at $WEBSITE_DIR" |
 | `scripts/dev.sh` | 5 | 5 | 24, 162, 166, 170, 232 | stop Stop Claude Deck dev servers for this checkout |
-| `scripts/e2e-agent-mail-same-repo-codex.sh` | 5 | 5 | 31, 88, 230, 237, 252 | INBOX_NUDGE_PREFIX='Claude Deck Agent Mail: please call 'deck_check_inbox' |
+| `scripts/e2e-agent-mail-same-repo-codex.sh` | 3 | 3 | 230, 237, 252 | "You are the planner in an automated Claude Deck Agent Mail E2E test. " + |
 | `scripts/e2e-instance.sh` | 1 | 1 | 51 | refuse "CLAUDE_DECK_URL names another Deck; unset it to run the E2E instance" |
 | `scripts/install.sh` | 1 | 1 | 10 | echo "Setting up Claude Deck..." |
 | `scripts/product-factory/claude-deck-product.service` | 1 | 1 | 2 | Description=Isolated Claude Deck product factory |
 
-### 4.3 Docs — 164 lines, 179 occurrences, 47 files
+### 4.3 Docs — 156 lines, 171 occurrences, 46 files
 
-Manuals, guides, comments, docstrings and test descriptions. These rename as ordinary documentation once #789 fixes the identifier vocabulary they describe; examples that must keep old-install instructions usable are a #792/#789 wording decision, not an inventory question.
+Manuals, guides, comments, internal docstrings and test descriptions. These rename as ordinary documentation once #789 fixes the identifier vocabulary they describe; examples that must keep old-install instructions usable are a #792/#789 wording decision, not an inventory question.
 
 | File | Lines | Occurrences | Line numbers | Example (first listed line) |
 |---|---:|---:|---|---|
@@ -258,7 +272,7 @@ Manuals, guides, comments, docstrings and test descriptions. These rename as ord
 | `backend/app/services/plugin_service.py` | 1 | 1 | 2 | Plugin Service for Claude Deck |
 | `backend/app/services/runtime_environment.py` | 1 | 1 | 16 | """Return True when Claude Deck appears to be running in a container.""" |
 | `backend/mcp_shim/agent_mail_hook.py` | 1 | 1 | 1 | """Claude Deck Agent Mail lifecycle hook shim.""" |
-| `backend/mcp_shim/agent_mail_server.py` | 5 | 5 | 1, 358, 386, 885, 1182 | """Claude Deck Agent Mail MCP server over stdio.""" |
+| `backend/mcp_shim/agent_mail_server.py` | 1 | 1 | 1 | """Claude Deck Agent Mail MCP server over stdio.""" |
 | `backend/mcp_shim/git_credential_helper.py` | 1 | 1 | 1 | """Git credential helper that requests a short-lived token from Claude Deck.""" |
 | `docs/api/agent-bridge.md` | 7 | 8 | 80, 82, 87, 103-104, 110, 129 | Use image attachments to upload a screenshot or mockup to the Claude Deck host, then paste a file-path prompt into a live tmux session. |
 | `docs/api/agent-mail.md` | 1 | 1 | 179 | Actor creation is loopback-only. External endpoints require a bearer token and are intended for Claude Deck's local trust boundary, not internet-facin… |
@@ -290,7 +304,6 @@ Manuals, guides, comments, docstrings and test descriptions. These rename as ord
 | `frontend/tests/instance-document-title.test.tsx` | 2 | 2 | 21, 26 | it("stays Claude Deck when no name is configured", () => { |
 | `frontend/tests/repository-setup.test.tsx` | 1 | 1 | 1749 | fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "https://github.com/adrirubio/claude-deck-docs" } }); |
 | `frontend/tests/team-summary-card.test.tsx` | 1 | 1 | 28 | const ISSUE = 'https://github.com/adrirubio/claude-deck/issues/490' |
-| `integrations/pi-agent-mail/manifest.ts` | 4 | 4 | 430, 439, 739, 1301 | "description": "List all local Agent Mail participants Claude Deck knows about, including member\n ids, display names, roles, repos, team slots, chart… |
 | `scripts/e2e-agent-mail-same-repo-codex.sh` | 1 | 1 | 7 | # - Claude Deck backend running on DECK_URL, default http://127.0.0.1:8000 |
 | `scripts/e2e-instance.sh` | 1 | 1 | 15 | # - CLAUDE_DECK_URL, or a Deck Mail token variable, names another Deck; |
 
@@ -935,7 +948,7 @@ This file is the whole difference between the 1,597-match/256-file binary-inclus
 ### 5.6 Claude Code keep-list (references that stay)
 
 Search: `git grep -I -n -E 'Claude Code|claude-code' <pin> -- .`, then one exclusion: lines whose only hit is the product package name `claude-code-registry-backend` are **not** keep-list lines, because that package name identifies this product, not the harness. Path conventions that do not spell the name (`.claude/` directories, `CLAUDE.md` files) are outside this name search by design.
-Keep-list: 1,129 lines, 1,188 occurrences, 262 distinct files; 68 of those lines also carry a primary old-name match and are classified in section 4. Excluded package-name lines: 23 in 6 files (`backend/pyproject.toml:2`, `backend/uv.lock:188`, 17 generated-comment lines in `backend/requirements.txt`, `scripts/bump-version.sh:100` and `:130`, campaign `README.md:40`, and `docs/superpowers/plans/2026-08-12-pr2-distinct-commit-and-pr-identity.md:247`) — #789 owns that package rename. The table lists the **1,061 non-primary keep-list lines** (1,115 occurrences, 260 distinct files). Every listed line names Anthropic's Claude Code product or its `claude-code` CLI/provider identifier; none of it renames.
+Keep-list: 1,129 lines, 1,188 occurrences, 262 distinct files; 68 of those lines also carry a primary old-name match and are classified in section 4. Excluded package-name lines: 23 in 6 files (`backend/pyproject.toml:2`, `backend/uv.lock:188`, 17 generated-comment lines in `backend/requirements.txt` (:4, :6, :19, :39, :42, :55, :70, :79, :87, :93, :98, :101, :106, :112, :123, :132, :157), `scripts/bump-version.sh:100` and `:130`, campaign `README.md:40`, and `docs/superpowers/plans/2026-08-12-pr2-distinct-commit-and-pr-identity.md:247`) — #789 owns that package rename. The table lists the **1,061 non-primary keep-list lines** (1,115 occurrences, 260 distinct files). The keep rule is occurrence-specific, not a whole-line exemption: the `Claude Code`/`claude-code` harness occurrences on the listed lines stay, because they name the Anthropic product or its CLI/provider identifier. Any other product occurrence on the same line still follows its own classification: `docs/features/agent-mail.md:104` and `docs/guide/supervised-factory-playbook.md:222` and `:603`, for example, are also bare-Deck supplemental lines whose `Deck` product copy renames (or is kept as history) under sections 4 and 5.1, while their harness names stay.
 
 | File | Lines | Occurrences | Line numbers | Example (first listed line) |
 |---|---:|---:|---|---|
@@ -1209,11 +1222,11 @@ Keep-list: 1,129 lines, 1,188 occurrences, 262 distinct files; 68 of those lines
 - Two independent counters (the shell searches in the appendix and the generation script's regex counter) agree on the section 2 figures, and the Leader independently reproduced the 1,596-line/255-file text total before approval.
 - Local hygiene: `git diff --check` clean; the diff touches only this file. Hosted CI and independent review apply to the pull request head and are reported there, not claimed here.
 
-Limits: this is a source-text inventory at one commit. It does not inventory the website repository (#792 did), generated or untracked files, GitHub-side text (issue and release bodies), or the contents of the one binary archive. Classification follows the precedence rules in section 1.2; a line a reviewer would place differently is a one-line move between tables, never a change to the totals, because the partition is over the same searched lines.
+Limits: this is a source-text inventory at one commit. It does not inventory the website repository (#792 did), generated outputs outside the tracked tree or untracked files, GitHub-side text (issue and release bodies), or the contents of the one binary archive. Classification follows the precedence rules in section 1.2; a line a reviewer would place differently is a one-line move between tables, never a change to the totals, because the partition is over the same searched lines.
 
 ## 7. Decisions this inventory does not make
 
-Open for the Director, unchanged by this document: the release number; the new `deck_` tool prefix and the deprecation-window length; trademark clearance timing; cutover dates and owners; announcement and go-live approvals; the Cloudflare project choice. #789 decides new identifier names, fallbacks and first-start migration for section 4.1 and section 5.3. Nothing here authorizes a rename, a transfer or a code change.
+Open for the Director, unchanged by this document: the release number; the new `deck_` tool prefix and the deprecation-window length; trademark clearance timing; cutover dates and owners; announcement and go-live approvals; the Cloudflare project choice. #789 assesses new identifier names, fallbacks and first-start migration per family for section 4.1 and for the supplemental families indexed in section 3.4 (listed in sections 5.1-5.4 and the 5.6 package exclusion); not every test-only name necessarily needs a fallback or a migration. Nothing here authorizes a rename, a transfer or a code change.
 
 ## Appendix: reproducing every number
 
