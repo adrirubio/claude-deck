@@ -1,14 +1,14 @@
 # Albiex Synth City rename: inventory of every old-name occurrence
 
 **Issue:** #788. **Source pin:** `94cb599a98d60281db824fc8e726d841acdb46a0` (master as merged through PR #794). **Scope:** this file only; it plans no code change.
-**Parent:** #787. **Next consumer:** #789 (compatibility design) reads the runtime-identifier class (section 4.1) plus the supplemental compatibility index (section 3.4), which cross-references the runtime families listed in sections 5.1, 5.2, 5.3, 5.4 and the package name excluded in 5.6.
+**Parent:** #787. **Next consumer:** #789 (compatibility design) reads the runtime-identifier class (section 4.1) plus the supplemental compatibility index (section 3.4), which cross-references the runtime families listed in sections 5.1, 5.2, 5.3, 5.4 and the package name excluded in 5.6. Director decisions recorded after measurement (section 7) remove parallel old-name support from that design; whether the database and backups move automatically on first start is a separate open question.
 
 ## Summary for the reader
 
 This inventory supports the rename to **Albiex Synth City**. Naming presentation in this document follows the Director rule recorded later in merged PR #797 (`website-and-docs.md` section 4.7 at merge `9895f49b5074e621dadd0d62390fb974647be40b`): first current mention uses the full name, page titles use the full name, later "Synth City" is allowed, and no package, command or repository is named bare `synthcity` (`albiexai/synth-city` remains decided). That rule post-dates the measurement pin below; quoted excerpts and titles in the tables are preserved exactly as measured at the pin and are not rewritten to manufacture compliance.
 A case-insensitive search for the six old-name strings in tracked text files finds **1,596 matching lines** (1,728 non-overlapping occurrences) in **255 distinct files** at the pin. Every one of those lines is listed exactly once, in exactly one of four classes, in the tables in section 4. Separate searches in section 5 cover the short name `Deck`, joined spellings such as `claudedeck.org`, the `deck_` names, filenames, one binary archive, and the Claude Code references that stay. Nothing in section 5 is added into the headline total.
 The one-sentence version: most old-name text is documentation and dated planning records that either rename as ordinary docs or stay untouched as history; the compatibility risk is concentrated in the much smaller runtime-identifier class (environment variables, the MCP server name, headers and markers, database and backup paths, package names, storage keys).
-This inventory file itself did not exist at the pin, so its own old-name mentions are not counted. The approved re-pin condition applied before the inventory run: had master moved before that run, measurement would have stopped and re-pinned instead of mixing commits. Master later moved for PR #797; that later presentation policy is cited separately above and no count in this document mixes the two commits. Every number below is a measurement of `94cb599a98d6`, not a constant.
+This inventory file itself did not exist at the pin, so its own old-name mentions are not counted. The approved re-pin condition applied before the inventory run: had master moved before that run, measurement would have stopped and re-pinned instead of mixing commits. Master later moved for PR #797, and the Director recorded further decisions on 2026-11-08 ([comment on #787](https://github.com/adrirubio/claude-deck/issues/787#issuecomment-6719501255), summarised in section 7); those later policies are cited separately and no count in this document mixes commits. Every number below is a measurement of `94cb599a98d6`, not a constant.
 
 ## 1. Method
 
@@ -76,18 +76,18 @@ Term rows overlap: one line can carry two terms, so term line counts need not su
 ### 3.3 Runtime identifiers at a glance (for #789)
 
 The runtime class contains 16 distinct `CLAUDE_DECK_*` environment names: `CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN`, `CLAUDE_DECK_INSTANCE_ACCENT`, `CLAUDE_DECK_INSTANCE_ID`, `CLAUDE_DECK_INSTANCE_NAME`, `CLAUDE_DECK_MAIL_OPT_IN`, `CLAUDE_DECK_MAIL_PYTHON`, `CLAUDE_DECK_MAIL_SHIM`, `CLAUDE_DECK_MAIL_TOKEN`, `CLAUDE_DECK_PROVIDER`, `CLAUDE_DECK_TEAM_PRESET_ID`, `CLAUDE_DECK_TEAM_PRESET_NAME`, `CLAUDE_DECK_TEAM_SLOT_COLOR`, `CLAUDE_DECK_TEAM_SLOT_ID`, `CLAUDE_DECK_TEAM_SLOT_NAME`, `CLAUDE_DECK_TEAM_SLOT_ROLE`, `CLAUDE_DECK_URL`.
-Other runtime groups, each traceable through the section 4.1 line lists: the MCP server name `claude-deck-mail` (defined at `backend/app/services/agent_mail_install_service.py:34`); the `X-Claude-Deck-Terminal-Token` header (for example `backend/app/api/v1/agent_bridge/router.py:384`); the stored labels `claude-deck-ready` and `claude-deck-design` (for example `backend/app/models/database.py:246`); the database file in `database_url` (`backend/app/config.py:30`) and the `~/.claude-registry` paths (for example `backend/app/config.py:33`); package names (`docs/package.json:2`, `integrations/pi-agent-mail/package.json:2`); browser storage keys (for example `frontend/src/contexts/ProviderContext.tsx:16`); release artifact filenames (`.github/workflows/release.yml:102`); and the product-factory unit names and install paths under `scripts/product-factory/`. Prose mentions of these same names in manuals are in docs by the precedence rule; section 3.2 shows how many there are per term.
+Other runtime groups, each traceable through the section 4.1 line lists: the MCP server name `claude-deck-mail` (defined at `backend/app/services/agent_mail_install_service.py:34`); the `X-Claude-Deck-Terminal-Token` header (for example `backend/app/api/v1/agent_bridge/router.py:384`); the stored labels `claude-deck-ready` and `claude-deck-design` (for example `backend/app/models/database.py:246`); the database file in `database_url` (`backend/app/config.py:30`) and the `~/.claude-registry` paths (for example `backend/app/config.py:33`); package names (`docs/package.json:2`, `integrations/pi-agent-mail/package.json:2`); browser storage keys (for example `frontend/src/contexts/ProviderContext.tsx:16`); release artifact filenames (`.github/workflows/release.yml:102`); and the product-factory unit names and install paths under `scripts/product-factory/`. Prose mentions of these same names in manuals are in docs by the precedence rule; section 3.2 shows how many there are per term. Whether the first start of the renamed product automatically moves the database file and backups folder to their new names is a separate **open** decision pending Supervisor confirmation (section 7); this inventory asserts no movement behaviour, and that question is not parallel old-name support.
 
 ### 3.4 Supplemental compatibility index (for #789)
 
-These families are runtime evidence outside the six primary terms. They stay in section 5 with their own totals; this index only prevents #789 from reading section 4.1 as the whole compatibility surface. #789 assesses rename, compatibility and migration needs per family.
+These families are runtime evidence outside the six primary terms. They stay in section 5 with their own totals; this index only prevents #789 from reading section 4.1 as the whole compatibility surface. #789 assesses rename, compatibility and migration needs per family under the Director decision recorded on 2026-11-08 that there is **no deprecation window and no parallel old-name support** (section 7); the separate open question about automatically moving the database and backups on first start is not an exception to that rule.
 
 | Supplemental family | Representative evidence | Listed in | What #789 assesses |
 |---|---|---|---|
-| Bare-Deck headers and trailers (`X-Deck-Operator-Token`, `X-Deck-Session-Token`, `Deck-Agent-Slot`, `Deck-Work-Item`) | `frontend/src/features/agent-mail/api.ts:22`; `backend/mcp_shim/agent_mail_server.py:125`; `backend/app/services/github_dispatch_service.py:1448` | 5.1 | Whether headers gain new names with old headers still read, and how new commit trailers coexist with trailers already in history |
-| Joined export and old domain (`ClaudeDeckAgentMailPlugin`, `claudedeck.org`) | `backend/app/services/agent_mail_install_service.py:599`; `README.md:3` | 5.2 | Generated plugin export compatibility for installed plugins; domain redirects (with #790/#792) |
-| `deck_` Agent Mail tools and other `deck_` tokens | definitions from `backend/mcp_shim/agent_mail_server.py:357` onward | 5.3 | The Director-decided new tool prefix with old names as aliases for the 36 tools; the 46 other tokens individually |
-| systemd unit filenames | `scripts/product-factory/claude-deck-product.service` and siblings | 5.4 | Unit rename, enable/state migration and references between units |
+| Bare-Deck headers and trailers (`X-Deck-Operator-Token`, `X-Deck-Session-Token`, `Deck-Agent-Slot`, `Deck-Work-Item`) | `frontend/src/features/agent-mail/api.ts:22`; `backend/mcp_shim/agent_mail_server.py:125`; `backend/app/services/github_dispatch_service.py:1448` | 5.1 | Replacement header names with no parallel reading of the old headers, and how new commit trailers coexist with trailers already in history |
+| Joined export and old domain (`ClaudeDeckAgentMailPlugin`, `claudedeck.org`) | `backend/app/services/agent_mail_install_service.py:599`; `README.md:3` | 5.2 | Generated plugin export replacement or regeneration for installed plugins, with no alias window; domain redirects to the decided new `synth-city-website` Pages project (with #790/#792) |
+| `deck_` Agent Mail tools and other `deck_` tokens | definitions from `backend/mcp_shim/agent_mail_server.py:357` onward | 5.3 | A new tool prefix (exact prefix still open) as replacement names for the 36 tools, with no old-name alias window; the 46 other tokens individually |
+| systemd unit filenames | `scripts/product-factory/claude-deck-product.service` and siblings | 5.4 | Unit rename and enable/state handling, with no parallel old unit names, and references between units |
 | Product package name excluded from the keep-list (`claude-code-registry-backend`) | `backend/pyproject.toml:2`; `backend/uv.lock:188` | 5.6 exclusion | Package rename and lockfile regeneration; never bare `synthcity` (the `website-and-docs.md` section 4.7 rule noted above) |
 
 ## 4. The classified primary lines
@@ -96,7 +96,7 @@ Each table below has one row per (file, class). "Line numbers" lists every count
 
 ### 4.1 Runtime identifiers — 377 lines, 400 occurrences, 93 files
 
-These are the six-term lines whose exact strings current consumers read. Runtime families that sit outside the six primary terms are indexed in section 3.4 and listed in section 5; they are not in this table and not in its counts. #789 assesses each family here and there for whether it needs a new name, a fallback/alias, or a first-start migration; not every test-only name necessarily needs all three. Lines that merely mention these names in prose are not in this table.
+These are the six-term lines whose exact strings current consumers read. Runtime families that sit outside the six primary terms are indexed in section 3.4 and listed in section 5; they are not in this table and not in its counts. #789 assesses replacement names for each family here and there under the decided rule of no deprecation window and no parallel old-name support; the only first-start question left open is the separate database/backups movement decision in section 7, and not every test-only name necessarily needs any data movement. Lines that merely mention these names in prose are not in this table.
 
 | File | Lines | Occurrences | Line numbers | Example (first listed line) |
 |---|---:|---:|---|---|
@@ -719,7 +719,7 @@ Whole set: 27 lines, 28 occurrences, 9 distinct files. Of these, 10 lines are al
 ### 5.3 `deck_` names
 
 Search: `git grep -I -n -E 'deck_[a-z0-9_]+' <pin> -- .` (case-sensitive, as the names are).
-Whole set: 1,027 lines, 1,155 occurrences of 82 distinct tokens, 106 distinct files; 40 of those lines are already primary. The file table lists the **987 non-primary lines** (1,104 occurrences, 103 distinct files). Not every `deck_` token is an Agent Mail tool: the token table after the file table separates the 36 tools actually defined in `backend/mcp_shim/agent_mail_server.py` (the surface the Director's prefix decision renames, with aliases) from other tokens such as storage keys and test names, which follow ordinary identifier rules in #789.
+Whole set: 1,027 lines, 1,155 occurrences of 82 distinct tokens, 106 distinct files; 40 of those lines are already primary. The file table lists the **987 non-primary lines** (1,104 occurrences, 103 distinct files). Not every `deck_` token is an Agent Mail tool: the token table after the file table separates the 36 tools actually defined in `backend/mcp_shim/agent_mail_server.py` (the surface #789 renames under a new prefix still to be chosen, with no old-name alias window after the 2026-11-08 Director decision) from other tokens such as storage keys and test names, which follow ordinary identifier rules in #789.
 
 | File | Lines | Occurrences | Line numbers | Example (first listed line) |
 |---|---:|---:|---|---|
@@ -1224,9 +1224,22 @@ Keep-list: 1,129 lines, 1,188 occurrences, 262 distinct files; 68 of those lines
 
 Limits: this is a source-text inventory at one commit. It does not inventory the website repository (#792 did), generated outputs outside the tracked tree or untracked files, GitHub-side text (issue and release bodies), or the contents of the one binary archive. Classification follows the precedence rules in section 1.2; a line a reviewer would place differently is a one-line move between tables, never a change to the totals, because the partition is over the same searched lines.
 
-## 7. Decisions this inventory does not make
+## 7. Director decisions recorded after measurement, and what remains open
 
-Open for the Director, unchanged by this document: the release number; the new `deck_` tool prefix and the deprecation-window length; trademark clearance timing; cutover dates and owners; announcement and go-live approvals; the Cloudflare project choice. #789 assesses new identifier names, fallbacks and first-start migration per family for section 4.1 and for the supplemental families indexed in section 3.4 (listed in sections 5.1-5.4 and the 5.6 package exclusion); not every test-only name necessarily needs a fallback or a migration. Nothing here authorizes a rename, a transfer or a code change.
+This inventory makes no decisions itself. After the measurement pin, the Director recorded decisions on 2026-11-08 in a [comment on #787](https://github.com/adrirubio/claude-deck/issues/787#issuecomment-6719501255). They change the guidance #789 and later items work to; they change no count, classification, or excerpt in this document:
+
+| Question | Director decision (2026-11-08) |
+|---|---|
+| Release number | **v4.0.0.** No version reset, so the existing tags v1.0.0 to v3.1.0 are not broken. |
+| Deprecation window | **None.** Old names are not kept working alongside the new ones; there is no parallel old-name support and no alias window. |
+| Cloudflare project | **A new `synth-city-website` Pages project**, switched at go-live, with a redirect from the old site. |
+| Preview access | **`noindex`** until the preview is shut down. |
+| Trademark filing | **Later**, when the project gets traction; the screening is enough for now. |
+| Cutover date | **No fixed date.** The cutover happens when the team is ready. |
+| Named people | **Adrian (`adrirubio`) performs the transfers.** The Director owns every other role: freeze, exceptions, website release, Cloudflare and DNS. |
+| The old repository name | **`adrirubio/claude-deck` is never recreated.** |
+
+Still open, unchanged by this document: the exact new `deck_` tool prefix; announcement content and go-live approvals beyond the no-fixed-date decision above; and, as a separate open decision pending Supervisor confirmation, whether the first start of the renamed product automatically moves the database file and backups folder to their new names. That movement question is not parallel old-name support and no answer is inferred here. #789 assesses replacement names per family for section 4.1 and for the supplemental families indexed in section 3.4 (listed in sections 5.1-5.4 and the 5.6 package exclusion) under the no-deprecation rule; not every test-only name necessarily needs any data movement. Nothing here authorizes a rename, a transfer or a code change.
 
 ## Appendix: reproducing every number
 
