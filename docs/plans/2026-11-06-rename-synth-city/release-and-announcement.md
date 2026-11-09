@@ -6,7 +6,7 @@
 
 This document plans how **Albiex Synth City** v4.0.0 is released and announced, and drafts every user-facing text in plain words: the migration guide, the release notes, the pre-transfer pinned Discussion, the pre-transfer README banner, and the go-live announcement. Later mentions may shorten the name to Synth City; each drafted text below nevertheless gets its own full-name first mention, as the naming rule requires.
 
-Everything substantive is already decided elsewhere and is not reopened here: the version is **v4.0.0** with no reset and no deprecation window; the first start of v4.0.0 automatically moves the database and backups with no manual step; old names stop working at v4.0.0; every new identifier spelling is now decided. What remains for the Director is execution, not design: approving the announcement texts, performing/approving the transfers, and choosing when to publish. This plan sequences those approvals and says exactly what must be true before each one. The drafts in sections 6–9 are **drafts for Director approval** — merging this document publishes none of them.
+Everything substantive is already decided elsewhere and is not reopened here: the version is **v4.0.0** with no reset and no deprecation window; the first start of v4.0.0 automatically moves the database and backups with no manual step; old names stop working at v4.0.0; every new identifier spelling is now decided. What remains for the Director is execution, not design: approving the announcement texts, performing/approving the transfers, and choosing when to publish. This plan sequences those approvals and says exactly what must be true before each one. The drafts in sections 6–10 are **drafts for Director approval** — merging this document publishes none of them.
 
 ## 1. Decisions already made (and where)
 
@@ -25,7 +25,7 @@ Everything substantive is already decided elsewhere and is not reopened here: th
 
 The original #791 issue asked this document to compare (a) continuing at v4.0.0 with (b) resetting to v1, to recommend a deprecation window of two minor releases, and to assume `deck_` aliases. All three premises were superseded by the 2026-11-08 decisions before this plan was written, so they are recorded here once as rejected history rather than re-argued as live options:
 
-- **Version reset to v1 — rejected.** The decided release is v4.0.0. Separately from that decision, two pinned facts would have made a reset costly: transferred repositories keep their existing tags, and this repository already carries `v1.0.0`…`v3.1.0` (`git tag -l 'v*'` at the pin), so fresh `v1.x` tags would collide outright; and the release workflow refuses to create a tag that already points at a different commit (`.github/workflows/release.yml:66–76`). Those facts prove *collision*; they do not by themselves prove anything about sorting. Sorting is a separate mechanism: the codebase's own version comparison splits on dots and compares numerically part by part (`backend/app/services/plugin_service.py:1330–1352`), under which `1.0.0 < 3.1.0 < 4.0.0` — so a reset release would sort *below* the current release for any tool or operator using ordinary numeric/semantic ordering, looking like a downgrade. No product self-update comparator was found at the pin, so this is stated as an operator/tooling consequence of numeric ordering, not as a claim about an in-product updater.
+- **Version reset to v1 — rejected.** The decided release is v4.0.0. Separately from that decision, two pinned facts would have made a reset costly: transferred repositories keep their existing tags, and this repository already carries tags `v1.0.0` through `v3.1.0` (a dated local observation of tag refs, 2026-11-09 — a commit pin does not freeze tag refs, so the refs must be captured separately as `transfer-runbook.md:662` requires), so reusing any existing exact tag such as `v1.0.0` would collide outright (an unused number such as `v1.4.0` would not collide, but would still sort below the current release, next point); and the release workflow refuses to create a tag that already points at a different commit (`.github/workflows/release.yml:66–76`). Those facts prove *collision*; they do not by themselves prove anything about sorting. Sorting is a separate mechanism: the codebase's own version comparison splits on dots and compares numerically part by part (`backend/app/services/plugin_service.py:1330–1361`, the numeric part comparison itself at `:1353–1361`), under which `1.0.0 < 3.1.0 < 4.0.0` — so a reset release would sort *below* the current release for any tool or operator using ordinary numeric/semantic ordering, looking like a downgrade. No product self-update comparator was found at the pin, so this is stated as an operator/tooling consequence of numeric ordering, not as a claim about an in-product updater.
 - **Deprecation window / aliases — rejected.** There is no window in which old names keep working, and the renamed tools register no `deck_` aliases (`compatibility.md` sections 4.1, 4.3). The migration guide in section 6 therefore describes one clean break plus automatic data movement, never a grace period.
 
 ## 3. Release preconditions (all must be true before tagging)
@@ -36,10 +36,10 @@ The release described here is the rename implementation shipped as v4.0.0. Taggi
 |---|---|---|
 | P1 | The compatibility design is **implemented** and its section-7 test list passes — in particular the standard-upgrade proof (stop v3.1 → start v4.0.0, nothing else) retaining data through current readers, and the power-loss boundary. Acceptance of `compatibility.md` was source/design review only; it proved no behaviour | Implementation team; `compatibility.md` section 7 |
 | P2 | Decided spellings (section 1) are the ones implemented everywhere — environment, tools, headers, database file, home folder, MCP server, packages, artifacts, units, labels, storage keys — and the no-old-name guard (T-G1) passes with only its named exceptions | Implementation team |
-| P3 | Version fields are synced to `4.0.0` by the existing tooling (`scripts/bump-version.sh` writes `VERSION`, `frontend/package.json`, `backend/pyproject.toml`, lockfiles and `backend/app/config.py`; at the pin they read `3.1.0`, e.g. `backend/app/config.py:17`) | Release operator |
+| P3 | Version fields are synced to `4.0.0` (`scripts/bump-version.sh:13–18,47–108` identifies/writes `VERSION`, `frontend/package.json`, `backend/pyproject.toml`, lockfiles and `backend/app/config.py`; at the pin they read `3.1.0`, e.g. `backend/app/config.py:17`). **Rename-aware tooling prerequisite:** the script matches the old backend package name literally at `scripts/bump-version.sh:100` (write) and `:130` (verify), so once the backend package is renamed the unmodified helper silently skips its `uv.lock` entry — and the release workflow's four-field check (`.github/workflows/release.yml:56–65`) does not check lockfiles. The rename implementation must update that lookup and verify the renamed lockfile entry reads `4.0.0`; neither script nor workflow is edited by this plan | Implementation team + release operator |
 | P4 | The release commit is a single accepted full SHA on `master`, and a **dry run** of the manual release workflow passes against it (`.github/workflows/release.yml:3–17` — `workflow_dispatch` with explicit version + 40-character commit + `dry_run` defaulting to true) | Release operator |
 | P5 | Transfer runbook gates that the release depends on are green and sequenced with section 4 (pre-transfer announcement live before freeze; transfers verified before anything is published as the new home) | `transfer-runbook.md` sections 3, 7–10 |
-| P6 | The Director has approved the final announcement texts (sections 6–9 as amended by the Director) and the publication moment; no fixed cutover date exists in advance | Director |
+| P6 | The Director has approved the final announcement texts (sections 6–10 as amended by the Director) and the publication moment, with every LINK/date fill-in resolved — no unresolved placeholder may reach publication; no fixed cutover date exists in advance | Director |
 
 ## 4. Release sequence
 
@@ -49,11 +49,11 @@ Ordering only; every step's mechanics belong to the owner named. Steps 4–7 int
 2. **Freeze, transfers, verification** under the runbook (Adrian performs; Director owns freeze/exceptions). Nothing in this document authorizes any of it.
 3. **Rename implementation lands** on the transferred repository's `master` under its own reviewed process, including P1–P3. (Whether implementation work starts earlier on branches is an implementation-team choice; it must not be *released* before this sequence completes.)
 4. **Website cutover merge** as one reviewed revision, then live checks (`website-and-docs.md` section 9.2 steps 6–7); `claudedeck.org` redirect switched on only after those checks pass.
-5. **Release run (dry run first, P4):** invoke the manual workflow with version `4.0.0` and the accepted full commit SHA. The workflow validates that all version fields equal the input (`.github/workflows/release.yml:54–64`), refuses a pre-existing `v4.0.0` tag pointing elsewhere (`:66–76`), builds the frontend archives under the decided release-file names (`albiex-synth-city-frontend-v4.0.0.zip` / `.tar.gz`, replacing today's `claude-deck-frontend-…` at `:102–105`), and — only with `dry_run` explicitly off — creates tag `v4.0.0` and the GitHub release. Paste the approved release notes (section 7) as the release body; do not improvise release text in the workflow UI.
-6. **Post-release verification:** fresh install from the release artifacts starts as Albiex Synth City v4.0.0; a staged v3.1 fixture performs the standard upgrade and passes the same reader-level checks as T-D1 (backups download/restore, attachments list/paste/delete); old-domain and old-repository addresses land on the new ones. Any failure stops at step 7's recovery rules — no hot-fix by editing the release after the fact.
+5. **Release run (dry run first, P4):** the manual workflow takes only version, commit and `dry_run` inputs — there is **no release-body input** (`.github/workflows/release.yml:5–18`). It generates `release-description.md` from the matching `CHANGELOG.md` section and appends a generated source-commit/checksum footer (`:107–124`), then publishes that file via `body_path`, immediately (`draft: false`), under a title that today still reads “Claude Deck v…” (`:136–144`). So the supported content path is: **before the accepted release SHA is fixed**, land the Director-approved release-note prose (section 7) as the `## [4.0.0]` section of `CHANGELOG.md` by normal reviewed PR, and have the rename implementation update the workflow's release title and archive names to the decided `albiex-synth-city-frontend-v4.0.0` forms (replacing `claude-deck-frontend-…` at `:99–105,146–149`). Then invoke the workflow with version `4.0.0` and the accepted full SHA: it validates the four version fields (`:56–65`) and refuses a pre-existing `v4.0.0` tag pointing elsewhere (`:66–76`). Inspect the **dry-run-generated** `release-description.md` and title (uploaded as the candidate artifact, `:125–134`) and only then run with `dry_run` explicitly off to create tag `v4.0.0` and the release. An after-publication body edit must never be how approved text first reaches users.
+6. **Post-release verification (full product, not frontend archives alone):** the uploaded ZIP/TAR assets are exclusively `frontend/dist` (`.github/workflows/release.yml:99–105,146–149`) and contain no backend or migration code, so they cannot by themselves install or upgrade anything. Verify instead against the complete tested distribution: the tagged backend/integration source **plus** the corresponding frontend assets/build, obtained the normal source-based way (`docs/guide/installation.md:71–93` updates the checkout and dependencies; `scripts/install.sh:39–64` installs backend/frontend dependencies) — including GitHub's source archive for tag `v4.0.0`, whose contained commit must be verified against the accepted release SHA recorded in the generated release footer before use. From that distribution: a fresh install starts as Albiex Synth City v4.0.0; a staged v3.1 fixture performs the standard upgrade and passes the same reader-level checks as T-D1 (backups download/restore, attachments list/paste/delete); old-domain and old-repository addresses land on the new ones. Record the source SHA and artifact identities verified. Any failure stops publication and is handled under the abort rules below — no hot-fix by editing the release after the fact.
 7. **Go-live announcement** (section 10) is published **after** steps 4–6 pass, when the Director says so. The pre-transfer banner is then updated to past tense by a normal reviewed PR outside the freeze (`transfer-runbook.md` section 8).
 
-**Abort and rollback, stated honestly.** Before tagging, aborting is free: nothing has been promised publicly beyond the pre-transfer announcement, whose correction is a Director-approved follow-up post. After a user has started v4.0.0, there is no rename-back downgrade (section 6): the only recovery is restoring the complete pre-upgrade state from a pre-upgrade backup. The release must therefore never be announced as “try it and switch back”, and a defective v4.0.0 is fixed forward (v4.0.1) or the release is withdrawn with the full-restoration instructions — never by telling users to rename files back.
+**Abort and rollback, stated honestly, by phase.** Cancellation is free only **before any transfer** (`transfer-runbook.md:713–718`): at that point nothing has moved and the only public artefact is the pre-transfer announcement, corrected by a Director-approved follow-up post. After that, each pre-tag failure routes to its owning phase, not to a generic abort: repository-transfer failures follow `transfer-runbook.md` section 11.1 (stop and fix forward; any transfer-back is a fresh Director decision), and website/Pages/routing failures follow section 11.2 — by the time tagging is reached in this sequence, the transfers and website/DNS/redirect cutover have already happened, so “before tagging” must never be described as cost-free. A release-step failure before the real (non-dry-run) invocation costs nothing beyond re-running the dry run; after tagging, a defective v4.0.0 is fixed forward (v4.0.1) or withdrawn. At the user level, after a user has started v4.0.0 there is no rename-back downgrade (section 6): the only recovery is restoring the complete pre-upgrade set from a pre-upgrade backup. The release must therefore never be announced as “try it and switch back”, and withdrawal instructions must be the full-restoration ones — never telling users to rename files back.
 
 ## 5. Redirect map (summary; mechanics owned elsewhere)
 
@@ -81,17 +81,17 @@ Two announcement consequences: public text may promise that old *web and reposit
 ### Before you upgrade
 
 1. Let running teams finish, or stop them. Running agent sessions do not carry over live — their work and history are kept, and you relaunch the teams afterwards.
-2. Keep a backup of your installation as you normally would before a major upgrade. Version 4.0.0 cannot be “renamed back”: the only way back is restoring that pre-upgrade backup in full (see “Going back”).
-3. Stop Claude Deck v3.1 completely before starting Albiex Synth City v4.0.0. Do not run both against the same data.
+2. Keep a complete pre-upgrade backup: the database file set, the whole `~/.claude-registry` data folder, your agent (provider) configuration, **and your browser state for this app** (its stored settings/operator token — export or snapshot the browser profile data for the app's address). Version 4.0.0 cannot be “renamed back”: the only way back is restoring that complete set (see “Going back”). Copying just the database and data folder is not a complete backup.
+3. Get v4.0.0 the normal way — update your checkout/source to the `v4.0.0` tag and install dependencies as the installation guide describes (the downloadable frontend archives alone cannot upgrade the backend). Then stop Claude Deck v3.1 completely before starting Albiex Synth City v4.0.0. Do not run both against the same data. “Stop old, start new” below is shorthand for that normal obtain-and-start upgrade; there is still no separate migration command.
 
 ### What happens on first start
 
 - Your database moves from `claude_registry.db` to **`synth_city.db`** (same folder), including its SQLite sidecar files. It is the same database — every team, setting and message is still there.
 - Your data folder moves from `~/.claude-registry` to **`~/.albiex-synth-city`**, including `backups/` and `bridge-attachments/`. Existing backups stay downloadable and restorable; existing attachments keep working.
-- If you used Mail setup to connect your coding agents, those connections are re-registered under the new server name **`albiex-synth-city-mail`** automatically (with a safety backup taken first). Agent Mail tools are renamed from `deck_…` to **`synth_city_…`** (for example `synth_city_check_inbox`); newly launched agents see the new names.
+- If you used Mail setup to connect your coding agents, connections the app can positively recognise as its own are re-registered under the new server name **`albiex-synth-city-mail`** automatically (with a safety backup taken first). An entry the app cannot positively recognise is left untouched and reported as needing attention rather than guessed at. If a connection step cannot finish (for example an agent's command-line tool is missing or a file cannot be written), it is reported as an incomplete step and retried on later starts — it is never silently reported as done, and ordinary temporary failures finish on a later start without a repair command. Agent Mail tools are renamed from `deck_…` to **`synth_city_…`** (for example `synth_city_check_inbox`); newly launched agents see the new names.
 - The app runs under a major version **4.0.0**; the browser keeps your selected provider and stored operator token.
 
-If both an old and a new database with data are found, startup stops safely and tells you both paths instead of guessing — nothing is deleted. That state cannot result from a normal upgrade; ask for help rather than deleting either file. If a first start is interrupted (power loss, killed process), simply start again: the move resumes where it stopped.
+If a first start is interrupted (power loss, killed process), simply start again: an interrupted move that the app can verify — including one where both old and new copies temporarily exist — resumes and finishes automatically. Only a conflict the app cannot explain (for example, old and new databases with data and no valid record of an interrupted move) stops startup safely, tells you both paths, and deletes nothing; that unexplained state does not result from a normal upgrade, so ask for help rather than deleting either file.
 
 ### What changed name (the short list)
 
@@ -111,20 +111,20 @@ Old runtime names stop working at v4.0.0. There is no period where both sets wor
 ### If you customised…
 
 - **You set `CLAUDE_DECK_INSTANCE_NAME`, `…_INSTANCE_ID`, `…_INSTANCE_ACCENT` or `…_EXTERNAL_ACTOR_TOKEN` yourself:** rename them to the `SYNTH_CITY_…` spellings. Until you do, they are ignored (a custom instance label falls back to the default). At startup the app warns once, naming any old variables still set — it never displays their values.
-- **You set a custom database location or attachment folder:** it stays exactly where it is. Only the shipped default locations move, each independently. Scripts that referenced the *default* filenames above need the new names.
+- **You set a custom database location or attachment folder:** a genuinely custom location stays where it is; only the shipped default locations move, each independently. If you explicitly configured a value that is exactly the shipped default, it is treated as the default and migrates automatically — you do not need to edit your launch files. If custom locations are nested inside, or overlap, a folder that would move (for example a custom database inside the old data folder), startup may stop safely instead of moving the whole folder, and will say so rather than guess. Scripts that referenced the *default* filenames above need the new names.
 - **You added the Mail MCP server to an agent by hand** (not via Mail setup), or heavily edited what setup installed: that entry stops working and is reported as needing attention. Re-add it under `albiex-synth-city-mail`, or run Mail setup for that agent.
-- **Your prompts, charters, skills or scripts name `deck_*` tools, the error codes `deck_unreachable`/`deck_http_error`, or the headers `X-Deck-Operator-Token` / `X-Deck-Session-Token` / `X-Claude-Deck-Terminal-Token`:** update them to `synth_city_*`, the new codes, and `X-Synth-City-…`. Token *values* did not change, but stopped sessions must be relaunched — they register fresh sessions; old session credentials are not revived.
+- **Your prompts, charters, skills or scripts name `deck_*` tools, the error codes `deck_unreachable`/`deck_http_error`, or the headers `X-Deck-Operator-Token` / `X-Deck-Session-Token` / `X-Claude-Deck-Terminal-Token`:** update them to `synth_city_*`, `synth_city_unreachable` / `synth_city_http_error`, and `X-Synth-City-…`. Your stored operator token is retained, but session credentials are not: stopped sessions must be relaunched and receive fresh session keys and capabilities through normal registration, with the usual session lifecycle checks unchanged; old session credentials are not revived.
 - **You download releases by script:** use the new `albiex-synth-city-frontend-v4.0.0` file names.
 
 ### Going back
 
-There is no supported downgrade by renaming files back: after first start, data files, stored file references, agent connections and browser state have all moved. To return to v3.1 you must restore your complete pre-upgrade backup (database, data folder and agent configuration) and accept losing anything created after the upgrade. If that trade-off is not acceptable, do not upgrade until you are ready to stay.
+There is no supported downgrade by renaming files back: after first start, data files, stored file references, agent connections and browser state have all moved. To return to v3.1 you must restore the complete pre-upgrade set — database file set, data folder, agent (provider) configuration, and browser state, kept with the operator settings the restored environment needs — and accept losing anything created after the upgrade. Restoring only some of those pieces (for example, files but not browser state) is not a supported downgrade and can leave you with a mixture of old and new state. If that trade-off is not acceptable, do not upgrade until you are ready to stay.
 
 ---
 
 ## 7. Draft: v4.0.0 release notes
 
-> Draft for Director approval. Publish target: the GitHub release body for tag `v4.0.0` (section 4, step 5). Keep the first line exactly in this shape — it is the one place “formerly” belongs.
+> Draft for Director approval. Publish path: this prose becomes the `## [4.0.0]` section of `CHANGELOG.md` before the release SHA is fixed, and the workflow turns it into the GitHub release body for tag `v4.0.0`, appending its own generated source-commit/checksum footer (section 4, step 5). The footer is generated metadata, not part of this approved prose. Keep the first line exactly in this shape — it is the one place “formerly” belongs.
 
 ---
 
@@ -132,19 +132,20 @@ There is no supported downgrade by renaming files back: after first start, data 
 
 **Albiex Synth City** is the new name of Claude Deck. Same project, same data, new name — now developed as `albiexai/synth-city` and documented at `albiex.org`. Old links redirect.
 
-**Upgrading from v3.1:** stop the old version completely, then start v4.0.0. Your database (`claude_registry.db` → `synth_city.db`), backups and attachments (`~/.claude-registry` → `~/.albiex-synth-city`), teams, settings and Agent Mail history move automatically on first start — no migration command, no manual renaming for a standard install. Read the [migration guide](LINK) before upgrading if you customised paths, environment variables, agent connections, or scripts.
+**Upgrading from v3.1:** get v4.0.0 the normal source-based way (see the installation guide), stop the old version completely, then start v4.0.0. Your database (`claude_registry.db` → `synth_city.db`), backups and attachments (`~/.claude-registry` → `~/.albiex-synth-city`), teams, settings and Agent Mail history move automatically on first start — no migration command, no manual renaming for a standard install. Read the [migration guide](LINK) before upgrading if you customised paths, environment variables, agent connections, or scripts.
 
 **Breaking changes (complete list):**
 
 - Old runtime names stop working; there are no aliases and no grace period.
 - `CLAUDE_DECK_*` → `SYNTH_CITY_*` environment variables. Hand-set instance/supervisor variables must be renamed; startup warns (names only, never values) if old ones remain set.
-- Agent Mail tools `deck_*` → `synth_city_*`; MCP server `claude-deck-mail` → `albiex-synth-city-mail`. Connections made through Mail setup are rewritten automatically; hand-written ones must be re-added.
-- API headers `X-Deck-*` / `X-Claude-Deck-Terminal-Token` → `X-Synth-City-*`; error codes renamed to match. Running sessions must be relaunched; they register as new sessions.
-- Default database and data-folder paths renamed (above). Custom locations are untouched.
+- Agent Mail tools `deck_*` → `synth_city_*`; MCP server `claude-deck-mail` → `albiex-synth-city-mail`. Mail-setup connections the app can positively recognise are rewritten automatically (temporary failures retry on later starts; persistent failures are reported as incomplete, never as done); unrecognised or hand-written ones are left untouched, reported as needing attention, and must be re-added.
+- API headers `X-Deck-*` / `X-Claude-Deck-Terminal-Token` → `X-Synth-City-*`; error codes `deck_unreachable` / `deck_http_error` → `synth_city_unreachable` / `synth_city_http_error`. Sessions must be relaunched and get fresh session credentials; your stored operator token is retained and authorisation checks are unchanged.
+- Default database and data-folder paths renamed (above). Genuinely custom locations stay put; explicitly configured shipped defaults migrate automatically; overlapping custom locations may cause a safe stop instead of a move (see the migration guide).
 - New queues/scopes default to labels `albiex-synth-city-ready` / `albiex-synth-city-design`; existing scopes keep working with their current labels.
-- Downgrade is restore-from-backup only — see the migration guide.
+- Release-download file names changed: `claude-deck-frontend-v…` → `albiex-synth-city-frontend-v…`; scripts that download releases must use the new names.
+- Downgrade is restore-the-complete-pre-upgrade-set only (database set, data folder, provider configuration and browser state) — see the migration guide.
 
-**Not changed:** your data model and history, backup file contents, token values, and the internal identifiers that existing databases depend on.
+**Not changed:** your data model and history, backup file contents, your stored operator token, and the internal identifiers that existing databases depend on. (Agent *session* credentials are the deliberate exception above: relaunched sessions register fresh ones.)
 
 Full rename design and upgrade contract: [compatibility design](LINK). Report upgrade problems with your startup log — never post tokens or credentials.
 
@@ -204,15 +205,15 @@ Release notes: [v4.0.0](LINK). Questions and upgrade reports: [Discussions](LINK
 
 Document/pipeline checks (necessary, not sufficient):
 
-1. Every published text matches its Director-approved final wording byte-for-byte apart from filled LINK/date fields; each text's first product mention is **Albiex Synth City**; no text promises a deprecation window, aliases, a rename-back downgrade, or old runtime names continuing to work.
+1. Every published text matches its Director-approved final wording, with all LINK/date fill-ins resolved and **no unresolved placeholder remaining**; the generated release footer (source commit + checksums, section 4 step 5) is checked as generated metadata separately from the approved prose. For the release specifically, the dry-run-generated `release-description.md` and release title were inspected and matched the approved `CHANGELOG.md` prose and the decided Albiex Synth City title before the real run; approved text did not first reach users via an after-publication edit. Each text's first product mention is **Albiex Synth City**; no text promises a deprecation window, aliases, a rename-back downgrade, or old runtime names continuing to work.
 2. Every decided spelling in sections 6–10 matches section 1 of this plan and the shipped build (one grep pass for `CLAUDE_DECK_`, `deck_`, `claude-deck`, `claude_registry`, `.claude-registry` over the *published* texts returns only intentional “was” references).
-3. Release run used `dry_run` first against the accepted full SHA, then the real run with identical inputs; tag `v4.0.0` points at that SHA; artifacts carry the `albiex-synth-city-frontend-v4.0.0` names.
+3. Release run used `dry_run` first against the accepted full SHA, then the real run with identical inputs; tag `v4.0.0` points at that SHA; artifacts carry the `albiex-synth-city-frontend-v4.0.0` names; the renamed `uv.lock` backend entry reads `4.0.0` (P3).
 
 Behavioural/operational proofs (owned elsewhere, required before section 10 may be published):
 
 4. P1 evidence exists: the compatibility implementation's test list passes, including the standard-upgrade and power-loss boundaries — announcement text must not run ahead of this.
 5. Transfer and website live checks pass under their owning documents; `claudedeck.org` spot checks (`/`, one docs page, one asset) return the same paths on `albiex.org`; old GitHub web/git/API addresses redirect; the pinned Discussion is present, still pinned, and its banner link resolves on the new home.
-6. A fresh install and a staged v3.1 standard upgrade both succeed from the published release artifacts (section 4 step 6).
+6. A fresh install and a staged v3.1 standard upgrade both succeed from the complete tested distribution — tagged backend/integration source (commit verified against the accepted release SHA) plus the corresponding frontend assets/build — not from the frontend archives alone (section 4 step 6). The documented downgrade, followed literally from a complete pre-upgrade set including browser state, restores v3.1 as `compatibility.md` T-G2 requires.
 
 ## 12. What remains Director-owned
 
@@ -230,12 +231,19 @@ PIN=56b6b40c78cd170dd60698128c7956f17bdbdc25
 # merged planning documents this plan builds on
 git ls-tree $PIN docs/plans/2026-11-06-rename-synth-city/
 git rev-parse $PIN:docs/plans/2026-11-06-rename-synth-city/compatibility.md
-# existing version tags (collision fact only - sorting is argued from
-# plugin_service's numeric comparison, not from this list)
+# existing version tags: a commit pin does not freeze tag refs, so this is a
+# dated local/live observation (2026-11-09), captured as refs/objects per
+# transfer-runbook.md:662 - collision fact only; sorting is argued from
+# plugin_service's numeric comparison, not from this list
+git ls-remote --tags origin 'v*' | sort -V
 git tag -l 'v*' | sort -V
-# version fields and bump tooling at the pin
-grep -n 'app_version' backend/app/config.py
-sed -n '1,20p' scripts/bump-version.sh
-# release workflow gates: input validation + dry run, tag-collision refusal
-sed -n '1,80p' .github/workflows/release.yml
+# code evidence read AT THE PIN (never from a mutable working tree)
+git show $PIN:backend/app/config.py | grep -n 'app_version'
+git show $PIN:backend/app/services/plugin_service.py | sed -n '1330,1361p'
+git show $PIN:scripts/bump-version.sh | sed -n '13,18p;100p;130p'
+# release workflow: inputs, version/tag gates, CHANGELOG body, title, assets
+git show $PIN:.github/workflows/release.yml | sed -n '1,18p;56,76p;99,155p'
+# normal source-based install/upgrade path
+git show $PIN:docs/guide/installation.md | sed -n '71,93p'
+git show $PIN:scripts/install.sh | sed -n '39,64p'
 ```
