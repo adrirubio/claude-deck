@@ -33,7 +33,7 @@ NON_TOOL_SUFFIXES = {
 
 
 def load_shim(monkeypatch, provider):
-    monkeypatch.setenv("CLAUDE_DECK_PROVIDER", provider)
+    monkeypatch.setenv("SYNTH_CITY_PROVIDER", provider)
     location = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
     spec = importlib.util.spec_from_file_location("rename_contract_" + provider, location)
     module = importlib.util.module_from_spec(spec)
@@ -109,7 +109,7 @@ def test_url_helper_and_status_field_are_paired():
 
     assert "synth_city_url" in AgentMailInstallStatus.model_fields
     assert "deck_url" not in AgentMailInstallStatus.model_fields
-    assert pi_mail_environment()["CLAUDE_DECK_URL"] == install.synth_city_base_url()
+    assert pi_mail_environment()["SYNTH_CITY_URL"] == install.synth_city_base_url()
 
 
 @pytest.mark.parametrize("old_flag", [False, True])

@@ -389,6 +389,7 @@ _APPROVAL_RECONCILIATION_MIGRATION = "pr1_historical_approval_reconciliation"
 
 
 async def _sqlite_approval_reconciliation_pending(conn) -> bool:
+    # Frozen bookkeeping name: existing applied rows must still prevent replay.
     await conn.execute(
         text(
             "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("

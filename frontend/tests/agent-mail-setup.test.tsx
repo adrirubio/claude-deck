@@ -123,6 +123,15 @@ describe('mailSetupState', () => {
     expect(mailConfirm('opencode-cli', 'remove', status()).title).toBe('Remove Agent Mail from OpenCode CLI')
   })
 
+  it('uses only new environment names in manual setup commands', () => {
+    for (const provider of ['codex-cli', 'copilot-cli'] as const) {
+      const text = mailConfirm(provider, 'setup', status()).mutations.join('\n')
+      expect(text).toContain('SYNTH_CITY_URL')
+      expect(text).toContain('SYNTH_CITY_PROVIDER')
+      expect(text).not.toContain('CLAUDE_DECK_')
+    }
+  })
+
   it('treats a status without its lists as unavailable', () => {
     expect(isCompleteInstallStatus(status())).toBe(true)
     expect(isCompleteInstallStatus({})).toBe(false)

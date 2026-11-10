@@ -11,7 +11,7 @@ try {
   const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
   if (metadata.name !== '@earendil-works/pi-coding-agent' || metadata.version !== '0.87.1') throw new Error()
   const { loadExtensions } = await import(pathToFileURL(join(packageRoot, 'dist/core/extensions/loader.js')).href)
-  delete process.env.CLAUDE_DECK_MAIL_OPT_IN
+  delete process.env.SYNTH_CITY_MAIL_OPT_IN
   const result = await loadExtensions([join(import.meta.dirname, 'extension.ts')], import.meta.dirname)
   if (result.errors.length || result.extensions.length !== 1) throw new Error()
   if (result.extensions[0].tools.size || result.extensions[0].handlers.size) throw new Error()

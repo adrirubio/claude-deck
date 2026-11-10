@@ -42,9 +42,9 @@ def pi_mail_environment() -> dict[str, str]:
     from app.services.agent_mail_install_service import synth_city_base_url, shim_path
 
     return {
-        "CLAUDE_DECK_MAIL_OPT_IN": "1",
-        "CLAUDE_DECK_PROVIDER": "pi-cli",
-        "CLAUDE_DECK_URL": synth_city_base_url(),
-        "CLAUDE_DECK_MAIL_PYTHON": str(Path(sys.executable).absolute()),
-        "CLAUDE_DECK_MAIL_SHIM": shim_path(),
+        "SYNTH_CITY_MAIL_OPT_IN": "1",
+        "SYNTH_CITY_PROVIDER": "pi-cli",
+        "SYNTH_CITY_URL": synth_city_base_url(),
+        "SYNTH_CITY_MAIL_PYTHON": str(Path(sys.executable).absolute()),
+        "SYNTH_CITY_MAIL_SHIM": shim_path(),
     }

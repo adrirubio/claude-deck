@@ -75,8 +75,8 @@ def test_owner_followup_forwards_explicit_event_and_private_challenge(monkeypatc
 def test_ensure_registered_refreshes_cached_member(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_SLOT_ID", "2")
 
     requests = []
     monkeypatch.setitem(shim._state, "member_id", 7)
@@ -1045,8 +1045,8 @@ def test_synth_city_launch_team_forwards_confirm_hash(monkeypatch):
 
 def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
     import mcp_shim.agent_mail_hook as hook
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_SLOT_ID", "2")
 
     body = {
         "hookSpecificOutput": {

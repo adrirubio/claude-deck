@@ -13,18 +13,52 @@ function fixture() {
   const fence = new PaneFence({ pid: process.pid, start: '1' }, root)
   const generation = new MailGeneration(fence, {
     PATH: process.env.PATH, HOME: root,
-    CLAUDE_DECK_MAIL_PYTHON: process.execPath,
-    CLAUDE_DECK_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
+    SYNTH_CITY_MAIL_PYTHON: process.execPath,
+    SYNTH_CITY_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
     OPENROUTER_API_KEY: 'synthetic-secret', GITHUB_TOKEN: 'synthetic-secret', OPERATOR_TOKEN: 'synthetic-secret',
   })
   return { root, fence, generation }
 }
 
-test('no opt-in means no tools, listeners, transport or prompts', () => {
+test('T-P1 old opt-in alone never activates the extension', () => {
   const old = process.env.CLAUDE_DECK_MAIL_OPT_IN
-  delete process.env.CLAUDE_DECK_MAIL_OPT_IN
+  const current = process.env.SYNTH_CITY_MAIL_OPT_IN
+  process.env.CLAUDE_DECK_MAIL_OPT_IN = '1'
+  delete process.env.SYNTH_CITY_MAIL_OPT_IN
+  try { deckMail(new Proxy({}, { get() { throw new Error('legacy opt-in activated Mail') } }) as ExtensionAPI) }
+  finally {
+    if (old === undefined) delete process.env.CLAUDE_DECK_MAIL_OPT_IN
+    else process.env.CLAUDE_DECK_MAIL_OPT_IN = old
+    if (current !== undefined) process.env.SYNTH_CITY_MAIL_OPT_IN = current
+  }
+})
+
+test('T-P1 child environment carries new keys only and never translates old input', () => {
+  const environment = childEnvironment({
+    SYNTH_CITY_URL: 'http://fixture.invalid/new', SYNTH_CITY_TEAM_PRESET_ID: '71', SYNTH_CITY_TEAM_SLOT_ID: '72',
+    CLAUDE_DECK_URL: 'http://fixture.invalid/old', CLAUDE_DECK_TEAM_PRESET_ID: '81', CLAUDE_DECK_TEAM_SLOT_ID: '82',
+    CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN: 'synthetic-private',
+  })
+  assert.deepEqual(environment, { PYTHONUNBUFFERED: '1', SYNTH_CITY_PROVIDER: 'pi-cli',
+    SYNTH_CITY_URL: 'http://fixture.invalid/new', SYNTH_CITY_TEAM_PRESET_ID: '71', SYNTH_CITY_TEAM_SLOT_ID: '72' })
+  assert.deepEqual(childEnvironment({ CLAUDE_DECK_URL: 'http://fixture.invalid/old' }),
+    { PYTHONUNBUFFERED: '1', SYNTH_CITY_PROVIDER: 'pi-cli' })
+})
+
+test('T-P1 per-generation fence uses the new ephemeral namespace', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synth-city-fence-contract-'))
+  try {
+    const fence = new PaneFence({ pid: 12, start: '23' }, root)
+    assert.equal(fence.file, join(root, 'albiex-synth-city-pi', '12-23.json'))
+    fence.release()
+  } finally { rmSync(root, { recursive: true }) }
+})
+
+test('no opt-in means no tools, listeners, transport or prompts', () => {
+  const old = process.env.SYNTH_CITY_MAIL_OPT_IN
+  delete process.env.SYNTH_CITY_MAIL_OPT_IN
   try { deckMail(new Proxy({}, { get() { throw new Error('unexpected side effect') } }) as ExtensionAPI) }
-  finally { if (old !== undefined) process.env.CLAUDE_DECK_MAIL_OPT_IN = old }
+  finally { if (old !== undefined) process.env.SYNTH_CITY_MAIL_OPT_IN = old }
 })
 
 test('public tools contain authority schemas but never private close', () => {

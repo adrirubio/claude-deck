@@ -16,9 +16,9 @@ function fixture() {
   chmodSync(executable, 0o700)
   const values = {
     PATH: `${bin}:${process.env.PATH}`, TMUX_PANE: '%1', XDG_RUNTIME_DIR: root,
-    DECK_TEST_PANE_PID: String(process.pid), CLAUDE_DECK_MAIL_OPT_IN: '1',
-    CLAUDE_DECK_MAIL_PYTHON: process.execPath,
-    CLAUDE_DECK_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
+    DECK_TEST_PANE_PID: String(process.pid), SYNTH_CITY_MAIL_OPT_IN: '1',
+    SYNTH_CITY_MAIL_PYTHON: process.execPath,
+    SYNTH_CITY_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
   }
   const previous = new Map<string, string | undefined>()
   for (const [key, value] of Object.entries(values)) {
@@ -79,7 +79,7 @@ test('real Mail startup permits only the owning generation to record native acti
 
 test('a refused authenticated startup creates no activity even after native callbacks', async () => {
   const f = fixture()
-  process.env.CLAUDE_DECK_MAIL_SHIM = join(f.root, 'missing-fixture-server.mjs')
+  process.env.SYNTH_CITY_MAIL_SHIM = join(f.root, 'missing-fixture-server.mjs')
   const failed = f.runtime()
   try {
     await failed.emit('session_start')

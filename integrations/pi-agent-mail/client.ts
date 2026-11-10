@@ -55,8 +55,8 @@ export function toolResultOverride(event: { toolName: string; content: MailResul
 
 export function childEnvironment(environment: NodeJS.ProcessEnv): Record<string, string> {
   const allowed = ['PATH', 'HOME', 'USER', 'LANG', 'LC_ALL', 'TMPDIR', 'TMUX', 'TMUX_PANE',
-    'CLAUDE_DECK_URL', 'CLAUDE_DECK_TEAM_PRESET_ID', 'CLAUDE_DECK_TEAM_SLOT_ID']
-  const clean: Record<string, string> = { CLAUDE_DECK_PROVIDER: 'pi-cli', PYTHONUNBUFFERED: '1' }
+    'SYNTH_CITY_URL', 'SYNTH_CITY_TEAM_PRESET_ID', 'SYNTH_CITY_TEAM_SLOT_ID']
+  const clean: Record<string, string> = { SYNTH_CITY_PROVIDER: 'pi-cli', PYTHONUNBUFFERED: '1' }
   for (const key of allowed) if (environment[key]) clean[key] = environment[key]!
   return clean
 }
@@ -85,10 +85,10 @@ export class PaneFence {
   readonly generation = randomUUID()
   readonly file: string
 
-  constructor(readonly pane: { pid: number; start: string }, root = process.env.XDG_RUNTIME_DIR || `/tmp/claude-deck-pi-${process.getuid!()}`) {
+  constructor(readonly pane: { pid: number; start: string }, root = process.env.XDG_RUNTIME_DIR || `/tmp/albiex-synth-city-pi-${process.getuid!()}`) {
     if (!Number.isSafeInteger(pane.pid) || pane.pid < 1 || !/^\d+$/.test(pane.start)) throw new Error('pane_unresolved')
     mkdirSync(root, { mode: 0o700, recursive: true })
-    const directory = join(root, 'claude-deck-pi')
+    const directory = join(root, 'albiex-synth-city-pi')
     for (const candidate of [root, directory]) {
       if (candidate === directory) mkdirSync(candidate, { mode: 0o700, recursive: true })
       const stat = lstatSync(candidate)
@@ -136,7 +136,7 @@ function canonical(value: unknown): string {
 }
 
 export class MailGeneration {
-  private client = new Client({ name: 'claude-deck-pi', version: '1.0.0' })
+  private client = new Client({ name: 'albiex-synth-city-pi', version: '1.0.0' })
   private transport?: StdioClientTransport
   private ready = false
   private closing = false
@@ -150,8 +150,8 @@ export class MailGeneration {
   }
 
   async start(cwd: string) {
-    const command = this.environment.CLAUDE_DECK_MAIL_PYTHON
-    const shim = this.environment.CLAUDE_DECK_MAIL_SHIM
+    const command = this.environment.SYNTH_CITY_MAIL_PYTHON
+    const shim = this.environment.SYNTH_CITY_MAIL_SHIM
     if (!command?.startsWith('/') || !shim?.startsWith('/')) throw new Error('mail_paths_invalid')
     this.transport = new StdioClientTransport({ command, args: [shim], cwd, env: childEnvironment(this.environment), stderr: 'ignore' })
     try {

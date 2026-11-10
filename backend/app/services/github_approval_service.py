@@ -66,6 +66,8 @@ IMPLEMENTATION_COMPLETION_ACTIONS = frozenset(
     {"push_pr_head", "request_verification"}
 )
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
+# Frozen v1 hash domain: persisted lease hashes depend on these exact bytes.
+# Matching a hash does not renew a lease or bypass its HOLD/approval checks.
 _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
 _HOSTED_ONLY_LOCAL_BUILD = re.compile(
     r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:env\s+(?:[^\s=]+=[^\s]+\s+)*)?"

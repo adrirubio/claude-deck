@@ -7,6 +7,11 @@ from typing import Any
 
 import httpx
 
+try:
+    from mcp_shim.environment_warning import warn_legacy_environment
+except ModuleNotFoundError:
+    from environment_warning import warn_legacy_environment
+
 HTTP_TIMEOUT = httpx.Timeout(connect=0.25, read=1.0, write=1.0, pool=0.25)
 
 
@@ -58,10 +63,11 @@ def _env_int(name: str) -> int | None:
 
 
 def main() -> int:
+    warn_legacy_environment()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synth-city-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--synth-city-url", default=os.environ.get("SYNTH_CITY_URL", "http://127.0.0.1:8000"))
     parser.add_argument("--event", required=True)
-    parser.add_argument("--provider", default=os.environ.get("CLAUDE_DECK_PROVIDER", "codex-cli"))
+    parser.add_argument("--provider", default=os.environ.get("SYNTH_CITY_PROVIDER", "codex-cli"))
     args = parser.parse_args()
 
     payload = _read_payload()
@@ -69,8 +75,8 @@ def main() -> int:
     payload["provider"] = args.provider
     payload["session_id"] = _session_id(payload)
     payload["pid"] = os.getppid()
-    team_preset_id = _env_int("CLAUDE_DECK_TEAM_PRESET_ID")
-    team_slot_id = _env_int("CLAUDE_DECK_TEAM_SLOT_ID")
+    team_preset_id = _env_int("SYNTH_CITY_TEAM_PRESET_ID")
+    team_slot_id = _env_int("SYNTH_CITY_TEAM_SLOT_ID")
     if team_preset_id is not None:
         payload["team_preset_id"] = team_preset_id
     if team_slot_id is not None:

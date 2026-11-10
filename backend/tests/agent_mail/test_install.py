@@ -288,9 +288,9 @@ async def test_codex_apply_uses_provider_executor(monkeypatch, db, tmp_path):
     assert calls[0][1][:5] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.synth_city_base_url()}",
+        f"SYNTH_CITY_URL={install.synth_city_base_url()}",
         "--env",
-        "CLAUDE_DECK_PROVIDER=codex-cli",
+        "SYNTH_CITY_PROVIDER=codex-cli",
     ]
     assert install.MCP_SERVER_NAME in calls[0][1]
 
@@ -346,9 +346,9 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
     assert calls[0][1][:6] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.synth_city_base_url()}",
+        f"SYNTH_CITY_URL={install.synth_city_base_url()}",
         "--env",
-        "CLAUDE_DECK_PROVIDER=copilot-cli",
+        "SYNTH_CITY_PROVIDER=copilot-cli",
         "--json",
     ]
     doc = json.loads(hooks_path.read_text(encoding="utf-8"))
@@ -376,7 +376,7 @@ async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_
     entry = doc["mcp"][install.MCP_SERVER_NAME]
     assert entry["type"] == "local"
     assert entry["command"] == [install.sys.executable, install.shim_path()]
-    assert entry["environment"]["CLAUDE_DECK_PROVIDER"] == "opencode-cli"
+    assert entry["environment"]["SYNTH_CITY_PROVIDER"] == "opencode-cli"
     plugin = plugin_path.read_text(encoding="utf-8")
     assert "Claude Deck Agent Mail OpenCode plugin" in plugin
     assert "experimental.chat.system.transform" in plugin
@@ -524,7 +524,7 @@ def test_question_hook_blocks_only_team_sessions(tmp_path, marker):
     script = Path(__file__).resolve().parents[2] / "mcp_shim" / "team_question_hook.py"
     environment = {"HOME": str(tmp_path), "PATH": os.defpath}
     if marker is not None:
-        environment["CLAUDE_DECK_TEAM_SLOT_ID"] = marker
+        environment["SYNTH_CITY_TEAM_SLOT_ID"] = marker
     result = subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps({"tool_name": "AskUserQuestion"}),

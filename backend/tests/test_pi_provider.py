@@ -129,8 +129,8 @@ def test_pi_spawn_readiness_and_explicit_extension(monkeypatch, options):
     monkeypatch.setattr(spawn.subprocess, "run", lambda argv, **kwargs: captured.append(argv) or SimpleNamespace(returncode=0, stdout="123", stderr=""))
     spawn_session("pi-cli", options)
     assert "--extension" in captured[0][-1]
-    assert "CLAUDE_DECK_MAIL_OPT_IN=1" in captured[0]
-    assert "CLAUDE_DECK_PROVIDER=pi-cli" in captured[0]
+    assert "SYNTH_CITY_MAIL_OPT_IN=1" in captured[0]
+    assert "SYNTH_CITY_PROVIDER=pi-cli" in captured[0]
     monkeypatch.setattr(readiness, "pi_mail_readiness", lambda: (False, "missing"))
     with pytest.raises(ValueError, match="agent_mail_not_configured"):
         spawn_session("pi-cli", options)

@@ -12,15 +12,15 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location("synth_city_pi_manifest", root / "backend/mcp_shim/agent_mail_server.py")
     shim = importlib.util.module_from_spec(spec)
-    previous = os.environ.get("CLAUDE_DECK_PROVIDER")
-    os.environ["CLAUDE_DECK_PROVIDER"] = "pi-cli"
+    previous = os.environ.get("SYNTH_CITY_PROVIDER")
+    os.environ["SYNTH_CITY_PROVIDER"] = "pi-cli"
     try:
         spec.loader.exec_module(shim)
     finally:
         if previous is None:
-            os.environ.pop("CLAUDE_DECK_PROVIDER", None)
+            os.environ.pop("SYNTH_CITY_PROVIDER", None)
         else:
-            os.environ["CLAUDE_DECK_PROVIDER"] = previous
+            os.environ["SYNTH_CITY_PROVIDER"] = previous
     public = []
     private = []
     for tool in shim.mcp._tool_manager.list_tools():
