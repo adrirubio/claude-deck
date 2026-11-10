@@ -91,7 +91,7 @@ async def client_and_db():
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+        headers={"X-Synth-City-Session-Token": DEFAULT_TOKEN},
     ) as ac:
         yield ac, maker
     app.dependency_overrides.clear()
@@ -115,7 +115,7 @@ async def wal_client_and_db(tmp_path):
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+        headers={"X-Synth-City-Session-Token": DEFAULT_TOKEN},
     ) as ac:
         yield ac, maker
     app.dependency_overrides.clear()
@@ -346,7 +346,7 @@ async def _token_for_slot(maker, slot_id: int | None, *, key: str = "mcp:auth") 
 
 
 def _auth(token: str) -> dict[str, str]:
-    return {"X-Deck-Session-Token": token}
+    return {"X-Synth-City-Session-Token": token}
 
 
 def _statuses_the_route_accepts() -> set[str]:

@@ -4,7 +4,7 @@ import { expect } from '../support/guard'
 
 // Shared steps for the lane C (Audit) journeys.
 
-const KEY_STORAGE = 'claude-deck.agent-teams.operator-token'
+const KEY_STORAGE = 'albiex-synth-city.agent-teams.operator-token'
 
 /** Open Audit with the Director key already stored, so the events load. */
 export async function openUnlockedAudit(page: Page, query = ''): Promise<void> {

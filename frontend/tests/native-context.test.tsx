@@ -98,7 +98,7 @@ afterEach(() => {
 });
 describe("native adapters", () => {
  it('shares a canonical Claude transcript link independently of a Codex saved preference', () => {
-  localStorage.setItem('claude-deck:selected-provider','codex-cli')
+  localStorage.setItem('albiex-synth-city:selected-provider','codex-cli')
   const open=vi.spyOn(window,'open').mockImplementation(()=>null)
   const session={id:'session/id',project_folder:'project folder',project_name:'Fixture',modified_at:'2026-09-30T12:00:00Z',size_bytes:1,summary:'Transcript fixture',total_messages:1,total_tool_calls:0} as SessionSummary
   renderRoute(<SessionCard session={session}/>,'/harnesses/claude-code/sessions','/harnesses/claude-code/sessions')
@@ -108,7 +108,7 @@ describe("native adapters", () => {
  })
 
  it('guards nested inventory writes independently of the parent config page', async () => {
-  localStorage.setItem('claude-deck:selected-provider', 'codex-cli')
+  localStorage.setItem('albiex-synth-city:selected-provider', 'codex-cli')
   const readOnly = statuses.map(p => p.id === 'codex-cli' ? { ...p, capability_matrix: { config: { state: 'write_capable' }, mcp: { state: 'read_only' }, plugins: { state: 'read_only' } } } : p)
   const { requests } = fixtureFetch(() => jsonResponse({providers:readOnly}))
   renderRoute(<ProviderProvider><CodexInventoryCard mcp={null} plugins={null} mcpError={null} pluginError={null} loading={false} onRefresh={() => undefined} /></ProviderProvider>); await settle()
@@ -142,7 +142,7 @@ describe("native adapters", () => {
     },
   );
   it("prepares canonical Codex context before first editor request without changing saved preference", async () => {
-    localStorage.setItem("claude-deck:selected-provider", "pi-cli");
+    localStorage.setItem("albiex-synth-city:selected-provider", "pi-cli");
     const { requests } = fixtureFetch((path) =>
       operationsFixtureResponse(path) ?? (path === "providers"
         ? jsonResponse({ providers: statuses })
@@ -159,12 +159,12 @@ describe("native adapters", () => {
     expect(screen.getByText("Mounted codex-cli editor")).toBeInTheDocument();
     expect(requests.some((r) => r.path === "codex-config")).toBe(true);
     expect(requests.some((r) => r.path === "config")).toBe(false);
-    expect(localStorage.getItem("claude-deck:selected-provider")).toBe(
+    expect(localStorage.getItem("albiex-synth-city:selected-provider")).toBe(
       "pi-cli",
     );
   });
   it("guards compatibility entries and prevents writable editor mounting for read-only access", async () => {
-    localStorage.setItem("claude-deck:selected-provider", "opencode-cli");
+    localStorage.setItem("albiex-synth-city:selected-provider", "opencode-cli");
     const { requests } = fixtureFetch((path) =>
       operationsFixtureResponse(path) ?? jsonResponse({ providers: statuses }),
     );
@@ -178,7 +178,7 @@ describe("native adapters", () => {
     await settle();
     expect(requests).toHaveLength(1);
     cleanup();
-    localStorage.setItem("claude-deck:selected-provider", "codex-cli");
+    localStorage.setItem("albiex-synth-city:selected-provider", "codex-cli");
     resetProviderOperations();
     fixtureFetch((path) =>
       operationsFixtureResponse(path) ?? jsonResponse({

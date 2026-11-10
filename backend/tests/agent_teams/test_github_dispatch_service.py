@@ -2174,8 +2174,8 @@ async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
     assert item.dispatch_head_ref in brief
     assert "detached HEAD at origin/master" in brief
     assert "detached HEAD at origin/release" not in brief
-    assert f"Deck-Agent-Slot: {owner.id} ({owner.display_name})" in brief
-    assert f"Deck-Work-Item: {item.id}" in brief
+    assert f"Synth-City-Agent-Slot: {owner.id} ({owner.display_name})" in brief
+    assert f"Synth-City-Work-Item: {item.id}" in brief
     assert f"git push -u origin {item.dispatch_head_ref}" in brief
     assert f'head_ref="{item.dispatch_head_ref}"' in brief
     assert 'status="pr_ready"' in brief
@@ -3542,7 +3542,7 @@ async def test_two_phase_handoff(db, monkeypatch):
     assert workspace.lease_last_owner_contact_at is not None
     assert revoked == [("lease-kept", architect.id)]
     assert any(
-        call[-2:] == ["user.name", "Backend SME (Deck agent)"]
+        call[-2:] == ["user.name", "Backend SME (Synth City agent)"]
         for call in config_calls
     )
     target_member = (

@@ -8,7 +8,7 @@ describe('operatorWriteHeaders', () => {
   it('sends the stored Director key on writes only', () => {
     setOperatorToken('director-key')
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'post']) {
-      expect(operatorWriteHeaders(method)).toEqual({ 'X-Deck-Operator-Token': 'director-key' })
+      expect(operatorWriteHeaders(method)).toEqual({ 'X-Synth-City-Operator-Token': 'director-key' })
     }
     for (const method of ['GET', 'HEAD', 'OPTIONS', undefined]) {
       expect(operatorWriteHeaders(method)).toEqual({})

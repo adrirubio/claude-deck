@@ -217,7 +217,7 @@ export function deleteTeamGithubScope(scopeId: number, operatorToken: string): P
 }
 
 export function operatorHeaders(operatorToken: string): HeadersInit {
-  return { 'X-Deck-Operator-Token': operatorToken }
+  return { 'X-Synth-City-Operator-Token': operatorToken }
 }
 
 export function updateTeamGithubContinuationPolicy(

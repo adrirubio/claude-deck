@@ -205,7 +205,7 @@ async def api_client(maker, token=OPERATOR):
     app.dependency_overrides[get_db] = override_db
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture",
-                                     headers={"X-Deck-Operator-Token": token} if token else {}) as client:
+                                     headers={"X-Synth-City-Operator-Token": token} if token else {}) as client:
             yield client
     finally:
         app.dependency_overrides.clear()

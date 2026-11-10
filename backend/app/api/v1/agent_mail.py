@@ -74,11 +74,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 async def require_mail_director(
-    x_deck_operator_token: Optional[str] = Header(default=None),
+    x_synth_city_operator_token: Optional[str] = Header(default=None),
 ) -> None:
     """Require the Director key when the installation has configured one."""
     if settings.operator_token:
-        await require_operator(x_deck_operator_token)
+        await require_operator(x_synth_city_operator_token)
 
 
 # Mail install writes use the configured Director key in every authentication mode.
@@ -87,28 +87,28 @@ _INITIAL_APPROVAL_MAX_ATTEMPTS = 2
 
 
 async def mail_read_session(
-    x_deck_session_token: Optional[str] = Header(default=None),
-    x_deck_operator_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
+    x_synth_city_operator_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[MailAgentSession]:
     """Use a Mail session or Director key, with an explicit legacy opt-out."""
-    if x_deck_operator_token is not None:
-        await require_mail_director(x_deck_operator_token)
-    if x_deck_session_token is not None:
-        return await require_mail_session(await mail_session(x_deck_session_token, db))
-    if (x_deck_operator_token is not None or not settings.operator_token
+    if x_synth_city_operator_token is not None:
+        await require_mail_director(x_synth_city_operator_token)
+    if x_synth_city_session_token is not None:
+        return await require_mail_session(await mail_session(x_synth_city_session_token, db))
+    if (x_synth_city_operator_token is not None or not settings.operator_token
             or not settings.mail_capability_tokens_required):
         return None
-    await require_operator(x_deck_operator_token)
+    await require_operator(x_synth_city_operator_token)
     return None
 
 
 async def require_mail_install_operator(
-    x_deck_operator_token: Optional[str] = Header(default=None),
+    x_synth_city_operator_token: Optional[str] = Header(default=None),
 ) -> None:
     """Protect install information in strict mode and validate supplied keys."""
-    if settings.operator_token and (settings.mail_capability_tokens_required or x_deck_operator_token is not None):
-        await require_operator(x_deck_operator_token)
+    if settings.operator_token and (settings.mail_capability_tokens_required or x_synth_city_operator_token is not None):
+        await require_operator(x_synth_city_operator_token)
 
 
 def _approval_response(request) -> GithubApprovalRequestResponse:
@@ -933,22 +933,22 @@ async def set_session_wake_participation(
 async def queue_inbox_check(
     member_id: int,
     body: MailWakeRequest = Body(default_factory=MailWakeRequest),
-    x_deck_session_token: str | None = Header(default=None),
-    x_deck_operator_token: str | None = Header(default=None),
+    x_synth_city_session_token: str | None = Header(default=None),
+    x_synth_city_operator_token: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     actor_type = "anonymous"
     actor_session_id = None
     source = "manual_anonymous"
     try:
-        if x_deck_session_token and x_deck_operator_token:
+        if x_synth_city_session_token and x_synth_city_operator_token:
             actor_type = "ambiguous"
             source = "manual_ambiguous"
             raise HTTPException(status_code=400, detail="wake_principal_ambiguous")
-        if x_deck_session_token:
+        if x_synth_city_session_token:
             actor_type = "session_unverified"
             source = "manual_session"
-            session = await mail_session(x_deck_session_token, db)
+            session = await mail_session(x_synth_city_session_token, db)
             if session is None:
                 raise HTTPException(status_code=401, detail="session_token_required")
             actor_type = "session"
@@ -957,10 +957,10 @@ async def queue_inbox_check(
                 raise HTTPException(status_code=403, detail="wake_member_forbidden")
             if body.force:
                 raise HTTPException(status_code=403, detail="wake_force_operator_only")
-        elif x_deck_operator_token:
+        elif x_synth_city_operator_token:
             actor_type = "operator_unverified"
             source = "manual_operator"
-            await require_operator(x_deck_operator_token)
+            await require_operator(x_synth_city_operator_token)
             actor_type = "operator"
         else:
             raise HTTPException(status_code=401, detail="wake_auth_required")
@@ -1026,7 +1026,7 @@ async def list_wake_attempts(
 async def register_agent(
     http_request: Request,
     request: MailAgentRegisterRequest,
-    x_deck_session_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
@@ -1040,9 +1040,9 @@ async def register_agent(
         and existing.capability_token_hash is not None
         and settings.mail_capability_tokens_required
     ):
-        if not x_deck_session_token:
+        if not x_synth_city_session_token:
             raise HTTPException(status_code=409, detail="token_required_for_rebind")
-        presented_hash = agent_mail_service.hash_capability_token(x_deck_session_token)
+        presented_hash = agent_mail_service.hash_capability_token(x_synth_city_session_token)
         if not hmac.compare_digest(existing.capability_token_hash, presented_hash):
             raise HTTPException(status_code=401, detail="session_token_invalid")
 
@@ -1088,7 +1088,7 @@ async def register_agent(
     try:
         member, session = await agent_mail_service.register_session(
             db, request, pane=pane, require_existing_token=settings.mail_capability_tokens_required,
-            capability_token=x_deck_session_token,
+            capability_token=x_synth_city_session_token,
         )
         capability_token = (
             None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
@@ -1234,11 +1234,11 @@ def _hook_inbox_reminder(event):
 @router.post("/hooks/session-start")
 async def hook_session_start(
     payload: dict[str, Any] = Body(...),
-    x_deck_session_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        session = await _content_hook_session(db, x_deck_session_token)
+        session = await _content_hook_session(db, x_synth_city_session_token)
     except HTTPException:
         return _hook_inbox_reminder("SessionStart")
     try:
@@ -1263,11 +1263,11 @@ async def hook_session_start(
 @router.post("/hooks/user-prompt-submit")
 async def hook_user_prompt_submit(
     payload: dict[str, Any] = Body(...),
-    x_deck_session_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        session = await _content_hook_session(db, x_deck_session_token)
+        session = await _content_hook_session(db, x_synth_city_session_token)
     except HTTPException:
         return _hook_inbox_reminder("UserPromptSubmit")
     try:

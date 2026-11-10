@@ -46,7 +46,7 @@ async def test_director_can_bind_supervisor_without_starting_automation(db, supe
     team, actor = await supervisor_team(db)
     team_id, actor_id = team.id, actor.id
     response = await supervisor_client.put(f"/api/v1/agent-teams/presets/{team_id}/supervisor",
-        headers={"X-Deck-Operator-Token": "synthetic-director-token"}, json={"actor_id": actor_id})
+        headers={"X-Synth-City-Operator-Token": "synthetic-director-token"}, json={"actor_id": actor_id})
     assert response.status_code == 200
     assert response.json()["actor_id"] == actor_id
     assert response.json()["status"] == "absent"
@@ -97,13 +97,13 @@ async def test_supervisor_checkin_requires_the_bound_external_actor(db, supervis
     payload = {"preset_id": team.id, "next_check_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()}
     assert (await supervisor_client.post(path, json=payload)).status_code == 401
     assert (await supervisor_client.post(path, json=payload,
-        headers={"X-Deck-Session-Token": "synthetic-member-token"})).status_code == 401
+        headers={"X-Synth-City-Session-Token": "synthetic-member-token"})).status_code == 401
     auth = {"Authorization": "Bearer synthetic-actor-token"}
     assert (await supervisor_client.post(path, json=payload, headers=auth)).status_code == 403
     bind = f"/api/v1/agent-teams/presets/{team.id}/supervisor"
     assert (await supervisor_client.put(bind, json={"actor_id": actor.id}, headers=auth)).status_code == 401
     await supervisor_client.put(bind, json={"actor_id": actor.id},
-        headers={"X-Deck-Operator-Token": "synthetic-director-token"})
+        headers={"X-Synth-City-Operator-Token": "synthetic-director-token"})
     response = await supervisor_client.post(path, json={**payload, "note": "token=private-note\nChecked."}, headers=auth)
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
@@ -184,7 +184,7 @@ async def test_team_member_can_address_only_the_current_supervisor(db, superviso
     await db.commit()
     monkeypatch.setattr("app.utils.peer_process.pane_is_alive", lambda *_: True)
     path = "/api/v1/agent-mail/supervisor/messages"
-    auth = {"X-Deck-Session-Token": "synthetic-member-token"}
+    auth = {"X-Synth-City-Session-Token": "synthetic-member-token"}
     message = {"actor_id": actor_id, "body_markdown": "Please inspect the incident."}
     assert (await supervisor_client.post(path, headers=auth, json=message)).status_code == 403
     await bind_supervisor(db, team_id, actor_id=actor_id, grace_seconds=None, set_grace=False)
@@ -248,7 +248,7 @@ async def test_actor_can_supervise_multiple_teams_and_grace_is_operator_controll
         assert result["status"] == "healthy" and result["grace_seconds"] == 60
     path = f"/api/v1/agent-teams/presets/{second.id}/supervisor"
     assert (await supervisor_client.put(path, json={"actor_id": actor.id, "grace_seconds": 0},
-        headers={"X-Deck-Operator-Token": "synthetic-director-token"})).status_code == 422
+        headers={"X-Synth-City-Operator-Token": "synthetic-director-token"})).status_code == 422
 
 
 def test_dispatch_brief_names_supervisor_without_changing_the_escalation_order():

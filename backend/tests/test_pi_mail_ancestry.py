@@ -52,7 +52,7 @@ def test_actual_pi_shim_kernel_ancestry_and_reload_on_disposable_socket(tmp_path
                 registrations.append(body)
                 self.respond({"member": {"id": 1}, "capability_token": "synthetic-capability"})
             elif self.path.endswith("/agent/close"):
-                closures.append(self.headers.get("X-Deck-Session-Token") == "synthetic-capability")
+                closures.append(self.headers.get("X-Synth-City-Session-Token") == "synthetic-capability")
                 self.respond({"closed": True})
             else:
                 self.send_error(404)

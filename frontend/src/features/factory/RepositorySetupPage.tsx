@@ -40,7 +40,7 @@ type Recovery = {
 type ScopeOverlap = { key: string; first: TeamGithubScope; second: TeamGithubScope; active: boolean };
 type UncertainLaunch = { slotIds: number[]; planHash: string } | null;
 const initial: Draft = {
-  owner: "", repo: "", path: "", dispatch: "claude-deck-ready", design: "claude-deck-design", baseRef: "origin/HEAD",
+  owner: "", repo: "", path: "", dispatch: "albiex-synth-city-ready", design: "albiex-synth-city-design", baseRef: "origin/HEAD",
   authMode: "token", teamMode: "new", teamId: "", teamName: "", leaderName: "Leader", workerNames: "Worker",
   provider: "codex-cli",
 };
@@ -235,7 +235,7 @@ export function RepositorySetupPage() {
       status: string;
       blockers: Array<{ code: string; message: string }>;
     }>(`agent-teams/github-scopes/${currentScope.id}/activation-readiness`, {
-      headers: { "X-Deck-Operator-Token": operatorToken },
+      headers: { "X-Synth-City-Operator-Token": operatorToken },
     });
     return readiness.blockers.map((blocker) => `${blocker.message} (${blocker.code})`);
   }
@@ -370,7 +370,7 @@ export function RepositorySetupPage() {
     const checkedKey = inputKey;
     try {
       const value = await withOperatorToken((operatorToken) => apiClient<Preflight>("factory/setup-preflight", {
-        method: "POST", headers: { "X-Deck-Operator-Token": operatorToken },
+        method: "POST", headers: { "X-Synth-City-Operator-Token": operatorToken },
         body: JSON.stringify({ repo_owner: draft.owner.trim(), repo_name: draft.repo.trim(), repo_path: draft.path.trim(), dispatch_label: draft.dispatch.trim(), design_label: draft.design.trim(), dispatch_auth_mode: draft.authMode, base_ref: draft.baseRef.trim() }),
       }), "to check access to this repository");
       if (currentKey.current !== checkedKey) return;
@@ -685,7 +685,7 @@ export function RepositorySetupPage() {
     try {
       const checkedKey = inputKey;
       const check = await apiClient<Preflight>("factory/setup-preflight", {
-        method: "POST", headers: { "X-Deck-Operator-Token": token },
+        method: "POST", headers: { "X-Synth-City-Operator-Token": token },
         body: JSON.stringify(scopePreflightInput(scope)),
       });
       if (checkedKey !== currentKey.current || check.status !== "ready") { setPreflight({ key: checkedKey, value: check }); setActivationSnapshot(null); setError("Inputs changed or current checks are not ready. Review the new result before activation."); return; }
@@ -788,7 +788,7 @@ export function RepositorySetupPage() {
           const results = await Promise.all(batch.map(async (item) => ({
             scopeId: item.id,
             result: await apiClient<Preflight>("factory/setup-preflight", {
-              method: "POST", headers: { "X-Deck-Operator-Token": token },
+              method: "POST", headers: { "X-Synth-City-Operator-Token": token },
               body: JSON.stringify(scopePreflightInput(item)),
             }),
           })));

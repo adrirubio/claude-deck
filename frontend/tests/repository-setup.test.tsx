@@ -221,7 +221,7 @@ describe("guided repository setup", () => {
     mocks.createAgentTeamPreset.mockResolvedValue(team);
     mocks.createTeamGithubScope.mockResolvedValue({
       id: 55, preset_id: 12, repo_owner: "example", repo_name: "synthetic-product", repo_path: "/synthetic/checkout",
-      dispatch_label: "claude-deck-ready", design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      dispatch_label: "albiex-synth-city-ready", design_label: "albiex-synth-city-design", base_ref: "origin/HEAD",
       github_auth_mode: "ambient", enabled: false,
     });
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
@@ -306,7 +306,7 @@ describe("guided repository setup", () => {
     };
     const scope = {
       id: 55, preset_id: 12, repo_owner: "example", repo_name: "synthetic-product", repo_path: "/synthetic/checkout",
-      dispatch_label: "claude-deck-ready", design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      dispatch_label: "albiex-synth-city-ready", design_label: "albiex-synth-city-design", base_ref: "origin/HEAD",
       github_auth_mode: "ambient", github_auth_configured: true, github_poll_token_configured: true, enabled: false,
     };
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
@@ -366,7 +366,7 @@ describe("guided repository setup", () => {
   function scopeFixture(id: number, presetId: number, enabled: boolean, repo: string, label: string) {
     return {
       id, preset_id: presetId, repo_owner: "example", repo_name: repo, repo_path: "/synthetic/checkout",
-      dispatch_label: label, design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      dispatch_label: label, design_label: "albiex-synth-city-design", base_ref: "origin/HEAD",
       github_auth_mode: "ambient", github_auth_configured: true, github_poll_token_configured: true, enabled,
     };
   }
@@ -388,7 +388,7 @@ describe("guided repository setup", () => {
   it("shows an external collision for a scope resumed by team activation and requires acknowledgement", async () => {
     const team = teamFixture(false);
     const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     const sibling = scopeFixture(56, 12, true, "other-repo", "shared-label");
     const external = scopeFixture(77, 20, true, "other-repo", "shared-label");
     const allScopes = [ownScope, sibling, external];
@@ -422,7 +422,7 @@ describe("guided repository setup", () => {
 
   it("invalidates acknowledgements when a collision appears after the activation review", async () => {
     const team = teamFixture(true);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
     let scopes = [ownScope];
     mocks.apiClient.mockImplementation((endpoint: string) => {
@@ -447,7 +447,7 @@ describe("guided repository setup", () => {
     expect(screen.getByRole("button", { name: "Enable this scope" })).toBeEnabled();
 
     // A conflicting external scope appears between review and activation.
-    scopes = [ownScope, scopeFixture(77, 20, true, "synthetic-product", "claude-deck-ready")];
+    scopes = [ownScope, scopeFixture(77, 20, true, "synthetic-product", "albiex-synth-city-ready")];
     fireEvent.click(screen.getByRole("button", { name: "Enable this scope" }));
 
     await screen.findByText(/changed after the checks/);
@@ -489,7 +489,7 @@ describe("guided repository setup", () => {
     const team = teamFixture(true);
     const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
     const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -502,6 +502,7 @@ describe("guided repository setup", () => {
     expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
     expect(mocks.createTeamGithubScope.mock.calls[0][1]).toMatchObject({
       enabled: false, merge_policy: "human", max_concurrent_dispatched: 1,
+      dispatch_label: "albiex-synth-city-ready", design_label: "albiex-synth-city-design",
       max_verification_retries: 1, max_auto_merges_per_day: 0,
     });
     // V28: policies, autonomy, Leader and existing scopes stay untouched.
@@ -513,7 +514,7 @@ describe("guided repository setup", () => {
 
   it("recovers an interrupted save without duplicating the disabled scope (V28)", async () => {
     const team = teamFixture(true);
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     let saved = false;
@@ -552,7 +553,7 @@ describe("guided repository setup", () => {
     const team = teamFixture(true);
     const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
     const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     let persisted = false;
@@ -633,7 +634,7 @@ describe("guided repository setup", () => {
 
   async function runToUncertainLaunchSetupWithPlanConflict() {
     const team = teamFixture(false);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -655,7 +656,7 @@ describe("guided repository setup", () => {
 
   async function runToUncertainLaunchSetupWithUnmarkedConflict() {
     const team = teamFixture(false);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -675,7 +676,7 @@ describe("guided repository setup", () => {
 
   async function runToUncertainLaunch() {
     const team = teamFixture(false);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -740,7 +741,7 @@ describe("guided repository setup", () => {
 
   it("discards a late launch-plan response after the selection changes (P04)", async () => {
     const team = teamFixture(false);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -765,8 +766,8 @@ describe("guided repository setup", () => {
   it("blocks readiness on an incomplete observation without omitting collisions (P04)", async () => {
     const team = teamFixture(true);
     const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
-    const external = scopeFixture(77, 20, true, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
+    const external = scopeFixture(77, 20, true, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team, externalTeam] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [ownScope, external] });
@@ -787,7 +788,7 @@ describe("guided repository setup", () => {
 
   it("blocks the write when the final observation turns incomplete (P04)", async () => {
     const team = teamFixture(true);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [ownScope] });
@@ -896,7 +897,7 @@ describe("guided repository setup", () => {
 
   it("blocks the write when saved inputs change during the readiness wait (V21)", async () => {
     const team = teamFixture(true);
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [ownScope] });
@@ -1092,7 +1093,7 @@ describe("guided repository setup", () => {
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
     mocks.createAgentTeamPreset.mockResolvedValue(team);
-    mocks.createTeamGithubScope.mockResolvedValue(scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready"));
+    mocks.createTeamGithubScope.mockResolvedValue(scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready"));
     mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
     let finalReadEntered = false;
     let signalFinalRead: (() => void) | undefined;
@@ -1186,7 +1187,7 @@ describe("guided repository setup", () => {
     mocks.createAgentTeamPreset.mockResolvedValue(createdTeam);
     let resolveLeader: ((value: unknown) => void) | undefined;
     mocks.updateAgentTeamLeader.mockImplementation(() => new Promise((resolve) => { resolveLeader = resolve; }));
-    mocks.createTeamGithubScope.mockResolvedValue(scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready"));
+    mocks.createTeamGithubScope.mockResolvedValue(scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready"));
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
@@ -1319,7 +1320,7 @@ describe("guided repository setup", () => {
       .mockRejectedValueOnce(new mocks.ApiHttpError("The operator token was rejected.", 401))
       .mockResolvedValue(team);
     mocks.createTeamGithubScope.mockResolvedValue(
-      scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready"));
+      scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready"));
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
@@ -1378,7 +1379,7 @@ describe("guided repository setup", () => {
     mockReadyPreflightAndRoster();
     const createdTeam = { ...teamFixture(false), leader_slot_id: null };
     const fixedTeam = teamFixture(false);
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [createdTeam] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
     mocks.createAgentTeamPreset.mockResolvedValue(createdTeam);
@@ -1445,7 +1446,7 @@ describe("guided repository setup", () => {
   it("captures implemented-flow configuration and compares it with saved payloads (V32)", async () => {
     mockReadyPreflightAndRoster();
     const team = teamFixture(false);
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
     mocks.createAgentTeamPreset.mockResolvedValue(team);
@@ -1483,7 +1484,7 @@ describe("guided repository setup", () => {
     const scopePayload = mocks.createTeamGithubScope.mock.calls[0][1];
     expect(scopePayload).toMatchObject({
       repo_owner: "example", repo_name: "synthetic-product", repo_path: "/synthetic/checkout",
-      dispatch_label: "claude-deck-ready", design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      dispatch_label: "albiex-synth-city-ready", design_label: "albiex-synth-city-design", base_ref: "origin/HEAD",
       github_auth_mode: "ambient", merge_policy: "human", enabled: false,
       max_concurrent_dispatched: 1, max_verification_retries: 1, max_auto_merges_per_day: 0,
     });
@@ -1498,7 +1499,7 @@ describe("guided repository setup", () => {
     const team = teamFixture(true);
     const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
     const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -1525,7 +1526,7 @@ describe("guided repository setup", () => {
     const team = teamFixture(false);
     const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
     const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
@@ -1550,7 +1551,7 @@ describe("guided repository setup", () => {
   it("requires one acknowledgement per simultaneous overlap (V36)", async () => {
     const team = teamFixture(false);
     const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
-    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     const siblingOne = scopeFixture(56, 12, true, "other-repo-a", "shared-a");
     const siblingTwo = scopeFixture(57, 12, true, "other-repo-b", "shared-b");
     const externalOne = scopeFixture(77, 20, true, "other-repo-a", "shared-a");
@@ -1626,7 +1627,7 @@ describe("guided repository setup", () => {
 
   it("refuses a recovered scope selection at resolveCandidate after a changed draft (C4/A1)", async () => {
     const team = teamFixture(true);
-    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "albiex-synth-city-ready");
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
     let saved = false;
@@ -1731,7 +1732,7 @@ describe("guided repository setup", () => {
 
     it("offers repositories that are already watched, with no extra request", async () => {
       mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [{ id: 12, name: "T", slots: [], autonomy_enabled: false }] });
-      mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [scopeFixture(55, 12, true, "synthetic-product", "claude-deck-ready")] });
+      mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [scopeFixture(55, 12, true, "synthetic-product", "albiex-synth-city-ready")] });
       render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
       const group = await screen.findByRole("group", { name: "Repositories Deck already watches" });
       fireEvent.click(within(group).getByRole("button", { name: "example/synthetic-product" }));

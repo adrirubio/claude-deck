@@ -1445,9 +1445,9 @@ class GithubDispatchService:
                 [
                     "- Claude Deck opens the pull request with its GitHub App identity; "
                     "do not create the PR yourself.",
-                    f"- Add commit trailers `Deck-Agent-Slot: {owner_slot_id} "
+                    f"- Add commit trailers `Synth-City-Agent-Slot: {owner_slot_id} "
                     f"({owner.display_name if owner else owner_slot_id})` and "
-                    f"`Deck-Work-Item: {item.id}`.",
+                    f"`Synth-City-Work-Item: {item.id}`.",
                     f"- Push the exact assigned branch with `git push -u origin "
                     f"{item.dispatch_head_ref}`.",
                     f"- After the push, call `synth_city_report_dispatch_status(work_item_id={item.id}, "

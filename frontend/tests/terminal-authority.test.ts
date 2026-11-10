@@ -14,7 +14,7 @@ describe('terminal authority', () => {
     expect(await fetchTerminalToken('deck:0.0', 'readonly')).toEqual({ token: 'readonly-grant' })
     expect(request).toHaveBeenCalledWith(
       '/api/v1/agent-bridge/token?target=deck%3A0.0&purpose=readonly',
-      expect.objectContaining({ headers: expect.not.objectContaining({ 'X-Deck-Operator-Token': expect.anything() }) }),
+      expect.objectContaining({ headers: expect.not.objectContaining({ 'X-Synth-City-Operator-Token': expect.anything() }) }),
     )
   })
 
@@ -26,7 +26,7 @@ describe('terminal authority', () => {
     await fetchTerminalToken('deck:0.0', 'interactive')
     expect(request).toHaveBeenCalledWith(
       '/api/v1/agent-bridge/token?target=deck%3A0.0&purpose=interactive',
-      expect.objectContaining({ headers: expect.objectContaining({ 'X-Deck-Operator-Token': 'operator-secret' }) }),
+      expect.objectContaining({ headers: expect.objectContaining({ 'X-Synth-City-Operator-Token': 'operator-secret' }) }),
     )
     expect(buildTerminalWsUrl('deck:0.0', 'interactive')).not.toContain('interactive-grant')
     expect(buildTerminalWsUrl('deck:0.0', 'interactive')).toContain('mode=interactive')
@@ -44,7 +44,7 @@ describe('terminal authority', () => {
     setOperatorToken('operator-secret')
     await pasteBridgeAttachment('deck:0.0', 7, { submit: false })
     expect(request.mock.calls[0][0]).toBe('/api/v1/agent-bridge/token?target=deck%3A0.0&purpose=attachment')
-    expect(request.mock.calls[1][1].headers.get('X-Claude-Deck-Terminal-Token')).toBe('attachment-grant')
-    expect(request.mock.calls[1][1].headers.get('X-Deck-Operator-Token')).toBe('operator-secret')
+    expect(request.mock.calls[1][1].headers.get('X-Synth-City-Terminal-Token')).toBe('attachment-grant')
+    expect(request.mock.calls[1][1].headers.get('X-Synth-City-Operator-Token')).toBe('operator-secret')
   })
 })

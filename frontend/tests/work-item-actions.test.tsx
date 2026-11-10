@@ -219,7 +219,7 @@ describe('WorkItemPanel on the Work item page', () => {
     const resume = calls.find((call) => call.path.endsWith('/resume-attempt'))!
     expect(resume.method).toBe('POST')
     expect(resume.path).toBe('agent-teams/presets/1/work-items/23/resume-attempt')
-    expect(resume.headers.get('X-Deck-Operator-Token')).toBe('test-token')
+    expect(resume.headers.get('X-Synth-City-Operator-Token')).toBe('test-token')
   })
 
   it('sends the same abandon request, with a reason and the key', async () => {
@@ -235,7 +235,7 @@ describe('WorkItemPanel on the Work item page', () => {
     await waitFor(() => expect(calls.some((call) => call.path === 'agent-teams/github-work-items/23/abandon')).toBe(true))
     const abandon = calls.find((call) => call.path === 'agent-teams/github-work-items/23/abandon')!
     expect(abandon.method).toBe('POST')
-    expect(abandon.headers.get('X-Deck-Operator-Token')).toBe('test-token')
+    expect(abandon.headers.get('X-Synth-City-Operator-Token')).toBe('test-token')
     expect(JSON.parse(abandon.body ?? '{}')).toEqual({ reason: 'Stopped by test' })
   })
 
@@ -261,7 +261,7 @@ describe('A1 findings on the Work item page', () => {
   }
   const serve = (items: GithubWorkItem[], calls: { path: string; method: string; key: string | null }[]) =>
     fixtureFetch((path, _query, options) => {
-      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Deck-Operator-Token') })
+      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Synth-City-Operator-Token') })
       if (path.startsWith('factory/work-items/')) return jsonResponse(detail.operator_stop_retry_eligible.response)
       if (path === `agent-teams/presets/${page.team.id}/github-work-items`) return jsonResponse({ items })
       if (path.endsWith('/retry')) return jsonResponse({ ...record, dispatch_status: 'pending' })
@@ -297,7 +297,7 @@ describe('A1 findings on the Work item page', () => {
     setOperatorToken('test-operator')
     const calls: { path: string; method: string; key: string | null }[] = []
     fixtureFetch((path, _query, options) => {
-      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Deck-Operator-Token') })
+      calls.push({ path, method: options?.method ?? 'GET', key: new Headers(options?.headers).get('X-Synth-City-Operator-Token') })
       if (path.startsWith('factory/work-items/')) return jsonResponse(detail.operator_stop_retry_eligible.response)
       if (path === `agent-teams/presets/${page.team.id}/github-work-items`) return jsonResponse({ items: [] })
       if (path.endsWith('/scope-revisions')) return jsonResponse([{ ...revision, revision: 2, status: 'approved' }])

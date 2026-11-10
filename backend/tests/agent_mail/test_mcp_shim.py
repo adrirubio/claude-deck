@@ -326,7 +326,7 @@ def test_synth_city_request_sends_the_session_token(monkeypatch):
     shim._state["offline_until"] = 0.0
 
     shim._synth_city_request("GET", "agent-mail", "/team")
-    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+    assert captured["headers"]["X-Synth-City-Session-Token"] == "tok-abc"
 
 
 def test_synth_city_request_preserves_a_callers_headers(monkeypatch):
@@ -354,10 +354,10 @@ def test_synth_city_request_preserves_a_callers_headers(monkeypatch):
         "GET",
         "agent-bridge",
         "/x",
-        headers={"X-Claude-Deck-Terminal-Token": "term"},
+        headers={"X-Synth-City-Terminal-Token": "term"},
     )
-    assert captured["headers"]["X-Claude-Deck-Terminal-Token"] == "term"
-    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+    assert captured["headers"]["X-Synth-City-Terminal-Token"] == "term"
+    assert captured["headers"]["X-Synth-City-Session-Token"] == "tok-abc"
 
 
 def test_synth_city_request_sends_no_header_without_a_token(monkeypatch):
@@ -382,7 +382,7 @@ def test_synth_city_request_sends_no_header_without_a_token(monkeypatch):
     shim._state["offline_until"] = 0.0
 
     shim._synth_city_request("GET", "agent-mail", "/team")
-    assert "X-Deck-Session-Token" not in (captured["headers"] or {})
+    assert "X-Synth-City-Session-Token" not in (captured["headers"] or {})
 
 
 def test_synth_city_request_routes_by_api_prefix(monkeypatch):
@@ -444,7 +444,7 @@ def test_http_conflict_preserves_detail_code_without_credentials():
     request = shim.httpx.Request(
         "POST",
         "http://deck/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": "request-secret"},
+        headers={"X-Synth-City-Session-Token": "request-secret"},
     )
     response = shim.httpx.Response(
         409,
@@ -855,7 +855,7 @@ def test_campaign_setter_sends_director_key_only_as_header(monkeypatch):
     requests = []
     def request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if kwargs.get("headers", {}).get("X-Deck-Operator-Token") != "synthetic-director-key":
+        if kwargs.get("headers", {}).get("X-Synth-City-Operator-Token") != "synthetic-director-key":
             return {"ok": False, "error": {"code": "operator_token_invalid"}}
         return {"ok": True, "data": {"id": 12, "backlog_milestone": "Campaign",
                                      "launch_options": {"secret": "private-launch"}}}
@@ -870,7 +870,7 @@ def test_campaign_setter_sends_director_key_only_as_header(monkeypatch):
     assert "synthetic-director-key" not in repr(result)
     assert "private-launch" not in repr(result)
     assert requests[-1] == ("PATCH", "/presets/12", {
-        "headers": {"X-Deck-Operator-Token": "synthetic-director-key"},
+        "headers": {"X-Synth-City-Operator-Token": "synthetic-director-key"},
         "json": {"backlog_milestone": "Campaign", "planned_decisions": planned}})
 
 
@@ -922,7 +922,7 @@ def test_synth_city_attach_image_to_bridge_session_uploads_and_pastes(monkeypatc
         requests.append((method, path, kwargs))
         if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": f"token-{len(requests)}"}}
-        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"].startswith("token-")
+        assert kwargs["headers"]["X-Synth-City-Terminal-Token"].startswith("token-")
         if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments":
             assert kwargs["data"]["created_by"] == "mcp"
             assert kwargs["data"]["prompt"] == "Inspect {path}"
@@ -965,7 +965,7 @@ def test_synth_city_list_bridge_attachments_uses_bridge_api(monkeypatch):
         requests.append((method, path, kwargs))
         if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": "token"}}
-        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"] == "token"
+        assert kwargs["headers"]["X-Synth-City-Terminal-Token"] == "token"
         return {"ok": True, "data": {"attachments": [{"id": 1}]}}
 
     monkeypatch.setattr(shim, "_bridge_request", fake_bridge_request)

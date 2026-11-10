@@ -1,9 +1,10 @@
 import { API_BASE_URL } from '@/lib/constants'
 import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '@/lib/api'
+import { clearSessionStorageValue, migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from '@/lib/browserStorageMigration'
 
-const KEY_STORAGE_KEY = 'deck-agent-mail-actor-key'
-const TOKEN_STORAGE_KEY = 'deck-agent-mail-actor-token'
+const KEY_STORAGE_KEY = PRODUCT_STORAGE_KEYS.actorKey
+const TOKEN_STORAGE_KEY = PRODUCT_STORAGE_KEYS.actorToken
 
 /**
  * One external-actor row per browser tab.
@@ -22,8 +23,12 @@ const TOKEN_STORAGE_KEY = 'deck-agent-mail-actor-token'
  * actor row per tab, which is why the key is random rather than fixed.
  */
 function actorKey(): string {
+  const migration = migrateBrowserStorage()
   const existing = sessionStorage.getItem(KEY_STORAGE_KEY)
   if (existing) return existing
+  if (migration.actorKey === 'pending') {
+    throw new Error('Could not restore the Agent Mail identity. Try again when browser storage is available.')
+  }
   const created = `deck-ui-${crypto.randomUUID().slice(0, 8)}`
   sessionStorage.setItem(KEY_STORAGE_KEY, created)
   return created
@@ -34,7 +39,7 @@ async function provision(): Promise<string> {
   const response = await fetch(`${API_BASE_URL}external/agent-mail/actors`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json',
-      ...(directorKey ? { 'X-Deck-Operator-Token': directorKey } : {}),
+      ...(directorKey ? { 'X-Synth-City-Operator-Token': directorKey } : {}),
     },
     body: JSON.stringify({
       actor_key: actorKey(),
@@ -52,6 +57,7 @@ async function provision(): Promise<string> {
 }
 
 async function token(): Promise<string> {
+  migrateBrowserStorage()
   return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? (await provision())
 }
 
@@ -60,7 +66,7 @@ async function token(): Promise<string> {
  * authentication recovery may call.
  */
 export function resetActorToken(): void {
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  clearSessionStorageValue('actorToken')
 }
 
 /**
@@ -71,8 +77,8 @@ export function resetActorToken(): void {
  * regression Step 1's recovery test and Step 15's item 7 exist to catch.
  */
 export function resetActorIdentity(): void {
-  sessionStorage.removeItem(KEY_STORAGE_KEY)
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  clearSessionStorageValue('actorKey')
+  clearSessionStorageValue('actorToken')
 }
 
 /**

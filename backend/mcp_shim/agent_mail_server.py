@@ -122,7 +122,7 @@ def _synth_city_request(method: str, api_prefix: str, path: str, **kwargs) -> di
     session_token = _state.get("capability_token")
     if session_token:
         headers = dict(kwargs.pop("headers", {}) or {})
-        headers["X-Deck-Session-Token"] = session_token
+        headers["X-Synth-City-Session-Token"] = session_token
         kwargs["headers"] = headers
     budget = kwargs.pop("total_timeout", None)
     deadline = getattr(_request_budget, "deadline", None)
@@ -225,7 +225,7 @@ def _bridge_request_with_token(method: str, path: str, *, target: str, **kwargs)
             },
         }
     headers = dict(kwargs.pop("headers", {}) or {})
-    headers["X-Claude-Deck-Terminal-Token"] = token
+    headers["X-Synth-City-Terminal-Token"] = token
     return _bridge_request(method, path, headers=headers, **kwargs)
 
 
@@ -967,7 +967,7 @@ def synth_city_update_team_campaign(
     if not director_key:
         return {"ok": False, "error": {"code": "operator_token_required"}}
     result = _team_request("PATCH", f"/presets/{preset_id}",
-        headers={"X-Deck-Operator-Token": director_key},
+        headers={"X-Synth-City-Operator-Token": director_key},
         json={"backlog_milestone": backlog_milestone, "planned_decisions": planned_decisions})
     if not result["ok"]:
         # Keep credential-bearing request details out of the returned error.

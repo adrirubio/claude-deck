@@ -52,7 +52,7 @@ async def _member(db, repo_id, name):
 async def _actor_token(client, key="openclaw", name="OpenClaw"):
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={
             "actor_key": key,
             "display_name": name,
@@ -172,7 +172,7 @@ async def test_external_context_request_preserves_sender_attribution(client, db)
     assert body["message"]["sender_actor_id"] == body["actor"]["id"]
     assert body["recipients"][0]["member_id"] == recipient.id
 
-    messages = await client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Operator-Token": "test-director-key"})
+    messages = await client.get("/api/v1/agent-mail/messages", headers={"X-Synth-City-Operator-Token": "test-director-key"})
     assert messages.status_code == 200
     assert messages.json()[0]["sender_name"] == "OpenClaw"
     assert messages.json()[0]["sender_type"] == "external_actor"
@@ -403,7 +403,7 @@ async def test_external_request_status_wait_and_ack_lifecycle(client, db):
 
     answer = await client.post(
         "/api/v1/agent-mail/messages",
-        headers={"X-Deck-Session-Token": recipient_token},
+        headers={"X-Synth-City-Session-Token": recipient_token},
         json={
             "kind": "answer",
             "sender_member_id": recipient.id,

@@ -2541,8 +2541,8 @@ class TeamGithubScopeCreate(BaseModel):
     repo_owner: str
     repo_name: str
     repo_path: str
-    dispatch_label: str = "claude-deck-ready"
-    design_label: str = "claude-deck-design"
+    dispatch_label: str = "albiex-synth-city-ready"
+    design_label: str = "albiex-synth-city-design"
     merge_policy: Literal["human", "auto"] = "human"
     review_hold_label: Optional[str] = None
     max_approval_rounds: int = Field(default=3, ge=1)

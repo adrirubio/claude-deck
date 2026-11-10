@@ -6,7 +6,7 @@ import { expect, test } from '../support/guard'
 // events after a refused read. Design reference: screens 16 (unlocked) and
 // 17 (locked).
 
-const KEY_STORAGE = 'claude-deck.agent-teams.operator-token'
+const KEY_STORAGE = 'albiex-synth-city.agent-teams.operator-token'
 const EVENT_COUNT = /\b\d+\s+(audit\s+)?events?\b/i
 
 async function openAudit(page: Page): Promise<void> {

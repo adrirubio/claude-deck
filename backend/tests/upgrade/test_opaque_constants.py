@@ -111,7 +111,7 @@ async def test_t_o1_same_hash_never_bypasses_lease_expiry_hold_or_approval(clien
     body = _continuation_request_body(item)
     body["lease_token"] = LEASE_TOKEN
     proposed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-                                 headers={"X-Deck-Session-Token": tokens[1]}, json=body)
+                                 headers={"X-Synth-City-Session-Token": tokens[1]}, json=body)
     assert proposed.status_code == 200, proposed.text
     revision = await db.get(GithubAttemptScopeRevision, proposed.json()["revision"]["id"])
     assert revision.expected_lease_token_hash == GOLDEN["lease"]
@@ -119,7 +119,7 @@ async def test_t_o1_same_hash_never_bypasses_lease_expiry_hold_or_approval(clien
                 "dispatch_nonce": item.dispatch_nonce, "decision": "approved", "reason": "Golden-byte gate fixture"}
     if gate == "hold":
         refused = await client.post("/api/v1/agent-mail/continuation-decisions",
-                                    headers={"X-Deck-Session-Token": tokens[0]}, json=decision)
+                                    headers={"X-Synth-City-Session-Token": tokens[0]}, json=decision)
         assert refused.status_code == 409
         await db.refresh(revision)
         assert revision.recovery_checkpoint_stage == "decision_hold"
@@ -127,7 +127,7 @@ async def test_t_o1_same_hash_never_bypasses_lease_expiry_hold_or_approval(clien
         return
     if gate != "unapproved":
         accepted = await client.post("/api/v1/agent-mail/continuation-decisions",
-                                     headers={"X-Deck-Session-Token": tokens[0]}, json=decision)
+                                     headers={"X-Synth-City-Session-Token": tokens[0]}, json=decision)
         assert accepted.status_code == 200, accepted.text
     if gate == "expired":
         revision.expires_at = datetime.utcnow() - timedelta(seconds=1)
@@ -136,7 +136,7 @@ async def test_t_o1_same_hash_never_bypasses_lease_expiry_hold_or_approval(clien
         workspace.lease_token = "new-acquisition-token"
         await db.commit()
     result = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/{revision.revision}/ack",
-                               headers={"X-Deck-Session-Token": tokens[1]},
+                               headers={"X-Synth-City-Session-Token": tokens[1]},
                                json={"dispatch_nonce": item.dispatch_nonce, "lease_token": LEASE_TOKEN})
     await db.refresh(revision)
     await db.refresh(workspace)

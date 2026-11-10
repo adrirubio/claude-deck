@@ -101,8 +101,8 @@ const emptyScope: TeamGithubScopeInput = {
   repo_owner: '',
   repo_name: '',
   repo_path: '',
-  dispatch_label: 'claude-deck-ready',
-  design_label: 'claude-deck-design',
+  dispatch_label: 'albiex-synth-city-ready',
+  design_label: 'albiex-synth-city-design',
   merge_policy: 'human',
   max_approval_rounds: 3,
   max_concurrent_dispatched: 3,
@@ -191,8 +191,8 @@ export function ScopeDialog({
         base_ref: form.base_ref?.trim() || 'origin/HEAD',
         build_dir_template: form.build_dir_template?.trim() || 'build',
         build_command_hint: form.build_command_hint?.trim() || null,
-        dispatch_label: form.dispatch_label?.trim() || 'claude-deck-ready',
-        design_label: form.design_label?.trim() || 'claude-deck-design',
+        dispatch_label: form.dispatch_label?.trim() || 'albiex-synth-city-ready',
+        design_label: form.design_label?.trim() || 'albiex-synth-city-design',
       }
       setNumberInputs(Object.fromEntries(scopeNumberKeys.map((key) => [key, String(input[key])])) as Record<ScopeNumberKey, string>)
       if (state?.mode === 'edit' && state.scope) {

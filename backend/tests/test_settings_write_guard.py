@@ -78,7 +78,7 @@ async def test_a_write_without_the_key_is_refused(client, monkeypatch, method, p
     monkeypatch.setattr(settings, "operator_token", KEY)
 
     missing = await client.request(method, path)
-    wrong = await client.request(method, path, headers={"X-Deck-Operator-Token": "wrong"})
+    wrong = await client.request(method, path, headers={"X-Synth-City-Operator-Token": "wrong"})
 
     assert (missing.status_code, missing.json()["detail"]) == (401, "operator_token_required")
     assert (wrong.status_code, wrong.json()["detail"]) == (401, "operator_token_invalid")
@@ -90,7 +90,7 @@ async def test_a_write_with_the_key_reaches_the_route(client, monkeypatch):
 
     response = await client.post(
         "/api/v1/config/validate-settings",
-        headers={"X-Deck-Operator-Token": KEY},
+        headers={"X-Synth-City-Operator-Token": KEY},
         json={"settings": {}},
     )
 

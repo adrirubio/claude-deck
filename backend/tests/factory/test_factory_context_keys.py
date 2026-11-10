@@ -17,7 +17,7 @@ from app.models.database import (
 from app.services import factory_audit_service as audit
 
 OPERATOR = "synthetic-context-keys-operator"
-HEADERS = {"X-Deck-Operator-Token": OPERATOR}
+HEADERS = {"X-Synth-City-Operator-Token": OPERATOR}
 NOW = datetime(2026, 10, 13, 12, 0, 0)
 
 pytestmark = pytest.mark.asyncio
@@ -99,7 +99,7 @@ async def test_the_listing_needs_the_director_key(client, store, monkeypatch):
     from app.config import settings
 
     assert (await client.get("/api/v1/factory/context-keys")).status_code == 401
-    wrong = await client.get("/api/v1/factory/context-keys", headers={"X-Deck-Operator-Token": "wrong"})
+    wrong = await client.get("/api/v1/factory/context-keys", headers={"X-Synth-City-Operator-Token": "wrong"})
     assert wrong.status_code == 401
     monkeypatch.setattr(settings, "operator_token", "")
     assert (await client.get("/api/v1/factory/context-keys", headers=HEADERS)).status_code == 503

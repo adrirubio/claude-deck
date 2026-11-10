@@ -11,7 +11,7 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 export function operatorWriteHeaders(method = 'GET'): Record<string, string> {
   if (READ_METHODS.has(method.toUpperCase())) return {}
   const token = getOperatorToken()
-  return token ? { 'X-Deck-Operator-Token': token } : {}
+  return token ? { 'X-Synth-City-Operator-Token': token } : {}
 }
 
 /**

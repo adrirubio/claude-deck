@@ -64,16 +64,16 @@ def require_current_mail_session(session: MailAgentSession) -> None:
 
 
 async def mail_session(
-    x_deck_session_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[MailAgentSession]:
     """Resolve the calling session from its capability token."""
-    if not x_deck_session_token:
+    if not x_synth_city_session_token:
         if settings.mail_capability_tokens_required:
             raise HTTPException(status_code=401, detail="session_token_required")
         return None
 
-    hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+    hashed = agent_mail_service.hash_capability_token(x_synth_city_session_token)
     result = await db.execute(
         select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
     )
@@ -94,12 +94,12 @@ async def require_mail_session(
 
 
 async def close_mail_session(
-    x_deck_session_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> MailAgentSession:
-    if not x_deck_session_token:
+    if not x_synth_city_session_token:
         raise HTTPException(status_code=401, detail="session_token_required")
-    hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+    hashed = agent_mail_service.hash_capability_token(x_synth_city_session_token)
     sessions = (await db.execute(
         select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
     )).scalars().all()
@@ -117,7 +117,7 @@ def require_session_slot(session: MailAgentSession) -> int:
 
 
 async def require_operator(
-    x_deck_operator_token: str | None = Header(default=None),
+    x_synth_city_operator_token: str | None = Header(default=None),
 ) -> None:
     """Authenticate the operator by a secret no agent is given.
 
@@ -156,10 +156,10 @@ async def require_operator(
     expected = settings.operator_token
     if not expected:
         raise HTTPException(status_code=503, detail="operator_token_unconfigured")
-    if not x_deck_operator_token:
+    if not x_synth_city_operator_token:
         raise HTTPException(status_code=401, detail="operator_token_required")
     if not hmac.compare_digest(
-        x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
+        x_synth_city_operator_token.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="operator_token_invalid")
 
@@ -169,7 +169,7 @@ _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 async def require_operator_for_writes(
     request: Request,
-    x_deck_operator_token: str | None = Header(default=None),
+    x_synth_city_operator_token: str | None = Header(default=None),
 ) -> None:
     """Guard the writes of a router that changes the controller's own settings.
 
@@ -184,16 +184,16 @@ async def require_operator_for_writes(
     """
     if request.method in _READ_METHODS or not settings.operator_token:
         return
-    await require_operator(x_deck_operator_token)
+    await require_operator(x_synth_city_operator_token)
 
 
 async def require_mail_session_or_operator(
-    x_deck_session_token: Optional[str] = Header(default=None),
-    x_deck_operator_token: Optional[str] = Header(default=None),
+    x_synth_city_session_token: Optional[str] = Header(default=None),
+    x_synth_city_operator_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[MailAgentSession]:
     """Authenticate either one agent session or the configured operator."""
-    if x_deck_session_token:
-        return await mail_session(x_deck_session_token, db)
-    await require_operator(x_deck_operator_token)
+    if x_synth_city_session_token:
+        return await mail_session(x_synth_city_session_token, db)
+    await require_operator(x_synth_city_operator_token)
     return None

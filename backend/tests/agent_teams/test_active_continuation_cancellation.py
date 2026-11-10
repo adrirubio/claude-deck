@@ -36,7 +36,7 @@ from app.services.github_dispatch_service import github_dispatch_service
 
 
 OPERATOR_TOKEN = "test-operator-token-for-active-continuation-cancel"
-OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+OPERATOR_HEADERS = {"X-Synth-City-Operator-Token": OPERATOR_TOKEN}
 
 
 @pytest.fixture(autouse=True)

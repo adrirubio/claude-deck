@@ -84,7 +84,7 @@ LEGACY_SYSTEM_SUBJECT_PATTERN = re.compile(
     r"|Continuation revision [0-9]+ cancelled for work item [0-9]+"
 )
 INBOX_CHECK_PROMPT = (
-    "Claude Deck Agent Mail: call `synth_city_check_inbox(unread_only=False)` now. "
+    "Albiex Synth City Agent Mail: call `synth_city_check_inbox(unread_only=False)` now. "
     "Read task and review messages. Then answer pending context requests and handoffs. "
     "After Mail handling, continue your current unfinished authorized task. "
     "An empty inbox does not mean the assignment is complete. "
