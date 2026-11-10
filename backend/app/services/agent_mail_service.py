@@ -84,7 +84,7 @@ LEGACY_SYSTEM_SUBJECT_PATTERN = re.compile(
     r"|Continuation revision [0-9]+ cancelled for work item [0-9]+"
 )
 INBOX_CHECK_PROMPT = (
-    "Claude Deck Agent Mail: call `deck_check_inbox(unread_only=False)` now. "
+    "Claude Deck Agent Mail: call `synth_city_check_inbox(unread_only=False)` now. "
     "Read task and review messages. Then answer pending context requests and handoffs. "
     "After Mail handling, continue your current unfinished authorized task. "
     "An empty inbox does not mean the assignment is complete. "
@@ -2659,8 +2659,8 @@ class AgentMailService:
                 f"{me.pending_count} pending request(s) awaiting your answer."
             )
         lines.append(
-            "Coordinate via MCP tools: deck_check_inbox, deck_request_context, "
-            "deck_send_message, deck_create_handoff."
+            "Coordinate via MCP tools: synth_city_check_inbox, synth_city_request_context, "
+            "synth_city_send_message, synth_city_create_handoff."
         )
         return "\n".join(lines)
 
@@ -2677,7 +2677,7 @@ class AgentMailService:
             parts.append(f"{pending} pending request(s)")
         return (
             f"[Agent Mail] You have {' and '.join(parts)}. "
-            "Call deck_check_inbox when convenient."
+            "Call synth_city_check_inbox when convenient."
         )
 
 

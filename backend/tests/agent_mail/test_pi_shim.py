@@ -65,8 +65,8 @@ def test_private_close_ack_is_terminal_and_never_returns_capability(shim, monkey
     shim._state["capability_token"] = "synthetic-token"
     calls = []
     monkeypatch.setattr(shim, "_request", lambda method, path, **kwargs: calls.append((method, path)) or {"ok": True, "data": {"closed": True}})
-    assert shim.__deck_mail_close_generation() == {"ok": True, "closed": True}
-    assert shim.__deck_mail_close_generation() == {"ok": True, "closed": True}
+    assert shim.__synth_city_mail_close_generation() == {"ok": True, "closed": True}
+    assert shim.__synth_city_mail_close_generation() == {"ok": True, "closed": True}
     assert calls == [("POST", "/agent/close")]
     assert shim._heartbeat_stop.is_set()
     assert not shim._ensure_registered()["ok"]
@@ -75,7 +75,7 @@ def test_private_close_ack_is_terminal_and_never_returns_capability(shim, monkey
 def test_private_close_without_ack_does_not_claim_terminal_success(shim, monkeypatch):
     shim._state["capability_token"] = "synthetic-token"
     monkeypatch.setattr(shim, "_request", lambda *_args, **_kwargs: {"ok": True, "data": {}})
-    assert not shim.__deck_mail_close_generation()["ok"]
+    assert not shim.__synth_city_mail_close_generation()["ok"]
     assert not shim._state["closed"] and shim._state["closing"]
 
 
@@ -96,14 +96,14 @@ def test_actual_mcp_tool_list_keeps_close_private_to_pi(monkeypatch, provider):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = {tool.name for tool in asyncio.run(module.mcp.list_tools())}
-    assert ("__deck_mail_close_generation" in names) == (provider == "pi-cli")
-    assert "deck_decide_continuation" in names
-    assert len({name for name in names if name.startswith("deck_")}) == 36
-    assert "deck_supervisor_checkin" in names
-    assert {"deck_get_backlog_coordination", "deck_report_backlog_assessment",
-            "deck_report_owner_followup",
-            "deck_get_operator_action_contexts", "deck_prepare_operator_action_contexts",
-            "deck_prepare_work_remaining_summary"} <= set(names)
+    assert ("__synth_city_mail_close_generation" in names) == (provider == "pi-cli")
+    assert "synth_city_decide_continuation" in names
+    assert len({name for name in names if name.startswith("synth_city_")}) == 36
+    assert "synth_city_supervisor_checkin" in names
+    assert {"synth_city_get_backlog_coordination", "synth_city_report_backlog_assessment",
+            "synth_city_report_owner_followup",
+            "synth_city_get_operator_action_contexts", "synth_city_prepare_operator_action_contexts",
+            "synth_city_prepare_work_remaining_summary"} <= set(names)
 
 
 def test_delayed_bind_pending_never_starts_a_send_after_deadline(shim, monkeypatch):
@@ -159,8 +159,8 @@ def test_whoami_requests_share_the_registration_deadline(shim, monkeypatch):
             clock[0] = 14.5
             return {"ok": True, "data": {"member": {"id": 1}}}
         return {"ok": True, "data": {"members": [], "unread_count": 0, "pending_count": 0}}
-    monkeypatch.setattr(shim, "_deck_request", request)
+    monkeypatch.setattr(shim, "_synth_city_request", request)
     monkeypatch.setattr(shim, "_start_heartbeat_thread", lambda: None)
-    assert shim.deck_whoami()["ok"]
+    assert shim.synth_city_whoami()["ok"]
     assert len(calls) == 3 and all(deadline == 15.0 for _, deadline in calls)
     assert not hasattr(shim._request_budget, "deadline")

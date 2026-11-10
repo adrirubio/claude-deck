@@ -48,7 +48,7 @@ def test_owner_and_leader_receive_same_review_rule():
     leader = github_dispatch_service._leader_unblock_instructions()
     _assert_review_authority(owner)
     _assert_review_authority(leader)
-    assert "deck_approve_work_item" in owner
+    assert "synth_city_approve_work_item" in owner
 
 
 @pytest.mark.parametrize("status", ["escalated", "merged", "failed", "cancelled",

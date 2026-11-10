@@ -20,7 +20,7 @@ SHA = "0b6274c9ced07978fb14976aa84d87e58a86ef28"
 BODY = (
     f"Release the workspace for #5 at {SHA}:\n\n"
     "```\n"
-    "deck_report_dispatch_status(\n"
+    "synth_city_report_dispatch_status(\n"
     "    work_item_id=1,\n"
     '    status="workspace_released",\n'
     f'    lease_token="{LEASE}",\n'

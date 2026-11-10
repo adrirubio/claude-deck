@@ -10,7 +10,7 @@ def test_supervisor_checkin_fails_closed_without_actor_credential(monkeypatch):
     monkeypatch.delenv("CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN", raising=False)
     monkeypatch.setattr(shim, "_guard", lambda: pytest.fail("Member registration must not run"))
     monkeypatch.setattr(shim.httpx, "request", lambda *a, **kw: pytest.fail("HTTP must not run"))
-    assert shim.deck_supervisor_checkin(7, "2026-10-13T02:00:00Z") == {
+    assert shim.synth_city_supervisor_checkin(7, "2026-10-13T02:00:00Z") == {
         "ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
 
 
@@ -26,7 +26,7 @@ def test_supervisor_checkin_sends_only_actor_authentication(monkeypatch):
         assert kwargs["json"] == {"preset_id": 7, "next_check_at": "2026-10-13T02:00:00Z", "note": "Checked."}
         return httpx.Response(200, json={"status": "healthy"}, request=httpx.Request(method, url))
     monkeypatch.setattr(shim.httpx, "request", request)
-    assert shim.deck_supervisor_checkin(7, "2026-10-13T02:00:00Z", "Checked.") == {
+    assert shim.synth_city_supervisor_checkin(7, "2026-10-13T02:00:00Z", "Checked.") == {
         "ok": True, "data": {"status": "healthy"}}
 
 
@@ -40,7 +40,7 @@ def test_supervisor_transport_never_returns_error_prose(monkeypatch, mode):
             raise httpx.ReadTimeout(secret)
         return httpx.Response(403, json={"detail": secret}, request=httpx.Request(method, url))
     monkeypatch.setattr(shim.httpx, "request", request)
-    result = shim.deck_supervisor_checkin(7, "2026-10-13T02:00:00Z")
+    result = shim.synth_city_supervisor_checkin(7, "2026-10-13T02:00:00Z")
     assert not result["ok"]
     assert secret not in json.dumps(result)
     if mode == "timeout":
@@ -54,8 +54,8 @@ def test_member_message_transport_can_use_the_current_supervisor_address(monkeyp
     monkeypatch.setattr(shim, "_counts", lambda: {})
     monkeypatch.setattr(shim, "_request", lambda method, path, **kwargs:
         sent.append((method, path, kwargs["json"])) or {"ok": True, "data": {"id": 19}})
-    assert shim.deck_send_message(to_supervisor_actor_id=7, body="Check the incident.")["message_id"] == 19
+    assert shim.synth_city_send_message(to_supervisor_actor_id=7, body="Check the incident.")["message_id"] == 19
     assert sent == [("POST", "/supervisor/messages", {"actor_id": 7, "subject": None,
                                                       "body_markdown": "Check the incident."})]
-    assert not shim.deck_send_message(to_member_id=1, to_supervisor_actor_id=7, body="Ambiguous.")["ok"]
+    assert not shim.synth_city_send_message(to_member_id=1, to_supervisor_actor_id=7, body="Ambiguous.")["ok"]
     assert len(sent) == 1

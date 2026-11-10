@@ -337,7 +337,7 @@ export function AgentMailPage() {
               <p>
                 {!hasConfiguredIntegration
                   ? 'Install the Agent Mail MCP server for Claude Code, Codex, GitHub Copilot CLI, or OpenCode CLI before agents can send, receive, or answer mailbox requests.'
-                  : 'Start or resume an agent in a repository, then have it call deck_whoami once so Claude Deck can attach it to a participant.'}
+                  : 'Start or resume an agent in a repository, then have it call synth_city_whoami once so Claude Deck can attach it to a participant.'}
               </p>
               <div className="flex shrink-0 flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setHelpOpen(true)}>
@@ -361,7 +361,7 @@ export function AgentMailPage() {
           <Terminal className="h-4 w-4" />
           <AlertTitle>Codex MCP installed, agent check-in pending</AlertTitle>
           <AlertDescription>
-            Agent Bridge can see the Codex tmux session. Ask that agent to run <code>deck_whoami</code> once from its repository so Agent Mail can mark it connected.
+            Agent Bridge can see the Codex tmux session. Ask that agent to run <code>synth_city_whoami</code> once from its repository so Agent Mail can mark it connected.
           </AlertDescription>
         </Alert>
       )}

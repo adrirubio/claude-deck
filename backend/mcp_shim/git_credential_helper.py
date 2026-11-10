@@ -22,7 +22,7 @@ def _read_credential_input() -> dict[str, str]:
 
 
 def _request_credential(
-    deck_url: str,
+    synth_city_url: str,
     lease: str,
     values: dict[str, str],
 ) -> tuple[str, str]:
@@ -35,7 +35,7 @@ def _request_credential(
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        f"{deck_url.rstrip('/')}/api/v1/agent-teams/git-credential",
+        f"{synth_city_url.rstrip('/')}/api/v1/agent-teams/git-credential",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -53,7 +53,7 @@ def _request_credential(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--deck-url", required=True)
+    parser.add_argument("--synth-city-url", required=True)
     parser.add_argument("--lease", required=True)
     parser.add_argument("operation", nargs="?", default="")
     args = parser.parse_args(argv)
@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.operation != "get":
         return 0
     try:
-        username, password = _request_credential(args.deck_url, args.lease, values)
+        username, password = _request_credential(args.synth_city_url, args.lease, values)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError):
         print("Claude Deck could not provide a GitHub credential", file=sys.stderr)
         return 1

@@ -27,9 +27,9 @@ def render_manifest() -> str:
             "description": tool.description,
             "inputSchema": tool.inputSchema,
         }
-        if tool.name.startswith("deck_"):
+        if tool.name.startswith("synth_city_"):
             public.append(entry)
-        elif tool.name == "__deck_mail_close_generation":
+        elif tool.name == "__synth_city_mail_close_generation":
             private.append(entry)
         else:
             raise ValueError(f"Unexpected MCP tool: {tool.name}")
