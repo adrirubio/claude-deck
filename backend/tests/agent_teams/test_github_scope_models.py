@@ -43,8 +43,8 @@ async def test_team_github_scope_round_trips(db):
     db.add(scope)
     await db.commit()
     await db.refresh(scope)
-    assert scope.dispatch_label == "claude-deck-ready"
-    assert scope.design_label == "claude-deck-design"
+    assert scope.dispatch_label == "albiex-synth-city-ready"
+    assert scope.design_label == "albiex-synth-city-design"
     assert scope.merge_policy == "human"
     assert scope.review_hold_label is None
     assert scope.max_approval_rounds == 3

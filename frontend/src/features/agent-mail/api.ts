@@ -19,7 +19,7 @@ export function fetchAgentMailAuthenticationStatus(): Promise<{ director_key_con
 
 function directorReadHeaders(): Record<string, string> {
   const token = getOperatorToken()
-  return token ? { 'X-Deck-Operator-Token': token } : {}
+  return token ? { 'X-Synth-City-Operator-Token': token } : {}
 }
 
 export function fetchAgentMailTeam(sync = true): Promise<TeamListResponse> {
@@ -121,7 +121,7 @@ export function queueAgentMailInboxCheck(
   if (!operatorToken) return Promise.reject(new Error('Set the Director key in Teams before requesting a wake.'))
   return apiClient<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }>(
     `agent-mail/members/${memberId}/queue-inbox-check`,
-    { method: 'POST', headers: { 'X-Deck-Operator-Token': operatorToken } }
+    { method: 'POST', headers: { 'X-Synth-City-Operator-Token': operatorToken } }
   )
 }
 

@@ -45,22 +45,22 @@ async def registered(db, tmp_path):
 async def test_closed_key_never_registers_or_rebinds(client, db, registered, monkeypatch, enforce, presented):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", enforce)
     request, member, session, token = registered
-    close = await client.post("/api/v1/agent-mail/agent/close", headers={"X-Deck-Session-Token": token})
+    close = await client.post("/api/v1/agent-mail/agent/close", headers={"X-Synth-City-Session-Token": token})
     assert close.status_code == 200 and close.json()["closed"]
-    headers = {} if presented is None else {"X-Deck-Session-Token": token if presented == "correct" else presented}
+    headers = {} if presented is None else {"X-Synth-City-Session-Token": token if presented == "correct" else presented}
     response = await client.post("/api/v1/agent-mail/agent/register", json=request.model_dump(), headers=headers)
     assert response.status_code == 409
     await db.refresh(session)
     assert session.member_id == member.id and session.mailbox_status == "offline"
     assert session.closed_at is not None
-    inbox = await client.get("/api/v1/agent-mail/agent/inbox", headers={"X-Deck-Session-Token": token})
+    inbox = await client.get("/api/v1/agent-mail/agent/inbox", headers={"X-Synth-City-Session-Token": token})
     assert inbox.status_code == 401 and inbox.json()["detail"] == "session_token_closed"
 
 
 @pytest.mark.asyncio
 async def test_self_close_replay_is_private_and_heartbeats_cannot_reopen(client, db, registered):
     request, _, session, token = registered
-    headers = {"X-Deck-Session-Token": token}
+    headers = {"X-Synth-City-Session-Token": token}
     assert (await client.post("/api/v1/agent-mail/agent/close", headers=headers)).status_code == 200
     assert (await client.post("/api/v1/agent-mail/agent/close", headers=headers)).status_code == 200
     assert (await client.post("/api/v1/agent-mail/agent/close")).status_code == 401
@@ -84,7 +84,7 @@ async def test_operator_retirement_exact_identity_and_admission_barrier(client, 
     monkeypatch.setattr(peer_process, "pane_is_alive_strict", lambda *_: liveness)
     payload = {"pane_pid": 54321, "pane_proc_start": "111"}
     assert (await client.post("/api/v1/agent-mail/sessions/retire-dead-pane", json=payload)).status_code == 401
-    response = await client.post("/api/v1/agent-mail/sessions/retire-dead-pane", json=payload, headers={"X-Deck-Operator-Token": "fixture-operator"})
+    response = await client.post("/api/v1/agent-mail/sessions/retire-dead-pane", json=payload, headers={"X-Synth-City-Operator-Token": "fixture-operator"})
     await db.refresh(session)
     if liveness is not False:
         assert response.status_code == 409 and session.closed_at is None
@@ -154,7 +154,7 @@ async def test_operator_retirement_rejects_path_pid(client, monkeypatch):
     response = await client.post(
         "/api/v1/agent-mail/sessions/retire-dead-pane",
         json={"pane_pid": "../../etc/passwd", "pane_proc_start": "1"},
-        headers={"X-Deck-Operator-Token": "fixture-operator"},
+        headers={"X-Synth-City-Operator-Token": "fixture-operator"},
     )
     assert response.status_code == 422
 

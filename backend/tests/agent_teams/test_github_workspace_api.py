@@ -60,7 +60,7 @@ def operator_token(monkeypatch):
     monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
 
 
-OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+OPERATOR_HEADERS = {"X-Synth-City-Operator-Token": OPERATOR_TOKEN}
 
 
 @pytest_asyncio.fixture

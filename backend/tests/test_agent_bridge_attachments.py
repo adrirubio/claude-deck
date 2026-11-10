@@ -75,7 +75,7 @@ async def _token(client) -> str:
 async def test_upload_image_attachment_persists_metadata_and_file(client, db):
     response = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("../../screen.png", PNG_BYTES, "image/png")},
         data={"prompt": "Please inspect\n{path}", "created_by": "test"},
     )
@@ -100,11 +100,11 @@ async def test_attachment_token_is_required_and_single_use(client):
     token = await _token(client)
     first = await client.get(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": token},
+        headers={"X-Synth-City-Terminal-Token": token},
     )
     second = await client.get(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": token},
+        headers={"X-Synth-City-Terminal-Token": token},
     )
     missing = await client.get("/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments")
 
@@ -118,13 +118,13 @@ async def test_attachment_token_is_bound_to_target_and_cannot_paste_anonymously(
     token = await _token(client)
     mismatched = await client.get(
         "/api/v1/agent-bridge/sessions/other:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": token},
+        headers={"X-Synth-City-Terminal-Token": token},
     )
     assert mismatched.status_code == 401
 
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("screen.png", PNG_BYTES, "image/png")},
     )
     assert upload.status_code == 200
@@ -135,7 +135,7 @@ async def test_attachment_token_is_bound_to_target_and_cannot_paste_anonymously(
     )
     refused = await client.post(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{upload.json()['id']}/paste",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         json={"submit": False},
     )
     assert refused.status_code == 401
@@ -146,7 +146,7 @@ async def test_attachment_token_is_bound_to_target_and_cannot_paste_anonymously(
 async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeypatch):
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("screen.png", PNG_BYTES, "image/png")},
     )
     assert upload.status_code == 200
@@ -176,7 +176,7 @@ async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeyp
     url = f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{upload.json()['id']}/paste"
     refused = await client.post(
         url,
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         json={"submit": False},
     )
     assert refused.status_code == 403
@@ -186,7 +186,7 @@ async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeyp
     principal.pane_id = "%8"
     wrong_pane = await client.post(
         url,
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         json={"submit": False},
     )
     assert wrong_pane.status_code == 403
@@ -196,7 +196,7 @@ async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeyp
     principal.bound_pane_pid = 40404
     wrong_pid = await client.post(
         url,
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         json={"submit": False},
     )
     assert wrong_pid.status_code == 403
@@ -205,7 +205,7 @@ async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeyp
     principal.bound_pane_pid = 31337
     allowed = await client.post(
         url,
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         json={"submit": False},
     )
     assert allowed.status_code == 200
@@ -217,7 +217,7 @@ async def test_attachment_endpoint_rejects_cross_origin(client):
     response = await client.get(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
         headers={
-            "X-Claude-Deck-Terminal-Token": await _token(client),
+            "X-Synth-City-Terminal-Token": await _token(client),
             "Origin": "https://evil.example",
             "Host": "test",
         },
@@ -230,7 +230,7 @@ async def test_attachment_endpoint_rejects_cross_origin(client):
 async def test_upload_rejects_unsupported_file(client):
     response = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("notes.txt", b"not an image", "text/plain")},
     )
 
@@ -242,7 +242,7 @@ async def test_upload_rejects_unsupported_file(client):
 async def test_paste_attachment_sends_literal_text_then_delayed_enter(client, monkeypatch):
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("screen.png", PNG_BYTES, "image/png")},
     )
     attachment_id = upload.json()["id"]
@@ -261,8 +261,8 @@ async def test_paste_attachment_sends_literal_text_then_delayed_enter(client, mo
     response = await client.post(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}/paste",
         headers={
-            "X-Claude-Deck-Terminal-Token": await _token(client),
-            "X-Deck-Operator-Token": "test-operator-secret",
+            "X-Synth-City-Terminal-Token": await _token(client),
+            "X-Synth-City-Operator-Token": "test-operator-secret",
         },
         json={"submit": True, "prefix": "Look: ", "suffix": "\nthanks"},
     )
@@ -279,7 +279,7 @@ async def test_paste_attachment_sends_literal_text_then_delayed_enter(client, mo
 async def test_paste_attachment_can_require_interactive_relay(client, monkeypatch):
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("screen.png", PNG_BYTES, "image/png")},
     )
     attachment_id = upload.json()["id"]
@@ -297,8 +297,8 @@ async def test_paste_attachment_can_require_interactive_relay(client, monkeypatc
     response = await client.post(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}/paste",
         headers={
-            "X-Claude-Deck-Terminal-Token": await _token(client),
-            "X-Deck-Operator-Token": "test-operator-secret",
+            "X-Synth-City-Terminal-Token": await _token(client),
+            "X-Synth-City-Operator-Token": "test-operator-secret",
         },
         json={"submit": False, "require_interactive_relay": True},
     )
@@ -312,7 +312,7 @@ async def test_paste_attachment_can_require_interactive_relay(client, monkeypatc
 async def test_delete_attachment_removes_file_and_row(client, db):
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
         files={"file": ("screen.png", PNG_BYTES, "image/png")},
     )
     attachment_id = upload.json()["id"]
@@ -322,7 +322,7 @@ async def test_delete_attachment_removes_file_and_row(client, db):
 
     response = await client.delete(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={"X-Synth-City-Terminal-Token": await _token(client)},
     )
 
     assert response.status_code == 200

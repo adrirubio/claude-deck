@@ -210,7 +210,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       const latest = await apiClient<Summary>(path, { cache: 'no-store' })
       if (JSON.stringify(policy(latest)) !== JSON.stringify(originalPolicy.current)) throw new Error('Coordination policy changed. Close and reopen this dialog to review it.')
       await withOperatorToken((token) => apiClient<Summary>(`${path}-policy`, {
-        method: 'PUT', headers: { 'X-Deck-Operator-Token': token },
+        method: 'PUT', headers: { 'X-Synth-City-Operator-Token': token },
         body: JSON.stringify({ expected_version: latest.version, enabled, issue_numbers: selected,
           fallback_seconds: fallback, max_daily_requests: cap }),
       }))

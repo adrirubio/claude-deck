@@ -59,7 +59,7 @@ async def test_message_list_never_returns_a_lease_token(client, db):
     owner = await _member(db, "lease-owner", "lease-owner")
     await _brief(db, owner)
 
-    response = await client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Operator-Token": "test-director-key"})
+    response = await client.get("/api/v1/agent-mail/messages", headers={"X-Synth-City-Operator-Token": "test-director-key"})
 
     assert response.status_code == 200
     assert LEASE not in response.text
@@ -79,7 +79,7 @@ async def test_thread_read_never_returns_a_lease_token(client, db):
     sent = await _brief(db, owner)
 
     for query in ("", f"?member_id={owner.id}"):
-        response = await client.get(f"/api/v1/agent-mail/messages/{sent.id}/thread{query}", headers={"X-Deck-Operator-Token": "test-director-key"})
+        response = await client.get(f"/api/v1/agent-mail/messages/{sent.id}/thread{query}", headers={"X-Synth-City-Operator-Token": "test-director-key"})
         assert response.status_code == 200
         assert LEASE not in response.text
         assert 'lease_token="[redacted]"' in response.json()["root"]["body_markdown"]
@@ -102,7 +102,7 @@ async def test_external_actor_thread_never_returns_a_lease_token(client, db):
     owner = await _member(db, "lease-external", "lease-external")
     actor = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={"actor_key": "lease-supervisor", "display_name": "Supervisor"},
     )
     bearer = {"Authorization": f"Bearer {actor.json()['token']}"}
@@ -125,7 +125,7 @@ async def test_external_request_status_reads_never_return_a_lease_token(client, 
     owner = await _member(db, "lease-request", "lease-request")
     actor = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={"actor_key": "lease-requester", "display_name": "Supervisor"},
     )
     bearer = {"Authorization": f"Bearer {actor.json()['token']}"}

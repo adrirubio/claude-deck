@@ -1139,7 +1139,7 @@ import hashlib as _hashlib
 import httpx as _httpx
 
 _OPERATOR = "synthetic-c08-operator"
-_OPERATOR_HEADERS = {"X-Deck-Operator-Token": _OPERATOR}
+_OPERATOR_HEADERS = {"X-Synth-City-Operator-Token": _OPERATOR}
 _LEADER = {"slot": 11, "member": 21, "session": 31, "token": "synthetic-leader-session"}
 _OWNER = {"slot": 12, "member": 22, "session": 32, "token": "synthetic-owner-session"}
 _OTHER = {"slot": 13, "member": 23, "session": 33, "token": "synthetic-other-session"}
@@ -1147,7 +1147,7 @@ _FIXED_LEASE = datetime(2026, 10, 6, 11, 30, 0)
 
 
 def _session_headers(identity: dict) -> dict:
-    return {"X-Deck-Session-Token": identity["token"]}
+    return {"X-Synth-City-Session-Token": identity["token"]}
 
 
 @pytest_asyncio.fixture

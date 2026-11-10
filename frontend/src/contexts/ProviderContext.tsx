@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useProviders } from '@/hooks/useProviders'
 import type { AgentProviderId, AgentProviderStatus } from '@/types/providers'
+import { migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from '@/lib/browserStorageMigration'
 
 interface ProviderContextValue {
   providers: AgentProviderStatus[]
@@ -13,11 +14,12 @@ interface ProviderContextValue {
 }
 
 const DEFAULT_PROVIDER: AgentProviderId = 'claude-code'
-const STORAGE_KEY = 'claude-deck:selected-provider'
+const STORAGE_KEY = PRODUCT_STORAGE_KEYS.provider
 
 const ProviderContext = createContext<ProviderContextValue | undefined>(undefined)
 
 function readStoredProvider(): AgentProviderId {
+  migrateBrowserStorage()
   const stored = window.localStorage.getItem(STORAGE_KEY)
   return stored === 'codex-cli'
     || stored === 'claude-code'

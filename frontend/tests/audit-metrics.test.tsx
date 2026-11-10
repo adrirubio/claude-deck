@@ -162,12 +162,12 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     expect(metricsUrl.pathname).toBe("/api/v1/factory/metrics");
     expect(metricsUrl.searchParams.get("filter_scope")).toBe("all");
     expect(metricsUrl.searchParams.has("page")).toBe(false);
-    expect(stub.metrics()[0].headers["X-Deck-Operator-Token"]).toBeUndefined();
+    expect(stub.metrics()[0].headers["X-Synth-City-Operator-Token"]).toBeUndefined();
     const auditUrl = stub.audit()[0].url;
     expect(auditUrl.pathname).toBe("/api/v1/factory/audit-events");
     expect(auditUrl.searchParams.get("page")).toBe("1");
     expect(auditUrl.searchParams.get("page_size")).toBe("25");
-    expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-operator");
+    expect(stub.audit()[0].headers["X-Synth-City-Operator-Token"]).toBe("synthetic-operator");
 
     // #517: the plain summary comes first. The definitions sit behind the "?" buttons.
     const summary = screen.getByRole("region", { name: "Delivery in this window" });
@@ -271,7 +271,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
       }
       const [, a1, b, a2] = stub.audit();
       for (const [call, team] of [[a1, "team:a"], [b, "team:b"], [a2, "team:a"]] as const) {
-        expect(call.headers["X-Deck-Operator-Token"]).toBe("synthetic-operator");
+        expect(call.headers["X-Synth-City-Operator-Token"]).toBe("synthetic-operator");
         expect(call.url.searchParams.get("page")).toBe("1");
         expect(call.url.searchParams.get("page_size")).toBe("25");
         expect(call.url.searchParams.get("team_context_key")).toBe(team);
@@ -383,7 +383,7 @@ describe("AuditMetricsPage at the HTTP boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use key" }));
     await waitFor(() => expect(stub.audit()).toHaveLength(1));
     expect(getOperatorToken()).toBe("synthetic-submitted");
-    expect(stub.audit()[0].headers["X-Deck-Operator-Token"]).toBe("synthetic-submitted");
+    expect(stub.audit()[0].headers["X-Synth-City-Operator-Token"]).toBe("synthetic-submitted");
     expect(stub.audit()[0].url.searchParams.has("team_context_key")).toBe(false);
     const after = Date.parse(stub.audit()[0].url.searchParams.get("occurred_after") ?? "");
     expect(Date.now() - after).toBeGreaterThan(29 * 24 * 3600 * 1000);

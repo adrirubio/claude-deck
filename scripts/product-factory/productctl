@@ -4,7 +4,7 @@ import argparse,datetime,json,os,pathlib,pwd,re,subprocess,sys,urllib.request
 BASE=pathlib.Path('/opt/claude-deck-product');STATE=BASE/'state';WORK=pathlib.Path('/home/deckproductctl/work');URL='http://127.0.0.1:8011';ENV=BASE/'controller/backend/.env'
 def cfg():return dict(l.split('=',1) for l in ENV.read_text().splitlines() if '=' in l)
 def api(method,path,body=None):
- req=urllib.request.Request(URL+'/api/v1'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Content-Type':'application/json','X-Deck-Operator-Token':cfg()['OPERATOR_TOKEN']})
+ req=urllib.request.Request(URL+'/api/v1'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Content-Type':'application/json','X-Synth-City-Operator-Token':cfg()['OPERATOR_TOKEN']})
  with urllib.request.urlopen(req,timeout=120) as r:return json.load(r)
 def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def store(p,data):p.write_text(json.dumps(data,indent=2)+'\n')

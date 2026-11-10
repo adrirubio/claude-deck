@@ -160,10 +160,10 @@ async def test_cancellation_requires_operator_and_explicit_confirmation(review_d
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://review") as client:
             path = f"/api/v1/agent-teams/github-work-items/{f.item_id}/approval-requests/{request_id}/cancel"
-            operator = {"X-Deck-Operator-Token": "review-operator"}
+            operator = {"X-Synth-City-Operator-Token": "review-operator"}
             body = {"cancel": True, "dispatch_nonce": f.nonce, "reason": "safe recovery"}
             assert (await client.post(path, json=body)).status_code == 401
-            assert (await client.post(path, headers={"X-Deck-Session-Token": f.tokens[1]}, json=body)).status_code == 401
+            assert (await client.post(path, headers={"X-Synth-City-Session-Token": f.tokens[1]}, json=body)).status_code == 401
             assert (await client.post(path, headers=operator, json={**body, "cancel": False})).status_code == 422
             assert (await client.post(path, headers=operator, json={**body, "reason": "  "})).status_code == 400
             response = await client.post(path, headers=operator, json=body)

@@ -28,7 +28,7 @@ async def _authenticated_headers(client, cwd):
     response = await client.post("/api/v1/agent-mail/agent/register", json={
         "source": "mcp", "provider": "claude-code", "session_key": "mcp:s1", "cwd": str(cwd)})
     assert response.status_code == 200
-    return {"X-Deck-Session-Token": response.json()["capability_token"]}
+    return {"X-Synth-City-Session-Token": response.json()["capability_token"]}
 
 
 @pytest.mark.asyncio

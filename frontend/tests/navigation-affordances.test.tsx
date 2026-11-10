@@ -30,7 +30,7 @@ afterEach(() => { cleanup(); resetFactoryReads(); resetProviderOperations(); cle
 
 describe('navigation hierarchy preserves destinations and actions', () => {
   it('keeps harness cards as links to the harness page, no code names outside Technical details, refresh as a button and navigation GET-only', async () => {
-    localStorage.setItem('claude-deck:selected-provider', 'pi-cli')
+    localStorage.setItem('albiex-synth-city:selected-provider', 'pi-cli')
     const { requests } = fixtureFetch(standard)
     renderRoute(<ProviderProvider><Location/><HarnessesPage/></ProviderProvider>, '/harnesses', '*'); await settle()
     expect(screen.getAllByRole('link', { name: /^Open/ })[0]).toHaveAttribute('href', '/harnesses/claude-code')
@@ -40,7 +40,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     const before = requests.length
     fireEvent.click(screen.getAllByRole('link', { name: /^Open/ })[0]); await settle()
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses/claude-code')
-    expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
+    expect(localStorage.getItem('albiex-synth-city:selected-provider')).toBe('pi-cli')
     expect(requests).toHaveLength(before); expect(requests.every(r => r.method === 'GET')).toBe(true)
   })
   it('does not intercept modified or middle clicks on the item link and still permits ordinary router navigation', async () => {
@@ -84,7 +84,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
   })
   it('preserves descendant active state, collapsed accessible names and the saved native preference', async () => {
     function Shell() { const [collapsed, setCollapsed] = useState(false); return <SidebarContext.Provider value={{ collapsed, setCollapsed }}><Sidebar/><Location/></SidebarContext.Provider> }
-    localStorage.setItem('claude-deck:selected-provider', 'pi-cli'); fixtureFetch(standard)
+    localStorage.setItem('albiex-synth-city:selected-provider', 'pi-cli'); fixtureFetch(standard)
     renderRoute(<ProviderProvider><Shell/></ProviderProvider>, '/work/9', '*'); await settle()
     const nav = screen.getByRole('navigation', { name: 'Main navigation' })
     expect(within(nav).getByRole('link', { name: 'Work' })).toHaveAttribute('aria-current', 'page')
@@ -98,7 +98,7 @@ describe('navigation hierarchy preserves destinations and actions', () => {
     expect(within(nav).getByRole('link', { name: 'Harnesses' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/harnesses')
     expect(screen.queryByLabelText('Saved native harness preference')).not.toBeInTheDocument()
-    expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
+    expect(localStorage.getItem('albiex-synth-city:selected-provider')).toBe('pi-cli')
   })
   it('keeps the empty-factory Open Harnesses destination as a link without launching or requesting native data', async () => {
     const empty = { ...overview.normal.response, counts: Object.fromEntries(Object.keys(overview.normal.response.counts).map(k => [k, 0])), automation: { ...overview.normal.response.automation, configured_scopes: 0 } }

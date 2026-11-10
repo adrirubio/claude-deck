@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { expect, test } from '../support/guard'
 import { enterDirectorKey, DIRECTOR_KEY } from '../support/director-key'
 
-const OWNER = { 'X-Deck-Session-Token': 'e2e-seed-idle-agent' }
-const LEADER = { 'X-Deck-Session-Token': 'e2e-mail-leader' }
+const OWNER = { 'X-Synth-City-Session-Token': 'e2e-seed-idle-agent' }
+const LEADER = { 'X-Synth-City-Session-Token': 'e2e-mail-leader' }
 const ITEM = 3
 const NONCE = 'seed000000000003'
 
@@ -45,16 +45,16 @@ test('@active authenticated Mail plans, decisions, acknowledgements and reports 
 })
 
 test('@active Mail reads and actor creation require the correct credential', async ({ request }) => {
-  const invalidCredentials: Record<string, string>[] = [{}, { 'X-Deck-Operator-Token': 'wrong-key' },
-    { 'X-Deck-Session-Token': 'wrong-session' }]
+  const invalidCredentials: Record<string, string>[] = [{}, { 'X-Synth-City-Operator-Token': 'wrong-key' },
+    { 'X-Synth-City-Session-Token': 'wrong-session' }]
   for (const headers of invalidCredentials) {
     const read = await request.get('/api/v1/agent-mail/messages', { headers })
     expect(read.status()).toBe(401)
   }
-  const read = await request.get('/api/v1/agent-mail/messages', { headers: { 'X-Deck-Operator-Token': DIRECTOR_KEY } })
+  const read = await request.get('/api/v1/agent-mail/messages', { headers: { 'X-Synth-City-Operator-Token': DIRECTOR_KEY } })
   expect(read.status()).toBe(200)
   const actor = await request.post('/api/v1/external/agent-mail/actors', {
-    headers: { 'X-Deck-Operator-Token': DIRECTOR_KEY },
+    headers: { 'X-Synth-City-Operator-Token': DIRECTOR_KEY },
     data: { actor_key: 'e2e-mail-auth-flow', display_name: 'Mail flow actor' },
   })
   expect(actor.status()).toBe(200)

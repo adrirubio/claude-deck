@@ -138,7 +138,7 @@ async def test_delivery_policy_endpoints_require_operator_authority(client):
         ("GET", "/github-scopes/1/delivery-policy/history", None),
     ]:
         response = await client.request(method, "/api/v1/agent-teams" + path,
-                                        json=body, headers={"X-Deck-Operator-Token": "invalid"})
+                                        json=body, headers={"X-Synth-City-Operator-Token": "invalid"})
         assert response.status_code == 401
 
 
@@ -177,7 +177,7 @@ async def client(db, monkeypatch):
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Operator-Token": "agent-team-api-test-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "agent-team-api-test-operator-token"},
     ) as c:
         yield c
     app.dependency_overrides.clear()
@@ -1004,7 +1004,7 @@ async def test_leader_assignment_is_explicit_and_survives_reorder(client, db, tm
 async def test_team_creation_requires_operator(client):
     response = await client.post(
         "/api/v1/agent-teams/presets",
-        headers={"X-Deck-Operator-Token": ""},
+        headers={"X-Synth-City-Operator-Token": ""},
         json={"name": "Denied creation", "slots": []},
     )
     assert response.status_code == 401
@@ -1017,8 +1017,8 @@ async def test_campaign_fields_need_director_key(client, key):
     created = await client.post("/api/v1/agent-teams/presets", json={"name": "Campaign", "slots": []})
     path = f'/api/v1/agent-teams/presets/{created.json()["id"]}'
     changes = {"backlog_milestone": "Campaign", "planned_decisions": [{"text": "Decide promotion.", "state": "later"}]}
-    denied = await client.patch(path, json=changes, headers={"X-Deck-Operator-Token": key,
-                                                           "X-Deck-Session-Token": "synthetic-session-key"})
+    denied = await client.patch(path, json=changes, headers={"X-Synth-City-Operator-Token": key,
+                                                           "X-Synth-City-Session-Token": "synthetic-session-key"})
     assert denied.status_code == 401
     unchanged = (await client.get(path)).json()
     assert unchanged["backlog_milestone"] is None and unchanged["planned_decisions"] is None
@@ -1067,10 +1067,10 @@ async def test_v18_leader_update_invalid_change_matrix(client, db, tmp_path):
                 "expected_updated_at": updated_at or stamp, "reason": reason}
 
     # Unauthorized: missing and wrong operator credentials are refused.
-    missing_auth = await client.put(endpoint, headers={"X-Deck-Operator-Token": ""},
+    missing_auth = await client.put(endpoint, headers={"X-Synth-City-Operator-Token": ""},
                                     json=payload(a1.id))
     assert missing_auth.status_code == 401
-    wrong_auth = await client.put(endpoint, headers={"X-Deck-Operator-Token": "v18-wrong"},
+    wrong_auth = await client.put(endpoint, headers={"X-Synth-City-Operator-Token": "v18-wrong"},
                                   json=payload(a1.id))
     assert wrong_auth.status_code == 401
 

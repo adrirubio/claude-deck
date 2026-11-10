@@ -26,7 +26,7 @@ from app.models.database import (
 from app.services.github_workspace_service import github_workspace_service
 
 OPERATOR_TOKEN = "test-operator-token-for-force-release"
-OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+OPERATOR_HEADERS = {"X-Synth-City-Operator-Token": OPERATOR_TOKEN}
 
 # The seven columns release() clears, plus the two timestamps that must agree.
 RELEASE_STATE_COLUMNS = (

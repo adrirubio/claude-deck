@@ -37,12 +37,12 @@ describe("audit browser clients at the HTTP boundary", () => {
     expect(calls[0].url).not.toContain("/api/v1//");
     expect(calls[0].url).toContain("/api/v1/factory/metrics?");
     const metricHeaders = calls[0].headers as Record<string, string>;
-    expect(metricHeaders["X-Deck-Operator-Token"]).toBeUndefined();
+    expect(metricHeaders["X-Synth-City-Operator-Token"]).toBeUndefined();
 
     expect(calls[1].url).toContain("/factory/audit-events?");
     expect(calls[1].url).not.toContain("/api/v1//");
     const auditHeaders = calls[1].headers as Record<string, string>;
-    expect(auditHeaders["X-Deck-Operator-Token"]).toBe("synthetic-operator");
+    expect(auditHeaders["X-Synth-City-Operator-Token"]).toBe("synthetic-operator");
   });
 
   it("reads the context keys with the Director key, and sends the time window when given", async () => {
@@ -59,7 +59,7 @@ describe("audit browser clients at the HTTP boundary", () => {
     await fetchAuditEvents({ operatorToken: "synthetic-operator" });
 
     expect(calls[0].url).toContain("/api/v1/factory/context-keys");
-    expect((calls[0].headers as Record<string, string>)["X-Deck-Operator-Token"]).toBe("synthetic-operator");
+    expect((calls[0].headers as Record<string, string>)["X-Synth-City-Operator-Token"]).toBe("synthetic-operator");
     expect(calls[1].url).toContain("occurred_after=2026-10-06T00%3A00%3A00.000Z");
     expect(calls[1].url).toContain("occurred_before=2026-10-13T00%3A00%3A00.000Z");
     expect(calls[2].url).not.toContain("occurred_");

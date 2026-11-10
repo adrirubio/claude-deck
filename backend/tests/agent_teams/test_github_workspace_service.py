@@ -938,10 +938,10 @@ def test_slot_email_is_ascii_bounded_and_has_a_safe_fallback():
     service = GithubWorkspaceService(runner=FakeGitRunner())
 
     assert service.slot_email("Backend SME", 12) == (
-        "backend-sme+slot12@claude-deck.local"
+        "backend-sme+slot12@synth-city.local"
     )
-    assert service.slot_email("... !!!", 3) == "agent+slot3@claude-deck.local"
-    assert service.slot_email("工程師", 4) == "agent+slot4@claude-deck.local"
+    assert service.slot_email("... !!!", 3) == "agent+slot3@synth-city.local"
+    assert service.slot_email("工程師", 4) == "agent+slot4@synth-city.local"
     email = service.slot_email("A" * 200, 987)
     assert len(email.split("@", 1)[0].encode()) <= 64
 
@@ -1169,10 +1169,10 @@ async def test_worktree_identity_and_app_helper_are_isolated(tmp_path, monkeypat
     )
 
     assert _git(env, "config", "--worktree", "--get", "user.name", cwd=worktree).strip() == (
-        "Backend SME (Deck agent)"
+        "Backend SME (Synth City agent)"
     )
     assert _git(env, "config", "--worktree", "--get", "user.email", cwd=worktree).strip() == (
-        "backend-sme+slot12@claude-deck.local"
+        "backend-sme+slot12@synth-city.local"
     )
     helper_values = _git(
         env,

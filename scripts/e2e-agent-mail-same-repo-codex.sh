@@ -28,7 +28,7 @@ SUBJECT="E2E plan review ${RUN_ID}"
 SUCCESS_TOKEN="E2E_AGENT_MAIL_ROUNDTRIP_${RUN_ID}"
 FEEDBACK_TOKEN="E2E_REVIEW_FEEDBACK_${RUN_ID}"
 WAITING_TOKEN="E2E_PLANNER_WAITING_FOR_NUDGE_${RUN_ID}"
-INBOX_NUDGE_PREFIX='Claude Deck Agent Mail: please call `synth_city_check_inbox'
+INBOX_NUDGE_PREFIX='Albiex Synth City Agent Mail: call `synth_city_check_inbox'
 TMP_DIR="${TMPDIR:-/tmp}/claude-deck-agent-mail-e2e-${RUN_ID}"
 
 PRESET_ID=""

@@ -54,7 +54,7 @@ async def _member(db, repo_id, name):
 async def _actor(client, key="deck-ui-aaaa1111"):
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={"actor_key": key, "display_name": "Deck UI", "kind": "supervisor"},
     )
     assert resp.status_code == 200
@@ -381,7 +381,7 @@ async def test_6f_a_self_minted_actor_token_grants_nothing_more(client, db):
 
     resp = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={"actor_key": "deck-ui-selfmint", "display_name": "Deck UI", "kind": "supervisor"},
     )
     assert resp.status_code == 200, resp.text
@@ -550,5 +550,5 @@ async def test_actor_read_scope_is_unchanged(client, db):
     assert resp.status_code == 403
     # The UI uses its Director credential for a generic read.
     resp = await client.get(f"/api/v1/agent-mail/messages/{root.id}/thread",
-                            headers={"X-Deck-Operator-Token": "test-director-key"})
+                            headers={"X-Synth-City-Operator-Token": "test-director-key"})
     assert resp.status_code == 200

@@ -40,7 +40,7 @@ async function attachmentRequest<T>(
 ): Promise<T> {
   const { token } = await fetchTerminalToken(target, 'attachment')
   const headers = new Headers(options.headers)
-  headers.set('X-Claude-Deck-Terminal-Token', token)
+  headers.set('X-Synth-City-Terminal-Token', token)
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers,
@@ -67,7 +67,7 @@ export async function fetchMailWakeAttempts(memberId: number): Promise<MailWakeA
     member_id: memberId,
     limit: 10,
   }), {
-    headers: { 'X-Deck-Operator-Token': operatorToken },
+    headers: { 'X-Synth-City-Operator-Token': operatorToken },
   })
 }
 
@@ -80,7 +80,7 @@ export async function updateMailWakeParticipation(
   if (!operatorToken) throw new Error('Operator token required')
   await apiClient(buildEndpoint(`agent-mail/sessions/${encodeURIComponent(sessionId)}/wake-participation`), {
     method: 'PATCH',
-    headers: { 'X-Deck-Operator-Token': operatorToken },
+    headers: { 'X-Synth-City-Operator-Token': operatorToken },
     body: JSON.stringify({ wake_enabled: wakeEnabled, reason }),
   })
 }
@@ -96,7 +96,7 @@ export async function fetchTerminalToken(
 ): Promise<CCTokenResponse> {
   return apiClient<CCTokenResponse>(buildEndpoint(BASE + '/token', { target, purpose }), {
     headers: purpose === 'interactive'
-      ? { 'X-Deck-Operator-Token': operatorToken ?? getOperatorToken() ?? '' }
+      ? { 'X-Synth-City-Operator-Token': operatorToken ?? getOperatorToken() ?? '' }
       : undefined,
   })
 }
@@ -110,7 +110,7 @@ export function buildTerminalWsUrl(target: string, mode: 'readonly' | 'interacti
 export async function spawnSession(request: SpawnSessionRequest, operatorToken: string): Promise<SpawnSessionResponse> {
   return apiClient<SpawnSessionResponse>(BASE + '/sessions', {
     method: 'POST',
-    headers: { 'X-Deck-Operator-Token': operatorToken },
+    headers: { 'X-Synth-City-Operator-Token': operatorToken },
     body: JSON.stringify(request),
   })
 }
@@ -123,7 +123,7 @@ export async function killSession(target: string, operatorToken: string, cleanup
   const params = cleanupWorktree ? '?cleanup_worktree=true' : ''
   return apiClient<KillSessionResponse>(`${BASE}/sessions/${encodeURIComponent(target)}${params}`, {
     method: 'DELETE',
-    headers: { 'X-Deck-Operator-Token': operatorToken },
+    headers: { 'X-Synth-City-Operator-Token': operatorToken },
   })
 }
 
@@ -165,7 +165,7 @@ export async function pasteBridgeAttachment(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Deck-Operator-Token': operatorToken,
+        'X-Synth-City-Operator-Token': operatorToken,
       },
       body: JSON.stringify(request),
     },

@@ -32,7 +32,7 @@ describe('creation-family client authorization', () => {
     await invoke('client-operator-token')
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     const headers = init.headers as Record<string, string>
-    expect(headers['X-Deck-Operator-Token']).toBe('client-operator-token')
+    expect(headers['X-Synth-City-Operator-Token']).toBe('client-operator-token')
   })
 
   it.each(families)('%s surfaces 401 for the protected credential helper', async (_label, invoke) => {
@@ -66,7 +66,7 @@ describe('configuration observation client authorization', () => {
     await fetchConfigurationObservation('observation-operator-token')
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     const headers = init.headers as Record<string, string>
-    expect(headers['X-Deck-Operator-Token']).toBe('observation-operator-token')
+    expect(headers['X-Synth-City-Operator-Token']).toBe('observation-operator-token')
   })
 
   it('surfaces 401 for the protected credential helper', async () => {

@@ -257,11 +257,11 @@ class GithubWorkspaceService:
             slug = "agent"
         suffix = f"+slot{slot_id}"
         slug = slug[: 64 - len(suffix)].rstrip("-") or "agent"
-        return f"{slug}{suffix}@claude-deck.local"
+        return f"{slug}{suffix}@synth-city.local"
 
     @staticmethod
     def slot_name(display_name: str) -> str:
-        return f"{display_name} (Deck agent)"
+        return f"{display_name} (Synth City agent)"
 
     @staticmethod
     def _credential_helper_command(lease_token: str) -> str:

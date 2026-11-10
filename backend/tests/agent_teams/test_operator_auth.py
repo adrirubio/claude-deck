@@ -127,7 +127,7 @@ async def _external_actor_token(client: httpx.AsyncClient, director_key: str) ->
     """Mint a real external-actor token rather than testing a fabricated string."""
     response = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": director_key},
+        headers={"X-Synth-City-Operator-Token": director_key},
         json={
             "actor_key": "operator-auth-test",
             "display_name": "Operator Auth Test",
@@ -217,8 +217,8 @@ async def test_operator_arming_routes_refuse_anonymous_and_agent_but_accept_oper
     session_token = await _agent_session_token(maker)
     for label, method, url, body in _routes(scope_id, workspace_id, item_id)[4:]:
         anonymous = await _call(client, method, url, body, {})
-        agent = await _call(client, method, url, body, {"X-Deck-Session-Token": session_token})
-        operator = await _call(client, method, url, body, {"X-Deck-Operator-Token": OPERATOR_TOKEN})
+        agent = await _call(client, method, url, body, {"X-Synth-City-Session-Token": session_token})
+        operator = await _call(client, method, url, body, {"X-Synth-City-Operator-Token": OPERATOR_TOKEN})
         assert anonymous.status_code == 401, label
         assert agent.status_code == 401, label
         assert operator.status_code not in (401, 503), label
@@ -309,29 +309,29 @@ async def test_retry_requires_current_bound_leader_or_operator(
 
     url = f"/api/v1/agent-teams/github-work-items/{item_id}/retry"
     assert (await client.post(url)).status_code == 401
-    invalid = await client.post(url, headers={"X-Deck-Operator-Token": "invalid"})
+    invalid = await client.post(url, headers={"X-Synth-City-Operator-Token": "invalid"})
     assert invalid.status_code == 401
     assert invalid.json()["detail"] == "operator_token_invalid"
-    nonleader = await client.post(url, headers={"X-Deck-Session-Token": tokens["other"]})
+    nonleader = await client.post(url, headers={"X-Synth-City-Session-Token": tokens["other"]})
     assert nonleader.status_code == 403
     assert nonleader.json()["detail"] == "current_leader_required"
     for name in ("hook", "cross_preset"):
-        refused = await client.post(url, headers={"X-Deck-Session-Token": tokens[name]})
+        refused = await client.post(url, headers={"X-Synth-City-Session-Token": tokens[name]})
         assert refused.status_code == 403, name
         assert refused.json()["detail"] == "current_leader_required"
-    operator = await client.post(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
+    operator = await client.post(url, headers={"X-Synth-City-Operator-Token": OPERATOR_TOKEN})
     assert operator.status_code == 409
-    leader = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    leader = await client.post(url, headers={"X-Synth-City-Session-Token": tokens["leader"]})
     assert leader.status_code == 409
     eligible_retry = await client.post(
         f"/api/v1/agent-teams/github-work-items/{eligible_id}/retry",
-        headers={"X-Deck-Session-Token": tokens["leader"]},
+        headers={"X-Synth-City-Session-Token": tokens["leader"]},
     )
     assert eligible_retry.status_code == 200
     assert eligible_retry.json()["dispatch_status"] == "pending"
 
     monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
-    unenforced = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    unenforced = await client.post(url, headers={"X-Synth-City-Session-Token": tokens["leader"]})
     assert unenforced.status_code == 403
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
 
@@ -348,11 +348,11 @@ async def test_retry_requires_current_bound_leader_or_operator(
             updated_at=datetime.utcnow() + timedelta(seconds=1),
         ))
         await db.commit()
-    replaced = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    replaced = await client.post(url, headers={"X-Synth-City-Session-Token": tokens["leader"]})
     assert replaced.status_code == 403
 
     monkeypatch.setattr("app.api.v1.deps.peer_process.pane_is_alive", lambda *_: False)
-    stale = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    stale = await client.post(url, headers={"X-Synth-City-Session-Token": tokens["leader"]})
     assert stale.status_code == 401
 
 
@@ -370,8 +370,8 @@ async def test_team_launch_requires_authority_and_agents_cannot_override(
         preset_id = preset.id
 
     base = f"/api/v1/agent-teams/presets/{preset_id}"
-    session_headers = {"X-Deck-Session-Token": session_token}
-    operator_headers = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+    session_headers = {"X-Synth-City-Session-Token": session_token}
+    operator_headers = {"X-Synth-City-Operator-Token": OPERATOR_TOKEN}
     for path in ("plan-launch", "launch/plan", "launch"):
         anonymous = await client.post(f"{base}/{path}", json={})
         assert anonymous.status_code == 401, path
@@ -427,10 +427,10 @@ async def test_session_kill_requires_operator_before_termination(
     url = "/api/v1/agent-bridge/sessions/not-the-leader"
     assert (await client.delete(url)).status_code == 401
     assert (
-        await client.delete(url, headers={"X-Deck-Session-Token": session_token})
+        await client.delete(url, headers={"X-Synth-City-Session-Token": session_token})
     ).status_code == 401
     assert killed == []
-    operator = await client.delete(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
+    operator = await client.delete(url, headers={"X-Synth-City-Operator-Token": OPERATOR_TOKEN})
     assert operator.status_code == 200
     assert killed == [("not-the-leader", False)]
 
@@ -460,7 +460,7 @@ async def test_bridge_spawn_requires_authority_and_agent_cannot_supply_overrides
     url = "/api/v1/agent-bridge/sessions"
     base = {"provider": "codex-cli", "directory": str(tmp_path)}
     assert (await client.post(url, json=base)).status_code == 401
-    session_headers = {"X-Deck-Session-Token": session_token}
+    session_headers = {"X-Synth-City-Session-Token": session_token}
     safe = await client.post(url, json=base, headers=session_headers)
     assert safe.status_code == 200
     for override in (
@@ -477,7 +477,7 @@ async def test_bridge_spawn_requires_authority_and_agent_cannot_supply_overrides
     assert len(spawned) == 1
     operator = await client.post(
         url, json={**base, "prompt": "operator prompt"},
-        headers={"X-Deck-Operator-Token": OPERATOR_TOKEN},
+        headers={"X-Synth-City-Operator-Token": OPERATOR_TOKEN},
     )
     assert operator.status_code == 200
     assert len(spawned) == 2
@@ -505,14 +505,14 @@ async def test_legacy_cc_bridge_cannot_spawn_or_kill_without_operator(
     monkeypatch.setattr(spawn_module, "kill_session", fake_kill)
     spawn_url = "/api/v1/cc-bridge/sessions"
     kill_url = "/api/v1/cc-bridge/sessions/test"
-    for headers in ({}, {"X-Deck-Session-Token": session_token}):
+    for headers in ({}, {"X-Synth-City-Session-Token": session_token}):
         assert (await client.post(
             spawn_url, json={"directory": str(tmp_path), "mode": "plain"}, headers=headers
         )).status_code == 401
         assert (await client.delete(kill_url, headers=headers)).status_code == 401
     assert spawned == []
     assert killed == []
-    operator_headers = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+    operator_headers = {"X-Synth-City-Operator-Token": OPERATOR_TOKEN}
     assert (await client.post(
         spawn_url, json={"directory": str(tmp_path), "mode": "plain"},
         headers=operator_headers,
@@ -530,7 +530,7 @@ async def test_unconfigured_install_refuses_with_503_whatever_the_header(
     """An empty configured secret refuses even absent and empty headers."""
     client, maker = client_and_db
     scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
-    headers = {} if header is None else {"X-Deck-Operator-Token": header}
+    headers = {} if header is None else {"X-Synth-City-Operator-Token": header}
 
     for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
@@ -551,7 +551,7 @@ async def test_no_header_is_required_and_a_wrong_one_is_invalid(
         assert absent.status_code == 401, label
         assert absent.json()["detail"] == "operator_token_required", label
 
-        wrong = await _call(client, method, url, body, {"X-Deck-Operator-Token": "wrong"})
+        wrong = await _call(client, method, url, body, {"X-Synth-City-Operator-Token": "wrong"})
         assert wrong.status_code == 401, label
         assert wrong.json()["detail"] == "operator_token_invalid", label
 
@@ -574,7 +574,7 @@ async def test_near_miss_tokens_are_invalid(
 
     for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(
-            client, method, url, body, {"X-Deck-Operator-Token": token}
+            client, method, url, body, {"X-Synth-City-Operator-Token": token}
         )
         assert response.status_code == 401, f"{label}: {why} was accepted"
         assert response.json()["detail"] == "operator_token_invalid", label
@@ -587,7 +587,7 @@ async def test_a_non_ascii_header_is_refused_rather_than_crashing(
     """Compare bytes so a non-ASCII header produces 401 rather than TypeError."""
     client, maker = client_and_db
     scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
-    headers = {"X-Deck-Operator-Token": "café-not-a-token".encode("latin-1")}
+    headers = {"X-Synth-City-Operator-Token": "café-not-a-token".encode("latin-1")}
 
     for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
@@ -603,7 +603,7 @@ async def test_an_agent_session_token_does_not_admit_an_operator_route(
     client, maker = client_and_db
     scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     session_token = await _agent_session_token(maker)
-    headers = {"X-Deck-Session-Token": session_token}
+    headers = {"X-Synth-City-Session-Token": session_token}
 
     for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
@@ -632,7 +632,7 @@ async def test_a_self_minted_external_actor_token_does_not_admit_an_operator_rou
             method,
             url,
             body,
-            {"X-Deck-Operator-Token": actor_token},
+            {"X-Synth-City-Operator-Token": actor_token},
         )
         assert as_operator.status_code == 401, f"{label}: actor token admitted as operator"
         assert as_operator.json()["detail"] == "operator_token_invalid", label
@@ -647,7 +647,7 @@ async def test_the_configured_operator_token_is_accepted(
 
     client, maker = client_and_db
     scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
-    headers = {"X-Deck-Operator-Token": operator_token_configured}
+    headers = {"X-Synth-City-Operator-Token": operator_token_configured}
 
     async def _fake_runner(args):
         return 0, ""
@@ -700,6 +700,6 @@ async def test_the_credential_is_checked_before_the_scope_is_looked_up(
     assert (
         await client.get(
             missing_scope,
-            headers={"X-Deck-Operator-Token": operator_token_configured},
+            headers={"X-Synth-City-Operator-Token": operator_token_configured},
         )
     ).status_code == 404

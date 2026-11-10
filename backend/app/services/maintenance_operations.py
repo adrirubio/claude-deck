@@ -223,7 +223,7 @@ class Maintenance:
             raise ValueError("operator_token_unconfigured")
         request = urllib.request.Request(self.profile.api_url.rstrip("/") + path,
             data=None if body is None else json.dumps(body).encode(), method=method,
-            headers={"Content-Type":"application/json", "X-Deck-Operator-Token":token})
+            headers={"Content-Type":"application/json", "X-Synth-City-Operator-Token":token})
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.loads(response.read(2 * 1024 * 1024))
 

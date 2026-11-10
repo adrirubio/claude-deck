@@ -238,7 +238,8 @@ async def _make_scope(db, **kw):
     )
     db.add(leader)
     scope = TeamGithubScope(
-        preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r", **kw
+        preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r",
+        **{"dispatch_label": "claude-deck-ready", "design_label": "claude-deck-design", **kw}
     )
     db.add(scope)
     await db.commit()

@@ -45,7 +45,7 @@ def _connect(namespace: str, target: str, token: str, mode: str):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("namespace", ["agent-bridge", "cc-bridge"])
 async def test_interactive_token_requires_operator_and_binds_websocket(namespace, monkeypatch):
-    for headers in (None, {"X-Deck-Session-Token": "agent-token"}, {"X-Deck-Operator-Token": "wrong"}):
+    for headers in (None, {"X-Synth-City-Session-Token": "agent-token"}, {"X-Synth-City-Operator-Token": "wrong"}):
         refused = await _issue(namespace, purpose="interactive", headers=headers)
         assert refused.status_code == 401
         assert "token" not in refused.json()
@@ -53,7 +53,7 @@ async def test_interactive_token_requires_operator_and_binds_websocket(namespace
     wrong_mode = await _issue(
         namespace,
         purpose="interactive",
-        headers={"X-Deck-Operator-Token": "test-operator-secret"},
+        headers={"X-Synth-City-Operator-Token": "test-operator-secret"},
     )
     with pytest.raises(WebSocketDisconnect) as refused:
         with _connect(namespace, "deck:0.0", wrong_mode.json()["token"], "readonly"):
@@ -71,7 +71,7 @@ async def test_interactive_token_requires_operator_and_binds_websocket(namespace
     granted = await _issue(
         namespace,
         purpose="interactive",
-        headers={"X-Deck-Operator-Token": "test-operator-secret"},
+        headers={"X-Synth-City-Operator-Token": "test-operator-secret"},
     )
     assert granted.status_code == 200
     assert granted.headers["cache-control"] == "no-store"
@@ -84,7 +84,7 @@ async def test_interactive_token_requires_operator_and_binds_websocket(namespace
 @pytest.mark.parametrize("namespace", ["agent-bridge", "cc-bridge"])
 async def test_interactive_token_refuses_unconfigured_operator_and_missing_target(namespace, monkeypatch):
     monkeypatch.setattr(settings, "operator_token", "")
-    refused = await _issue(namespace, purpose="interactive", headers={"X-Deck-Operator-Token": ""})
+    refused = await _issue(namespace, purpose="interactive", headers={"X-Synth-City-Operator-Token": ""})
     assert refused.status_code == 503
     assert "token" not in refused.json()
 

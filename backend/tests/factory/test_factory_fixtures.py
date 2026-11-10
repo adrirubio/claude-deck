@@ -143,7 +143,7 @@ async def test_frozen_response_contract(factory_client, factory_store, monkeypat
     retry_path = f"/api/v1/agent-teams/github-work-items/{ids.items[1]}/retry"
     await record("protected-errors", "unauthenticated", retry_path, status=401, method="POST", json={})
     await record("protected-errors", "state_conflict", retry_path, status=409, method="POST", json={},
-                 headers={"X-Deck-Operator-Token": "synthetic-factory-operator"})
+                 headers={"X-Synth-City-Operator-Token": "synthetic-factory-operator"})
     monkeypatch.setattr(projection.settings, "mail_capability_tokens_required", True)
     async def synthetic_owner():
         return owner_session

@@ -125,7 +125,7 @@ describe('Agent Mail authentication', () => {
     await actual.fetchAgentMailSnippets()
     expect(fetch.mock.calls).toHaveLength(2)
     for (const [, options] of fetch.mock.calls) {
-      expect(options.headers['X-Deck-Operator-Token']).toBe('test-director-key')
+      expect(options.headers['X-Synth-City-Operator-Token']).toBe('test-director-key')
     }
   })
 
@@ -137,10 +137,10 @@ describe('Agent Mail authentication', () => {
     vi.stubGlobal('fetch', fetch)
     await fetchAgentMailThread(1)
     await sendAgentMailMessage({ kind: 'message', recipient_member_id: 1, body_markdown: 'Test message' })
-    expect(fetch.mock.calls[0][1].headers['X-Deck-Operator-Token']).toBe('test-director-key')
-    expect(fetch.mock.calls[1][1].headers['X-Deck-Operator-Token']).toBe('test-director-key')
+    expect(fetch.mock.calls[0][1].headers['X-Synth-City-Operator-Token']).toBe('test-director-key')
+    expect(fetch.mock.calls[1][1].headers['X-Synth-City-Operator-Token']).toBe('test-director-key')
     expect(fetch.mock.calls[2][1].headers.Authorization).toBe('Bearer test-actor-token')
-    expect(fetch.mock.calls[2][1].headers['X-Deck-Operator-Token']).toBeUndefined()
+    expect(fetch.mock.calls[2][1].headers['X-Synth-City-Operator-Token']).toBeUndefined()
   })
 })
 

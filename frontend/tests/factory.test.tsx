@@ -87,7 +87,7 @@ describe("delivery read authority and filters", () => {
   });
 
   it("does not inherit native preferences and links complete-set counts with URL filters", async () => {
-    localStorage.setItem("claude-deck:selected-provider", "pi-cli");
+    localStorage.setItem("albiex-synth-city:selected-provider", "pi-cli");
     localStorage.setItem("claude-deck:active-project", "/native/project");
     const { requests } = fixtureFetch((path) => standard(path));
     renderRoute(<OverviewPage />, "/?team_id=1", "/");
@@ -451,7 +451,7 @@ describe("work details and protected controls", () => {
     const { requests } = fixtureFetch((path, _query, options) =>
       path.endsWith("/retry")
         ? options?.headers &&
-          new Headers(options.headers).get("X-Deck-Operator-Token") ===
+          new Headers(options.headers).get("X-Synth-City-Operator-Token") ===
             "test-operator"
           ? jsonResponse(
               {
@@ -521,7 +521,7 @@ describe("work details and protected controls", () => {
     const credentials: (string | null)[] = [];
     const { requests } = fixtureFetch((path, _query, options) => {
       if (!path.endsWith("/retry")) return jsonResponse(eligible);
-      credentials.push(new Headers(options?.headers).get("X-Deck-Operator-Token"));
+      credentials.push(new Headers(options?.headers).get("X-Synth-City-Operator-Token"));
       return jsonResponse(response);
     });
     setOperatorToken("synthetic-operator");
@@ -548,7 +548,7 @@ describe("work details and protected controls", () => {
     const credentials: (string | null)[] = [];
     const { requests } = fixtureFetch((path, _query, options) => {
       if (!path.endsWith("/retry")) return jsonResponse(eligible);
-      credentials.push(new Headers(options?.headers).get("X-Deck-Operator-Token"));
+      credentials.push(new Headers(options?.headers).get("X-Synth-City-Operator-Token"));
       return ++posts === 1 ? jsonResponse({ detail: "Expired authorization" }, 401)
         : jsonResponse({ ...eligible.work_item.item, dispatch_status: "pending" });
     });
