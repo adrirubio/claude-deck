@@ -39,12 +39,12 @@ def pi_mail_readiness() -> tuple[bool, str | None]:
 
 
 def pi_mail_environment() -> dict[str, str]:
-    from app.services.agent_mail_install_service import deck_base_url, shim_path
+    from app.services.agent_mail_install_service import synth_city_base_url, shim_path
 
     return {
         "CLAUDE_DECK_MAIL_OPT_IN": "1",
         "CLAUDE_DECK_PROVIDER": "pi-cli",
-        "CLAUDE_DECK_URL": deck_base_url(),
+        "CLAUDE_DECK_URL": synth_city_base_url(),
         "CLAUDE_DECK_MAIL_PYTHON": str(Path(sys.executable).absolute()),
         "CLAUDE_DECK_MAIL_SHIM": shim_path(),
     }

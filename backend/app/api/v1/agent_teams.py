@@ -1109,7 +1109,7 @@ async def report_dispatch_status(
     if not settings.mail_capability_tokens_required:
         raise HTTPException(status_code=409, detail="tokens_not_enforced")
     if report.status == "revision_requested":
-        raise HTTPException(status_code=409, detail="use_deck_approve_work_item")
+        raise HTTPException(status_code=409, detail="use_synth_city_approve_work_item")
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 

@@ -1695,7 +1695,7 @@ class AgentTeamService:
             parts = [
                 f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
                 f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
-                "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
+                "Call `synth_city_whoami` when the session starts, then check your inbox with `synth_city_check_inbox(unread_only=False)`.",
             ]
             if slot.role:
                 parts.append(f"Role: {slot.role}")

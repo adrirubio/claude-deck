@@ -3225,7 +3225,7 @@ async def test_install_reads_use_the_director_key_in_strict_mode(auth_client, db
 
     status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
         claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
-        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+        curl_available=False, shim_path="test-shim", python_path="test-python", synth_city_url="http://test")
     monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=status))
     monkeypatch.setattr(install, "get_snippets", lambda: AgentMailSnippets(codex_config_toml="", codex_agents_md=""))
     owner = await member(db, "install-reader")
@@ -3388,7 +3388,7 @@ async def test_install_writes_require_a_configured_director_key(auth_client, mon
     monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
     status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
         claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
-        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+        curl_available=False, shim_path="test-shim", python_path="test-python", synth_city_url="http://test")
     mutation = AsyncMock(return_value=status)
     monkeypatch.setattr(install, service, mutation)
     endpoint = f"/api/v1/agent-mail/install/{harness}/{action}"

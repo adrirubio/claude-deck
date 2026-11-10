@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
-from app.services.agent_mail_install_service import deck_base_url
+from app.services.agent_mail_install_service import synth_city_base_url
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
@@ -270,8 +270,8 @@ class GithubWorkspaceService:
             [
                 sys.executable,
                 str(helper_path),
-                "--deck-url",
-                deck_base_url(),
+                "--synth-city-url",
+                synth_city_base_url(),
                 "--lease",
                 lease_token,
             ]

@@ -59,7 +59,7 @@ def _env_int(name: str) -> int | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--deck-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--synth-city-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
     parser.add_argument("--event", required=True)
     parser.add_argument("--provider", default=os.environ.get("CLAUDE_DECK_PROVIDER", "codex-cli"))
     args = parser.parse_args()
@@ -78,7 +78,7 @@ def main() -> int:
 
     try:
         response = httpx.post(
-            f"{args.deck_url.rstrip('/')}/api/v1/agent-mail/hooks/{args.event}",
+            f"{args.synth_city_url.rstrip('/')}/api/v1/agent-mail/hooks/{args.event}",
             json=payload,
             timeout=HTTP_TIMEOUT,
         )

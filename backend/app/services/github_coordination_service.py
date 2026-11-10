@@ -566,18 +566,18 @@ class GithubCoordinationService:
                 body_markdown=(
                     f"Backlog notice {requests + 1} of {_MAX_SNAPSHOT_REQUESTS} for this snapshot.\n\n"
                     f"Assess the assigned backlog for scope {scope_id}. Call "
-                    f"deck_get_backlog_coordination(scope_id={scope_id}) for the current request, "
+                    f"synth_city_get_backlog_coordination(scope_id={scope_id}) for the current request, "
                     "then inspect the assigned GitHub issues and reviewed dependency/milestone packet. "
                     "Reconcile already-landed fixes before assigning new implementation. Submit exactly "
-                    "one evidenced disposition per assigned issue using deck_report_backlog_assessment. "
+                    "one evidenced disposition per assigned issue using synth_city_report_backlog_assessment. "
                     'Use required_actor:"operator" for human decisions, milestone acceptance, and pilot decisions. '
                     'Before requesting input, include human_actions with the kind and current readiness. '
-                    'First call deck_prepare_operator_action_contexts for the intended requests. '
+                    'First call synth_city_prepare_operator_action_contexts for the intended requests. '
                     'Publish its completed records near the start of each main GitHub issue. '
                     'State the reason, responsible person, exact action, evidence, and completion condition. '
                     'Use existing authorized GitHub access. Preserve other issue content and other scopes. '
                     'Clear or supersede old records when their requests change. '
-                    'For automatic escalations or review requests, use deck_get_operator_action_contexts. '
+                    'For automatic escalations or review requests, use synth_city_get_operator_action_contexts. '
                     'Do not leave the instructions only in Mail or comments. '
                     'Use requested when the human can act now. '
                     'Use waiting_for_prerequisites when required evidence is absent. '
@@ -593,7 +593,7 @@ class GithubCoordinationService:
                     "work; spare capacity alone does not authorize blocked work. Preserve human merge, "
                     "exact-head review, approval/lease identities and finite budgets. Stop on OFF/HOLD."
                     " Inspect owner_followups in the fresh read. Resolve each pending settlement with "
-                    "deck_report_owner_followup. For unfinished current initial implementation, record "
+                    "synth_city_report_owner_followup. For unfinished current initial implementation, record "
                     "the next action and register its owner watch before ending your turn."
                 ), payload={"kind": "github_backlog_reconcile", "scope_id": scope_id,
                             "generation": generation, "request_sequence": sequence},

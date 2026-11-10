@@ -127,7 +127,7 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 # An Agent Mail MCP configuration in HOME would connect fake agents to a Deck.
-if grep -rqsE 'claude-deck-mail|deck_check_inbox|/api/v1/agent-mail' "$E2E_HOME"; then
+if grep -rqsE 'claude-deck-mail|synth_city_check_inbox|/api/v1/agent-mail' "$E2E_HOME"; then
   refuse "the instance HOME holds an Agent Mail MCP configuration"
 fi
 

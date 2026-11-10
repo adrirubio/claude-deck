@@ -165,7 +165,7 @@ export class MailGeneration {
         return !found || canonical(found.inputSchema) !== canonical(tool.inputSchema)
       })) throw new Error('mail_schema_mismatch')
       this.registrationDispatched = true
-      const identity = adaptResult(await this.client.callTool({ name: 'deck_whoami', arguments: {} }, undefined, { timeout: 20000 }))
+      const identity = adaptResult(await this.client.callTool({ name: 'synth_city_whoami', arguments: {} }, undefined, { timeout: 20000 }))
       if (identity.details.deckError || this.closing) throw new Error('mail_registration_failed')
       this.ready = true
     } catch {
@@ -182,7 +182,7 @@ export class MailGeneration {
       const code = (result.details.deck.error as { code?: string })?.code
       if (!readOnlyTools.has(name) && (result.details.deck.outcome === 'unknown'
         || (result.details.deck.ok && result.details.deckError && !result.details.mappingError) || [
-        'deck_unreachable', 'malformed_mcp_result', 'unsupported_mcp_content', 'mcp_protocol_error',
+        'synth_city_unreachable', 'malformed_mcp_result', 'unsupported_mcp_content', 'mcp_protocol_error',
       ].includes(code || ''))) {
         return failure('mutation_outcome_unknown', true)
       }
@@ -204,7 +204,7 @@ export class MailGeneration {
     try {
       if (!this.registrationDispatched) this.fence.release()
       else {
-        const result = adaptResult(await this.client.callTool({ name: '__deck_mail_close_generation', arguments: {} }, undefined, { timeout: 5000 }))
+        const result = adaptResult(await this.client.callTool({ name: '__synth_city_mail_close_generation', arguments: {} }, undefined, { timeout: 5000 }))
         if (!result.details.deckError && result.details.deck.ok && result.details.deck.closed === true) this.fence.release()
       }
     } catch {
