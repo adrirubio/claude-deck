@@ -615,12 +615,12 @@ def start_panes(root: Path) -> None:
         name = f"deck-e2e-{slot['id']}"
         binary = "codex" if slot["provider"] == "codex-cli" else "claude"
         env = {
-            "CLAUDE_DECK_TEAM_PRESET_ID": str(RELEASE_TEAM),
-            "CLAUDE_DECK_TEAM_PRESET_NAME": "Release crew",
-            "CLAUDE_DECK_TEAM_SLOT_ID": str(slot["id"]),
-            "CLAUDE_DECK_TEAM_SLOT_NAME": slot["name"],
-            "CLAUDE_DECK_TEAM_SLOT_ROLE": slot["role"],
-            "CLAUDE_DECK_TEAM_SLOT_COLOR": slot["color"],
+            "SYNTH_CITY_TEAM_PRESET_ID": str(RELEASE_TEAM),
+            "SYNTH_CITY_TEAM_PRESET_NAME": "Release crew",
+            "SYNTH_CITY_TEAM_SLOT_ID": str(slot["id"]),
+            "SYNTH_CITY_TEAM_SLOT_NAME": slot["name"],
+            "SYNTH_CITY_TEAM_SLOT_ROLE": slot["role"],
+            "SYNTH_CITY_TEAM_SLOT_COLOR": slot["color"],
         }
         cmd = [str(shim), "new-session", "-d", "-s", name, "-c", str(repo), "-x", "120", "-y", "32"]
         for key, value in env.items():

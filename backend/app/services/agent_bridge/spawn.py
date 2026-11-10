@@ -104,7 +104,7 @@ def spawn_session(
         env_flags += _env_flags(extra_env)
 
     trust_changed = False
-    if extra_env and extra_env.get("CLAUDE_DECK_TEAM_SLOT_ID"):
+    if extra_env and extra_env.get("SYNTH_CITY_TEAM_SLOT_ID"):
         trust_changed = prepare_workspace_trust(provider.id, directory)
 
     try:

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from mcp_shim.environment_warning import warn_legacy_environment
 
 from app.api.v1.router import router as api_v1_router
 from app.config import settings
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    warn_legacy_environment()
     # Startup: Initialize database
     await init_db()
     try:

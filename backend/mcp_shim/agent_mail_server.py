@@ -10,8 +10,8 @@ from urllib.parse import quote
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-DECK_URL = os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000").rstrip("/")
-PROVIDER = os.environ.get("CLAUDE_DECK_PROVIDER", "unknown")
+DECK_URL = os.environ.get("SYNTH_CITY_URL", "http://127.0.0.1:8000").rstrip("/")
+PROVIDER = os.environ.get("SYNTH_CITY_PROVIDER", "unknown")
 DECK_API = f"{DECK_URL}/api/v1"
 API = f"{DECK_API}/agent-mail"
 DECK_HTTP_TIMEOUT = httpx.Timeout(connect=0.5, read=15.0, write=5.0, pool=0.5)
@@ -179,7 +179,7 @@ def synth_city_supervisor_checkin(preset_id: int, next_check_at: str, note: Opti
     """Promise the next supervisor check with an ISO 8601 UTC time.
     Only the bound external actor can call this tool. The promise grants no authority.
     The controller derives health. The next check must be within 24 hours."""
-    credential = os.environ.get("CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN")
+    credential = os.environ.get("SYNTH_CITY_EXTERNAL_ACTOR_TOKEN")
     if not credential:
         return {"ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
     try:
@@ -244,8 +244,8 @@ def _ensure_registered() -> dict:
             "session_key": _state["session_key"],
             "pid": os.getppid(),
         }
-        team_preset_id = _env_int("CLAUDE_DECK_TEAM_PRESET_ID")
-        team_slot_id = _env_int("CLAUDE_DECK_TEAM_SLOT_ID")
+        team_preset_id = _env_int("SYNTH_CITY_TEAM_PRESET_ID")
+        team_slot_id = _env_int("SYNTH_CITY_TEAM_SLOT_ID")
         if team_preset_id is not None:
             payload["team_preset_id"] = team_preset_id
         if team_slot_id is not None:
@@ -1457,6 +1457,11 @@ def synth_city_report_backlog_assessment(
 
 
 if __name__ == "__main__":
+    try:
+        from mcp_shim.environment_warning import warn_legacy_environment
+    except ModuleNotFoundError:
+        from environment_warning import warn_legacy_environment
+    warn_legacy_environment()
     if PROVIDER != "pi-cli":
         _start_heartbeat_thread()
     mcp.run()

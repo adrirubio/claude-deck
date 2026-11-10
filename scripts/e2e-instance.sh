@@ -12,7 +12,7 @@
 #     script that forces a shared team socket);
 #   - the private tmux socket is not inside the instance root, or the server
 #     is not new, or the server does not use the instance HOME;
-#   - CLAUDE_DECK_URL, or a Deck Mail token variable, names another Deck;
+#   - SYNTH_CITY_URL, or a Deck Mail token variable, names another Deck;
 #   - the instance HOME holds an Agent Mail MCP configuration;
 #   - a harness name (claude, codex, copilot, opencode, pi, muse), gh or tmux does
 #     not resolve to the instance's fake binaries.
@@ -47,11 +47,11 @@ refuse() {
 
 # Another Deck (for example production Agent Mail) must not be reachable
 # through the caller's environment.
-if [[ -n "${CLAUDE_DECK_URL:-}" && "$CLAUDE_DECK_URL" != "$INSTANCE_URL" ]]; then
-  refuse "CLAUDE_DECK_URL names another Deck; unset it to run the E2E instance"
+if [[ -n "${SYNTH_CITY_URL:-}" && "$SYNTH_CITY_URL" != "$INSTANCE_URL" ]]; then
+  refuse "SYNTH_CITY_URL names another Deck; unset it to run the E2E instance"
 fi
 for var in $(compgen -e); do
-  if [[ "$var" == CLAUDE_DECK_* && "$var" == *TOKEN* ]]; then
+  if [[ "$var" == SYNTH_CITY_* && "$var" == *TOKEN* ]]; then
     refuse "$var is set; a Deck Mail credential must not reach the E2E instance"
   fi
 done
@@ -166,7 +166,7 @@ CLEAN_ENV=(
   "TMPDIR=$ROOT" "TMUX_TMPDIR=$TMUX_DIR"
   "XDG_CONFIG_HOME=$E2E_HOME/.config" "XDG_DATA_HOME=$E2E_HOME/.local/share"
   "XDG_CACHE_HOME=$E2E_HOME/.cache" "XDG_STATE_HOME=$E2E_HOME/.local/state"
-  "CLAUDE_DECK_URL=$INSTANCE_URL"
+  "SYNTH_CITY_URL=$INSTANCE_URL"
   "E2E_NO_TMUX=$NO_TMUX"
 )
 if [[ -n "${E2E_SEED_NOW:-}" ]]; then
@@ -198,7 +198,7 @@ else
     || refuse "the tmux server has other sessions; it is not private"
   [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g HOME 2>/dev/null || true)" == "HOME=$E2E_HOME" ]] \
     || refuse "the tmux server HOME is outside the instance root"
-  [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g CLAUDE_DECK_URL 2>/dev/null || true)" == "CLAUDE_DECK_URL=$INSTANCE_URL" ]] \
+  [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g SYNTH_CITY_URL 2>/dev/null || true)" == "SYNTH_CITY_URL=$INSTANCE_URL" ]] \
     || refuse "the tmux server names another Deck"
   run_clean "$FAKE_BIN/tmux" set-option -g exit-empty off \; kill-session -t '=deck-e2e-probe'
   CLEAN_ENV+=("E2E_TMUX_PROVEN_SOCKET=$TMUX_SOCKET")

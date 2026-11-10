@@ -502,10 +502,10 @@ def test_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
     spawn.spawn_session(
         "codex-cli",
         SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
-        extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"},
+        extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"},
     )
 
-    assert "CLAUDE_DECK_TEAM_SLOT_ID=7" in calls[0]
+    assert "SYNTH_CITY_TEAM_SLOT_ID=7" in calls[0]
 
 
 def test_claude_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
@@ -526,10 +526,10 @@ def test_claude_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path
     spawn.spawn_session(
         "claude-code",
         SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
-        extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"},
+        extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"},
     )
 
-    assert "CLAUDE_DECK_TEAM_SLOT_ID=7" in calls[0]
+    assert "SYNTH_CITY_TEAM_SLOT_ID=7" in calls[0]
 
 
 def test_spawn_session_rejects_invalid_extra_env_names(monkeypatch, tmp_path):
@@ -563,7 +563,7 @@ def test_team_trust_is_prepared_before_tmux_spawn(monkeypatch, tmp_path):
     monkeypatch.setattr(spawn, "prepare_workspace_trust", trust)
     monkeypatch.setattr(spawn.subprocess, "run", run)
     result = spawn.spawn_session("claude-code", SpawnCommandOptions(directory=str(tmp_path)),
-                                 extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+                                 extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"})
     assert calls[0] == ("trust", "claude-code", str(tmp_path))
     assert calls[1][1][:2] == ["tmux", "new-session"]
     assert result["workspace_trust_changed"] is True
@@ -579,7 +579,7 @@ def test_trust_refusal_stops_team_spawn(monkeypatch, tmp_path):
     monkeypatch.setattr(spawn.subprocess, "run", lambda *args, **kwargs: calls.append(args))
     with pytest.raises(ValueError, match="Workspace trust"):
         spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
-                            extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+                            extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"})
     assert calls == []
 
 
@@ -601,5 +601,5 @@ def test_failed_spawn_reports_completed_trust_change(monkeypatch, tmp_path):
         returncode=1, stdout="", stderr="fixture failure"))
     with pytest.raises(ValueError) as error:
         spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
-                            extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"})
+                            extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"})
     assert error.value.workspace_trust_changed is True

@@ -13,8 +13,8 @@ const { validateToolArguments } = await import(pathToFileURL(join(packageRoot, '
 const { loadExtensions } = await import(pathToFileURL(join(packageRoot, 'dist/core/extensions/loader.js')).href)
 
 test('pinned Pi loader and TypeBox validate every real public schema without starting a session', async () => {
-  const previous = process.env.CLAUDE_DECK_MAIL_OPT_IN
-  process.env.CLAUDE_DECK_MAIL_OPT_IN = '1'
+  const previous = process.env.SYNTH_CITY_MAIL_OPT_IN
+  process.env.SYNTH_CITY_MAIL_OPT_IN = '1'
   try {
     const loaded = await loadExtensions([join(import.meta.dirname, '../extension.ts')], import.meta.dirname)
     assert.deepEqual(loaded.errors, [])
@@ -48,14 +48,14 @@ test('pinned Pi loader and TypeBox validate every real public schema without sta
     assert(Compile(nested as TSchema).Check({ scope: { paths: ['docs/readme.md'], options: { mode: null } } }))
     assert.throws(() => validateToolArguments({ name: 'fixture', parameters: nested }, { id: 'fixture', name: 'fixture', arguments: { scope: { paths: [false], options: {} } } }))
   } finally {
-    if (previous === undefined) delete process.env.CLAUDE_DECK_MAIL_OPT_IN
-    else process.env.CLAUDE_DECK_MAIL_OPT_IN = previous
+    if (previous === undefined) delete process.env.SYNTH_CITY_MAIL_OPT_IN
+    else process.env.SYNTH_CITY_MAIL_OPT_IN = previous
   }
 })
 
 test('actual Pi extension runner and AgentSession hook preserve final native tool errors', async () => {
-  const previous = process.env.CLAUDE_DECK_MAIL_OPT_IN
-  process.env.CLAUDE_DECK_MAIL_OPT_IN = '1'
+  const previous = process.env.SYNTH_CITY_MAIL_OPT_IN
+  process.env.SYNTH_CITY_MAIL_OPT_IN = '1'
   try {
     const loaded = await loadExtensions([join(import.meta.dirname, '../extension.ts')], import.meta.dirname)
     assert.deepEqual(loaded.errors, [])
@@ -76,7 +76,7 @@ test('actual Pi extension runner and AgentSession hook preserve final native too
       assert.deepEqual(final.content, result.content)
     }
   } finally {
-    if (previous === undefined) delete process.env.CLAUDE_DECK_MAIL_OPT_IN
-    else process.env.CLAUDE_DECK_MAIL_OPT_IN = previous
+    if (previous === undefined) delete process.env.SYNTH_CITY_MAIL_OPT_IN
+    else process.env.SYNTH_CITY_MAIL_OPT_IN = previous
   }
 })

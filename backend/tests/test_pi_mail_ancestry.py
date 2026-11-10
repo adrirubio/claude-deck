@@ -70,10 +70,10 @@ def test_actual_pi_shim_kernel_ancestry_and_reload_on_disposable_socket(tmp_path
         "PATH": os.environ["PATH"], "HOME": str(tmp_path), "SHELL": "/bin/sh",
         "PI_CODING_AGENT_DIR": str(tmp_path / "pi-agent"),
         "XDG_RUNTIME_DIR": str(tmp_path),
-        "CLAUDE_DECK_MAIL_OPT_IN": "1", "CLAUDE_DECK_PROVIDER": "pi-cli",
-        "CLAUDE_DECK_MAIL_PYTHON": sys.executable,
-        "CLAUDE_DECK_MAIL_SHIM": str(root / "backend/mcp_shim/agent_mail_server.py"),
-        "CLAUDE_DECK_URL": f"http://127.0.0.1:{server.server_port}",
+        "SYNTH_CITY_MAIL_OPT_IN": "1", "SYNTH_CITY_PROVIDER": "pi-cli",
+        "SYNTH_CITY_MAIL_PYTHON": sys.executable,
+        "SYNTH_CITY_MAIL_SHIM": str(root / "backend/mcp_shim/agent_mail_server.py"),
+        "SYNTH_CITY_URL": f"http://127.0.0.1:{server.server_port}",
     }
     command = shlex.join([pi, "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--provider", "openrouter", "--model", "moonshotai/kimi-k3", "--extension", str(extension)])
     def wait_for(predicate):

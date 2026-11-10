@@ -2,7 +2,7 @@ import { expect, test } from '../support/guard'
 
 // #509: a default installation never shows a red identity, and the tab title
 // is "Claude Deck" unless a name is configured. The E2E instance sets no
-// instance name (no CLAUDE_DECK_INSTANCE_NAME), so it is a default installation.
+// instance name (no SYNTH_CITY_INSTANCE_NAME), so it is a default installation.
 // @active since #509 merged into release/v3.1 (PR #579).
 
 /** True when a CSS colour is red-dominant (an alarm colour). */

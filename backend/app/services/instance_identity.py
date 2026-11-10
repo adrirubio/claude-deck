@@ -76,6 +76,7 @@ def _stable_id(hostname: str, explicit_id: str | None) -> str:
     cleaned = _clean_explicit_id(explicit_id)
     if cleaned:
         return cleaned
+    # Frozen v1 identity seed: changing these invisible bytes would re-key installations.
     return hashlib.sha256(f"claude-deck:{hostname}".encode("utf-8")).hexdigest()[:12]
 
 
@@ -92,7 +93,7 @@ def _resolve_accent(hostname: str, raw_accent: str | None) -> str:
         return accent
 
     LOGGER.warning(
-        "Unsupported CLAUDE_DECK_INSTANCE_ACCENT=%r; using hostname-derived accent",
+        "Unsupported SYNTH_CITY_INSTANCE_ACCENT=%r; using hostname-derived accent",
         raw_accent,
     )
     return _accent_from_hostname(hostname)
@@ -104,14 +105,14 @@ def get_instance_identity() -> InstanceIdentity:
 
     hostname = _get_hostname()
     short_hostname = _short_hostname(hostname)
-    raw_name = os.getenv("CLAUDE_DECK_INSTANCE_NAME")
+    raw_name = os.getenv("SYNTH_CITY_INSTANCE_NAME")
 
     return InstanceIdentity(
-        id=_stable_id(hostname, os.getenv("CLAUDE_DECK_INSTANCE_ID")),
+        id=_stable_id(hostname, os.getenv("SYNTH_CITY_INSTANCE_ID")),
         name=_clean_name(raw_name, DEFAULT_INSTANCE_NAME),
         name_configured=bool(_remove_control_chars(raw_name or "")),
         hostname=hostname,
         short_hostname=short_hostname,
-        accent=_resolve_accent(hostname, os.getenv("CLAUDE_DECK_INSTANCE_ACCENT")),
+        accent=_resolve_accent(hostname, os.getenv("SYNTH_CITY_INSTANCE_ACCENT")),
         started_at=_STARTED_AT,
     )

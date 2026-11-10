@@ -3,9 +3,15 @@ import json
 import os
 import sys
 
+try:
+    from mcp_shim.environment_warning import warn_legacy_environment
+except ModuleNotFoundError:
+    from environment_warning import warn_legacy_environment
+
 
 def main() -> int:
-    marker = os.environ.get("CLAUDE_DECK_TEAM_SLOT_ID", "")
+    warn_legacy_environment()
+    marker = os.environ.get("SYNTH_CITY_TEAM_SLOT_ID", "")
     if not marker.isascii() or not marker.isdecimal() or int(marker) <= 0:
         return 0
     try:

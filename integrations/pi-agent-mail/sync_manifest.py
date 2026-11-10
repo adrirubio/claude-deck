@@ -12,7 +12,7 @@ from pathlib import Path
 
 def render_manifest() -> str:
     root = Path(__file__).resolve().parents[2]
-    os.environ["CLAUDE_DECK_PROVIDER"] = "pi-cli"
+    os.environ["SYNTH_CITY_PROVIDER"] = "pi-cli"
     spec = importlib.util.spec_from_file_location(
         "pi_manifest_shim", root / "backend/mcp_shim/agent_mail_server.py"
     )

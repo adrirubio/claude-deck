@@ -21,7 +21,7 @@ def test_manifest_matches_real_mcp_tools_without_registration(sync_module, monke
         raise AssertionError("Schema inspection must not make an HTTP request")
 
     monkeypatch.setattr(httpx, "request", reject_http)
-    monkeypatch.setenv("CLAUDE_DECK_PROVIDER", "pi-cli")
+    monkeypatch.setenv("SYNTH_CITY_PROVIDER", "pi-cli")
     expected = sync_module.render_manifest()
     path = Path(sync_module.__file__).with_name("manifest.ts")
     assert path.read_text() == expected

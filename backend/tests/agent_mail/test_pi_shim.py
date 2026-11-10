@@ -90,7 +90,7 @@ def test_post_transport_failure_preserves_outcome_uncertainty(shim, monkeypatch)
 
 @pytest.mark.parametrize("provider", ["pi-cli", "codex-cli", "claude-code", "unknown"])
 def test_actual_mcp_tool_list_keeps_close_private_to_pi(monkeypatch, provider):
-    monkeypatch.setenv("CLAUDE_DECK_PROVIDER", provider)
+    monkeypatch.setenv("SYNTH_CITY_PROVIDER", provider)
     location = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
     spec = importlib.util.spec_from_file_location(f"fixture_shim_{provider}", location)
     module = importlib.util.module_from_spec(spec)

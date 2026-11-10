@@ -543,8 +543,8 @@ def _opencode_mcp_entry() -> dict:
         "command": [sys.executable, shim_path()],
         "enabled": True,
         "environment": {
-            "CLAUDE_DECK_URL": synth_city_base_url(),
-            "CLAUDE_DECK_PROVIDER": "opencode-cli",
+            "SYNTH_CITY_URL": synth_city_base_url(),
+            "SYNTH_CITY_PROVIDER": "opencode-cli",
         },
     }
 
@@ -560,8 +560,8 @@ def _opencode_mcp_entry_is_current(entry: object) -> bool:
         and entry.get("enabled", True) is not False
         and command == expected["command"]
         and isinstance(environment, dict)
-        and environment.get("CLAUDE_DECK_URL") == expected["environment"]["CLAUDE_DECK_URL"]
-        and environment.get("CLAUDE_DECK_PROVIDER") == "opencode-cli"
+        and environment.get("SYNTH_CITY_URL") == expected["environment"]["SYNTH_CITY_URL"]
+        and environment.get("SYNTH_CITY_PROVIDER") == "opencode-cli"
     )
 
 
@@ -580,8 +580,8 @@ def opencode_mcp_installed() -> bool:
 
 def _opencode_plugin_content() -> str:
     template = r"""// Claude Deck Agent Mail OpenCode plugin.
-const DECK_URL = (__DECK_URL__ || process.env.CLAUDE_DECK_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
-const PROVIDER = process.env.CLAUDE_DECK_PROVIDER || "opencode-cli";
+const DECK_URL = (__SYNTH_CITY_URL__ || process.env.SYNTH_CITY_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const PROVIDER = process.env.SYNTH_CITY_PROVIDER || "opencode-cli";
 
 function envInt(name) {
   const raw = process.env[name];
@@ -607,8 +607,8 @@ export const ClaudeDeckAgentMailPlugin = async (ctx) => {
       pid: process.pid,
       ...extra,
     };
-    const teamPresetID = envInt("CLAUDE_DECK_TEAM_PRESET_ID");
-    const teamSlotID = envInt("CLAUDE_DECK_TEAM_SLOT_ID");
+    const teamPresetID = envInt("SYNTH_CITY_TEAM_PRESET_ID");
+    const teamSlotID = envInt("SYNTH_CITY_TEAM_SLOT_ID");
     if (teamPresetID !== undefined) body.team_preset_id = teamPresetID;
     if (teamSlotID !== undefined) body.team_slot_id = teamSlotID;
     return body;
@@ -672,7 +672,7 @@ export const ClaudeDeckAgentMailPlugin = async (ctx) => {
   };
 };
 """
-    return template.replace("__DECK_URL__", json.dumps(synth_city_base_url()))
+    return template.replace("__SYNTH_CITY_URL__", json.dumps(synth_city_base_url()))
 
 
 def installed_opencode_plugin_events() -> list[str]:
@@ -773,7 +773,7 @@ def muse_hook_command(slug: str) -> str:
 
 def _muse_mcp_entry() -> dict:
     return {"transport": "stdio", "command": sys.executable, "args": [shim_path()],
-            "env": {"CLAUDE_DECK_URL": synth_city_base_url(), "CLAUDE_DECK_PROVIDER": "muse-cli"}}
+            "env": {"SYNTH_CITY_URL": synth_city_base_url(), "SYNTH_CITY_PROVIDER": "muse-cli"}}
 
 
 def _load_muse_settings() -> dict:
@@ -921,8 +921,8 @@ async def apply_claude_code_install(db: AsyncSession) -> AgentMailInstallStatus:
                 command=sys.executable,
                 args=[shim_path()],
                 env={
-                    "CLAUDE_DECK_URL": synth_city_base_url(),
-                    "CLAUDE_DECK_PROVIDER": "claude-code",
+                    "SYNTH_CITY_URL": synth_city_base_url(),
+                    "SYNTH_CITY_PROVIDER": "claude-code",
                 },
             )
         )
@@ -947,9 +947,9 @@ async def apply_codex_install(db: AsyncSession) -> AgentMailInstallStatus:
         args = [
             "add",
             "--env",
-            f"CLAUDE_DECK_URL={synth_city_base_url()}",
+            f"SYNTH_CITY_URL={synth_city_base_url()}",
             "--env",
-            "CLAUDE_DECK_PROVIDER=codex-cli",
+            "SYNTH_CITY_PROVIDER=codex-cli",
             MCP_SERVER_NAME,
             "--",
             sys.executable,
@@ -992,9 +992,9 @@ async def apply_copilot_install(db: AsyncSession) -> AgentMailInstallStatus:
         args = [
             "add",
             "--env",
-            f"CLAUDE_DECK_URL={synth_city_base_url()}",
+            f"SYNTH_CITY_URL={synth_city_base_url()}",
             "--env",
-            "CLAUDE_DECK_PROVIDER=copilot-cli",
+            "SYNTH_CITY_PROVIDER=copilot-cli",
             "--json",
             MCP_SERVER_NAME,
             "--",
@@ -1078,7 +1078,7 @@ def get_snippets() -> AgentMailSnippets:
         f"[mcp_servers.{MCP_SERVER_NAME}]\n"
         f'command = "{sys.executable}"\n'
         f'args = ["{shim_path()}"]\n'
-        f'env = {{ CLAUDE_DECK_URL = "{synth_city_base_url()}", CLAUDE_DECK_PROVIDER = "codex-cli" }}\n'
+        f'env = {{ SYNTH_CITY_URL = "{synth_city_base_url()}", SYNTH_CITY_PROVIDER = "codex-cli" }}\n'
     )
     agents_md = (
         "## Claude Deck Agent Mail\n"
@@ -1095,9 +1095,9 @@ def get_snippets() -> AgentMailSnippets:
                 "mcp",
                 "add",
                 "--env",
-                shlex.quote(f"CLAUDE_DECK_URL={synth_city_base_url()}"),
+                shlex.quote(f"SYNTH_CITY_URL={synth_city_base_url()}"),
                 "--env",
-                "CLAUDE_DECK_PROVIDER=copilot-cli",
+                "SYNTH_CITY_PROVIDER=copilot-cli",
                 MCP_SERVER_NAME,
                 "--",
                 shlex.quote(sys.executable),

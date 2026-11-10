@@ -998,12 +998,12 @@ class AgentTeamService:
                 slot.provider,
                 options,
                 extra_env={
-                    "CLAUDE_DECK_TEAM_PRESET_ID": str(preset.id),
-                    "CLAUDE_DECK_TEAM_PRESET_NAME": preset.name,
-                    "CLAUDE_DECK_TEAM_SLOT_ID": str(slot.id),
-                    "CLAUDE_DECK_TEAM_SLOT_NAME": slot.display_name,
-                    **({"CLAUDE_DECK_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
-                    **({"CLAUDE_DECK_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
+                    "SYNTH_CITY_TEAM_PRESET_ID": str(preset.id),
+                    "SYNTH_CITY_TEAM_PRESET_NAME": preset.name,
+                    "SYNTH_CITY_TEAM_SLOT_ID": str(slot.id),
+                    "SYNTH_CITY_TEAM_SLOT_NAME": slot.display_name,
+                    **({"SYNTH_CITY_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
+                    **({"SYNTH_CITY_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
             if slot.provider == "claude-code" and options.session_id:

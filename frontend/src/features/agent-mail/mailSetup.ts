@@ -217,7 +217,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
         title: 'Install Agent Mail for Codex',
         description: 'A backup is attempted before Claude Deck installs the Codex MCP server and lifecycle hooks.',
         mutations: [
-          'Codex CLI: run `codex mcp add --env CLAUDE_DECK_URL=... --env CLAUDE_DECK_PROVIDER=codex-cli claude-deck-mail -- ...`',
+          'Codex CLI: run `codex mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=codex-cli claude-deck-mail -- ...`',
           `${status.codex_hooks_path || '~/.codex/hooks.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
           command,
         ],
@@ -236,7 +236,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
         title: 'Install Agent Mail for GitHub Copilot CLI',
         description: 'A backup is attempted before Claude Deck installs the Copilot MCP server and lifecycle hooks.',
         mutations: [
-          'Copilot CLI: run `copilot mcp add --env CLAUDE_DECK_URL=... --env CLAUDE_DECK_PROVIDER=copilot-cli claude-deck-mail -- ...`',
+          'Copilot CLI: run `copilot mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=copilot-cli claude-deck-mail -- ...`',
           `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: write Agent Mail hook definitions`,
           command,
         ],
