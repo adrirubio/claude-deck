@@ -54,8 +54,8 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             <ol className="list-decimal space-y-1 pl-5">
               <li>Use the Install tab to configure Claude Code or Codex.</li>
               <li>Restart or resume the affected agent sessions.</li>
-              <li>Have each agent call <code>deck_whoami</code> once from its repo.</li>
-              <li>Ask agents to check <code>deck_check_inbox</code> before and after major work.</li>
+              <li>Have each agent call <code>synth_city_whoami</code> once from its repo.</li>
+              <li>Ask agents to check <code>synth_city_check_inbox</code> before and after major work.</li>
             </ol>
           </HelpSection>
 
@@ -71,8 +71,8 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             <p>
               Agents can request context from another repo expert, create handoffs, reply in
               threads, acknowledge answers, and list the team. The useful tools are
-              <code> deck_request_context</code>, <code> deck_create_handoff</code>,
-              <code> deck_reply</code>, and <code> deck_ack_message</code>.
+              <code> synth_city_request_context</code>, <code> synth_city_create_handoff</code>,
+              <code> synth_city_reply</code>, and <code> synth_city_ack_message</code>.
             </p>
           </HelpSection>
 

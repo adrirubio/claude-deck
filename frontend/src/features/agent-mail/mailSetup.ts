@@ -112,7 +112,7 @@ export interface TechnicalLine {
 export function mailTechnicalLines(providerId: AgentProviderId, status: AgentMailInstallStatus): TechnicalLine[] {
   const common: TechnicalLine[] = [
     { label: 'MCP server command', value: `${status.python_path} ${status.shim_path}` },
-    { label: 'Deck URL', value: status.deck_url },
+    { label: 'Albiex Synth City URL', value: status.synth_city_url },
     { label: 'curl', value: status.curl_available ? 'available' : 'missing' },
   ]
   switch (providerId) {

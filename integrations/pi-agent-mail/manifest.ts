@@ -1,6 +1,6 @@
 export const manifest = [
   {
-    "name": "deck_ack_continuation",
+    "name": "synth_city_ack_continuation",
     "description": "Acknowledge and activate one delivered continuation revision.",
     "inputSchema": {
       "properties": {
@@ -27,12 +27,12 @@ export const manifest = [
         "dispatch_nonce",
         "lease_token"
       ],
-      "title": "deck_ack_continuationArguments",
+      "title": "synth_city_ack_continuationArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_ack_message",
+    "name": "synth_city_ack_message",
     "description": "Acknowledge a message. Acking an answer to your context request closes it; acking\n    a handoff addressed to you accepts and closes the handoff.",
     "inputSchema": {
       "properties": {
@@ -44,13 +44,13 @@ export const manifest = [
       "required": [
         "message_id"
       ],
-      "title": "deck_ack_messageArguments",
+      "title": "synth_city_ack_messageArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_approve_work_item",
-    "description": "Approve or reject a normalized initial-plan request as its designated Leader.\n\n    Pass approval_request_id from deck_request_work_item_approval. A rejection opens\n    the next round automatically when one remains.\n    ",
+    "name": "synth_city_approve_work_item",
+    "description": "Approve or reject a normalized initial-plan request as its designated Leader.\n\n    Pass approval_request_id from synth_city_request_work_item_approval. A rejection opens\n    the next round automatically when one remains.\n    ",
     "inputSchema": {
       "properties": {
         "work_item_id": {
@@ -81,12 +81,12 @@ export const manifest = [
         "reason",
         "approval_request_id"
       ],
-      "title": "deck_approve_work_itemArguments",
+      "title": "synth_city_approve_work_itemArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_attach_image_to_bridge_session",
+    "name": "synth_city_attach_image_to_bridge_session",
     "description": "Upload a local image file to an Agent Bridge tmux session, paste the\n    generated image-path prompt, and optionally submit it. target is the\n    tmux target from Agent Bridge, such as \"repo-1234:0.0\". file_path must\n    point to an image readable by this trusted MCP server process.",
     "inputSchema": {
       "properties": {
@@ -113,12 +113,12 @@ export const manifest = [
         "target",
         "file_path"
       ],
-      "title": "deck_attach_image_to_bridge_sessionArguments",
+      "title": "synth_city_attach_image_to_bridge_sessionArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_check_inbox",
+    "name": "synth_city_check_inbox",
     "description": "Read your Agent Mail inbox, including messages, context requests, handoffs, and\n    answers. Returned messages are marked read. Check before major work and after\n    finishing a task.",
     "inputSchema": {
       "properties": {
@@ -133,12 +133,12 @@ export const manifest = [
           "type": "integer"
         }
       },
-      "title": "deck_check_inboxArguments",
+      "title": "synth_city_check_inboxArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_create_handoff",
+    "name": "synth_city_create_handoff",
     "description": "Hand work over to another Agent Mail participant with a summary, touched files, and next\n    steps. The recipient acknowledges it to accept the handoff.",
     "inputSchema": {
       "properties": {
@@ -185,13 +185,13 @@ export const manifest = [
         "to_member_id",
         "summary"
       ],
-      "title": "deck_create_handoffArguments",
+      "title": "synth_city_create_handoffArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_create_team",
-    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use deck_plan_team_launch before launch.\n    ",
+    "name": "synth_city_create_team",
+    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use synth_city_plan_team_launch before launch.\n    ",
     "inputSchema": {
       "properties": {
         "name": {
@@ -235,12 +235,12 @@ export const manifest = [
       "required": [
         "name"
       ],
-      "title": "deck_create_teamArguments",
+      "title": "synth_city_create_teamArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_decide_continuation",
+    "name": "synth_city_decide_continuation",
     "description": "Approve or reject one explicit continuation authority request.",
     "inputSchema": {
       "properties": {
@@ -272,12 +272,12 @@ export const manifest = [
         "decision",
         "reason"
       ],
-      "title": "deck_decide_continuationArguments",
+      "title": "synth_city_decide_continuationArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_get_backlog_coordination",
+    "name": "synth_city_get_backlog_coordination",
     "description": "Current Leader: read the assigned backlog, observations and request version.\n\n    Reconcile reviewed dependency/milestone gates and already-landed fixes even for\n    issues without a dispatch-ready label. While ON, this read returns a short-lived\n    snapshot_token for publishing a current assessment without another notification.\n    Read again immediately before reporting; keep the token private. OFF/HOLD reads\n    grant no publication challenge. This tool grants no implementation authority.\n    ",
     "inputSchema": {
       "properties": {
@@ -289,13 +289,13 @@ export const manifest = [
       "required": [
         "scope_id"
       ],
-      "title": "deck_get_backlog_coordinationArguments",
+      "title": "synth_city_get_backlog_coordinationArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_get_operator_action_contexts",
-    "description": "Read current requests and issue instruction templates. This grants no authority.\n\n    The Leader must publish completed templates near the start of each main\n    GitHub issue. Use the returned section markers. Fill every WRITE_ placeholder.\n    State the reason, responsible person, exact steps, evidence and completion\n    condition. Use a UTC update time. Keep existing content and other scopes.\n    Use existing authorized GitHub access. Never copy tokens, leases, nonces,\n    private paths, prompts or raw logs into GitHub. The read does not write to\n    GitHub, retry work, release a lease, approve a plan or merge a PR.\n    Missing or stale instructions appear as Action details pending in Deck.\n    ",
+    "name": "synth_city_get_operator_action_contexts",
+    "description": "Read current requests and issue instruction templates. This grants no authority.\n\n    The Leader must publish completed templates near the start of each main\n    GitHub issue. Use the returned section markers. Fill every WRITE_ placeholder.\n    State the reason, responsible person, exact steps, evidence and completion\n    condition. Use a UTC update time. Keep existing content and other scopes.\n    Use existing authorized GitHub access. Never copy tokens, leases, nonces,\n    private paths, prompts or raw logs into GitHub. The read does not write to\n    GitHub, retry work, release a lease, approve a plan or merge a PR.\n    Missing or stale instructions appear as Action details pending in Synth City.\n    ",
     "inputSchema": {
       "properties": {
         "preset_id": {
@@ -306,12 +306,12 @@ export const manifest = [
       "required": [
         "preset_id"
       ],
-      "title": "deck_get_operator_action_contextsArguments",
+      "title": "synth_city_get_operator_action_contextsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_get_team_summary",
+    "name": "synth_city_get_team_summary",
     "description": "Read a team's outcome, parent link, existing attention signals, effort total and next actors.\n\n    Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.\n    ",
     "inputSchema": {
       "properties": {
@@ -323,12 +323,12 @@ export const manifest = [
       "required": [
         "preset_id"
       ],
-      "title": "deck_get_team_summaryArguments",
+      "title": "synth_city_get_team_summaryArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_get_work_item_context",
+    "name": "synth_city_get_work_item_context",
     "description": "Claim the current owner's continuation context, including the persisted\n    branch, approval round, workspace, and lease capability after a handoff or\n    session restart.",
     "inputSchema": {
       "properties": {
@@ -340,13 +340,13 @@ export const manifest = [
       "required": [
         "work_item_id"
       ],
-      "title": "deck_get_work_item_contextArguments",
+      "title": "synth_city_get_work_item_contextArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_launch_team",
-    "description": "Launch an Agent Team preset.\n\n    Call deck_plan_team_launch first and pass its plan_hash as\n    confirm_plan_hash. Forced respawn and force_without_plan require an\n    operator and are not available through this agent tool. Launch behavior\n    uses the per-provider launch_options accepted by deck_create_team;\n    validation errors include machine-readable\n    block_code values when available.\n    ",
+    "name": "synth_city_launch_team",
+    "description": "Launch an Agent Team preset.\n\n    Call synth_city_plan_team_launch first and pass its plan_hash as\n    confirm_plan_hash. Forced respawn and force_without_plan require an\n    operator and are not available through this agent tool. Launch behavior\n    uses the per-provider launch_options accepted by synth_city_create_team;\n    validation errors include machine-readable\n    block_code values when available.\n    ",
     "inputSchema": {
       "properties": {
         "preset_id": {
@@ -387,12 +387,12 @@ export const manifest = [
       "required": [
         "preset_id"
       ],
-      "title": "deck_launch_teamArguments",
+      "title": "synth_city_launch_teamArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_list_bridge_attachments",
+    "name": "synth_city_list_bridge_attachments",
     "description": "List recent image attachments for an Agent Bridge tmux target.",
     "inputSchema": {
       "properties": {
@@ -404,12 +404,12 @@ export const manifest = [
       "required": [
         "target"
       ],
-      "title": "deck_list_bridge_attachmentsArguments",
+      "title": "synth_city_list_bridge_attachmentsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_list_scope_revisions",
+    "name": "synth_city_list_scope_revisions",
     "description": "List safe continuation authority history for one work item.",
     "inputSchema": {
       "properties": {
@@ -421,31 +421,31 @@ export const manifest = [
       "required": [
         "work_item_id"
       ],
-      "title": "deck_list_scope_revisionsArguments",
+      "title": "synth_city_list_scope_revisionsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_list_team",
-    "description": "List all local Agent Mail participants Claude Deck knows about, including member\n    ids, display names, roles, repos, team slots, charters, and live statuses.",
+    "name": "synth_city_list_team",
+    "description": "List all local Agent Mail participants Albiex Synth City knows about, including member\n    ids, display names, roles, repos, team slots, charters, and live statuses.",
     "inputSchema": {
       "properties": {},
-      "title": "deck_list_teamArguments",
+      "title": "synth_city_list_teamArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_list_teams",
-    "description": "List saved Claude Deck Agent Team presets. Returns preset ids, names,\n    descriptions, and slots with launch options and validation warnings.",
+    "name": "synth_city_list_teams",
+    "description": "List saved Albiex Synth City Agent Team presets. Returns preset ids, names,\n    descriptions, and slots with launch options and validation warnings.",
     "inputSchema": {
       "properties": {},
-      "title": "deck_list_teamsArguments",
+      "title": "synth_city_list_teamsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_list_work_items",
-    "description": "Leader-only: list this team's GitHub dispatch work items with their\n    work_item_id and issue_number. Defaults to escalated items (pass status=\"\"\n    for all). Use at team start to resolve which escalated dependents are now\n    unblocked (per your dependency map) so you can call deck_retry_work_item\n    with the correct work_item_id.\n    ",
+    "name": "synth_city_list_work_items",
+    "description": "Leader-only: list this team's GitHub dispatch work items with their\n    work_item_id and issue_number. Defaults to escalated items (pass status=\"\"\n    for all). Use at team start to resolve which escalated dependents are now\n    unblocked (per your dependency map) so you can call synth_city_retry_work_item\n    with the correct work_item_id.\n    ",
     "inputSchema": {
       "properties": {
         "status": {
@@ -459,12 +459,12 @@ export const manifest = [
           "type": "integer"
         }
       },
-      "title": "deck_list_work_itemsArguments",
+      "title": "synth_city_list_work_itemsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_paste_bridge_attachment",
+    "name": "synth_city_paste_bridge_attachment",
     "description": "Paste an existing Agent Bridge attachment prompt into a tmux session,\n    optionally submitting it with Enter.",
     "inputSchema": {
       "properties": {
@@ -486,13 +486,13 @@ export const manifest = [
         "target",
         "attachment_id"
       ],
-      "title": "deck_paste_bridge_attachmentArguments",
+      "title": "synth_city_paste_bridge_attachmentArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_plan_team_launch",
-    "description": "Plan an Agent Team launch and return the plan_hash required by\n    deck_launch_team. Agent sessions cannot include disabled slots or force\n    replacement of a running session; those options require an operator.",
+    "name": "synth_city_plan_team_launch",
+    "description": "Plan an Agent Team launch and return the plan_hash required by\n    synth_city_launch_team. Agent sessions cannot include disabled slots or force\n    replacement of a running session; those options require an operator.",
     "inputSchema": {
       "properties": {
         "preset_id": {
@@ -528,12 +528,12 @@ export const manifest = [
       "required": [
         "preset_id"
       ],
-      "title": "deck_plan_team_launchArguments",
+      "title": "synth_city_plan_team_launchArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_prepare_operator_action_contexts",
+    "name": "synth_city_prepare_operator_action_contexts",
     "description": "Prepare issue records for the current Leader's intended human requests.\n\n    Entries use the backlog assessment schema. Supply only the assigned issues\n    that have intended human_actions. Use required_actor operator. Up to sixteen\n    unique actions and eight PRs are allowed. PRs need their full expected head.\n    Inspection actions require a current stopped attempt.\n\n    Publish the completed templates in the main issue body before requesting\n    input. Preserve other issue facts and other scopes. Clear or supersede old\n    records when the request changes. A PR record must include its target and\n    reviewed head. Do not leave instructions only in Mail or comments.\n    After publication, read fresh backlog coordination and pass its private\n    snapshot_token to the normal assessment tool. This preparation is read-only\n    and grants no approval, lease, retry, merge or milestone authority.\n    ",
     "inputSchema": {
       "properties": {
@@ -554,12 +554,12 @@ export const manifest = [
         "scope_id",
         "entries"
       ],
-      "title": "deck_prepare_operator_action_contextsArguments",
+      "title": "synth_city_prepare_operator_action_contextsArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_prepare_work_remaining_summary",
+    "name": "synth_city_prepare_work_remaining_summary",
     "description": "Leader-only: prepare three short public lines for the main GitHub issue and PR.\n\n    This tool does not publish to GitHub. Use existing authorized GitHub access.\n    State what remains and who acts next. An effort range covers active work only;\n    name its scope and confidence. Omit both bounds when the estimate is unknown.\n    Publish after a safe checkpoint and refresh after source, scope or phase changes.\n    Reports grant no approval and do not satisfy review, CI or milestone gates.\n    Do not include private values, raw output, prompts or an inferred percentage.\n    ",
     "inputSchema": {
       "properties": {
@@ -625,12 +625,12 @@ export const manifest = [
         "remaining",
         "next_action"
       ],
-      "title": "deck_prepare_work_remaining_summaryArguments",
+      "title": "synth_city_prepare_work_remaining_summaryArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_render_github_summary",
+    "name": "synth_city_render_github_summary",
     "description": "Render one short current summary in an issue or PR body.\n\n    Supply goal, status, completed, remaining, next_action and human_action.\n    Status is Working, Checking, Awaiting review, Blocked or Complete.\n    Optional effort bounds are minutes of active work, with confidence and scope.\n    Waiting is a separate description. Source SHA is an optional public checkpoint.\n    Read the current body with existing authorized GitHub access before rendering.\n    The tool preserves all text outside its deck:current-summary block.\n    It refuses ambiguous markers, private summary text and a changed expected body hash.\n    It performs no GitHub write and grants no approval, merge or milestone authority.\n    Use one responsible body publisher. Reconcile concurrent edits before publication.\n    ",
     "inputSchema": {
       "properties": {
@@ -660,12 +660,12 @@ export const manifest = [
         "current_body",
         "summary"
       ],
-      "title": "deck_render_github_summaryArguments",
+      "title": "synth_city_render_github_summaryArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_reply",
+    "name": "synth_city_reply",
     "description": "Reply in an existing thread. If the root is a pending context request addressed\n    to you, your reply is recorded as the answer and resolves it.",
     "inputSchema": {
       "properties": {
@@ -682,13 +682,13 @@ export const manifest = [
         "thread_root_id",
         "body"
       ],
-      "title": "deck_replyArguments",
+      "title": "synth_city_replyArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_report_backlog_assessment",
-    "description": "Current Leader: submit one advisory disposition per assigned issue.\n\n    Each entry: issue_number; disposition (eligible, dependency_blocked,\n    human_decision_blocked, resource_blocked, completed, needs_scope_clarification,\n    standing); reason (admission, dependency, m1a_acceptance, pilot_decision,\n    m1b_acceptance, authority_prerequisite, human_merge, review_evidence, resource,\n    owner, scope_clarification, complete, standing, unknown); required_actor\n    (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned\n    positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.\n\n    An entry may also include human_actions (at most four per entry,16 overall):\n    kind (review_pr, merge_pr, pilot_decision, milestone_acceptance, provide_evidence,\n    scope_clarification, inspect_attempt, inspect_checkpoint); readiness (requested, waiting_for_prerequisites);\n    prerequisite_issue_numbers (assigned references). PR actions require\n    pull_request_number and expected_head_sha (full40-character lowercase SHA;\n    at most eight distinct PRs). Fresh same-repository/open/head checks are required.\n    Include standing documentation PRs as explicit human requests in their assigned\n    standing issue. Distinguish current review requests from future pilot/acceptance\n    gates; never mark a gated decision requested before its prerequisites permit it.\n    These requests appear above the Roster and Autonomy tabs and grant no authority.\n    Human actions require required_actor operator. Before reporting requested,\n    prepare and publish current issue instructions with\n    deck_prepare_operator_action_contexts. Missing, stale or changed records are\n    refused. Clear or supersede replaced records in the issue body first.\n    Automatic dispatch requests use deck_get_operator_action_contexts templates.\n\n    Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish\n    while already working, even when notification quota is exhausted or no request\n    has been sent (request_sequence may be zero). This spends no notification quota.\n    A changed or expired read requires a fresh read; never reuse it for a correction.\n    Omitting the token retains the legacy one-assessment-per-notification protocol.\n\n    Assessments do not approve implementation, add dispatch labels, release leases,\n    change policy or satisfy human merge/milestone gates. Stale requests, OFF/HOLD\n    and a changed Leader binding are refused. Use the existing authorized admission\n    workflow only after verifying every reviewed gate and resource assignment.\n    ",
+    "name": "synth_city_report_backlog_assessment",
+    "description": "Current Leader: submit one advisory disposition per assigned issue.\n\n    Each entry: issue_number; disposition (eligible, dependency_blocked,\n    human_decision_blocked, resource_blocked, completed, needs_scope_clarification,\n    standing); reason (admission, dependency, m1a_acceptance, pilot_decision,\n    m1b_acceptance, authority_prerequisite, human_merge, review_evidence, resource,\n    owner, scope_clarification, complete, standing, unknown); required_actor\n    (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned\n    positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.\n\n    An entry may also include human_actions (at most four per entry,16 overall):\n    kind (review_pr, merge_pr, pilot_decision, milestone_acceptance, provide_evidence,\n    scope_clarification, inspect_attempt, inspect_checkpoint); readiness (requested, waiting_for_prerequisites);\n    prerequisite_issue_numbers (assigned references). PR actions require\n    pull_request_number and expected_head_sha (full40-character lowercase SHA;\n    at most eight distinct PRs). Fresh same-repository/open/head checks are required.\n    Include standing documentation PRs as explicit human requests in their assigned\n    standing issue. Distinguish current review requests from future pilot/acceptance\n    gates; never mark a gated decision requested before its prerequisites permit it.\n    These requests appear above the Roster and Autonomy tabs and grant no authority.\n    Human actions require required_actor operator. Before reporting requested,\n    prepare and publish current issue instructions with\n    synth_city_prepare_operator_action_contexts. Missing, stale or changed records are\n    refused. Clear or supersede replaced records in the issue body first.\n    Automatic dispatch requests use synth_city_get_operator_action_contexts templates.\n\n    Pass snapshot_token from a fresh synth_city_get_backlog_coordination read to publish\n    while already working, even when notification quota is exhausted or no request\n    has been sent (request_sequence may be zero). This spends no notification quota.\n    A changed or expired read requires a fresh read; never reuse it for a correction.\n    Omitting the token retains the legacy one-assessment-per-notification protocol.\n\n    Assessments do not approve implementation, add dispatch labels, release leases,\n    change policy or satisfy human merge/milestone gates. Stale requests, OFF/HOLD\n    and a changed Leader binding are refused. Use the existing authorized admission\n    workflow only after verifying every reviewed gate and resource assignment.\n    ",
     "inputSchema": {
       "properties": {
         "scope_id": {
@@ -730,13 +730,13 @@ export const manifest = [
         "request_sequence",
         "entries"
       ],
-      "title": "deck_report_backlog_assessmentArguments",
+      "title": "synth_city_report_backlog_assessmentArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_report_dispatch_status",
-    "description": "Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.\n\n    status is one of: triaging, ack_received, in_progress, pr_ready (with\n    head_ref), pr_opened (with pr_number), handoff_initiated (with\n    reassign_to_slot_id), handoff_accepted, blocked, continuation_completed,\n    diagnostic_completed, workspace_released. Both completion statuses require\n    revision, dispatch_nonce, current_head_sha, summary, evidence, and lease_token.\n    diagnostic_completed is accepted only after the PR tree is restored exactly to\n    the approved diagnostic baseline. Never send both head_ref and pr_number. Report\n    ack_received only after the designated\n    leader records an explicit approved decision with deck_approve_work_item;\n    prose replies are not approval. Called by the owner slot the brain dispatched\n    the issue to. Include work_item_id and lease_token from your bootstrap prompt.\n    ",
+    "name": "synth_city_report_dispatch_status",
+    "description": "Report progress on a GitHub issue dispatched by Albiex Synth City.\n\n    status is one of: triaging, ack_received, in_progress, pr_ready (with\n    head_ref), pr_opened (with pr_number), handoff_initiated (with\n    reassign_to_slot_id), handoff_accepted, blocked, continuation_completed,\n    diagnostic_completed, workspace_released. Both completion statuses require\n    revision, dispatch_nonce, current_head_sha, summary, evidence, and lease_token.\n    diagnostic_completed is accepted only after the PR tree is restored exactly to\n    the approved diagnostic baseline. Never send both head_ref and pr_number. Report\n    ack_received only after the designated\n    leader records an explicit approved decision with synth_city_approve_work_item;\n    prose replies are not approval. Called by the owner slot the brain dispatched\n    the issue to. Include work_item_id and lease_token from your bootstrap prompt.\n    ",
     "inputSchema": {
       "properties": {
         "work_item_id": {
@@ -873,13 +873,13 @@ export const manifest = [
         "work_item_id",
         "status"
       ],
-      "title": "deck_report_dispatch_statusArguments",
+      "title": "synth_city_report_dispatch_statusArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_report_owner_followup",
-    "description": "Current Leader: persist or resolve a bounded owner settlement watch.\n\n    Read deck_get_backlog_coordination immediately before this call. Select the\n    current owner_followups entry. Keep its followup_token private and use its\n    event_sequence as expected_sequence. Use action watch and reason\n    unfinished_authorized_work before ending a turn with unfinished initial\n    implementation. Watch supports current revision0 work with a tracked PR.\n    Arrange the next authorized action before ending your turn.\n\n    For an observed pending event, use action assess and reason\n    next_action_arranged, blocked, or complete. This records only a coordination\n    disposition. A Mail read or an older backlog assessment does not resolve it.\n    If work remains, read again and register the next watch. Changed authority,\n    event, binding, policy, expired challenges and OFF/HOLD refuse stale writes.\n    A watch never wakes the owner, renews a lease, resets budgets, approves work,\n    merges a PR, or satisfies a review or milestone gate.\n    ",
+    "name": "synth_city_report_owner_followup",
+    "description": "Current Leader: persist or resolve a bounded owner settlement watch.\n\n    Read synth_city_get_backlog_coordination immediately before this call. Select the\n    current owner_followups entry. Keep its followup_token private and use its\n    event_sequence as expected_sequence. Use action watch and reason\n    unfinished_authorized_work before ending a turn with unfinished initial\n    implementation. Watch supports current revision0 work with a tracked PR.\n    Arrange the next authorized action before ending your turn.\n\n    For an observed pending event, use action assess and reason\n    next_action_arranged, blocked, or complete. This records only a coordination\n    disposition. A Mail read or an older backlog assessment does not resolve it.\n    If work remains, read again and register the next watch. Changed authority,\n    event, binding, policy, expired challenges and OFF/HOLD refuse stale writes.\n    A watch never wakes the owner, renews a lease, resets budgets, approves work,\n    merges a PR, or satisfies a review or milestone gate.\n    ",
     "inputSchema": {
       "properties": {
         "scope_id": {
@@ -915,13 +915,13 @@ export const manifest = [
         "expected_sequence",
         "followup_token"
       ],
-      "title": "deck_report_owner_followupArguments",
+      "title": "synth_city_report_owner_followupArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_request_context",
-    "description": "Ask another Agent Mail participant a non-authoritative structured question.\n\n    Creates a pending context request they will be nudged to answer. For initial-plan\n    approval, use deck_request_work_item_approval instead; a context answer cannot\n    authorize implementation.\n    ",
+    "name": "synth_city_request_context",
+    "description": "Ask another Agent Mail participant a non-authoritative structured question.\n\n    Creates a pending context request they will be nudged to answer. For initial-plan\n    approval, use synth_city_request_work_item_approval instead; a context answer cannot\n    authorize implementation.\n    ",
     "inputSchema": {
       "properties": {
         "to_member_id": {
@@ -981,12 +981,12 @@ export const manifest = [
         "to_member_id",
         "topic"
       ],
-      "title": "deck_request_contextArguments",
+      "title": "synth_city_request_contextArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_request_continuation",
+    "name": "synth_city_request_continuation",
     "description": "Request one bounded continuation revision from the designated Leader.",
     "inputSchema": {
       "properties": {
@@ -1066,13 +1066,13 @@ export const manifest = [
         "tool_fallbacks",
         "lease_token"
       ],
-      "title": "deck_request_continuationArguments",
+      "title": "synth_city_request_continuationArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_request_work_item_approval",
-    "description": "Submit the current work item's initial plan to its designated Leader.\n\n    This creates normalized approval authority and returns its stable request id.\n    Do not use deck_request_context for initial-plan approval; ordinary context\n    questions are non-authoritative.\n    ",
+    "name": "synth_city_request_work_item_approval",
+    "description": "Submit the current work item's initial plan to its designated Leader.\n\n    This creates normalized approval authority and returns its stable request id.\n    Do not use synth_city_request_context for initial-plan approval; ordinary context\n    questions are non-authoritative.\n    ",
     "inputSchema": {
       "properties": {
         "work_item_id": {
@@ -1106,12 +1106,12 @@ export const manifest = [
         "dispatch_nonce",
         "summary"
       ],
-      "title": "deck_request_work_item_approvalArguments",
+      "title": "synth_city_request_work_item_approvalArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_retry_work_item",
+    "name": "synth_city_retry_work_item",
     "description": "Leader-only: request re-dispatch of an ESCALATED GitHub work item whose\n    blockers are now resolved. Pass the work_item_id (from the blocker-merged\n    notification's escalated_items) and a short reason, e.g.\n    'prerequisite #816 merged'. Rejected (409) if the item is not escalated.\n    ",
     "inputSchema": {
       "properties": {
@@ -1128,13 +1128,13 @@ export const manifest = [
       "required": [
         "work_item_id"
       ],
-      "title": "deck_retry_work_itemArguments",
+      "title": "synth_city_retry_work_itemArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_send_message",
-    "description": "Send a plain message to a team member or the current bound Supervisor.\n    Set exactly one target. For context requests use deck_request_context.\n    For handoffs use deck_create_handoff. Supervisor messages grant no authority.",
+    "name": "synth_city_send_message",
+    "description": "Send a plain message to a team member or the current bound Supervisor.\n    Set exactly one target. For context requests use synth_city_request_context.\n    For handoffs use synth_city_create_handoff. Supervisor messages grant no authority.",
     "inputSchema": {
       "properties": {
         "to_member_id": {
@@ -1172,12 +1172,12 @@ export const manifest = [
           "title": "To Supervisor Actor Id"
         }
       },
-      "title": "deck_send_messageArguments",
+      "title": "synth_city_send_messageArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_supervisor_checkin",
+    "name": "synth_city_supervisor_checkin",
     "description": "Promise the next supervisor check with an ISO 8601 UTC time.\n    Only the bound external actor can call this tool. The promise grants no authority.\n    The controller derives health. The next check must be within 24 hours.",
     "inputSchema": {
       "properties": {
@@ -1206,12 +1206,12 @@ export const manifest = [
         "preset_id",
         "next_check_at"
       ],
-      "title": "deck_supervisor_checkinArguments",
+      "title": "synth_city_supervisor_checkinArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_update_team_campaign",
+    "name": "synth_city_update_team_campaign",
     "description": "Replace campaign metadata. Use null to clear either field.\n\n    backlog_milestone is an exact GitHub milestone title.\n    Each planned decision has text and state: later, now, or done.\n    The caller supplies the Director key for this call.\n    The tool never loads, stores, logs, returns, or publishes the key.\n    A session key grants no authority for this write.\n    ",
     "inputSchema": {
       "properties": {
@@ -1263,12 +1263,12 @@ export const manifest = [
         "backlog_milestone",
         "planned_decisions"
       ],
-      "title": "deck_update_team_campaignArguments",
+      "title": "synth_city_update_team_campaignArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_update_team_parent_issue",
+    "name": "synth_city_update_team_parent_issue",
     "description": "Set a team's GitHub parent issue link. Use null to clear the link.\n\n    This operation changes only the parent link. It grants no execution authority.\n    ",
     "inputSchema": {
       "properties": {
@@ -1292,16 +1292,16 @@ export const manifest = [
         "preset_id",
         "parent_issue_url"
       ],
-      "title": "deck_update_team_parent_issueArguments",
+      "title": "synth_city_update_team_parent_issueArguments",
       "type": "object"
     }
   },
   {
-    "name": "deck_whoami",
-    "description": "Register with Claude Deck Agent Mail and return your participant identity, role,\n    charter, repo, live status, and unread/pending inbox counts. Call this once when\n    starting coordinated work.",
+    "name": "synth_city_whoami",
+    "description": "Register with Albiex Synth City Agent Mail and return your participant identity, role,\n    charter, repo, live status, and unread/pending inbox counts. Call this once when\n    starting coordinated work.",
     "inputSchema": {
       "properties": {},
-      "title": "deck_whoamiArguments",
+      "title": "synth_city_whoamiArguments",
       "type": "object"
     }
   }
@@ -1309,11 +1309,11 @@ export const manifest = [
 
 export const privateTools = [
   {
-    "name": "__deck_mail_close_generation",
+    "name": "__synth_city_mail_close_generation",
     "description": "Private lifecycle control; not a model tool.",
     "inputSchema": {
       "properties": {},
-      "title": "__deck_mail_close_generationArguments",
+      "title": "__synth_city_mail_close_generationArguments",
       "type": "object",
       "additionalProperties": false
     }

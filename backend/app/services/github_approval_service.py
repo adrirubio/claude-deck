@@ -882,9 +882,9 @@ class GithubApprovalService:
     ) -> str:
         return (
             "Claude Deck approved continuation: call "
-            "`deck_check_inbox(unread_only=False)` now, find delivery message "
+            "`synth_city_check_inbox(unread_only=False)` now, find delivery message "
             f"{revision.delivery_message_id} for work item {revision.work_item_id} "
-            f"revision {revision.revision}, and call `deck_ack_continuation` now "
+            f"revision {revision.revision}, and call `synth_city_ack_continuation` now "
             "using the dispatch nonce from that delivery and the current workspace "
             "lease token held by this owner session. Do not execute any approved "
             "action until acknowledgement succeeds. After acknowledgement, continue "
@@ -898,10 +898,10 @@ class GithubApprovalService:
     ) -> str:
         return (
             "Claude Deck continuation approval: call "
-            "`deck_check_inbox(unread_only=False)` now, find request message "
+            "`synth_city_check_inbox(unread_only=False)` now, find request message "
             f"{request.request_message_id} for work item {request.work_item_id} "
             f"revision {revision.revision}, and review its persisted phase and "
-            "allowed actions before calling `deck_decide_continuation`. Evidence "
+            "allowed actions before calling `synth_city_decide_continuation`. Evidence "
             "collection, temporary hosted instrumentation, hosted log collection, "
             "or restoration work must use phase `diagnostic` and include "
             "`revert_diagnostic_changes`. Phase `implementation` is only for a "

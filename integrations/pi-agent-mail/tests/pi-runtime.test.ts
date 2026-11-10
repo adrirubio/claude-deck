@@ -25,20 +25,20 @@ test('pinned Pi loader and TypeBox validate every real public schema without sta
       const definition = definitions.find((tool: { name: string }) => tool.name === name)
       return validateToolArguments(definition, { id: 'fixture', type: 'toolCall', name, arguments: args })
     }
-    assert.deepEqual(validate('deck_check_inbox', { unread_only: false, limit: 10 }), { unread_only: false, limit: 10 })
-    assert.deepEqual(validate('deck_get_backlog_coordination', { scope_id: 1 }), { scope_id: 1 })
+    assert.deepEqual(validate('synth_city_check_inbox', { unread_only: false, limit: 10 }), { unread_only: false, limit: 10 })
+    assert.deepEqual(validate('synth_city_get_backlog_coordination', { scope_id: 1 }), { scope_id: 1 })
     const followup = { scope_id: 1, work_item_id: 2, action: 'assess', reason: 'next_action_arranged',
       expected_sequence: 3, followup_token: 'fixture-private-followup' }
-    assert.deepEqual(validate('deck_report_owner_followup', followup), followup)
-    assert.throws(() => validate('deck_report_owner_followup', { scope_id: 1 }))
-    assert.deepEqual(validate('deck_get_operator_action_contexts', { preset_id: 1 }), { preset_id: 1 })
-    assert.deepEqual(validate('deck_prepare_operator_action_contexts', { scope_id: 1, entries: [] }), { scope_id: 1, entries: [] })
-    assert.throws(() => validate('deck_prepare_operator_action_contexts', { entries: [] }))
-    assert.throws(() => validate('deck_report_backlog_assessment', { scope_id: 1 }))
-    assert.throws(() => validate('deck_decide_continuation', { decision: 'approved' }))
-    assert.equal(validate('deck_decide_continuation', { approval_request_id: 3, work_item_id: 1, dispatch_nonce: 'fixture', decision: 'approved', reason: 'fixture' }).approval_request_id, 3)
+    assert.deepEqual(validate('synth_city_report_owner_followup', followup), followup)
+    assert.throws(() => validate('synth_city_report_owner_followup', { scope_id: 1 }))
+    assert.deepEqual(validate('synth_city_get_operator_action_contexts', { preset_id: 1 }), { preset_id: 1 })
+    assert.deepEqual(validate('synth_city_prepare_operator_action_contexts', { scope_id: 1, entries: [] }), { scope_id: 1, entries: [] })
+    assert.throws(() => validate('synth_city_prepare_operator_action_contexts', { entries: [] }))
+    assert.throws(() => validate('synth_city_report_backlog_assessment', { scope_id: 1 }))
+    assert.throws(() => validate('synth_city_decide_continuation', { decision: 'approved' }))
+    assert.equal(validate('synth_city_decide_continuation', { approval_request_id: 3, work_item_id: 1, dispatch_nonce: 'fixture', decision: 'approved', reason: 'fixture' }).approval_request_id, 3)
     const report = { work_item_id: 1, status: 'triaging', dispatch_nonce: null, evidence: { paths: ['docs/readme.md'], mode: null } }
-    assert.deepEqual(validate('deck_report_dispatch_status', report), report)
+    assert.deepEqual(validate('synth_city_report_dispatch_status', report), report)
     const nested = {
       type: 'object', required: ['scope'], properties: { scope: { $ref: '#/$defs/Scope' } },
       $defs: { Scope: { type: 'object', required: ['paths', 'options'], properties: {
@@ -70,7 +70,7 @@ test('actual Pi extension runner and AgentSession hook preserve final native too
     prototype._installAgentToolHooks.call(context)
     for (const status of [403, 409]) {
       const result = adaptResult({ structuredContent: { ok: false, error: { code: 'fixture_conflict', status_code: status } }, content: [] })
-      const final = await context.agent.afterToolCall({ toolCall: { id: 'fixture', name: 'deck_send_message' }, args: {}, result, isError: false })
+      const final = await context.agent.afterToolCall({ toolCall: { id: 'fixture', name: 'synth_city_send_message' }, args: {}, result, isError: false })
       assert.equal(final.isError, true)
       assert.deepEqual(final.details, result.details)
       assert.deepEqual(final.content, result.content)

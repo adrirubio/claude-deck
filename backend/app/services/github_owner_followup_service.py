@@ -586,9 +586,9 @@ class GithubOwnerFollowupService:
                 kind="message", recipient_member_id=leader.member_id,
                 subject=f"Owner turn completed: inspect remaining issue #{item.issue_number}",
                 body_markdown=(f"The watched owner of issue #{item.issue_number} completed its native turn. "
-                    f"Call deck_get_backlog_coordination(scope_id={watch.scope_id}). Inspect owner_followups "
+                    f"Call synth_city_get_backlog_coordination(scope_id={watch.scope_id}). Inspect owner_followups "
                     "and current work evidence. Choose the next permitted action, a specific blocker, or an "
-                    "evidenced completion. Use deck_report_owner_followup with the fresh private followup_token "
+                    "evidenced completion. Use synth_city_report_owner_followup with the fresh private followup_token "
                     "and event_sequence to record that disposition. A Mail read or an older assessment does "
                     "not resolve this event. If work remains, arrange the next authorized chunk and register "
                     "a fresh watch before ending your turn. This notice grants no implementation, approval, "

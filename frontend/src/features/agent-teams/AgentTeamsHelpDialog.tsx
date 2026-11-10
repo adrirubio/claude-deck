@@ -81,9 +81,9 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
 
           <HelpSection icon={BookOpen} title="After launch">
             <p>
-              Use Agent Mail for the actual coordination. Agents should call <code>deck_whoami</code>
-              to confirm their slot identity, then use <code>deck_request_context</code>,
-              <code> deck_reply</code>, and handoffs to coordinate.
+              Use Agent Mail for the actual coordination. Agents should call <code>synth_city_whoami</code>
+              to confirm their slot identity, then use <code>synth_city_request_context</code>,
+              <code> synth_city_reply</code>, and handoffs to coordinate.
             </p>
           </HelpSection>
 

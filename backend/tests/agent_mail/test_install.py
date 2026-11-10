@@ -50,7 +50,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
                                     "type": "command",
                                     "command": (
                                         "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                        "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                        "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                         "--provider codex-cli --event session-start"
                                     ),
                                 }
@@ -64,7 +64,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
                                     "type": "command",
                                     "command": (
                                         "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                        "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                        "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                         "--provider codex-cli --event user-prompt-submit"
                                     ),
                                 }
@@ -93,7 +93,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
                             "type": "command",
                             "command": (
                                 "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                 "--provider copilot-cli --event session-start"
                             ),
                             "timeoutSec": 2,
@@ -104,7 +104,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
                             "type": "command",
                             "command": (
                                 "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                 "--provider copilot-cli --event user-prompt-submit"
                             ),
                             "matcher": "agent_idle",
@@ -288,7 +288,7 @@ async def test_codex_apply_uses_provider_executor(monkeypatch, db, tmp_path):
     assert calls[0][1][:5] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.deck_base_url()}",
+        f"CLAUDE_DECK_URL={install.synth_city_base_url()}",
         "--env",
         "CLAUDE_DECK_PROVIDER=codex-cli",
     ]
@@ -346,7 +346,7 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
     assert calls[0][1][:6] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.deck_base_url()}",
+        f"CLAUDE_DECK_URL={install.synth_city_base_url()}",
         "--env",
         "CLAUDE_DECK_PROVIDER=copilot-cli",
         "--json",
@@ -498,7 +498,7 @@ async def test_install_endpoints_require_confirmation(client, monkeypatch):
         curl_available=True,
         shim_path="/tmp/shim.py",
         python_path="/usr/bin/python",
-        deck_url="http://127.0.0.1:8000",
+        synth_city_url="http://127.0.0.1:8000",
         claude_settings_path="/home/test/.claude/settings.json",
         claude_mcp_config_path="/home/test/.claude.json",
     )

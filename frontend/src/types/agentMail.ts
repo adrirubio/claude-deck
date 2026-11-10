@@ -137,7 +137,7 @@ export interface AgentMailInstallStatus {
   curl_available: boolean
   shim_path: string
   python_path: string
-  deck_url: string
+  synth_city_url: string
   claude_settings_path?: string | null
   claude_mcp_config_path?: string | null
   codex_hooks_path?: string | null

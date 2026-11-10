@@ -2257,7 +2257,7 @@ class AgentMailInstallStatus(BaseModel):
     curl_available: bool
     shim_path: str
     python_path: str
-    deck_url: str
+    synth_city_url: str
     claude_settings_path: Optional[str] = None
     claude_mcp_config_path: Optional[str] = None
     codex_hooks_path: Optional[str] = None

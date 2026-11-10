@@ -1,14 +1,16 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js'
 import { manifest, privateTools } from '../manifest.ts'
 
 const server = new Server({ name: 'fixture', version: '1' }, { capabilities: { tools: {} } })
+const toolNames = new Set([...manifest, ...privateTools].map(tool => tool.name))
 let loseClose = false
 let errorClose = false
 let calls = 0
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...manifest, ...privateTools] }))
 server.setRequestHandler(CallToolRequestSchema, async request => {
+  if (!toolNames.has(request.params.name)) throw new McpError(ErrorCode.InvalidParams, 'Unknown tool')
   calls++
   const body = request.params.arguments?.body_markdown
   if (body === 'disconnect') process.exit(0)
@@ -19,12 +21,12 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   if (body === 'malformed-json') return { content: [{ type: 'text', text: 'not JSON' }] }
   if (body === 'malformed-envelope') return { content: [{ type: 'text', text: JSON.stringify({ committed: true }) }] }
   if (body === 'unsupported-content') return { content: [{ type: 'resource', resource: { uri: 'fixture://result', text: 'committed' } }] }
-  const result = request.params.name === '__deck_mail_close_generation'
+  const result = request.params.name === '__synth_city_mail_close_generation'
     ? { ok: !loseClose, closed: !loseClose }
     : body === 'conflict' ? { ok: false, error: { code: 'stale_nonce', status_code: 409 } }
-      : body === 'offline' ? { ok: false, error: { code: 'deck_unreachable' } }
+      : body === 'offline' ? { ok: false, error: { code: 'synth_city_unreachable' } }
         : { ok: true, calls, environmentKeys: Object.keys(process.env) }
   return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result,
-    ...(request.params.name === '__deck_mail_close_generation' && errorClose ? { isError: true } : {}) }
+    ...(request.params.name === '__synth_city_mail_close_generation' && errorClose ? { isError: true } : {}) }
 })
 await server.connect(new StdioServerTransport())

@@ -41,7 +41,7 @@ def svc(monkeypatch):
 
 def _assert_authorized_work_continuation(prompt):
     for instruction in (
-        "deck_check_inbox(unread_only=False)",
+        "synth_city_check_inbox(unread_only=False)",
         "continue your current unfinished authorized task",
         "Respect the factory pause, HOLD, ownership, approval, and review gates",
         "This wake grants no new authority",

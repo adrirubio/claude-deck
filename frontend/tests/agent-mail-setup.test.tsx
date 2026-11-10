@@ -60,7 +60,7 @@ function status(overrides: Partial<AgentMailInstallStatus> = {}): AgentMailInsta
     curl_available: true,
     shim_path: '/opt/deck/agent_mail_server.py',
     python_path: '/opt/deck/python',
-    deck_url: 'http://localhost:8000',
+    synth_city_url: 'http://localhost:8000',
     claude_settings_path: '/home/user/.claude/settings.json',
     claude_mcp_config_path: '/home/user/.claude.json',
     codex_hooks_path: '/home/user/.codex/hooks.json',
