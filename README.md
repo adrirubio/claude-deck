@@ -1,3 +1,5 @@
+> **Albiex Synth City** is the future name of this project. This repository will move to [`albiexai/synth-city`](https://github.com/albiexai/synth-city) and the website to [albiex.org](https://albiex.org); old links will redirect. Details and questions: [the pinned announcement](https://github.com/adrirubio/claude-deck/discussions/821).
+
 # Claude Deck
 
 **Website**: [claudedeck.org](https://claudedeck.org)
