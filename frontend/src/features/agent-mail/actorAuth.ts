@@ -1,7 +1,7 @@
 import { API_BASE_URL } from '@/lib/constants'
 import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '@/lib/api'
-import { migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from '@/lib/browserStorageMigration'
+import { clearSessionStorageValue, migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from '@/lib/browserStorageMigration'
 
 const KEY_STORAGE_KEY = PRODUCT_STORAGE_KEYS.actorKey
 const TOKEN_STORAGE_KEY = PRODUCT_STORAGE_KEYS.actorToken
@@ -23,9 +23,12 @@ const TOKEN_STORAGE_KEY = PRODUCT_STORAGE_KEYS.actorToken
  * actor row per tab, which is why the key is random rather than fixed.
  */
 function actorKey(): string {
-  migrateBrowserStorage()
+  const migration = migrateBrowserStorage()
   const existing = sessionStorage.getItem(KEY_STORAGE_KEY)
   if (existing) return existing
+  if (migration.actorKey === 'pending') {
+    throw new Error('Could not restore the Agent Mail identity. Try again when browser storage is available.')
+  }
   const created = `deck-ui-${crypto.randomUUID().slice(0, 8)}`
   sessionStorage.setItem(KEY_STORAGE_KEY, created)
   return created
@@ -63,8 +66,7 @@ async function token(): Promise<string> {
  * authentication recovery may call.
  */
 export function resetActorToken(): void {
-  migrateBrowserStorage()
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  clearSessionStorageValue('actorToken')
 }
 
 /**
@@ -75,9 +77,8 @@ export function resetActorToken(): void {
  * regression Step 1's recovery test and Step 15's item 7 exist to catch.
  */
 export function resetActorIdentity(): void {
-  migrateBrowserStorage()
-  sessionStorage.removeItem(KEY_STORAGE_KEY)
-  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  clearSessionStorageValue('actorKey')
+  clearSessionStorageValue('actorToken')
 }
 
 /**

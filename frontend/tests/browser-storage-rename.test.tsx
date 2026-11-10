@@ -176,4 +176,93 @@ describe('T-S1: actual localStorage and sessionStorage consumers', () => {
     expect(sessionStorage.getItem(keys.actorKey[0])).toBeNull()
     expect(sessionStorage.getItem(keys.actorToken[0])).toBeNull()
   })
+
+  it('preserves a pending historical actor identity when a shorter replacement would fit', async () => {
+    const identity = 'deck-ui-historical-identity-with-existing-threads'
+    sessionStorage.setItem(keys.actorKey[0], identity)
+    let rejectHistoricalCopy = true
+    const original = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, data) {
+      if (this === sessionStorage && key === keys.actorKey[1] && rejectHistoricalCopy && data.length > 24) {
+        throw new DOMException('Full', 'QuotaExceededError')
+      }
+      original.call(this, key, data)
+    })
+    const request = vi.fn().mockImplementation(async (url: string) => new Response(
+      JSON.stringify(url.endsWith('/actors') ? { token: 'synthetic-replacement' } : { threads: ['retained'] }), { status: 200 },
+    ))
+    vi.stubGlobal('fetch', request)
+    const auth = await import('@/features/agent-mail/actorAuth')
+
+    await expect(auth.actorFetch('external/agent-mail/team')).rejects.toThrow(/restore.*identity/i)
+    expect(request).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(keys.actorKey[0])).toBe(identity)
+    expect(sessionStorage.getItem(keys.actorKey[1])).toBeNull()
+
+    rejectHistoricalCopy = false
+    expect(await auth.actorFetch('external/agent-mail/team')).toEqual({ threads: ['retained'] })
+    const registrations = request.mock.calls.filter(([url]) => url.endsWith('/actors'))
+    expect(registrations).toHaveLength(1)
+    expect(JSON.parse(registrations[0][1].body).actor_key).toBe(identity)
+    expect(sessionStorage.getItem(keys.actorKey[1])).toBe(identity)
+    expect(sessionStorage.getItem(keys.actorKey[0])).toBeNull()
+  })
+
+  it('clears a pending operator credential before storage recovers and across reload', async () => {
+    sessionStorage.setItem(keys.operator[0], 'synthetic-cleared-operator')
+    let rejectCopy = true
+    const original = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, data) {
+      if (this === sessionStorage && key === keys.operator[1] && rejectCopy) {
+        throw new DOMException('Full', 'QuotaExceededError')
+      }
+      original.call(this, key, data)
+    })
+    const auth = await import('@/features/agent-teams/operatorAuth')
+    expect(auth.getOperatorToken()).toBeNull()
+    auth.clearOperatorToken()
+    expect(sessionStorage.getItem(keys.operator[0])).toBeNull()
+    rejectCopy = false
+    expect(auth.getOperatorToken()).toBeNull()
+    vi.resetModules()
+    expect(await readOperator()).toBeNull()
+    expect((await import('@/lib/api')).operatorWriteHeaders('POST')).toEqual({})
+  })
+
+  for (const reset of ['token', 'identity'] as const) {
+    it(`actor ${reset} reset cancels pending legacy credentials across storage recovery and reload`, async () => {
+      const identity = 'deck-ui-historical-identity'
+      sessionStorage.setItem(keys.actorKey[0], identity)
+      sessionStorage.setItem(keys.actorToken[0], 'synthetic-retired-token')
+      let rejectCopy = true
+      const original = Storage.prototype.setItem
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, data) {
+        if (this === sessionStorage && rejectCopy && (key === keys.actorToken[1] || (reset === 'identity' && key === keys.actorKey[1]))) {
+          throw new DOMException('Full', 'QuotaExceededError')
+        }
+        original.call(this, key, data)
+      })
+      const auth = await import('@/features/agent-mail/actorAuth')
+      if (reset === 'token') auth.resetActorToken()
+      else auth.resetActorIdentity()
+      expect(sessionStorage.getItem(keys.actorToken[0])).toBeNull()
+      if (reset === 'identity') expect(sessionStorage.getItem(keys.actorKey[0])).toBeNull()
+
+      rejectCopy = false
+      vi.resetModules()
+      const request = vi.fn().mockImplementation(async (url: string) => new Response(
+        JSON.stringify(url.endsWith('/actors') ? { token: 'synthetic-current-token' } : { ok: true }), { status: 200 },
+      ))
+      vi.stubGlobal('fetch', request)
+      await (await import('@/features/agent-mail/actorAuth')).actorFetch('external/agent-mail/team')
+      const registrations = request.mock.calls.filter(([url]) => url.endsWith('/actors'))
+      expect(registrations).toHaveLength(1)
+      const provisionedKey = JSON.parse(registrations[0][1].body).actor_key
+      if (reset === 'token') expect(provisionedKey).toBe(identity)
+      else expect(provisionedKey).not.toBe(identity)
+      expect(sessionStorage.getItem(keys.actorKey[1])).toBe(provisionedKey)
+      expect(sessionStorage.getItem(keys.actorToken[1])).toBe('synthetic-current-token')
+      expect(request.mock.calls.at(-1)![1].headers.Authorization).toBe('Bearer synthetic-current-token')
+    })
+  }
 })
