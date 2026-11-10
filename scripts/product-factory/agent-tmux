@@ -1,5 +1,100 @@
 #!/usr/bin/python3
-import os,sys,pwd
-u=pwd.getpwnam('deckproduct')
-env={'HOME':u.pw_dir,'USER':u.pw_name,'LOGNAME':u.pw_name,'PATH':'/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin','LANG':'C.UTF-8','TERM':os.environ.get('TERM','xterm-256color'),'SYNTH_CITY_URL':'http://127.0.0.1:8011','SYNTH_CITY_PROVIDER':'codex-cli'}
-os.execve('/usr/bin/tmux',['tmux','-S','/home/deckproduct/.local/state/claude-deck-product/tmux.sock',*sys.argv[1:]],env)
+"""tmux wrapper for agent panes.
+
+By default every call is pinned to the live agent server with a sanitized
+environment. A caller that names its own socket (-L/-S) keeps that socket and
+its own environment, so tests can run disposable servers. kill-server aimed
+at the live server is refused: a test teardown once killed every agent
+session that way.
+"""
+import os
+import pwd
+import sys
+
+TMUX = "/usr/bin/tmux"
+LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
+_ARG_OPTIONS = ("-c", "-f", "-T", "-L", "-S")
+_SEPARATORS = (";", "\\;")
+
+
+def sanitized_env():
+    u = pwd.getpwnam("deckproduct")
+    return {
+        "HOME": u.pw_dir,
+        "USER": u.pw_name,
+        "LOGNAME": u.pw_name,
+        "PATH": "/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "TERM": os.environ.get("TERM", "xterm-256color"),
+        "SYNTH_CITY_URL": "http://127.0.0.1:8011",
+        "SYNTH_CITY_PROVIDER": "codex-cli",
+    }
+
+
+def _global_options_end(argv):
+    """Index of the first command token; also return the caller socket.
+
+    The socket is ("-L", name) or ("-S", path) when the caller named one, in
+    separate or joined form, else None. The global options -c -f -T -L -S
+    each consume the following token as their argument.
+    """
+    socket = None
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _ARG_OPTIONS:
+            if tok in ("-L", "-S") and i + 1 < len(argv):
+                socket = (tok, argv[i + 1])
+            i += 2
+        elif tok[:2] in ("-L", "-S") and len(tok) > 2:
+            socket = (tok[:2], tok[2:])
+            i += 1
+        elif tok[:2] in ("-c", "-f", "-T") and len(tok) > 2:
+            i += 1
+        elif tok.startswith("-") and tok != "-":
+            i += 1
+        else:
+            break
+    return i, socket
+
+
+def caller_socket(argv):
+    return _global_options_end(argv)[1]
+
+
+def command_names(argv):
+    """First token of each ';'-separated command; arguments never count."""
+    start, _socket = _global_options_end(argv)
+    names = []
+    expect_command = True
+    for tok in argv[start:]:
+        if tok in _SEPARATORS:
+            expect_command = True
+        elif expect_command:
+            names.append(tok)
+            expect_command = False
+    return names
+
+
+def targets_live(socket):
+    if socket is None:
+        return True
+    kind, value = socket
+    return kind == "-S" and value == LIVE_SOCKET
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    socket = caller_socket(args)
+    if "kill-server" in command_names(args) and targets_live(socket):
+        print("agent-tmux: refusing kill-server against the live agent server", file=sys.stderr)
+        return 1
+    if socket is not None:
+        os.execve(TMUX, ["tmux", *args], dict(os.environ))
+    else:
+        os.execve(TMUX, ["tmux", "-S", LIVE_SOCKET, *args], sanitized_env())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
