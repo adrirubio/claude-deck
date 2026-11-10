@@ -2,10 +2,10 @@ name: E2E
 
 on:
   pull_request:
-    branches: [master, release/v3.1]
+    branches: [master, release/v3.1, release/v4.0]
     types: [opened, synchronize, reopened]
   push:
-    branches: [master, release/v3.1]
+    branches: [master, release/v3.1, release/v4.0]
 
 permissions:
   contents: read
