@@ -89,6 +89,70 @@ def test_argument_taking_global_option_consumes_kill_server_value(monkeypatch, o
     assert calls == [("/usr/bin/tmux", ["tmux", "-S", LIVE_SOCKET, *argv], {"SANITIZED": "yes"})]
 
 
+@pytest.mark.parametrize("argv", [
+    # -S wins over -L whenever a path is supplied, in either order.
+    ["-S", LIVE_SOCKET, "-L", "private-name", "kill-server"],
+    ["-L", "private-name", "-S", LIVE_SOCKET, "kill-server"],
+    ["-S" + LIVE_SOCKET, "-Lprivate-name", "kill-server"],
+    ["-Lprivate-name", "-S" + LIVE_SOCKET, "kill-server"],
+    # A repeated -S: the last path is the effective socket.
+    ["-S", "/tmp/private.sock", "-S", LIVE_SOCKET, "kill-server"],
+])
+def test_mixed_socket_options_path_wins_and_live_kill_is_refused(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize("argv", [
+    ["-S", "/tmp/private.sock", "-L", "private-name", "kill-server"],
+    ["-L", "private-name", "-S", "/tmp/private.sock", "kill-server"],
+    ["-S", LIVE_SOCKET, "-S", "/tmp/private.sock", "kill-server"],
+    ["-S" + LIVE_SOCKET, "-Lprivate-name", "list-sessions"],
+])
+def test_mixed_socket_options_private_path_keeps_caller_call(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 0
+    assert calls == [("/usr/bin/tmux", ["tmux", *argv], CALLER_ENV)]
+
+
+@pytest.mark.parametrize("argv", [
+    ["-vf", "/dev/null", "kill-server"],
+    ["-vT", "RGB", "kill-server"],
+    ["-vf/dev/null", "kill-server"],
+    ["--", "kill-server"],
+    ["-vS", LIVE_SOCKET, "kill-server"],
+])
+def test_grouped_global_options_still_refuse_live_kill_server(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize("argv", [
+    ["-vL", "private-name", "kill-server"],
+    ["-vS/tmp/private.sock", "kill-server"],
+    ["-vc", "kill-server", "list-sessions"],
+])
+def test_grouped_global_options_consume_their_values(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 0
+    expected_env = CALLER_ENV if argv[0] in ("-vL", "-vS/tmp/private.sock") else {"SANITIZED": "yes"}
+    expected_argv = ["tmux", *argv] if expected_env is CALLER_ENV else ["tmux", "-S", LIVE_SOCKET, *argv]
+    assert calls == [("/usr/bin/tmux", expected_argv, expected_env)]
+
+
+@pytest.mark.parametrize("argv", [
+    ["list-sessions;", "kill-server"],
+    ["kill-server;"],
+    ["list-sessions;", "kill-server;"],
+])
+def test_trailing_semicolon_is_a_command_boundary(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 1
+    assert calls == []
+
+
 def test_sanitized_environment_is_unchanged(monkeypatch):
     module, _calls = _load(monkeypatch)
     fake = type("Pw", (), {"pw_dir": "/home/deckproduct", "pw_name": "deckproduct"})()

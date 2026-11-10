@@ -13,7 +13,7 @@ import sys
 
 TMUX = "/usr/bin/tmux"
 LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
-_ARG_OPTIONS = ("-c", "-f", "-T", "-L", "-S")
+_ARG_OPTION_CHARS = frozenset("cfTLS")
 _SEPARATORS = (";", "\\;")
 
 
@@ -32,29 +32,49 @@ def sanitized_env():
 
 
 def _global_options_end(argv):
-    """Index of the first command token; also return the caller socket.
+    """Index of the first command token; also return the effective socket.
 
-    The socket is ("-L", name) or ("-S", path) when the caller named one, in
-    separate or joined form, else None. The global options -c -f -T -L -S
-    each consume the following token as their argument.
+    Global options follow tmux getopt rules: short options may be grouped
+    (``-vf``), an option that takes a value (``-c -f -T -L -S``) consumes
+    the rest of its token or the following token, and ``--`` ends option
+    parsing. The socket is ("-S", path) when any -S was supplied (the last
+    one; tmux keeps the path and the -L label separately and uses the path
+    whenever present), else ("-L", name) from the last -L, else None.
     """
-    socket = None
+    path = None
+    label = None
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok in _ARG_OPTIONS:
-            if tok in ("-L", "-S") and i + 1 < len(argv):
-                socket = (tok, argv[i + 1])
-            i += 2
-        elif tok[:2] in ("-L", "-S") and len(tok) > 2:
-            socket = (tok[:2], tok[2:])
+        if tok == "--":
             i += 1
-        elif tok[:2] in ("-c", "-f", "-T") and len(tok) > 2:
-            i += 1
-        elif tok.startswith("-") and tok != "-":
-            i += 1
-        else:
             break
+        if len(tok) < 2 or not tok.startswith("-") or tok == "-":
+            break
+        consumed_next = False
+        for pos, char in enumerate(tok[1:]):
+            if char not in _ARG_OPTION_CHARS:
+                continue
+            rest = tok[2 + pos:]
+            if rest:
+                value = rest
+            elif i + 1 < len(argv):
+                value = argv[i + 1]
+                consumed_next = True
+            else:
+                value = None
+            if char == "S":
+                path = value
+            elif char == "L":
+                label = value
+            break
+        i += 2 if consumed_next else 1
+    if path is not None:
+        socket = ("-S", path)
+    elif label is not None:
+        socket = ("-L", label)
+    else:
+        socket = None
     return i, socket
 
 
@@ -62,8 +82,17 @@ def caller_socket(argv):
     return _global_options_end(argv)[1]
 
 
+def _ends_command(tok):
+    return tok.endswith(";") and not tok.endswith("\\;")
+
+
 def command_names(argv):
-    """First token of each ';'-separated command; arguments never count."""
+    """First token of each ';'-separated command; arguments never count.
+
+    A standalone ';' or '\\;' token separates commands, and so does an
+    unescaped trailing ';' on a token (tmux strips it and ends the
+    command there), including on the first command.
+    """
     start, _socket = _global_options_end(argv)
     names = []
     expect_command = True
@@ -71,8 +100,15 @@ def command_names(argv):
         if tok in _SEPARATORS:
             expect_command = True
         elif expect_command:
-            names.append(tok)
-            expect_command = False
+            if _ends_command(tok):
+                if tok[:-1]:
+                    names.append(tok[:-1])
+                expect_command = True
+            else:
+                names.append(tok)
+                expect_command = False
+        elif _ends_command(tok):
+            expect_command = True
     return names
 
 
