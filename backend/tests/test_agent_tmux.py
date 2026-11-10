@@ -108,12 +108,40 @@ def test_mixed_socket_options_path_wins_and_live_kill_is_refused(monkeypatch, ar
     ["-S", "/tmp/private.sock", "-L", "private-name", "kill-server"],
     ["-L", "private-name", "-S", "/tmp/private.sock", "kill-server"],
     ["-S", LIVE_SOCKET, "-S", "/tmp/private.sock", "kill-server"],
-    ["-S" + LIVE_SOCKET, "-Lprivate-name", "list-sessions"],
 ])
 def test_mixed_socket_options_private_path_keeps_caller_call(monkeypatch, argv):
     _module, calls, code = _run(monkeypatch, argv)
     assert code == 0
     assert calls == [("/usr/bin/tmux", ["tmux", *argv], CALLER_ENV)]
+
+
+@pytest.mark.parametrize("argv", [
+    ["-S", LIVE_SOCKET, "list-sessions"],
+    ["-S" + LIVE_SOCKET, "-Lprivate-name", "list-sessions"],
+    ["-S", LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product//tmux.sock"), "list-sessions"],
+])
+def test_explicit_live_socket_keeps_argv_but_uses_sanitized_environment(monkeypatch, argv):
+    _module, calls, code = _run(monkeypatch, argv)
+    assert code == 0
+    assert calls == [("/usr/bin/tmux", ["tmux", *argv], {"SANITIZED": "yes"})]
+
+
+@pytest.mark.parametrize("socket_path", [
+    LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product//tmux.sock"),
+    LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product/./tmux.sock"),
+])
+def test_kill_server_via_live_socket_spelling_is_refused(monkeypatch, socket_path):
+    _module, calls, code = _run(monkeypatch, ["-S", socket_path, "kill-server"])
+    assert code == 1
+    assert calls == []
+
+
+def test_kill_server_via_symlink_to_live_socket_is_refused(monkeypatch, tmp_path):
+    link = tmp_path / "live-link.sock"
+    link.symlink_to(LIVE_SOCKET)
+    _module, calls, code = _run(monkeypatch, ["-S", str(link), "kill-server"])
+    assert code == 1
+    assert calls == []
 
 
 @pytest.mark.parametrize("argv", [

@@ -2,10 +2,11 @@
 """tmux wrapper for agent panes.
 
 By default every call is pinned to the live agent server with a sanitized
-environment. A caller that names its own socket (-L/-S) keeps that socket and
-its own environment, so tests can run disposable servers. kill-server aimed
-at the live server is refused: a test teardown once killed every agent
-session that way.
+environment. A caller that names a non-live socket (-L/-S) keeps that socket
+and its own environment, so tests can run disposable servers; any call that
+reaches the live server, however the socket is spelled, gets the sanitized
+environment. kill-server aimed at the live server is refused: a test
+teardown once killed every agent session that way.
 """
 import os
 import pwd
@@ -116,7 +117,7 @@ def targets_live(socket):
     if socket is None:
         return True
     kind, value = socket
-    return kind == "-S" and value == LIVE_SOCKET
+    return kind == "-S" and os.path.realpath(value) == os.path.realpath(LIVE_SOCKET)
 
 
 def main(argv=None):
@@ -125,8 +126,10 @@ def main(argv=None):
     if "kill-server" in command_names(args) and targets_live(socket):
         print("agent-tmux: refusing kill-server against the live agent server", file=sys.stderr)
         return 1
-    if socket is not None:
+    if socket is not None and not targets_live(socket):
         os.execve(TMUX, ["tmux", *args], dict(os.environ))
+    elif socket is not None:
+        os.execve(TMUX, ["tmux", *args], sanitized_env())
     else:
         os.execve(TMUX, ["tmux", "-S", LIVE_SOCKET, *args], sanitized_env())
     return 0
