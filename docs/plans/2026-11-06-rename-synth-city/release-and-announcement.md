@@ -159,7 +159,7 @@ Full rename design and upgrade contract: [compatibility design](LINK). Report up
 
 ## 8. Draft: pinned Discussion (pre-transfer, old repository)
 
-> Draft for Director approval. Publish target: a pinned Discussion on `adrirubio/claude-deck`, posted and pinned **before** the transfer/freeze (section 4 step 1; `transfer-runbook.md` section 8). Square-bracketed fields are filled by the Director at posting time — no cutover date exists in advance (2026-11-08 decision), so the draft deliberately promises an update instead of inventing one. Discussion preservation across transfer is verified after the move (runbook section 10 phase B), not assumed.
+> Draft for Director approval. Publish target: a pinned Discussion on `adrirubio/claude-deck`, posted and pinned **before** the transfer/freeze (section 4 step 1; `transfer-runbook.md` section 8). The move-window field is filled (Director, 2026-11-10: “We will update this post with the date before anything moves.”); the remaining LINK fields are filled at posting time — no cutover date exists in advance (2026-11-08 decision), so the draft deliberately promises an update instead of inventing one. Discussion preservation across transfer is verified after the move (runbook section 10 phase B), not assumed.
 
 ---
 
@@ -167,7 +167,7 @@ Full rename design and upgrade contract: [compatibility design](LINK). Report up
 
 **Albiex Synth City** will be the new name of this project.
 
-**What is happening.** This repository will be transferred — not copied, not recreated — to its new home at `albiexai/synth-city`, and the website will move to `albiex.org`. The next major release after the move is **v4.0.0**. [Director to add: planned move window, or “We will update this post with the date before anything moves.”]
+**What is happening.** This repository will be transferred — not copied, not recreated — to its new home at `albiexai/synth-city`, and the website will move to `albiex.org`. The next major release after the move is **v4.0.0**. We will update this post with the date before anything moves.
 
 **What will not break.** Existing links to this repository and to `claudedeck.org` will redirect to the new addresses. Your clone, bookmarks and installed copy keep working; you do not need to re-clone. Your local data is not touched by the repository move at all.
 
