@@ -333,6 +333,6 @@ export function forceReleaseGithubWorkspace(
 ): Promise<{ released_item_id: number; discarded_paths?: string | null; unpushed_commits?: number | null }> {
   return apiClient(`agent-teams/github-scopes/${scopeId}/workspaces/${workspace.id}/force-release`, {
     method: 'POST', headers: operatorHeaders(operatorToken),
-    body: JSON.stringify({ force: true, expected_leased_at: workspace.leased_at, reason, requested_by: 'Deck UI operator' }),
+    body: JSON.stringify({ force: true, expected_leased_at: workspace.leased_at, reason, requested_by: 'Synth City UI operator' }),
   })
 }

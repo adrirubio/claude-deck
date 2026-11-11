@@ -14,7 +14,7 @@ describe('AgentTeamsHelpDialog', () => {
 
     expect(screen.getByRole('link', { name: 'Read the autonomy guide' })).toHaveAttribute(
       'href',
-      'https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md',
+      'https://github.com/albiexai/synth-city/blob/master/docs/autonomy.md',
     )
   })
 })

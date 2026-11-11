@@ -20,7 +20,7 @@ export function RequiredCiNotice({
         {signal.label}
       </h3>
       <p>
-        Deck cannot read the required checks
+        Synth City cannot read the required checks
         {pullRequest ? ` for PR #${pullRequest}` : ""}, so it cannot verify the
         change. {requiredCiReason(signal.reason)}
       </p>

@@ -40,7 +40,7 @@ export function ProjectSelector() {
       setAdding(false);
       setPath('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Deck could not add this folder.');
+      setError(err instanceof Error ? err.message : 'Synth City could not add this folder.');
     }
   };
 
@@ -63,7 +63,7 @@ export function ProjectSelector() {
             </optgroup>
           )}
           {tracked.length > 0 && (
-            <optgroup label="Other folders Deck knows about">
+            <optgroup label="Other folders Synth City knows about">
               {tracked.map((folder) => (
                 <option key={folder.path} value={folder.path}>{folder.name} · {folder.path}</option>
               ))}
@@ -84,7 +84,7 @@ export function ProjectSelector() {
       )}
       <p className="text-muted-foreground">
         Scopes project-level native settings on this page only.{' '}
-        <Link className="text-primary underline" to="/harnesses/folders">Folders Deck knows about</Link>
+        <Link className="text-primary underline" to="/harnesses/folders">Folders Synth City knows about</Link>
       </p>
       {error && <p role="alert" className="w-full text-destructive">{error}</p>}
     </div>

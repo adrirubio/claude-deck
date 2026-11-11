@@ -110,7 +110,7 @@ function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; met
   if (!pages.length) {
     return (
       <p>
-        {harnesses[id]} has no settings pages in Deck. <Link className="text-primary underline" to="/teams">Open Teams</Link> or <Link className="text-primary underline" to={`/agent-bridge?provider=${id}`}>Live sessions</Link> to work with it.
+        {harnesses[id]} has no settings pages in Synth City. <Link className="text-primary underline" to="/teams">Open Teams</Link> or <Link className="text-primary underline" to={`/agent-bridge?provider=${id}`}>Live sessions</Link> to work with it.
       </p>
     );
   }
@@ -151,7 +151,7 @@ function Tiles({ id, metadata, catalog, withCounts }: { id: AgentProviderId; met
 function HarnessPage({ id, metadata, registryLoading }: { id: AgentProviderId; metadata?: AgentProviderStatus; registryLoading: boolean }) {
   const { state, catalog } = useProviderOperations(id);
   const mail = useAgentMailSetup();
-  useDocumentTitle(`${harnesses[id]} · Claude Deck`);
+  useDocumentTitle(`${harnesses[id]} · Albiex Synth City`);
   const summaryAccess = catalog ? nativeAccess(id, "summary", metadata, catalog) : null;
   if (registryLoading || state === "idle" || state === "loading") return <HarnessCardSkeleton id={id} />;
   const status = harnessStatus(metadata, catalog);
@@ -187,7 +187,7 @@ function HarnessCard({ id, metadata, registryLoading, teamCount }: { id: AgentPr
   const status = harnessStatus(metadata, catalog);
   const missing = status?.kind === "missing";
   const pageCount = catalog ? availablePages(id, metadata, catalog).length : 0;
-  const pages = pageCount > 0 ? `${pageCount} settings ${pageCount === 1 ? "page" : "pages"}` : "No settings pages in Deck";
+  const pages = pageCount > 0 ? `${pageCount} settings ${pageCount === 1 ? "page" : "pages"}` : "No settings pages in Synth City";
   const usedBy = teamCount ? ` · used by ${teamCount} ${teamCount === 1 ? "team" : "teams"}` : "";
   const open = () => navigate(`/harnesses/${id}`);
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -249,7 +249,7 @@ export function HarnessesPage() {
   const ids = Object.keys(harnesses).filter(id => !providerId || providerId === id) as AgentProviderId[];
   const teamCounts = useTeamCounts();
   const single = providerId && ids.length === 1 ? ids[0] : null;
-  useDocumentTitle(single ? null : "Harnesses · Claude Deck");
+  useDocumentTitle(single ? null : "Harnesses · Albiex Synth City");
   return <section className="space-y-5">
     {!single && <HarnessBreadcrumb />}
     {!single && <h2 className="text-2xl font-semibold">Harnesses{providerId ? ` · ${harnesses[providerId as AgentProviderId] ?? providerId}` : ""}</h2>}

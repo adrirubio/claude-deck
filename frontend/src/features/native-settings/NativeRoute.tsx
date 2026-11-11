@@ -68,7 +68,7 @@ export function NativeRoute({
   const access = nativeAccess(provider, surface, metadata, catalog.catalog ?? undefined);
   const pageName = surfaceInfo[surface as keyof typeof surfaceInfo]?.name ?? null;
   const harnessName = harnesses[provider as AgentProviderId] ?? provider;
-  useDocumentTitle(pageName && metadata ? `${pageName} · ${harnessName} · Claude Deck` : null);
+  useDocumentTitle(pageName && metadata ? `${pageName} · ${harnessName} · Albiex Synth City` : null);
   if (context.loading) return <p role="status">Loading harness registry…</p>;
   if (entry && Page && metadata && !context.error && (catalog.state === "idle" || catalog.state === "loading"))
     return <p role="status">Loading required operating catalog…</p>;

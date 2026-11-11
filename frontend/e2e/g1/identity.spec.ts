@@ -29,8 +29,8 @@ for (const route of ['/', '/work', '/teams']) {
   })
 }
 
-test('@active the tab title is "Claude Deck" on a default installation', async ({ page }) => {
+test('@active the tab title is "Albiex Synth City" on a default installation', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
-  await expect(page).toHaveTitle('Claude Deck')
+  await expect(page).toHaveTitle('Albiex Synth City')
 })

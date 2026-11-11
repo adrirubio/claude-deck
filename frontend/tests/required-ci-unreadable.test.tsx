@@ -30,7 +30,7 @@ const signal: RequiredCIUnreadableSignal = {
   reason: 'permission_missing',
   next_steps: [
     'Check GitHub access and the configured required workflows.',
-    'Deck will poll again. Unreadable checks do not grant verification or consume a retry.',
+    'Synth City will poll again. Unreadable checks do not grant verification or consume a retry.',
   ],
 }
 
@@ -81,7 +81,7 @@ describe('Work item page', () => {
     await settle()
     const block = screen.getByRole('region', { name: 'Required CI cannot be read' })
     expect(within(block).getByRole('heading')).toHaveTextContent('Required CI cannot be read')
-    expect(block).toHaveTextContent('Deck cannot read the required checks for PR #202')
+    expect(block).toHaveTextContent('Synth City cannot read the required checks for PR #202')
     expect(block).toHaveTextContent('The GitHub token or App has no permission to read the checks.')
     expect(within(block).getAllByRole('listitem')).toHaveLength(2)
     expect(block).toHaveTextContent('Check GitHub access')
@@ -123,8 +123,8 @@ describe('reason text', () => {
   })
 
   it('never shows a raw server string', () => {
-    expect(requiredCiReason('401 Unauthorized: token ghp_secret')).toBe('Deck does not know why the checks cannot be read.')
-    expect(requiredCiReason(null)).toBe('Deck does not know why the checks cannot be read.')
+    expect(requiredCiReason('401 Unauthorized: token ghp_secret')).toBe('Synth City does not know why the checks cannot be read.')
+    expect(requiredCiReason(null)).toBe('Synth City does not know why the checks cannot be read.')
     render(<RequiredCiNotice signal={{ ...signal, reason: 'ghp_secret' as never }} pullRequest={null} />)
     expect(document.body).not.toHaveTextContent('ghp_secret')
   })

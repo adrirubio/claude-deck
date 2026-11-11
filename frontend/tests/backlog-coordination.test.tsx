@@ -194,7 +194,7 @@ describe('Leader backlog coordination', () => {
       : Promise.resolve({ ...summary, scope_id: 2, repo: 'o/new', status: 'unknown', assessment_current: false }))
     const view = render(<StrictMode><BacklogCoordination scopeId={1} withOperatorToken={withToken} /></StrictMode>)
     view.rerender(<StrictMode><BacklogCoordination scopeId={2} withOperatorToken={withToken} /></StrictMode>)
-    await screen.findByText('Deck has not read the backlog yet')
+    await screen.findByText('Synth City has not read the backlog yet')
     resolveOld(summary)
     await waitFor(() => expect(screen.queryByText('No eligible implementation work')).toBeNull())
   })

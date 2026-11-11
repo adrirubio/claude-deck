@@ -60,7 +60,7 @@ describe('compact harness list', () => {
     expect(within(claude).getByText('v1.2.3')).toBeInTheDocument()
     expect(within(claude).getByText(/settings pages · used by 2 teams/)).toBeInTheDocument()
     expect(within(card('Codex CLI')).getByText(/used by 1 team$/)).toBeInTheDocument()
-    expect(within(card('Pi')).getByText(/No settings pages in Deck/)).toBeInTheDocument()
+    expect(within(card('Pi')).getByText(/No settings pages in Synth City/)).toBeInTheDocument()
   })
 
   it('shows the page count only when the teams cannot be read', async () => {

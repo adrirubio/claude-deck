@@ -30,7 +30,7 @@ export function workItemAttention(item: GithubWorkItem, scope?: TeamGithubScope)
     }
   }
   if (['escalated', 'failed'].includes(item.dispatch_status)) {
-    return { label: 'Your intervention is needed', reason: 'Deck stopped this attempt. Open the details to inspect the reason and available recovery actions.', linkLabel: 'Open PR' }
+    return { label: 'Your intervention is needed', reason: 'Synth City stopped this attempt. Open the details to inspect the reason and available recovery actions.', linkLabel: 'Open PR' }
   }
   return null
 }

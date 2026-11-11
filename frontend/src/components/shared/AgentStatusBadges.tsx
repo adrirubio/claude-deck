@@ -40,7 +40,7 @@ export function AgentStatusBadges({ status, compact, now, className }: AgentStat
       {' '}
       <Badge
         variant="outline"
-        title={view.current ? 'Whether the agent session is alive.' : expired ? 'This status has expired.' : 'Deck has no status for this agent.'}
+        title={view.current ? 'Whether the agent session is alive.' : expired ? 'This status has expired.' : 'Synth City has no status for this agent.'}
         className={cn(
           view.session.state === 'online' && 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
           view.session.state !== 'online' && 'border-muted-foreground/30 bg-muted text-muted-foreground',
@@ -63,7 +63,7 @@ export function AgentStatusBadges({ status, compact, now, className }: AgentStat
       {' '}
       <Badge
         variant="outline"
-        title={view.wake.reason ?? (view.wake.state === 'can_wake' ? 'Deck can wake it in its terminal.' : 'Whether Deck can wake the agent. This display grants no authority.')}
+        title={view.wake.reason ?? (view.wake.state === 'can_wake' ? 'Synth City can wake it in its terminal.' : 'Whether Synth City can wake the agent. This display grants no authority.')}
         className={cn(
           view.wake.state === 'can_wake' && 'border-emerald-300 text-emerald-700 dark:text-emerald-300',
           view.wake.state === 'cannot_wake' && 'border-amber-300 text-amber-700 dark:text-amber-300',

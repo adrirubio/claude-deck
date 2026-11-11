@@ -10,9 +10,9 @@ export function statusSentence(data: OverviewResponse, teams: number | null) {
   // With every repository off, nothing is taking in work, so "paused" comes first.
   // The scheduler and recovery-only details stay in the automation details.
   if (automation.enabled_scopes > 0 && automation.runtime.mode === "recovery_only")
-    return { tone: "warn", text: "Recovery-only mode. Deck blocks normal intake." };
+    return { tone: "warn", text: "Recovery-only mode. Synth City blocks normal intake." };
   if (automation.enabled_scopes > 0 && automation.runtime.scheduler_state === "stopped")
-    return { tone: "warn", text: "The scheduler is stopped. Deck blocks normal intake." };
+    return { tone: "warn", text: "The scheduler is stopped. Synth City blocks normal intake." };
   if (automation.enabled_scopes === 0) {
     const all = automation.configured_scopes === 1 ? "The" : "All";
     return {

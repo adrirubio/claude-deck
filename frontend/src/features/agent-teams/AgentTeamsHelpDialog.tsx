@@ -89,15 +89,15 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
 
           <HelpSection icon={GitBranch} title="Autonomous GitHub dispatch">
             <ol className="list-decimal space-y-1 pl-5">
-              <li>Put <code>github_token</code> in <code>backend/.env</code> for polling private repos and restart Deck. App-backed dispatch also needs GitHub App settings; App settings alone do not authenticate the watcher.</li>
+              <li>Put <code>github_token</code> in <code>backend/.env</code> for polling private repos and restart Albiex Synth City. App-backed dispatch also needs GitHub App settings; App settings alone do not authenticate the watcher.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory.</li>
               <li>Assign and launch the Leader slot before enabling autonomy. Reordering and Role text do not change the assignment.</li>
-              <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
+              <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Synth City uses expertise, then the Leader.</li>
               <li>Watch Activity. The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and Director remedies. It is separate from the GitHub polling token and stays in this browser tab.</li>
             </ol>
             <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
-            <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
-            <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy guide</a>.</p>
+            <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Synth City stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
+            <p><a href="https://github.com/albiexai/synth-city/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy guide</a>.</p>
           </HelpSection>
         </div>
       </DialogContent>

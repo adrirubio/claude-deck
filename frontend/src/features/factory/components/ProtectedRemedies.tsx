@@ -99,8 +99,8 @@ export function ProtectedRemedies({
           response.retry_requested_at
           ? `Retry requested; re-dispatch is deferred until the current owner releases the workspace. Dispatch status: ${response.dispatch_status}. ${response.status_note ?? ""}`
           : response.dispatch_status === "pending"
-            ? "Retry reset this work item to pending. Deck has not yet seen a new dispatch."
-            : `Retry response status: ${response.dispatch_status}. Deck has not yet seen a new dispatch. ${response.status_note ?? ""}`,
+            ? "Retry reset this work item to pending. Synth City has not yet seen a new dispatch."
+            : `Retry response status: ${response.dispatch_status}. Synth City has not yet seen a new dispatch. ${response.status_note ?? ""}`,
         );
         await context.current.refresh();
       }
@@ -134,7 +134,7 @@ export function ProtectedRemedies({
     <section className={panel}>
       <h3 className="font-semibold">Protected recovery</h3>
       <p>
-        Deck checks again on the server that you may do this. Agent decisions
+        Synth City checks again on the server that you may do this. Agent decisions
         and human PR review stay separate.
       </p>
       <div className="flex flex-wrap gap-3">
@@ -172,7 +172,7 @@ export function ProtectedRemedies({
             </AlertDialogTitle>
             <AlertDialogDescription>
               Retry can discard prior PR, handoff, and attempt markers. If the
-              workspace is still leased, Deck defers re-dispatch until the current
+              workspace is still leased, Synth City defers re-dispatch until the current
               owner releases it. Review this work item before continuing. The
               server rechecks current eligibility and authorization.
             </AlertDialogDescription>

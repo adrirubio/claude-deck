@@ -106,7 +106,7 @@ function recoverySummary(item: GithubWorkItem) {
     return 'Waiting for the Leader to approve the proposed recovery revision.'
   }
   if (item.dispatch_status === 'verifying' && item.active_scope_revision > 0) {
-    return `Recovery revision ${item.active_scope_revision} was submitted; Deck is checking the PR.`
+    return `Recovery revision ${item.active_scope_revision} was submitted; Synth City is checking the PR.`
   }
   if (item.dispatch_status === 'dispatched' && item.active_scope_status === 'active') {
     return `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. The Director needs to do nothing unless it stalls.`
@@ -311,7 +311,7 @@ export function WorkItemActions({
                   <h3 className="font-medium">{attention.label}</h3>
                   <p className="mt-2 text-sm">{attention.reason}</p>
                   {item.last_verified_sha && (
-                    <p className="mt-2 text-xs text-muted-foreground">Last head verified by Deck: <code>{item.last_verified_sha.slice(0, 12)}</code>. Check the current PR head and review evidence before merging.</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Last head verified by Synth City: <code>{item.last_verified_sha.slice(0, 12)}</code>. Check the current PR head and review evidence before merging.</p>
                   )}
                   {prUrl(item) ? (
                     <a href={prUrl(item)!} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 font-medium text-primary">
@@ -495,7 +495,7 @@ export function WorkItemActions({
               <section className="space-y-3 rounded-lg border p-4" aria-labelledby="operator-actions-title">
                 <div>
                   <h3 id="operator-actions-title" className="font-semibold">Director remedies</h3>
-                  <p className="text-sm text-muted-foreground">Only remedies valid for this state appear. Deck checks current authority before changing the issue.</p>
+                  <p className="text-sm text-muted-foreground">Only remedies valid for this state appear. Synth City checks current authority before changing the issue.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {item.escalation_reason === 'prepared_owner_unavailable' && (
@@ -537,7 +537,7 @@ export function WorkItemActions({
                       ? `This may discard dirty or unpushed work in ${operatorAction.workspace.path}. Lease acquired ${formatDateTime(operatorAction.workspace.leased_at)}. Verify the owner is finished before continuing.`
                       : operatorAction?.kind === 'release_decision' || operatorAction?.kind === 'release_ack'
                         ? 'This starts a time-limited decision or acknowledgement window. Confirm the responsible agent is available now.'
-                        : 'Deck will check current authority and reject stale or ineligible requests.'}
+                        : 'Synth City will check current authority and reject stale or ineligible requests.'}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 {operatorAction?.kind === 'resume' && (

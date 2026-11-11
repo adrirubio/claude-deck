@@ -427,7 +427,7 @@ export function CCBridgePage() {
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Agent CLIs unavailable in this runtime</AlertTitle>
                 <AlertDescription>
-                  {agentCliWarning} Run Claude Deck natively on the host where Claude Code, Codex, Copilot, or OpenCode are installed.
+                  {agentCliWarning} Run Synth City natively on the host where Claude Code, Codex, Copilot, or OpenCode are installed.
                 </AlertDescription>
               </Alert>
             </div>

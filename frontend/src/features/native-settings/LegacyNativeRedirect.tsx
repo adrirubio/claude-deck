@@ -19,7 +19,7 @@ export function LegacyNativeRedirect() {
     return (
       <section className="space-y-2">
         <h2 className="text-xl font-semibold">No harness available</h2>
-        <p>Deck found no harness for <code>{pathname}</code>. Open Harnesses to see what is installed.</p>
+        <p>Synth City found no harness for <code>{pathname}</code>. Open Harnesses to see what is installed.</p>
       </section>
     )
   }

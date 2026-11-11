@@ -90,7 +90,7 @@ export function NeedsALookPanel({ state, groups, names, namesReady = true, trunc
       ))}
       {state === "ready" && truncated && (
         <p className="text-xs text-muted-foreground">
-          Deck read only the newest request events. Older refusals in this window are not counted.
+          Synth City read only the newest request events. Older refusals in this window are not counted.
         </p>
       )}
     </section>

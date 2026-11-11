@@ -88,7 +88,7 @@ export function useWorkItemOperations({
             <AlertDialogTitle>Retry issue #{retryTarget?.issue_number}?</AlertDialogTitle>
             <AlertDialogDescription>
               Retry can discard prior PR, handoff, and attempt markers. If the workspace is still leased,
-              Deck defers re-dispatch until the current owner releases it. Review the work item before continuing.
+              Synth City defers re-dispatch until the current owner releases it. Review the work item before continuing.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

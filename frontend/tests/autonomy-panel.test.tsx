@@ -201,7 +201,7 @@ describe('OperatorTokenDialog', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Director key' })
     expect(within(dialog).getByText(/It is the value of/)).toHaveTextContent('OPERATOR_TOKEN')
-    expect(within(dialog).getByText('Deck needs the key to read audit events.')).toBeInTheDocument()
+    expect(within(dialog).getByText('Synth City needs the key to read audit events.')).toBeInTheDocument()
     expect(within(dialog).getByText('First time? Set up the key on the server').closest('details')).not.toHaveAttribute('open')
     expect(within(dialog).getByRole('link', { name: 'installation guide', hidden: true })).toHaveAttribute('href', expect.stringContaining('docs/guide/installation.md'))
   })
@@ -209,6 +209,6 @@ describe('OperatorTokenDialog', () => {
   it('omits the reason line when the caller gives no reason', () => {
     render(<OperatorTokenDialog open value="" error={null} onValueChange={noop} onSubmit={noop} onCancel={noop} />)
 
-    expect(screen.queryByText(/Deck needs the key/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Synth City needs the key/)).not.toBeInTheDocument()
   })
 })

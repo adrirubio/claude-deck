@@ -25,7 +25,7 @@ function message(id: number, overrides: Partial<MailMessageResponse>): MailMessa
 }
 
 const BY_TYPE = {
-  deck: message(1, { sender_type: "system", sender_name: "Deck" }),
+  deck: message(1, { sender_type: "system", sender_name: "Synth City" }),
   director: message(2, { sender_type: "director", sender_name: "Director" }),
   agent: message(3, { sender_type: "member", sender_member_id: 3, sender_name: "L1 Leader" }),
   legacy: message(4, { sender_type: "legacy", sender_name: LEGACY_SENDER_LABEL }),
@@ -35,7 +35,7 @@ const BY_TYPE = {
 
 describe("senderName and senderKind", () => {
   it("reads the label only from sender_type and sender_name", () => {
-    expect(senderName(BY_TYPE.deck, MEMBERS)).toBe("Deck");
+    expect(senderName(BY_TYPE.deck, MEMBERS)).toBe("Synth City");
     expect(senderName(BY_TYPE.director, MEMBERS)).toBe("Director");
     expect(senderName(BY_TYPE.agent, MEMBERS)).toBe("L1 Leader");
     expect(senderName(BY_TYPE.legacy, MEMBERS)).toBe(LEGACY_SENDER_LABEL);
@@ -44,8 +44,8 @@ describe("senderName and senderKind", () => {
       .toEqual(["deck", "director", "agent", "legacy", "external", "unknown"]);
   });
 
-  it("shows Deck for a service message even when the name says Director", () => {
-    expect(senderName(message(7, { sender_type: "system", sender_name: "Director" }), MEMBERS)).toBe("Deck");
+  it("shows Synth City for a service message even when the name says Director", () => {
+    expect(senderName(message(7, { sender_type: "system", sender_name: "Director" }), MEMBERS)).toBe("Synth City");
   });
 
   it("never shows Director for an unknown sender", () => {
@@ -81,7 +81,7 @@ describe("Conversations list", () => {
   it("shows one label and the right icon for each sender type", () => {
     renderRequests(Object.values(BY_TYPE));
     const expected: Array<[string, string, RegExp | null]> = [
-      ["Subject 1", "Deck", /Sent by Deck, not by an agent/],
+      ["Subject 1", "Synth City", /Sent by Synth City, not by an agent/],
       ["Subject 2", "Director", /Sent by the Director/],
       ["Subject 3", "L1 Leader", null],
       ["Subject 4", LEGACY_SENDER_LABEL, /Recorded before sender types existed/],
@@ -99,12 +99,12 @@ describe("Conversations list", () => {
   it("does not show a scheduler message as sent by the Director", () => {
     renderRequests([BY_TYPE.deck]);
     const row = card("Subject 1");
-    expect(row.textContent).toContain("Deck→B1 Backend");
+    expect(row.textContent).toContain("Synth City→B1 Backend");
     expect(row.textContent).not.toContain("Director");
   });
 
   it("finds a message by its sender label in the search", () => {
-    renderRequests(Object.values(BY_TYPE), "deck");
+    renderRequests(Object.values(BY_TYPE), "synth");
     expect(screen.getByText("Subject 1")).toBeInTheDocument();
     expect(screen.queryByText("Subject 2")).not.toBeInTheDocument();
   });
@@ -112,7 +112,7 @@ describe("Conversations list", () => {
 
 describe("Thread dialog", () => {
   it.each([
-    ["deck", "Deck", /Sent by Deck, not by an agent/],
+    ["deck", "Synth City", /Sent by Synth City, not by an agent/],
     ["director", "Director", /Sent by the Director/],
     ["legacy", LEGACY_SENDER_LABEL, /Recorded before sender types existed/],
     ["unknown", "Unknown sender", /The sender is not known/],

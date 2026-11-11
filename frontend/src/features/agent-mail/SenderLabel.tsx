@@ -6,7 +6,7 @@ import { senderKind, senderName, type SenderKind } from './utils'
 // A non-agent sender gets an icon with an accessible name. An agent keeps its
 // name alone. The icon only labels a message; it grants no authority.
 const ICONS: Partial<Record<SenderKind, { Icon: typeof User; title: string; className: string }>> = {
-  deck: { Icon: Cog, title: 'Sent by Deck, not by an agent', className: 'text-muted-foreground' },
+  deck: { Icon: Cog, title: 'Sent by Synth City, not by an agent', className: 'text-muted-foreground' },
   director: { Icon: User, title: 'Sent by the Director', className: 'text-blue-700 dark:text-blue-300' },
   legacy: { Icon: HelpCircle, title: 'Recorded before sender types existed', className: 'text-muted-foreground' },
   external: { Icon: Plug, title: 'Sent by an external tool', className: 'text-muted-foreground' },

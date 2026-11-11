@@ -21,7 +21,7 @@ export function ProjectsPage() {
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <FolderOpen className="h-8 w-8" />
-            Folders Deck knows about
+            Folders Synth City knows about
           </h1>
           <p className="text-muted-foreground mt-2">
             These folders scope project-level native settings (MCP servers, commands, configuration and others) on the{' '}

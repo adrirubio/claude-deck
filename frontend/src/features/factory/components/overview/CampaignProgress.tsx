@@ -67,7 +67,7 @@ function CampaignCard({ preset, summary }: { preset: AgentTeamPreset; summary: A
       <CampaignBar campaign={c} />
       {c.backlog_state !== "available" && (
         <p role="note" className="text-sm text-muted-foreground">
-          The backlog cannot be read, so Deck shows only the work it has seen.
+          The backlog cannot be read, so Synth City shows only the work it has seen.
         </p>
       )}
       <div className="grid gap-4 md:grid-cols-3">

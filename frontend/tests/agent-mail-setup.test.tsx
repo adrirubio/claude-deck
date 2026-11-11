@@ -169,7 +169,7 @@ describe('HarnessMailSetup', () => {
 
   it('shows Pi as ready with no button', () => {
     render(<HarnessMailSetup providerId="pi-cli" harnessInstalled setup={setup(status())} />)
-    expect(screen.getByText(/✓ Ready · Deck adds it when it launches Pi/)).toBeInTheDocument()
+    expect(screen.getByText(/✓ Ready · Synth City adds it when it launches Pi/)).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 

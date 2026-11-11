@@ -121,7 +121,7 @@ describe('NewSessionDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start session' }))
     const dialog = await screen.findByRole('dialog', { name: 'Director key' })
-    expect(within(dialog).getByText(/Deck needs the key to start a session\./)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Synth City needs the key to start a session\./)).toBeInTheDocument()
     expect(spawnSession).not.toHaveBeenCalled()
 
     await user.type(within(dialog).getByLabelText(/Director key/), 'new-key{Enter}')

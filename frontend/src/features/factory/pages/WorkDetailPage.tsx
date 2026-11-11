@@ -91,7 +91,7 @@ export function WorkDetailPage() {
                 </GithubLink>
               )}
             </div>
-            <Time value={w.item.updated_at} label="Deck record updated" />
+            <Time value={w.item.updated_at} label="Synth City record updated" />
           </article>
           {w.item.required_ci_unreadable && (
             <RequiredCiNotice

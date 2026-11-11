@@ -179,7 +179,7 @@ export function actorName(event: AuditEventRead, members: Record<number, string>
     if (match) return members[Number(match[1])] ?? "An agent";
     return "An agent";
   }
-  return "Deck";
+  return "Synth City";
 }
 
 function teamOf(event: AuditEventRead, ctx: FeedContext): FeedTeam {
@@ -254,7 +254,7 @@ function actionOf(event: AuditEventRead, refused: boolean): string {
     if (/approved/.test(decision)) return "approved a plan for";
     if (/declined|rejected/.test(decision)) return "declined a plan for";
   }
-  if (!label) return "did something that Deck does not describe on";
+  if (!label) return "did something that Synth City does not describe on";
   return refused && label.refused ? label.refused : label.action;
 }
 
@@ -306,7 +306,7 @@ function importRow(events: AuditEventRead[]): FeedRow {
     key: `import-${newest.id}`,
     occurredAt: newest.occurred_at,
     count: events.length,
-    actor: "Deck",
+    actor: "Synth City",
     action: `recorded the start of the history; existing state imported (${events.length} ${events.length === 1 ? "record" : "records"})`,
     subject: null,
     refused: false,

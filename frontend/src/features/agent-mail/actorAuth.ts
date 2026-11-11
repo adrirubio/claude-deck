@@ -43,9 +43,9 @@ async function provision(): Promise<string> {
     },
     body: JSON.stringify({
       actor_key: actorKey(),
-      display_name: 'Deck UI',
+      display_name: 'Synth City UI',
       kind: 'supervisor',
-      description: 'Claude Deck browser session',
+      description: 'Synth City browser session',
     }),
   })
   if (!response.ok) {

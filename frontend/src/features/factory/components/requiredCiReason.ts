@@ -6,7 +6,7 @@ const REASON_TEXT: Record<RequiredCIUnreadableSignal["reason"], string> = {
   permission_missing: "The GitHub token or App has no permission to read the checks.",
   workflow_missing: "GitHub shows no workflow for the required checks.",
   api_error: "GitHub did not answer the request for the checks.",
-  unknown: "Deck does not know why the checks cannot be read.",
+  unknown: "Synth City does not know why the checks cannot be read.",
 };
 
 export function requiredCiReason(reason: string | null | undefined) {

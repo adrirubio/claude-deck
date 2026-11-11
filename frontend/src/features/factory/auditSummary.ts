@@ -5,7 +5,7 @@ import type { MetricSample, MetricsWindow } from "./auditApi";
 // format what the metrics read returns. They never change a value and never
 // turn an unknown value into zero.
 
-export const GUIDE_URL = "https://github.com/adrirubio/claude-deck/blob/master/docs/guide/factory-audit-and-metrics.md";
+export const GUIDE_URL = "https://github.com/albiexai/synth-city/blob/master/docs/guide/factory-audit-and-metrics.md";
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -152,7 +152,7 @@ export function headlines(window: MetricsWindow | null): Headline[] {
       label: "Cost",
       value: cost?.value == null ? "not measured" : String(cost.value),
       detail: null,
-      help: "Deck has no measured usage attribution, so it reports no cost.",
+      help: "Synth City has no measured usage attribution, so it reports no cost.",
     },
   ];
 }

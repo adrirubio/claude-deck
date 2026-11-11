@@ -90,7 +90,7 @@ describe('harness page', () => {
   it('says in one sentence that a harness has no settings pages and links to Teams and Live sessions', async () => {
     await open('pi-cli')
 
-    expect(screen.getByText(/has no settings pages in Deck/)).toBeInTheDocument()
+    expect(screen.getByText(/has no settings pages in Synth City/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open Teams' })).toHaveAttribute('href', '/teams')
     expect(screen.getByRole('link', { name: 'Live sessions' })).toHaveAttribute('href', '/agent-bridge?provider=pi-cli')
   })
