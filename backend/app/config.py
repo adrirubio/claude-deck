@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite+aiosqlite:///./synth_city.db", repr=False)
 
     # Agent Bridge attachment settings
-    bridge_attachment_dir: str = "~/.claude-registry/bridge-attachments"
+    bridge_attachment_dir: str = "~/.albiex-synth-city/bridge-attachments"
     bridge_attachment_agent_root: str | None = None
     bridge_attachment_max_bytes: int = 10 * 1024 * 1024
     bridge_attachment_retention_days: int = 7

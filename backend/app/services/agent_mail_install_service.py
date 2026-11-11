@@ -692,7 +692,7 @@ def installed_opencode_plugin_events() -> list[str]:
 
 async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
     try:
-        backup_dir = Path.home() / ".claude-registry" / "backups"
+        backup_dir = Path.home() / ".albiex-synth-city" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.utcnow()
         name = f"pre-agent-mail-{scope}-{timestamp:%Y%m%d-%H%M%S}"

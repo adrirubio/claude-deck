@@ -1,10 +1,30 @@
 """Keep test imports and each test independent of installation settings."""
 import copy
+import atexit
 import os
+import tempfile
 from unittest.mock import patch
 
 import pytest
 from pydantic_settings import BaseSettings
+
+
+# A memory database does not suppress independent HOME-resource conversion.
+# Establish isolation before config or child conftests can import application code.
+_original_home = os.environ.get('HOME')
+_session_home = tempfile.TemporaryDirectory(prefix='synth-city-test-home-')
+os.environ['HOME'] = _session_home.name
+
+
+def _restore_home():
+    if _original_home is None:
+        os.environ.pop('HOME', None)
+    else:
+        os.environ['HOME'] = _original_home
+    _session_home.cleanup()
+
+
+atexit.register(_restore_home)
 
 
 _settings_init = BaseSettings.__init__
