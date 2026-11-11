@@ -90,7 +90,7 @@ export function RepositorySettings({ scope, autonomyEnabled, refresh, onRemoved 
         editLabel={`Edit merging and limits for ${scope.repo_owner}/${scope.repo_name}`}
         onEdit={(element) => { trigger.current = element; setScopeDialog({ mode: 'edit', scope }) }}
       >
-        <Row label="Who merges">{scope.merge_policy === 'auto' ? 'Deck merges after checks pass' : 'You (human merge)'}</Row>
+        <Row label="Who merges">{scope.merge_policy === 'auto' ? 'Synth City merges after checks pass' : 'You (human merge)'}</Row>
         <Row label="Work at the same time">{scope.max_concurrent_dispatched} {scope.max_concurrent_dispatched === 1 ? 'issue' : 'issues'}</Row>
         <Row label="Review rounds">up to {scope.max_approval_rounds}</Row>
         <Row label="Verification retries">up to {scope.max_verification_retries}</Row>

@@ -653,7 +653,7 @@ function SlotDialog({
             </div>
             <p id="slot-controlled-language-help" className="text-xs text-muted-foreground">
               Use short, clear English for team messages and GitHub text. Clear this option to use the member&apos;s own writing style.
-              The new setting applies when the member receives new Deck instructions.
+              The new setting applies when the member receives new Synth City instructions.
             </p>
           </div>
           <label className="flex items-center gap-2 text-sm">

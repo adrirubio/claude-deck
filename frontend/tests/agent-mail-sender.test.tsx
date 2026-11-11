@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { ConversationsTab } from "../src/features/agent-mail/ConversationsTab";
 import { buildConversations } from "../src/features/agent-mail/conversations";
 import { ThreadDialog } from "../src/features/agent-mail/ThreadDialog";
+import { ComposeDialog } from "../src/features/agent-mail/ComposeDialog";
 import { LEGACY_SENDER_LABEL, senderKind, senderName } from "../src/features/agent-mail/utils";
 import type { MailMemberResponse, MailMessageResponse } from "../src/types/agentMail";
 
@@ -33,9 +34,41 @@ const BY_TYPE = {
   unknown: message(6, { sender_type: undefined, sender_name: "Director" }),
 };
 
+describe("ComposeDialog delivery warning", () => {
+  const cannotWakeMember = (wakeReason: string | null) => ({
+    id: 9, display_name: "B9 Backend", repo_name: "repo", wake_methods: [],
+    agent_status: {
+      session_state: "online", activity_state: "idle", activity_reason: null,
+      wake_state: "cannot_wake", wake_reason: wakeReason, idle_since: null,
+      checked_at: "2026-10-13T08:00:00Z", valid_until: "2999-01-01T00:00:00Z",
+    },
+  }) as unknown as MailMemberResponse;
+
+  it("names the full product name first when the recipient cannot be woken", async () => {
+    render(<ComposeDialog open members={[cannotWakeMember("wake_target_unbound")]} preset={{ recipient_member_id: 9, kind: "message" }} onOpenChange={() => {}} onSend={vi.fn()} />);
+    expect(await screen.findByText(/Albiex Synth City cannot nudge this session/)).toBeInTheDocument();
+  });
+
+  // The warning interpolates the locally generated wake reason before its own
+  // product sentence, so the reason text itself carries the first mention.
+  it.each(["wake_target_stale", "observation_unavailable", null, "unlisted_reason_code"] as const)(
+    "uses the full product name as the first mention in the whole warning for wake reason %s",
+    async (wakeReason) => {
+      for (const kind of ["message", "handoff", "context_request"] as const) {
+        const view = render(
+          <ComposeDialog open members={[cannotWakeMember(wakeReason)]} preset={{ recipient_member_id: 9, kind }} onOpenChange={() => {}} onSend={vi.fn()} />,
+        );
+        const warning = await screen.findByText(/will be stored/);
+        expect(warning.textContent?.match(/Albiex Synth City|Synth City/)?.[0]).toBe("Albiex Synth City");
+        view.unmount();
+      }
+    },
+  );
+});
+
 describe("senderName and senderKind", () => {
   it("reads the label only from sender_type and sender_name", () => {
-    expect(senderName(BY_TYPE.deck, MEMBERS)).toBe("Deck");
+    expect(senderName(BY_TYPE.deck, MEMBERS)).toBe("Albiex Synth City");
     expect(senderName(BY_TYPE.director, MEMBERS)).toBe("Director");
     expect(senderName(BY_TYPE.agent, MEMBERS)).toBe("L1 Leader");
     expect(senderName(BY_TYPE.legacy, MEMBERS)).toBe(LEGACY_SENDER_LABEL);
@@ -44,8 +77,8 @@ describe("senderName and senderKind", () => {
       .toEqual(["deck", "director", "agent", "legacy", "external", "unknown"]);
   });
 
-  it("shows Deck for a service message even when the name says Director", () => {
-    expect(senderName(message(7, { sender_type: "system", sender_name: "Director" }), MEMBERS)).toBe("Deck");
+  it("shows Albiex Synth City for a service message even when the name says Director", () => {
+    expect(senderName(message(7, { sender_type: "system", sender_name: "Director" }), MEMBERS)).toBe("Albiex Synth City");
   });
 
   it("never shows Director for an unknown sender", () => {
@@ -81,7 +114,7 @@ describe("Conversations list", () => {
   it("shows one label and the right icon for each sender type", () => {
     renderRequests(Object.values(BY_TYPE));
     const expected: Array<[string, string, RegExp | null]> = [
-      ["Subject 1", "Deck", /Sent by Deck, not by an agent/],
+      ["Subject 1", "Albiex Synth City", /Sent by Synth City, not by an agent/],
       ["Subject 2", "Director", /Sent by the Director/],
       ["Subject 3", "L1 Leader", null],
       ["Subject 4", LEGACY_SENDER_LABEL, /Recorded before sender types existed/],
@@ -99,12 +132,12 @@ describe("Conversations list", () => {
   it("does not show a scheduler message as sent by the Director", () => {
     renderRequests([BY_TYPE.deck]);
     const row = card("Subject 1");
-    expect(row.textContent).toContain("Deck→B1 Backend");
+    expect(row.textContent).toContain("Albiex Synth City→B1 Backend");
     expect(row.textContent).not.toContain("Director");
   });
 
   it("finds a message by its sender label in the search", () => {
-    renderRequests(Object.values(BY_TYPE), "deck");
+    renderRequests(Object.values(BY_TYPE), "synth");
     expect(screen.getByText("Subject 1")).toBeInTheDocument();
     expect(screen.queryByText("Subject 2")).not.toBeInTheDocument();
   });
@@ -112,7 +145,7 @@ describe("Conversations list", () => {
 
 describe("Thread dialog", () => {
   it.each([
-    ["deck", "Deck", /Sent by Deck, not by an agent/],
+    ["deck", "Albiex Synth City", /Sent by Synth City, not by an agent/],
     ["director", "Director", /Sent by the Director/],
     ["legacy", LEGACY_SENDER_LABEL, /Recorded before sender types existed/],
     ["unknown", "Unknown sender", /The sender is not known/],

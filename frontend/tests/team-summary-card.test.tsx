@@ -77,7 +77,7 @@ const cases = [
   },
   {
     name: 'a team on HOLD', data: hold,
-    expects: ['This team is on HOLD. Deck admits no new work.', 'Attempt stopped on', 'Unknown. The team has not reported.', /^The Leader$/],
+    expects: ['This team is on HOLD. Synth City admits no new work.', 'Attempt stopped on', 'Unknown. The team has not reported.', /^The Leader$/],
   },
 ]
 

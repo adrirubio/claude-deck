@@ -123,6 +123,14 @@ describe('mailSetupState', () => {
     expect(mailConfirm('opencode-cli', 'remove', status()).title).toBe('Remove Agent Mail from OpenCode CLI')
   })
 
+  it('names the full product name first in every install and remove confirmation', () => {
+    for (const provider of ['codex-cli', 'copilot-cli', 'muse-cli', 'opencode-cli'] as const) {
+      for (const action of ['setup', 'remove'] as const) {
+        expect(mailConfirm(provider, action, status()).description).toContain('before Albiex Synth City')
+      }
+    }
+  })
+
   it('uses only new environment names in manual setup commands', () => {
     for (const provider of ['codex-cli', 'copilot-cli'] as const) {
       const text = mailConfirm(provider, 'setup', status()).mutations.join('\n')
@@ -169,7 +177,7 @@ describe('HarnessMailSetup', () => {
 
   it('shows Pi as ready with no button', () => {
     render(<HarnessMailSetup providerId="pi-cli" harnessInstalled setup={setup(status())} />)
-    expect(screen.getByText(/✓ Ready · Deck adds it when it launches Pi/)).toBeInTheDocument()
+    expect(screen.getByText(/✓ Ready · Synth City adds it when it launches Pi/)).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 

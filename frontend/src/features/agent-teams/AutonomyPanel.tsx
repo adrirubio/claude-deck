@@ -222,7 +222,7 @@ export function AutonomyPanel({
         </div>
       </div>
 
-      {gateStatus === 'active' && <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Recovery-only mode is active: Deck&apos;s scheduler is limited to one configured issue attempt. Select Recovery-only mode for details.</p>}
+      {gateStatus === 'active' && <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Recovery-only mode is active: Synth City&apos;s scheduler is limited to one configured issue attempt. Select Recovery-only mode for details.</p>}
       {gateStatus === 'unknown' && <p role="alert" className="text-sm text-destructive">Recovery-only mode could not be checked. Refresh before enabling autonomy.</p>}
       {gateStatus === 'loading' && <p role="status" className="text-xs text-muted-foreground">Checking recovery-only mode…</p>}
 
@@ -232,11 +232,11 @@ export function AutonomyPanel({
           <div className="rounded-lg border p-5 text-sm text-muted-foreground">
             <h3 className="font-semibold text-foreground">Before you enable autonomy</h3>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
-              <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
+              <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Synth City. For App-backed dispatch, also configure the GitHub App settings. Synth City selects the dispatch mode when work becomes eligible.</li>
               <li>Add a repository with an existing primary checkout under your home directory and labels to watch. Use Add a repository above.</li>
               <li>In Roster, assign and launch the Leader slot. It approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
-              <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
+              <li>Enable autonomy. Synth City polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
             <p className="mt-2">The Director key protects roster and watched-repo settings, team launch, autonomy, recovery policy, and Director remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
           </div>
@@ -279,7 +279,7 @@ export function AutonomyPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deck will poll enabled repos every 60 seconds by default. Issues with the dispatch label will be assigned to agents, whose sessions run in worktrees beside each primary checkout.
+              Synth City will poll enabled repos every 60 seconds by default. Issues with the dispatch label will be assigned to agents, whose sessions run in worktrees beside each primary checkout.
               {enableGateActive && ' Recovery-only mode is active, so the scheduler is limited to its configured issue attempt.'}
               Review these conditions before continuing.
             </AlertDialogDescription>

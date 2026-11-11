@@ -75,7 +75,7 @@ export async function sendAgentMailMessage(
   }
   const route = message.kind ? routes[message.kind] : undefined
   if (!route) {
-    throw new Error(`The Deck UI cannot send kind "${message.kind ?? 'unset'}"`)
+    throw new Error(`The Synth City UI cannot send kind "${message.kind ?? 'unset'}"`)
   }
   const response = await actorFetch<ExternalSendResponse>(route.path, {
     method: 'POST',

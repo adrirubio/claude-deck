@@ -185,6 +185,44 @@ describe('WorkItemActions (moved from the Autonomy tab dialog)', () => {
   })
 })
 
+describe('WorkItemActions operator-dialog first mention', () => {
+  const authorityText = 'Albiex Synth City will check current authority and reject stale or ineligible requests.'
+
+  it('opens the resume dialog and names Albiex Synth City first', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    render(<Harness item={{ ...workItem, escalation_reason: 'prepared_owner_unavailable' }} onFetchScopeRevisions={vi.fn().mockResolvedValue([revision])} />)
+    await user.click(await screen.findByRole('button', { name: 'Resume prepared attempt' }))
+    expect(await screen.findByText(authorityText)).toBeInTheDocument()
+  })
+
+  it('opens the abandon dialog and names Albiex Synth City first', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    render(<Harness item={{ ...workItem, dispatch_status: 'dispatched' }} onFetchScopeRevisions={vi.fn().mockResolvedValue([revision])} />)
+    await user.click(await screen.findByRole('button', { name: 'Abandon work item' }))
+    expect(await screen.findByText(authorityText)).toBeInTheDocument()
+  })
+
+  it('opens the cancel-request dialog and names Albiex Synth City first', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    const pending = { ...revision, approval_request: { id: 5, status: 'pending', leader_member_id: 38 } } as unknown as GithubScopeRevision
+    render(<Harness onFetchScopeRevisions={vi.fn().mockResolvedValue([pending])} />)
+    await user.click(await screen.findByRole('button', { name: 'Cancel request #5' }))
+    expect(await screen.findByText(authorityText)).toBeInTheDocument()
+  })
+
+  it('opens the cancel-active-revision dialog and names Albiex Synth City first', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    const active = { ...revision, status: 'active' } as unknown as GithubScopeRevision
+    render(<Harness item={{ ...workItem, dispatch_status: 'dispatched', pr_number: 99 }} onFetchScopeRevisions={vi.fn().mockResolvedValue([active])} />)
+    await user.click(await screen.findByRole('button', { name: 'Cancel active revision' }))
+    expect(await screen.findByText(authorityText)).toBeInTheDocument()
+  })
+})
+
 describe('WorkItemPanel on the Work item page', () => {
   const requestsFor = (item: GithubWorkItem, respond: (path: string, options?: RequestInit) => Response | undefined = () => undefined) => {
     const calls: { path: string; method: string; headers: Headers; body: string | null }[] = []

@@ -80,7 +80,7 @@ const reasons: Record<string, string> = {
 }
 const statuses: Record<string, string> = {
   disabled: 'Leader backlog coordination is disabled', paused: 'Coordination is paused with autonomy off',
-  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Deck has not read the backlog yet',
+  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Synth City has not read the backlog yet',
   stale: 'Backlog data is out of date', backlog_unavailable: 'Backlog data is unavailable',
   leader_unavailable: 'The current Leader is unavailable', leader_identity_unavailable: 'Leader identity cannot be confirmed',
   coordination_capped: 'Coordination notification limit reached', hold: 'Coordination is paused by a safety hold',

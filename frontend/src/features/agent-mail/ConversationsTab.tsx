@@ -147,7 +147,7 @@ export function ConversationsTab({
       )}
       {messageCount >= CONVERSATION_LIMIT && (
         <p className="text-xs text-muted-foreground">
-          Deck loads the newest {CONVERSATION_LIMIT} threads. Older threads are not listed here.
+          Synth City loads the newest {CONVERSATION_LIMIT} threads. Older threads are not listed here.
         </p>
       )}
     </div>

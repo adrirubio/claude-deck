@@ -116,7 +116,7 @@ export function ProviderLaunchOptionsFields({
         <p className="text-sm text-muted-foreground">Meta · runs on your Muse subscription through Muse Code. Questions are detected and sent to the Supervisor; Muse cannot block them.</p>
       )}
       {provider === 'pi-cli' && (
-        <p className="text-sm text-muted-foreground">OpenRouter · default moonshotai/kimi-k3. Agent Mail requires the Deck extension; Pi tools are not sandboxed by Deck.</p>
+        <p className="text-sm text-muted-foreground">OpenRouter · default moonshotai/kimi-k3. Agent Mail requires the Synth City extension; Pi tools are not sandboxed by Synth City.</p>
       )}
       {descriptor?.bedrock_supported && (
         <div className="grid gap-2">

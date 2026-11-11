@@ -92,7 +92,7 @@ describe("guided repository setup", () => {
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Deck needs the key to check access to this repository.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Synth City needs the key to check access to this repository.")).toBeInTheDocument();
     expect(mocks.apiClient).not.toHaveBeenCalled();
     fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "fixture-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Use key" }));
@@ -1734,7 +1734,7 @@ describe("guided repository setup", () => {
       mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [{ id: 12, name: "T", slots: [], autonomy_enabled: false }] });
       mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [scopeFixture(55, 12, true, "synthetic-product", "albiex-synth-city-ready")] });
       render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
-      const group = await screen.findByRole("group", { name: "Repositories Deck already watches" });
+      const group = await screen.findByRole("group", { name: "Repositories Synth City already watches" });
       fireEvent.click(within(group).getByRole("button", { name: "example/synthetic-product" }));
       expect(screen.getByLabelText("GitHub repository")).toHaveValue("example/synthetic-product");
       expect(screen.getByLabelText("Repository owner")).toHaveValue("example");
@@ -1785,7 +1785,7 @@ describe("guided repository setup", () => {
 
     it("uses plain hints and marks required and optional steps with a progress bar", () => {
       render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
-      expect(screen.getByText(/Deck reads the checkout and checks that it can see the repository and its labels\. Nothing changes\./)).toBeInTheDocument();
+      expect(screen.getByText(/Synth City reads the checkout and checks that it can see the repository and its labels\. Nothing changes\./)).toBeInTheDocument();
       expect(screen.queryByText(/checkout identity, repository access/)).not.toBeInTheDocument();
       expect(screen.queryByText(/separate steps/)).not.toBeInTheDocument();
       const steps = within(screen.getByRole("list", { name: "Setup steps" })).getAllByRole("listitem").map((item) => item.textContent);
@@ -1827,7 +1827,7 @@ describe("guided repository setup", () => {
       stored = null;
       fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
       const dialog = await screen.findByRole("dialog");
-      expect(within(dialog).getByText("Deck needs the key to save this setup.")).toBeInTheDocument();
+      expect(within(dialog).getByText("Synth City needs the key to save this setup.")).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(await screen.findByRole("status")).toHaveTextContent("The Director key is needed to save");
       expect(mocks.createAgentTeamPreset).not.toHaveBeenCalled();

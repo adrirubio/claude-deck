@@ -14,10 +14,10 @@ export interface AgentStatusView {
 
 const WAKE_REASONS: Record<string, string> = {
   wake_target_unbound: 'No session is bound to this agent.',
-  wake_target_stale: 'The wake target is out of date. Deck cannot confirm it.',
+  wake_target_stale: 'The wake target is out of date. Albiex Synth City cannot confirm it.',
   wake_target_ambiguous: 'More than one session matches this agent.',
   wake_opted_out: 'Wake participation is turned off for this agent.',
-  observation_unavailable: 'Deck cannot read or confirm the wake path.',
+  observation_unavailable: 'Albiex Synth City cannot read or confirm the wake path.',
 }
 
 const ACTIVITY_REASONS: Record<string, string> = {
@@ -29,13 +29,13 @@ const ACTIVITY_REASONS: Record<string, string> = {
   process_ended: 'The bound process has ended.',
   provider_unsupported: 'This harness has no native activity adapter yet.',
   no_current_binding: 'No authenticated current session binding is available.',
-  restart_needed_for_observation: 'Restart this session in resume mode through Deck to see its activity.',
+  restart_needed_for_observation: 'Restart this session in resume mode through Synth City to see its activity.',
   observation_unavailable: 'The controller cannot read or validate this activity observation.',
 }
 
 export function wakeReasonText(reason: string | null | undefined): string {
-  if (!reason) return 'Deck gave no reason.'
-  return WAKE_REASONS[reason] ?? 'Deck cannot confirm a wake path.'
+  if (!reason) return 'Albiex Synth City gave no reason.'
+  return WAKE_REASONS[reason] ?? 'Albiex Synth City cannot confirm a wake path.'
 }
 
 /** True while the backend still stands behind the status. */
@@ -67,7 +67,7 @@ export function agentStatusView(status: AgentStatus | null | undefined, now: num
       activity: {
         state: 'unknown',
         label: 'Activity unknown',
-        title: status ? 'This status has expired. Deck is reading it again.' : 'Deck has no status for this agent.',
+        title: status ? 'This status has expired. Synth City is reading it again.' : 'Synth City has no status for this agent.',
       },
       wake: { state: 'unknown', label: 'Wake unknown', reason: null },
     }

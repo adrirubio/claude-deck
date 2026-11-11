@@ -24,7 +24,7 @@ export function Header() {
 
   const instanceTitle = instance
     ? [
-        `Claude Deck instance: ${instance.name}`,
+        `Albiex Synth City instance: ${instance.name}`,
         `Hostname: ${instance.hostname}`,
         `Opened from: ${typeof window === "undefined" ? "unknown" : window.location.host}`,
       ].join("\n")
@@ -39,12 +39,12 @@ export function Header() {
       <div className="flex min-h-16 flex-wrap items-center justify-between gap-2 px-3 py-2 md:px-6">
         <div className="flex items-center gap-3">
           <img
-            src={theme === "light" ? "/logo-light.png" : "/logo-dark.png"}
-            alt="Claude Deck"
-            className="h-10 w-10"
+            src={theme === "light" ? "/albiex-logo-compact.svg" : "/albiex-logo-compact-dark.svg"}
+            alt="Albiex Synth City"
+            className="h-10 w-auto"
           />
           <div>
-            <h1 className="text-xl md:text-2xl font-bold text-primary leading-tight">Claude Deck</h1>
+            <h1 className="text-xl md:text-2xl font-bold text-primary leading-tight">Albiex Synth City</h1>
             <p className="text-xs text-muted-foreground">Your local agent command centre</p>
           </div>
         </div>

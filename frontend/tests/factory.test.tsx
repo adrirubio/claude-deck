@@ -535,7 +535,7 @@ describe("work details and protected controls", () => {
     expect(credentials).toEqual(["synthetic-operator"]);
     expect(requests.filter((r) => r.path.startsWith("factory/"))).toHaveLength(2);
     const message = screen.getByRole("status");
-    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Deck has not yet seen a new dispatch");
+    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Synth City has not yet seen a new dispatch");
     if (status === "pending") expect(message).toHaveTextContent("reset this work item to pending");
     if (status === "retained") expect(message).toHaveTextContent("Retry response status: escalated");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -889,7 +889,7 @@ describe("work item page", () => {
     itemFor(detail.completed.response);
     renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
     await settle();
-    const record = screen.getByText(/Deck record updated:/);
+    const record = screen.getByText(/Synth City record updated:/);
     const observed = screen.getByText(/Details updated:/);
     expect(record).not.toBe(observed);
     expect(record.textContent).not.toMatch(/Details updated/);

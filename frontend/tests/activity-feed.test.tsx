@@ -57,7 +57,7 @@ describe("ActivityFeed", () => {
     renderFeed();
     const rows = screen.getAllByTestId("audit-feed-row");
     expect(rows).toHaveLength(4);
-    expect(plainText(rows[0])).toMatch(/Release crew.*Deck delivered adrirubio\/claude-deck #101/);
+    expect(plainText(rows[0])).toMatch(/Release crew.*Synth City delivered adrirubio\/claude-deck #101/);
     expect(plainText(rows[1])).toMatch(/Request refused:.*B1 Backend asked to continue adrirubio\/claude-deck #101/);
     expect(plainText(rows[1])).toContain("The plan's file paths are not valid.");
     expect(plainText(rows[1])).toContain("Leader notified");

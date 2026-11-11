@@ -18,14 +18,14 @@ afterEach(() => {
 });
 
 describe("instance document title", () => {
-  it("stays Claude Deck when no name is configured", () => {
+  it("stays Albiex Synth City when no name is configured", () => {
     renderHook(() => useInstanceDocumentTitle(instance));
-    expect(document.title).toBe("Claude Deck");
+    expect(document.title).toBe("Albiex Synth City");
   });
 
-  it("stays Claude Deck before the status loads", () => {
+  it("stays Albiex Synth City before the status loads", () => {
     renderHook(() => useInstanceDocumentTitle(null));
-    expect(document.title).toBe("Claude Deck");
+    expect(document.title).toBe("Albiex Synth City");
   });
 
   it("carries the name when the operator configured one", () => {
@@ -34,15 +34,15 @@ describe("instance document title", () => {
       { initialProps: { value: instance } },
     );
     rerender({ value: { ...instance, name: "Studio Mac", name_configured: true } });
-    expect(document.title).toBe("Studio Mac · Claude Deck");
+    expect(document.title).toBe("Studio Mac · Albiex Synth City");
     rerender({ value: instance });
-    expect(document.title).toBe("Claude Deck");
+    expect(document.title).toBe("Albiex Synth City");
   });
 
   it("does not use an old payload without name_configured as a configured name", () => {
     const { name_configured: _unused, ...legacy } = instance;
     void _unused;
     renderHook(() => useInstanceDocumentTitle({ ...legacy, name: "linux-box" }));
-    expect(document.title).toBe("Claude Deck");
+    expect(document.title).toBe("Albiex Synth City");
   });
 });

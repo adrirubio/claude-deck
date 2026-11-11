@@ -14,22 +14,22 @@ import { parseReminders, reminderAge } from './reminderText'
 import { SupervisorStatus } from './SupervisorStatus'
 
 const HOLD_TEXT: Record<NonNullable<AgentTeamSummary['hold_code']>, string> = {
-  hold: 'This team is on HOLD. Deck admits no new work.',
-  recovery_only: 'This team is in recovery-only mode. Deck admits no new work.',
-  hold_unavailable: 'Deck could not read the HOLD state of this team.',
+  hold: 'This team is on HOLD. Synth City admits no new work.',
+  recovery_only: 'This team is in recovery-only mode. Synth City admits no new work.',
+  hold_unavailable: 'Synth City could not read the HOLD state of this team.',
 }
 
 const ACTORS = {
   owner: 'The owner agent',
   leader: 'The Leader',
   operator: 'You',
-  controller: 'Deck',
+  controller: 'Synth City',
 } as const
 
 const UNKNOWN_REASON: Record<TeamRemainingWork['reason'], string> = {
-  complete: 'Deck read every item.',
+  complete: 'Synth City read every item.',
   report_unknown: 'The team has not reported.',
-  observation_incomplete: 'Deck could not read every item.',
+  observation_incomplete: 'Synth City could not read every item.',
   context_changed: 'The last team report is out of date.',
 }
 
@@ -201,7 +201,7 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
           </dl>
           {(!summary.coverage_complete || !summary.next_actor_coverage_complete || summary.reminder_attention_complete === false) && (
             <p role="note" className="text-xs text-muted-foreground">
-              This summary may be incomplete: Deck did not read every item.
+              This summary may be incomplete: Synth City did not read every item.
             </p>
           )}
           {showChecked && <p className="text-xs text-muted-foreground">Checked {formatServerTime(summary.checked_at)}</p>}

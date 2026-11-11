@@ -13,7 +13,7 @@ export const CHIPS: Array<{ id: ChipId; label: string }> = [
   { id: 'to_you', label: 'To you' },
   { id: 'requests', label: 'Requests' },
   { id: 'handoffs', label: 'Handoffs' },
-  { id: 'notices', label: 'Deck notices' },
+  { id: 'notices', label: 'Synth City notices' },
 ]
 
 export const NO_TEAM_LABEL = 'No team'
