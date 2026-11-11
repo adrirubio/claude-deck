@@ -21,7 +21,8 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_entrypoint(install, mode, configured=None, dotenv=False):
+def run_entrypoint(install, mode, configured=None, dotenv=False, *,
+                   configured_attachment=None, home_audit=False):
     # This is code replacement inside a fresh fixture's throwaway installation,
     # not a worktree, installed factory, or modification of the shared baseline.
     for package in ('app', 'mcp_shim'):
@@ -39,6 +40,15 @@ def run_entrypoint(install, mode, configured=None, dotenv=False):
     guard.mkdir(exist_ok=True)
     old = str(install.database)
     new = str(install.app_dir / 'synth_city.db')
+    home_checks = ''
+    if home_audit:
+        home_checks = f'''
+            assert not pathlib.Path({str(install.home / '.claude-registry')!r}).exists(), 'HOME move incomplete before first connection'
+            assert pathlib.Path({str(install.home / '.albiex-synth-city/backups')!r}).is_dir(), 'backup root not landed'
+            assert pathlib.Path({str(install.home / '.albiex-synth-city/bridge-attachments')!r}).is_dir(), 'attachment root not landed'
+            from app.config import settings
+            assert settings.bridge_attachment_dir == {str(install.home / '.albiex-synth-city/bridge-attachments')!r}, 'attachment binding not effective'
+'''
     (guard / 'sitecustomize.py').write_text(f'''
 import json, os, pathlib, sys
 old = pathlib.Path({old!r})
@@ -51,6 +61,7 @@ def guard(event, args):
             assert new.is_file(), 'first connection would create an empty database before movement'
             assert not list(new.parent.glob('.albiex-synth-city-db-upgrade.*.json')), 'DB journal still open'
             assert not old.exists(), 'source DB is still present at first open'
+{home_checks}
             with open({str(trace)!r}, 'a') as stream:
                 stream.write(json.dumps({{'path': path}}) + '\\n')
     elif event == 'socket.connect':
@@ -94,6 +105,14 @@ except Exception:
                 env_file.write_text('DATABASE_URL=' + configured + '\n')
         else:
             environment['DATABASE_URL'] = configured
+    if configured_attachment:
+        if dotenv:
+            current = env_file.read_text() if env_file.exists() else ''
+            line = 'BRIDGE_ATTACHMENT_DIR=' + configured_attachment + '\n'
+            if line not in current:
+                env_file.write_text(current + line)
+        else:
+            environment['BRIDGE_ATTACHMENT_DIR'] = configured_attachment
     operator_bytes = env_file.read_bytes() if env_file.exists() else None
     if mode == 'uvicorn':
         command = [sys.executable, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', str(port)]

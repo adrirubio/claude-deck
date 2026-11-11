@@ -17,6 +17,12 @@ def test_global_settings_use_disposable_defaults():
     assert settings.mail_capability_tokens_required is True
 
 
+def test_attachment_default_uses_new_home_without_changing_explicit_location():
+    assert Settings().bridge_attachment_dir == '~/.albiex-synth-city/bridge-attachments'
+    configured = '~/.claude-registry/bridge-attachments'
+    assert Settings(bridge_attachment_dir=configured).bridge_attachment_dir == configured
+
+
 def test_settings_ignore_dotenv_and_process_values(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text("OPERATOR_TOKEN=synthetic-dotenv-token\nDEBUG=invalid\n")

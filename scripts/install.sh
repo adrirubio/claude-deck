@@ -78,7 +78,7 @@ echo "Documentation setup complete!"
 # Create required directories
 echo ""
 echo "Creating required directories..."
-mkdir -p ~/.claude-registry/backups
+mkdir -p ~/.albiex-synth-city/backups
 
 echo ""
 echo "Setup complete!"

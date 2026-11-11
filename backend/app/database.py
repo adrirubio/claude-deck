@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
-from app.upgrade_bootstrap import prepare_database_url
+from app.upgrade_bootstrap import prepare_resource_locations
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,11 @@ class Base(DeclarativeBase):
 
 
 # Settle the default file set before any engine can open or create a database.
-settings.database_url = prepare_database_url(
+settings.database_url, settings.bridge_attachment_dir = prepare_resource_locations(
     settings.database_url,
-    explicit="database_url" in settings.model_fields_set,
+    settings.bridge_attachment_dir,
+    database_explicit="database_url" in settings.model_fields_set,
+    attachment_explicit="bridge_attachment_dir" in settings.model_fields_set,
     test_instance=settings.test_instance,
 )
 
