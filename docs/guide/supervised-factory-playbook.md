@@ -36,8 +36,8 @@ The Director binds the actor with `PUT /api/v1/agent-teams/presets/{preset_id}/s
 Set `actor_id` to the actor ID. Set it to `null` to remove the binding.
 One actor can supervise several teams. Binding grants no new permission.
 
-Members find `supervisor_address` in `deck_whoami` and the dispatch brief.
-Use `deck_send_message(to_supervisor_actor_id=..., body=...)` to contact the current bound supervisor.
+Members find `supervisor_address` in `synth_city_whoami` and the dispatch brief.
+Use `synth_city_send_message(to_supervisor_actor_id=..., body=...)` to contact the current bound supervisor.
 The external actor reads direct messages with `GET /api/v1/external/agent-mail/supervisor-inbox`.
 Foreign actors and unbound teams cannot use this route.
 
@@ -266,7 +266,7 @@ The periodic supervisor loop should:
 5. Resolve an authorized routine blocker, or record the required actor and decision.
 6. Publish a short checkpoint when the state changes.
 7. Schedule the next real check.
-8. Call `deck_supervisor_checkin(preset_id, next_check_at, note)` with the next promised check time.
+8. Call `synth_city_supervisor_checkin(preset_id, next_check_at, note)` with the next promised check time.
 
 About ten minutes is a useful ordinary interval. Check more often during startup, cutover and recovery.
 A local watcher can inspect holds and session failures more often.
@@ -278,7 +278,7 @@ It accepts no credential argument. Member credentials cannot call it.
 Use an ISO 8601 next check time. It must be future time within 24 hours.
 Keep the optional note short. Synth City removes credential-shaped text.
 
-Read `supervisor_observation` in `deck_get_team_summary` for controller-derived health.
+Read `supervisor_observation` in `synth_city_get_team_summary` for controller-derived health.
 `healthy` means the promised time has not passed.
 `late` means the promised time passed, within the grace period.
 `absent` means no check was received, or the grace period ended.
@@ -310,7 +310,7 @@ Estimate: 1–2 active hours, medium confidence. CI waiting is separate.
 Next: Implementer pushes the complete candidate; verifier reviews it.
 ```
 
-Use `Unknown` when there is no credible estimate. Do not infer completion from commit counts or elapsed time. The Leader can use `deck_prepare_work_remaining_summary` after a safe published checkpoint.
+Use `Unknown` when there is no credible estimate. Do not infer completion from commit counts or elapsed time. The Leader can use `synth_city_prepare_work_remaining_summary` after a safe published checkpoint.
 
 ### Check plan
 
@@ -413,7 +413,7 @@ A suspected false positive is still an incident until classified. Preserve the n
 
 State the cause, affected item, source head, required actor and action that removes the block. Keep those instructions in the main issue body and the current Synth City operator-action record. Put delegated maintenance under `operator — supervisor` when appropriate. The operator must be able to tell whether their input is actually needed.
 
-Use `deck_prepare_operator_action_contexts` and the Leader's current assessment for requested actions. When the request is completed, clear or supersede it and refresh the assessment. A comment alone is insufficient. See [Current operator action records](../api/agent-teams.md#current-operator-action-records).
+Use `synth_city_prepare_operator_action_contexts` and the Leader's current assessment for requested actions. When the request is completed, clear or supersede it and refresh the assessment. A comment alone is insufficient. See [Current operator action records](../api/agent-teams.md#current-operator-action-records).
 
 ## 9. Stop safely for factory maintenance
 

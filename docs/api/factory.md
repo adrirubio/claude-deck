@@ -1,10 +1,10 @@
 # Factory API
 
-These five observational routes return versioned factory work and repository observations. Availability depends on the installed version. Two more routes read the audit ledger and the delivery metrics, and one protected route records review acceptance declarations; see [Audit events and delivery metrics](#audit-events-and-delivery-metrics). One protected route checks repository setup prerequisites without writing; see [Setup preflight](#setup-preflight).
+These five observational routes return versioned Albiex Synth City factory work and repository observations. Availability depends on the installed version. Two more routes read the audit ledger and the delivery metrics, and one protected route records review acceptance declarations; see [Audit events and delivery metrics](#audit-events-and-delivery-metrics). One protected route checks repository setup prerequisites without writing; see [Setup preflight](#setup-preflight).
 
 ## Route classification
 
-The classes below describe behavior and access, not the HTTP method. "Operator token" means the `X-Albiex Synth City-Operator-Token` header. "Mail session" means an authenticated `X-Synth City-Session-Token`.
+The classes below describe behavior and access, not the HTTP method. "Operator token" means the `X-Synth-City-Operator-Token` header. "Mail session" means an authenticated `X-Synth-City-Session-Token`.
 
 A route with **Operator token** access accepts only the operator token; a session token never opens it. A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
 
@@ -166,7 +166,7 @@ These two GET routes read the observation ledger. They never fetch GitHub facts 
 
 | Method and path | Authentication | Parameters |
 | --- | --- | --- |
-| GET `/audit-events` | Operator token header `X-Synth City-Operator-Token` | `page` (default 1), `page_size` (1–100, default 25), `event_kind`, `team_context_key`, `scope_context_key`, `item_context_key`, `team_id`, `scope_id`, `item_id` |
+| GET `/audit-events` | Operator token header `X-Synth-City-Operator-Token` | `page` (default 1), `page_size` (1–100, default 25), `event_kind`, `team_context_key`, `scope_context_key`, `item_context_key`, `team_id`, `scope_id`, `item_id` |
 | GET `/metrics` | None | `window_start`, `window_end` (required), `filter_scope` (`all` or `scoped`), `team_context_key`, `scope_context_key` |
 
 Audit events accept pagination and context filters, without a time window. Metrics accept a time window and context filters, without pagination. Agent session tokens do not authorize audit reads. A missing backend operator token returns 503; a missing or invalid header returns 401.
@@ -179,7 +179,7 @@ A metrics window has `window_start`, `window_end`, `filter_scope`, `counting_uni
 
 ### Review acceptance declarations
 
-POST `/review-acceptances` records one review acceptance from a trusted source. It needs the operator token header `X-Synth City-Operator-Token`. It is observational: it never changes work state, approvals, merges, retries, leases or counters.
+POST `/review-acceptances` records one review acceptance from a trusted source. It needs the operator token header `X-Synth-City-Operator-Token`. It is observational: it never changes work state, approvals, merges, retries, leases or counters.
 
 | Field | Rule |
 | --- | --- |
@@ -206,7 +206,7 @@ An accepted, independent, human declaration for a design item also records deliv
 
 ## Setup preflight
 
-POST `/api/v1/factory/setup-preflight` checks repository setup prerequisites for guided configuration. It needs the operator token header `X-Synth City-Operator-Token`. It is an observation: it creates or changes no records, creates no labels and starts no issue intake. It reads the local checkout and GitHub.
+POST `/api/v1/factory/setup-preflight` checks repository setup prerequisites for guided configuration. It needs the operator token header `X-Synth-City-Operator-Token`. It is an observation: it creates or changes no records, creates no labels and starts no issue intake. It reads the local checkout and GitHub.
 
 | Request field | Rule |
 | --- | --- |

@@ -129,12 +129,12 @@ The broadcast endpoint also accepts `team_preset` or `work_item` with the corres
 
 ## Agent Teams Integration
 
-External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Synth City-Operator-Token`) or an authenticated Mail session token (`X-Synth City-Session-Token`). A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected; otherwise the route returns 403 `authenticated_mcp_session_required`. The route authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token. The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
+External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Synth-City-Operator-Token`) or an authenticated Mail session token (`X-Synth-City-Session-Token`). A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected; otherwise the route returns 403 `authenticated_mcp_session_required`. The route authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token. The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
 
 ```bash
 curl -s "$DECK_API/agent-teams/presets"
 curl -s -X POST "$DECK_API/agent-teams/presets/3/plan-launch" \
-  -H "X-Synth City-Operator-Token: $DECK_OPERATOR_TOKEN" \
+  -H "X-Synth-City-Operator-Token: $OPERATOR_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"requested_by": "OpenClaw"}'
 ```
@@ -143,7 +143,7 @@ After reviewing the plan, launch with the returned plan hash:
 
 ```bash
 curl -s -X POST "$DECK_API/agent-teams/presets/3/launch" \
-  -H "X-Synth City-Operator-Token: $DECK_OPERATOR_TOKEN" \
+  -H "X-Synth-City-Operator-Token: $OPERATOR_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "requested_by": "OpenClaw",

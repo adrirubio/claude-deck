@@ -94,7 +94,7 @@ The progress view shows three short lines:
 - **Estimate:** A range of active effort, with confidence and scope, or **Unknown**.
 - **Next:** The next actor and action.
 
-The owner supplies the estimate. The Leader calls `deck_prepare_work_remaining_summary` after a safe published checkpoint or review handoff.
+The owner supplies the estimate. The Leader calls `synth_city_prepare_work_remaining_summary` after a safe published checkpoint or review handoff.
 The Leader places the returned block near the start of the main issue and PR. Keep the other issue facts and action records.
 The tool formats the block. It does not write to GitHub. Use existing authorized GitHub access.
 

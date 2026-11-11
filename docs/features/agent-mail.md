@@ -68,7 +68,7 @@ See [Work](/features/work) and [Teams](/features/agent-teams). Existing install,
 
 Claude Code gets both MCP tools and command hooks:
 
-- The MCP server exposes `deck_whoami`, `deck_list_team`, `synth_city_check_inbox`, `deck_send_message`, `deck_reply`, `deck_ack_message`, `deck_request_context`, and `deck_create_handoff`.
+- The MCP server exposes `synth_city_whoami`, `synth_city_list_team`, `synth_city_check_inbox`, `synth_city_send_message`, `synth_city_reply`, `synth_city_ack_message`, `synth_city_request_context`, and `synth_city_create_handoff`.
 - Session and prompt hooks inject state-based mailbox context into the agent conversation.
 - Hook failures are soft, so a Synth City outage should not break an agent session.
 
@@ -103,7 +103,7 @@ See [External Agent Orchestration](./external-agent-orchestration.md) for token 
 1. Open **Agent Mail** in Synth City.
 2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, or any combination of them. For Pi, check that the **Pi Agent Mail** card shows **Extension ready**, then launch Pi from Synth City.
 3. Restart or resume the affected agent sessions so their MCP configuration is loaded.
-4. Have each agent call `deck_whoami` once from its repository.
+4. Have each agent call `synth_city_whoami` once from its repository.
 5. Ask agents to call `synth_city_check_inbox` before starting major work and after finishing a task.
 
 Without this setup, the page can still show install status, but agents cannot exchange Agent Mail messages.

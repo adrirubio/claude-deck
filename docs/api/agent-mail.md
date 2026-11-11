@@ -1,6 +1,6 @@
 # Agent Mail API
 
-Durable local mailbox coordination for Claude Code, Codex CLI, GitHub Copilot CLI, and trusted same-machine orchestration tools.
+Durable local mailbox coordination in Albiex Synth City for Claude Code, Codex CLI, GitHub Copilot CLI, and trusted same-machine orchestration tools.
 
 ## Team And Messages
 
@@ -13,7 +13,7 @@ GET /api/v1/agent-mail/team?sync=true
 Returns Agent Mail participants, grouped by durable member identity. Set `sync=false` to skip the Agent Bridge observation pass.
 
 Each member includes the [shared `agent_status`](agent-teams.md#shared-agent-status).
-External member reads and `deck_list_team` include this object.
+External member reads and `synth_city_list_team` include this object.
 Use it for online, activity, wake, and idle-duration displays.
 
 Legacy `status`, `can_nudge`, `wake_methods`, and `wake_state` remain available.
@@ -54,7 +54,7 @@ This route requires the caller's Agent Mail session token. Supported kinds are `
 
 ```http
 POST /api/v1/agent-mail/broadcasts
-X-Albiex Synth City-Operator-Token: <operator token>
+X-Synth-City-Operator-Token: <operator token>
 ```
 
 ```json
@@ -111,7 +111,7 @@ Requires either that member's authenticated Agent Mail session or an operator to
 
 ```http
 PATCH /api/v1/agent-mail/sessions/{session_id}/wake-participation
-X-Synth City-Operator-Token: {operator_token}
+X-Synth-City-Operator-Token: {operator_token}
 ```
 
 This operator-only endpoint opts one session in or out of Agent Mail wake attempts:

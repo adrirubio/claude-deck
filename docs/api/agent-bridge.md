@@ -1,6 +1,6 @@
 # Agent Bridge API
 
-Provider-aware live terminal monitoring for Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI tmux sessions.
+Provider-aware live terminal monitoring for Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI tmux sessions in Albiex Synth City.
 
 ## Endpoints
 
@@ -65,7 +65,7 @@ Returns a captured pane preview.
 GET /api/v1/agent-bridge/token?target={target}&purpose=readonly
 ```
 
-Returns a 30-second, single-use token bound to one exact tmux target and purpose. `purpose=readonly` is available for terminal viewing; `purpose=attachment` is used for attachment routes. `purpose=interactive` requires `X-Albiex Synth City-Operator-Token` and permits terminal input only for that target. Agent session tokens do not authorize interactive terminal grants. An attachment or read-only token cannot be upgraded by changing the WebSocket query or sending a mode control frame.
+Returns a 30-second, single-use token bound to one exact tmux target and purpose. `purpose=readonly` is available for terminal viewing; `purpose=attachment` is used for attachment routes. `purpose=interactive` requires `X-Synth-City-Operator-Token` and permits terminal input only for that target. Agent session tokens do not authorize interactive terminal grants. An attachment or read-only token cannot be upgraded by changing the WebSocket query or sending a mode control frame.
 
 ### Attach Terminal
 
@@ -138,9 +138,9 @@ Configuration:
 
 Agentic interfaces can use the MCP shim tools:
 
-- `deck_attach_image_to_bridge_session(target, file_path, submit, prompt)`
-- `deck_list_bridge_attachments(target)`
-- `deck_paste_bridge_attachment(target, attachment_id, submit)`
+- `synth_city_attach_image_to_bridge_session(target, file_path, submit, prompt)`
+- `synth_city_list_bridge_attachments(target)`
+- `synth_city_paste_bridge_attachment(target, attachment_id, submit)`
 
 MCP tools intentionally omit `require_interactive_relay`; MCP callers are trusted agentic callers and may paste into a live tmux target without an attached browser relay. `file_path` is resolved on the MCP host and may point to any image readable by that trusted MCP process; the backend validates the image and copies it into the attachment store before generating the agent-visible prompt.
 

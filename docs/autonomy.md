@@ -52,7 +52,7 @@ a continuation just to make in-scope review corrections. Do not send a second
 Every pushed head needs independent review and hosted CI for its full SHA.
 Previous review acceptance and CI readiness apply to the previous head. Preserve
 the configured merge policy; human policy still requires human merge. The owner
-context returned by `deck_get_work_item_context` includes `review_rework_guidance`;
+context returned by `synth_city_get_work_item_context` includes `review_rework_guidance`;
 that text explains the workflow and does not grant approval.
 
 This rule applies to nonterminal, non-escalated initial implementation attempts

@@ -70,16 +70,24 @@ Synth City starts the backend at `http://localhost:8000` and the frontend dev se
 
 Synth City runs from a clone of the repository. An upgrade changes the source. It keeps your database, your operator and GitHub settings in `backend/.env`, and your agent configuration files.
 
-### Upgrade
+### Upgrading from v3.1 to v4.0.0
 
-1. Stop Synth City.
-2. Copy the database while Synth City is stopped. The database uses SQLite WAL mode, so committed data can be in the `-wal` file. Use the SQLite backup command and keep the copy outside the repository:
+Version 4.0.0 is the rename release, and its upgrade renames data and settings as well as the product. Follow [Moving to Albiex Synth City v4.0.0](/guide/migration-v4) for that upgrade, including its complete backup and restore contract. Do not use the historical procedure below for a v4 upgrade: its filenames predate the rename.
+
+### Historical procedure (v3.0.0 and earlier)
+
+The steps below are the upgrade and rollback procedure as written for v3.0.0 and earlier versions, kept for those versions. They use the database filename from before the rename, `backend/claude_registry.db`. Do not pair them with a v4 checkout.
+
+#### Upgrade (historical)
+
+1. Stop the application.
+2. Copy the database while it is stopped. The database uses SQLite WAL mode, so committed data can be in the `-wal` file. Use the SQLite backup command and keep the copy outside the repository:
 
 ```bash
-sqlite3 backend/synth_city.db ".backup '$HOME/synth_city.db.before-3.0.0'"
+sqlite3 backend/claude_registry.db ".backup '$HOME/claude_registry.db.before-3.0.0'"
 ```
 
-Without `sqlite3`, copy `synth_city.db`, `synth_city.db-wal` and `synth_city.db-shm` together. If `DATABASE_URL` in `backend/.env` sets another database path, back up that database.
+Without `sqlite3`, copy `claude_registry.db`, `claude_registry.db-wal` and `claude_registry.db-shm` together. If `DATABASE_URL` in `backend/.env` sets another database path, back up that database.
 
 3. Copy `backend/.env` if you have one. Also create a Backup in the Backup page if you plan to edit agent configuration.
 4. Update the source and install the dependencies:
@@ -90,18 +98,18 @@ git checkout v3.0.0
 ./scripts/install.sh
 ```
 
-5. Start Synth City with `./scripts/dev.sh`.
+5. Start the application with `./scripts/dev.sh`.
 
-Do not delete the database. At startup, Synth City adds the listed missing columns and indexes in place and records one-time data migrations. The first start after an upgrade also installs one audit coverage marker. See [Factory audit and metrics](/guide/factory-audit-and-metrics).
+Do not delete the database. At startup, the application adds the listed missing columns and indexes in place and records one-time data migrations. The first start after an upgrade also installs one audit coverage marker. See [Factory audit and metrics](/guide/factory-audit-and-metrics).
 
-### Rollback
+#### Rollback (historical)
 
 The startup steps do not support downgrade. To roll back, restore the copy you made before the upgrade:
 
-1. Stop Synth City.
+1. Stop the application.
 2. Check out the earlier version. For example, `git checkout v2.0.1`, then run `./scripts/install.sh`.
-3. Remove `backend/synth_city.db-wal` and `backend/synth_city.db-shm`. A stale file from 3.0.0 can damage the restored database. Then replace `backend/synth_city.db` with your copy, for example `~/synth_city.db.before-3.0.0`.
-4. Keep `backend/.env` unchanged. Start Synth City.
+3. Remove `backend/claude_registry.db-wal` and `backend/claude_registry.db-shm`. A stale file from 3.0.0 can damage the restored database. Then replace `backend/claude_registry.db` with your copy, for example `~/claude_registry.db.before-3.0.0`.
+4. Keep `backend/.env` unchanged. Start the application.
 
 Records written after the upgrade are not in the copy. They are lost when you restore it. Rollback does not change your agent configuration files. Use the Backup page to restore those files.
 
