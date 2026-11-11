@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     cors_headers: list[str] = ["*"]
 
     # Database settings
-    database_url: str = Field(default="sqlite+aiosqlite:///./claude_registry.db", repr=False)
+    database_url: str = Field(default="sqlite+aiosqlite:///./synth_city.db", repr=False)
 
     # Agent Bridge attachment settings
     bridge_attachment_dir: str = "~/.claude-registry/bridge-attachments"
