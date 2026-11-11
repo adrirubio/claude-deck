@@ -1,12 +1,11 @@
 """T-D7/T-D8 ownership, exact allocations, atomic stamps and live references."""
-import json
 import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
 
 from .reference_startup_harness import (
-    OLD, NEW, create_database, digest, journal, publish, reference, rows, run_reference,
+    OLD, create_database, digest, journal, publish, reference, rows, run_reference,
 )
 
 

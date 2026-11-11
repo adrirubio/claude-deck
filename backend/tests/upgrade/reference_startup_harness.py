@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from contextlib import closing
 
 
 OLD = '.claude-registry'
@@ -46,7 +47,7 @@ def digest(record):
 
 def create_database(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         assert db.execute('PRAGMA journal_mode=WAL').fetchone()[0] == 'wal'
         db.executescript('''
             CREATE TABLE backups (id INTEGER PRIMARY KEY, file_path TEXT NOT NULL);
@@ -74,7 +75,7 @@ def create_database(path, records):
 
 
 def rows(path, table):
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute('SELECT * FROM ' + table + ' ORDER BY rowid')]
 

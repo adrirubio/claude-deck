@@ -45,20 +45,40 @@ def run_entrypoint(install, mode, configured=None, dotenv=False, *,
     reference_trace = install.root / 'reference-before-services.json'
     if reference_audit:
         reference_checks = f'''
-from app.services.agent_bridge.attachments import agent_bridge_attachment_service
-from sqlalchemy import text
-original_cleanup = agent_bridge_attachment_service.cleanup_expired
-async def checked_cleanup(db, **kwargs):
-    from app.upgrade_bootstrap import read_reference_journals
-    assert read_reference_journals() == [], 'ordinary cleanup reached an open reference phase'
-    stamps = (await db.execute(text('SELECT count(*) FROM upgrade_reference_stamps'))).scalar_one()
-    assert stamps >= 2, 'ordinary services reached unstamped references'
-    for table, field in [('backups','file_path'),('bridge_session_attachments','storage_path')]:
-        values = (await db.execute(text('SELECT '+field+' FROM '+table))).scalars().all()
-        assert values and all('/.claude-registry/' not in value for value in values)
-    pathlib.Path({str(reference_trace)!r}).write_text(json.dumps({{'stamps':stamps,'journals':0}}))
-    return await original_cleanup(db, **kwargs)
-agent_bridge_attachment_service.cleanup_expired = checked_cleanup
+# Install a lazy observation at the real app import. Eagerly importing the
+# application from sitecustomize would also start bootstrap in the dev
+# script's Python curl helpers/reloader and manufacture lock races.
+import importlib.abc, importlib.machinery
+class ReferenceAuditLoader:
+    def __init__(self, original):
+        self.original = original
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+    def create_module(self, spec):
+        return self.original.create_module(spec)
+    def exec_module(self, module):
+        self.original.exec_module(module)
+        service = module.agent_bridge_attachment_service
+        original_cleanup = service.cleanup_expired
+        async def checked_cleanup(db, **kwargs):
+            from app.upgrade_bootstrap import read_reference_journals
+            from sqlalchemy import text
+            assert read_reference_journals() == [], 'ordinary cleanup reached an open reference phase'
+            stamps = (await db.execute(text('SELECT count(*) FROM upgrade_reference_stamps'))).scalar_one()
+            assert stamps >= 2, 'ordinary services reached unstamped references'
+            for table, field in [('backups','file_path'),('bridge_session_attachments','storage_path')]:
+                values = (await db.execute(text('SELECT '+field+' FROM '+table))).scalars().all()
+                assert values and all('/.claude-registry/' not in value for value in values)
+            pathlib.Path({str(reference_trace)!r}).write_text(json.dumps({{'stamps':stamps,'journals':0}}))
+            return await original_cleanup(db, **kwargs)
+        service.cleanup_expired = checked_cleanup
+class ReferenceAuditFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'app.main':
+            spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+            spec.loader = ReferenceAuditLoader(spec.loader)
+            return spec
+sys.meta_path.insert(0, ReferenceAuditFinder())
 '''
     if home_audit:
         home_checks = f'''

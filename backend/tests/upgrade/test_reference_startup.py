@@ -170,7 +170,8 @@ def test_t_d5_power_cut_drops_unflushed_sql_and_replays_without_losing_journal(t
     run_reference(path, [], home)
 
 
-@pytest.mark.parametrize('url', ['sqlite+aiosqlite:///:memory:', 'postgresql://unused/db'])
+@pytest.mark.parametrize('url', ['sqlite+aiosqlite:///:memory:', 'postgresql://unused/db',
+    'sqlite+aiosqlite:///file:reference-memory?mode=memory&uri=true'])
 def test_pending_journals_fail_closed_on_unsupported_backend(tmp_path, url):
     home = tmp_path / 'home'
     record = reference(home)
@@ -198,6 +199,7 @@ def test_t_d5_every_native_sql_and_retirement_boundary_with_shared_partitions(tm
     discovery = ReferencePowerLoss(path, home)
     run_reference(path, records, home, ops=discovery.operations())
     assert discovery.barriers == 1
+    assert discovery.namespace == {}, 'completion did not durably retire every reference record'
     assert any('wal_checkpoint(FULL)' in name for name in discovery.events)
     assert len([name for name in discovery.events if name.startswith('unlink.after:')]) == 3
     for cut in range(len(discovery.events)):
@@ -260,6 +262,53 @@ def test_t_d5_real_reader_blocks_native_checkpoint_and_records_remain(tmp_path):
         reader.close()
     run_reference(path, [record], home)
     assert not journal(home, record).exists()
+
+
+@pytest.mark.parametrize('cut', ['reference_committed:backups', 'reference_barrier_verified',
+                                'reference_record_unlinked:0', 'reference_record_retired:0'])
+def test_t_d5_actual_init_replays_power_loss_including_undurable_schema(tmp_path, cut):
+    install = build_v31_install(tmp_path / 'install')
+    code = r'''
+import asyncio,sqlite3
+from pathlib import Path
+from unittest.mock import patch
+from app.database import init_db,engine
+from app.upgrade_bootstrap import read_reference_journals
+from tests.upgrade.reference_power_loss import ReferencePowerLoss,PowerCut
+path=Path.cwd()/'synth_city.db'
+home=Path.home()
+# Import ran the immutable file phase; no engine connection has opened yet.
+# This durable baseline is the real old schema, without the new stamp table.
+model=ReferencePowerLoss(path,home,CUT)
+ops=model.operations()
+async def check():
+    with patch('app.upgrade_references.ReferenceOps',return_value=ops):
+        try:
+            await init_db()
+        except PowerCut:
+            pass
+        else:
+            raise AssertionError('modeled cut was not reached')
+    # Pool cleanup may checkpoint in the real process. The frozen power-cut
+    # oracle discards those bytes instead of treating cleanup as durability.
+    await engine.dispose()
+    model.restore()
+    if not model.barriers:
+        assert read_reference_journals(),'NORMAL commit lost its recovery records'
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='upgrade_reference_stamps'").fetchone()[0]==0
+    await init_db()
+    assert read_reference_journals()==[]
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT count(*) FROM upgrade_reference_stamps').fetchone()[0]>=2
+        assert all('/.albiex-synth-city/backups/' in r[0] for r in db.execute('SELECT file_path FROM backups'))
+        assert all('/.albiex-synth-city/bridge-attachments/' in r[0]
+                   for r in db.execute('SELECT storage_path FROM bridge_session_attachments'))
+    await init_db()
+    await engine.dispose()
+asyncio.run(check())
+'''.replace('CUT', repr(cut))
+    run_fixture_code(install, code)
 
 
 @pytest.mark.parametrize('result', [(1, 3, 1), (0, -1, -1), (0, 3, 1), None])
@@ -446,3 +495,80 @@ with reference_startup('sqlite+aiosqlite:///'+str(path),home=home,cwd=path.paren
             raise
     assert owner.returncode == 0, error
     assert not journal(home, record).exists()
+
+
+@pytest.mark.parametrize('failure', ['row_write', 'stamp_write', 'commit', 'checkpoint', 'unlink', 'directory'])
+def test_t_d5_failed_io_preserves_landed_files_and_allows_ordinary_replay(tmp_path, failure):
+    home = tmp_path / 'home'
+    record = reference(home)
+    path = create_database(tmp_path / 'db', [record])
+    landed = {p: p.read_bytes() for p in home.rglob('*.allocated.bin')}
+    from app.upgrade_references import ReferenceOps
+    from app.upgrade_bootstrap import read_reference_journals
+
+    class Failed(ReferenceOps):
+        def execute(self, db, sql, parameters=()):
+            if ((failure == 'row_write' and sql.startswith('UPDATE backups'))
+                    or (failure == 'stamp_write' and sql.startswith('INSERT INTO upgrade_reference_stamps'))
+                    or (failure == 'commit' and sql == 'COMMIT')
+                    or (failure == 'checkpoint' and sql == 'PRAGMA wal_checkpoint(FULL)')):
+                raise sqlite3.OperationalError('synthetic I/O failure')
+            return super().execute(db, sql, parameters)
+
+        def unlink(self, target):
+            if failure == 'unlink':
+                raise OSError(5, 'synthetic unlink failure')
+            super().unlink(target)
+
+        def sync_dir(self, target):
+            if failure == 'directory':
+                raise OSError(5, 'synthetic directory sync failure')
+            super().sync_dir(target)
+
+    with pytest.raises((RuntimeError, OSError)):
+        run_reference(path, [record], home, ops=Failed())
+    assert {p: p.read_bytes() for p in landed} == landed
+    if failure != 'directory':
+        assert journal(home, record).exists()
+    run_reference(path, read_reference_journals(home=home), home)
+    assert rows(path, 'backups')[0]['file_path'].endswith('.allocated.bin')
+    assert rows(path, 'bridge_session_attachments')[0]['storage_path'].endswith('.allocated.bin')
+    assert not journal(home, record).exists()
+
+
+def test_non_wal_database_fails_before_stamp_or_rewrite(tmp_path):
+    home = tmp_path / 'home'
+    record = reference(home)
+    path = create_database(tmp_path / 'db', [record])
+    with sqlite3.connect(path) as db:
+        assert db.execute('PRAGMA journal_mode=DELETE').fetchone()[0] == 'delete'
+    with pytest.raises(RuntimeError, match='WAL durability'):
+        run_reference(path, [record], home)
+    assert rows(path, 'upgrade_reference_stamps') == []
+    assert rows(path, 'backups')[0]['file_path'].endswith('/a.bin')
+    assert journal(home, record).exists()
+
+
+def test_reference_phase_rejects_file_journal_before_database_parent_lock(tmp_path):
+    home = tmp_path / 'home'
+    reference(home)
+    old = home / '.claude-registry'
+    old.mkdir()
+    file_journal = home / '.albiex-synth-city-upgrade.pending.json'
+    file_journal.write_text('{}')
+    from app.upgrade_references import reference_startup
+    with pytest.raises(RuntimeError, match='file phase in progress'):
+        with reference_startup('sqlite+aiosqlite:///' + str(old / 'custom.db'),
+                               home=home, cwd=tmp_path):
+            pytest.fail('incomplete file phase reached a database connection')
+    assert list(old.iterdir()) == [], 'reference lock contaminated a directory still awaiting movement'
+
+
+def test_no_pending_records_do_not_open_a_reference_connection(tmp_path):
+    from app.upgrade_references import ReferenceOps, complete_reference_upgrade
+
+    class NoOpen(ReferenceOps):
+        def open_database(self, path):
+            pytest.fail('completed startup opened an unnecessary reference connection')
+
+    complete_reference_upgrade(None, [], home=tmp_path, ops=NoOpen())

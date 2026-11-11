@@ -577,7 +577,7 @@ def _database_choice(configured_url: str, cwd: Path | None):
 
 
 @contextmanager
-def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps):
+def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps, *, reference_phase=False):
     """One order for both entries: HOME first, then sorted unique DB anchors.
 
     The HOME anchor is the parent of both product directories. The same anchor
@@ -585,9 +585,17 @@ def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps
     """
     _mkdir_synced(home, ops)
     with _migration_lock(home):
+        if reference_phase and _home_journals(home):
+            raise RuntimeError('Upgrade reference set is incomplete: file phase in progress')
         binding = home / NEW_HOME / BINDING_NAME
         bindings = _bindings(binding)
-        parents = {cwd, configured.parent} if configured is not None else set()
+        parents = {cwd} if configured is not None else set()
+        # Only the database-open phase adds a custom DB parent. In the file
+        # phase that directory may itself be inside a planned HOME move, or
+        # intentionally missing; creating its lock would contaminate the plan
+        # before containment preflight can reject it.
+        if reference_phase and configured is not None:
+            parents.add(configured.parent)
         entry = bindings['resources'].get('database')
         if entry and configured == Path(entry['old_path']):
             parents.add(Path(entry['old_path']).parent)
@@ -782,7 +790,7 @@ def reference_phase_lock(configured_url: str, *, home: Path | None = None,
     home, cwd = (home or Path.home()).resolve(), (cwd or Path.cwd()).resolve()
     ops = ops or FileOps()
     _, configured = _database_choice(configured_url, cwd)
-    with _resource_locks(home, cwd, configured, ops):
+    with _resource_locks(home, cwd, configured, ops, reference_phase=True):
         if _home_journals(home) or any(_journals(parent) for parent in
                 ({cwd, configured.parent} if configured is not None else set())):
             raise RuntimeError('Upgrade reference set is incomplete: file phase in progress')
