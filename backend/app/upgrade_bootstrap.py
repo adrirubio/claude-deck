@@ -493,10 +493,20 @@ def _configured_file(url, cwd: Path | None):
     if asbool(url.query.get('uri', False)):
         name = url.get_dialect()().create_connect_args(url)[0][0]
         if name.startswith('file:'):
+            # urlsplit removes literal TAB/LF/CR, but SQLite keeps those bytes
+            # in filenames. Protect them for parsing, then decode the path.
+            name = name.translate({9: '%09', 10: '%0A', 13: '%0D'})
             parsed = urlsplit(name)
             if parsed.netloc not in ('', 'localhost'):
                 return None
-            if str(url.query.get('mode', '')).lower() == 'memory':
+            # SQLite stops its native query at # and percent-decodes names
+            # and values without HTML-form '+' decoding. SQLAlchemy's query
+            # can contain ignored fragment text, so it is not authoritative.
+            native = {}
+            for option in parsed.query.split('&'):
+                key, _, value = option.partition('=')
+                native[unquote(key).split('\0', 1)[0]] = unquote(value).split('\0', 1)[0]
+            if native.get('mode') == 'memory':
                 return None
             name = unquote(parsed.path)
     if name == ':memory:':
@@ -508,6 +518,11 @@ def _configured_file(url, cwd: Path | None):
 def _new_url(url, path: Path) -> str:
     is_uri = asbool(url.query.get('uri', False))
     name = 'file:' + quote(str(path), safe='/') if is_uri else str(path)
+    if is_uri and (url.database or '').startswith('file:') and '#' in url.database:
+        # Retain the database fragment before the dialect appends its native
+        # query. Dropping it would activate formerly ignored native options.
+        # Preserve the SQLAlchemy query separately, including Python options.
+        name += '#' + url.database.split('#', 1)[1]
     if not is_uri and '?' in name:
         # SQLAlchemy string URLs split an unescaped ? even without URI mode.
         # Keep the same disk filename/options using a safe relative spelling.

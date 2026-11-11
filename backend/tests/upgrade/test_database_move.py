@@ -806,3 +806,89 @@ def test_plain_sqlite_url_in_question_mark_cwd_still_opens_the_moved_file(tmp_pa
             assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == root / 'synth_city.db'
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('bound', [False, True])
+@pytest.mark.parametrize('mode', ['memory', 'ro'])
+def test_uri_fragment_ignored_native_options_stay_ignored_after_move(tmp_path, monkeypatch, bound, mode):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    configured = ('sqlite+aiosqlite:///file:./claude_registry.db#label?uri=true&mode=' + mode
+                  + '&timeout=7&check_same_thread=false&cached_statements=17')
+    parsed = make_url(configured)
+    before_python_options = parsed.get_dialect()().create_connect_args(parsed)[1]
+    engine = create_engine(parsed.set(drivername='sqlite'))
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE preserved(value TEXT)')
+        connection.exec_driver_sql("INSERT INTO preserved VALUES ('historical-row')")
+        assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == tmp_path / 'claude_registry.db'
+    engine.dispose()
+    if bound:
+        start(tmp_path, url='sqlite+aiosqlite:///./claude_registry.db', explicit=True)
+    result = start(tmp_path, url=configured, explicit=True)
+    effective = make_url(result)
+    assert effective.drivername == parsed.drivername
+    assert effective.get_dialect()().create_connect_args(effective)[1] == before_python_options
+    engine = create_engine(effective.set(drivername='sqlite'))
+    try:
+        with engine.begin() as connection:
+            assert connection.exec_driver_sql('SELECT value FROM preserved').fetchall() == [('historical-row',)]
+            assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == tmp_path / 'synth_city.db'
+            connection.exec_driver_sql("INSERT INTO preserved VALUES ('still-writable')")
+    finally:
+        engine.dispose()
+    assert not (tmp_path / 'claude_registry.db').exists()
+    assert start(tmp_path, url=configured, explicit=True) == result
+
+
+@pytest.mark.parametrize('existing_metadata', [False, True])
+def test_uri_fragment_terminated_memory_mode_is_a_complete_noop(tmp_path, monkeypatch, existing_metadata):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    configured = 'sqlite+aiosqlite:///file:./claude_registry.db?uri=true&mode=memory#label'
+    engine = create_engine(make_url(configured).set(drivername='sqlite'))
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE transient(value TEXT)')
+        assert connection.exec_driver_sql('PRAGMA database_list').fetchone()[2] == ''
+    engine.dispose()
+    seed_bytes(tmp_path)
+    binding = tmp_path / 'home' / BINDING
+    if existing_metadata:
+        binding.parent.mkdir(parents=True)
+        binding.write_bytes(b'malformed metadata must not be read for a memory URL')
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    assert start(tmp_path, url=configured, explicit=True) == configured
+    assert {str(path.relative_to(tmp_path)): path.read_bytes()
+            for path in tmp_path.rglob('*') if path.is_file()} == before
+    assert not (tmp_path / migration().LOCK_NAME).exists()
+
+
+@pytest.mark.parametrize(('spelling', 'filename'), [
+    ('\tclaude_registry.db', '\tclaude_registry.db'),
+    ('\nclaude_registry.db', '\nclaude_registry.db'),
+    ('\rclaude_registry.db', '\rclaude_registry.db'),
+    ('%09claude_registry.db', '\tclaude_registry.db'),
+    ('%0Aclaude_registry.db', '\nclaude_registry.db'),
+    ('%0Dclaude_registry.db', '\rclaude_registry.db'),
+    ('custom-claude_registry.db', 'custom-claude_registry.db'),
+], ids=['literal-TAB', 'literal-LF', 'literal-CR', 'escaped-TAB', 'escaped-LF', 'escaped-CR', 'ordinary'])
+def test_literal_uri_control_characters_preserve_custom_filename_and_unrelated_default(tmp_path, monkeypatch, spelling, filename):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    configured = 'sqlite+aiosqlite:///file:./' + spelling + '?uri=true&cache=private'
+    engine = create_engine(make_url(configured).set(drivername='sqlite'))
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE custom_data(value TEXT)')
+        assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == tmp_path / filename
+    engine.dispose()
+    seed_bytes(tmp_path)
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    assert start(tmp_path, url=configured, explicit=True) == configured
+    assert {str(path.relative_to(tmp_path)): path.read_bytes()
+            for path in tmp_path.rglob('*') if path.is_file()} == before
+    assert not (tmp_path / 'home').exists()
