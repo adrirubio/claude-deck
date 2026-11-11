@@ -18,9 +18,11 @@ from pathlib import Path
 import shutil
 import stat
 import uuid
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlsplit
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+from sqlalchemy.util import asbool
 
 
 OLD_NAME = 'claude_registry.db'
@@ -179,7 +181,7 @@ def _migration_lock(parent: Path):
 
 def _bindings(path: Path) -> dict:
     value = _read_json(path) if _exists(path) else {'version': 1, 'resources': {}}
-    if value.get('version') != 1 or not isinstance(value.get('resources'), dict):
+    if type(value.get('version')) is not int or value['version'] != 1 or not isinstance(value.get('resources'), dict):
         raise RuntimeError(f'Database upgrade binding record is invalid: {path}')
     entry = value['resources'].get('database')
     if entry is not None:
@@ -288,6 +290,13 @@ def _validate_journal(path: Path, value: dict, old: Path, new: Path):
                     or all(row['size'] == 0 for row in value['existing_targets'].values()))
     except (KeyError, TypeError, ValueError, AttributeError):
         raise RuntimeError(f'Database upgrade journal is invalid or mismatched: {path}') from None
+
+    # Adoption has no source rows to require a surviving target implicitly.
+    # Its complete recorded set must still exist before any record is changed.
+    for name, expected in value['existing_targets'].items():
+        target = Path(name)
+        if not _exists(target) or not _same(target, expected):
+            raise RuntimeError(f'Database upgrade adopted target does not match its journal: {target}')
 
     rows = {row['suffix']: row for row in files}
     for suffix in SUFFIXES:
@@ -475,21 +484,37 @@ def _move_default(parent: Path, binding: Path, bindings: dict, explicit: bool, o
 
 
 def _configured_file(url, cwd: Path | None):
-    if url.get_backend_name() != 'sqlite' or not url.database or url.database == ':memory:':
+    if url.get_backend_name() != 'sqlite' or not url.database:
         return None
     name = url.database
-    if str(url.query.get('mode', '')).lower() == 'memory':
+    # Ask the dialect for its filename, without constructing an engine or
+    # opening a connection. In URI mode it appends native SQLite options; a
+    # filename without file: still treats that suffix literally in SQLite.
+    if asbool(url.query.get('uri', False)):
+        name = url.get_dialect()().create_connect_args(url)[0][0]
+        if name.startswith('file:'):
+            parsed = urlsplit(name)
+            if parsed.netloc not in ('', 'localhost'):
+                return None
+            if str(url.query.get('mode', '')).lower() == 'memory':
+                return None
+            name = unquote(parsed.path)
+    if name == ':memory:':
         return None
-    if name.startswith('file:'):
-        name = unquote(name[5:])
-        if name == ':memory:' or name.startswith('//'):
-            return None
     path = Path(name).expanduser()
     return (path if path.is_absolute() else (cwd or Path.cwd()) / path).resolve()
 
 
 def _new_url(url, path: Path) -> str:
-    name = ('file:' if (url.database or '').startswith('file:') else '') + str(path)
+    is_uri = asbool(url.query.get('uri', False))
+    name = 'file:' + quote(str(path), safe='/') if is_uri else str(path)
+    if not is_uri and '?' in name:
+        # SQLAlchemy string URLs split an unescaped ? even without URI mode.
+        # Keep the same disk filename/options using a safe relative spelling.
+        # Never enable URI mode implicitly: it could activate ignored options.
+        name = os.path.relpath(path, Path.cwd())
+        if '?' in name:
+            raise RuntimeError(f'Database upgrade cannot represent the target in a literal SQLite URL: {path}')
     return url.set(database=name).render_as_string(hide_password=False)
 
 
@@ -507,7 +532,7 @@ def prepare_database_url(configured_url: str, *, explicit: bool,
     try:
         url = make_url(configured_url)
         configured = _configured_file(url, cwd)
-    except (ValueError, TypeError):
+    except (ArgumentError, ValueError, TypeError):
         # Do not log/format an operator URL; it may contain credentials.
         raise RuntimeError('Database upgrade cannot resolve the configured database URL') from None
     # A non-file URL is no location choice to bind or retire. This must precede

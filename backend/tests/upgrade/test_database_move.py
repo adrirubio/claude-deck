@@ -534,3 +534,275 @@ def test_t_d5_directory_sync_failure_after_landing_or_unlink_still_resumes(tmp_p
             (tmp_path / name, tmp_path / name.replace('claude_registry.db', 'synth_city.db')))
     start(tmp_path)
     assert database_files(tmp_path) == {k.replace('claude_registry.db', 'synth_city.db'): v for k, v in original.items()}
+
+
+@pytest.mark.parametrize('missing', SUFFIXES)
+@pytest.mark.parametrize('existing_binding', [False, True])
+def test_adoption_recovery_refuses_each_missing_recorded_target_before_open(tmp_path, missing, existing_binding):
+    seed_bytes(tmp_path, name='synth_city.db')
+    module = migration()
+
+    class Stop(module.FileOps):
+        def checkpoint(self, stage, path):
+            if stage == 'journal_durable':
+                raise Interrupted()
+
+    configured = 'sqlite+aiosqlite:///./claude_registry.db'
+    binding = tmp_path / 'home' / BINDING
+    if existing_binding:
+        binding.parent.mkdir(parents=True)
+        binding.write_text(json.dumps({'version': 1, 'resources': {'backups': {'owned_by': 'future-c5'}}}))
+    with pytest.raises(Interrupted):
+        start(tmp_path, url=configured, explicit=True, ops=Stop())
+    journal = next(tmp_path.glob(JOURNALS))
+    Path(str(tmp_path / 'synth_city.db') + missing).rename(tmp_path / 'quarantined-target')
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    opened = []
+    with pytest.raises(RuntimeError) as error:
+        effective = start(tmp_path, url=configured, explicit=True)
+        # This boundary must be unreachable, especially for the missing main:
+        # SQLite would otherwise silently create an empty database here.
+        opened.append(True)
+        connection = sqlite3.connect(make_url(effective).database)
+        connection.close()
+    assert not opened
+    assert str(tmp_path / 'claude_registry.db') in str(error.value)
+    assert str(tmp_path / 'synth_city.db') in str(error.value)
+    assert journal.exists() and binding.exists() == existing_binding
+    assert {str(path.relative_to(tmp_path)): path.read_bytes()
+            for path in tmp_path.rglob('*') if path.is_file()} == before
+
+
+def test_valid_adoption_journal_recovers_and_preserves_shared_binding_state(tmp_path):
+    seed_bytes(tmp_path, name='synth_city.db')
+    module = migration()
+    binding = tmp_path / 'home' / BINDING
+    binding.parent.mkdir(parents=True)
+    unrelated = {'backups': {'owned_by': 'future-c5'}}
+    binding.write_text(json.dumps({'version': 1, 'resources': unrelated}))
+
+    class Stop(module.FileOps):
+        def checkpoint(self, stage, path):
+            if stage == 'journal_durable':
+                raise Interrupted()
+
+    configured = 'sqlite+aiosqlite:///./claude_registry.db'
+    before = database_files(tmp_path)
+    with pytest.raises(Interrupted):
+        start(tmp_path, url=configured, explicit=True, ops=Stop())
+    effective = start(tmp_path, url=configured, explicit=True)
+    assert Path(make_url(effective).database) == tmp_path / 'synth_city.db'
+    assert database_files(tmp_path) == before
+    record = json.loads(binding.read_text())
+    assert record['resources']['backups'] == unrelated['backups']
+    assert record['resources']['database']['state'] == 'active'
+    assert not list(tmp_path.glob(JOURNALS))
+
+
+@pytest.mark.parametrize('name', ['case#fragment', 'case?fragment', 'case%23fragment', 'plain-control'])
+def test_generated_sqlite_uri_opens_preserved_database_with_special_path_characters(tmp_path, monkeypatch, name):
+    from sqlalchemy import create_engine
+
+    root = tmp_path / name
+    root.mkdir()
+    monkeypatch.chdir(root)
+    original = create_engine('sqlite:///./claude_registry.db')
+    with original.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE preserved(value TEXT)')
+        connection.exec_driver_sql("INSERT INTO preserved VALUES ('historical-row')")
+    original.dispose()
+    configured = 'sqlite+aiosqlite:///file:./claude_registry.db?uri=true&mode=rw&cache=private'
+    result = start(root, url=configured, explicit=True, home=tmp_path / 'home')
+    parsed = make_url(result)
+    assert parsed.drivername == 'sqlite+aiosqlite'
+    assert parsed.query == make_url(configured).query
+    engine = create_engine(parsed.set(drivername='sqlite'))
+    try:
+        with engine.begin() as connection:
+            assert connection.exec_driver_sql('SELECT value FROM preserved').fetchall() == [('historical-row',)]
+            assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == root / 'synth_city.db'
+            connection.exec_driver_sql("INSERT INTO preserved VALUES ('legitimate-first-open-write')")
+    finally:
+        engine.dispose()
+    assert not (root / 'claude_registry.db').exists()
+    assert start(root, url=configured, explicit=True, home=tmp_path / 'home') == result
+
+
+@pytest.mark.parametrize('query', ['', '?uri=false'])
+def test_uri_disabled_file_prefix_is_a_literal_custom_filename(tmp_path, monkeypatch, query):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    engine = create_engine('sqlite:///file:claude_registry.db' + query)
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE custom_data(value TEXT)')
+        connection.exec_driver_sql("INSERT INTO custom_data VALUES ('preserve-custom')")
+    engine.dispose()
+    seed_bytes(tmp_path)
+    original = {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+    configured = 'sqlite+aiosqlite:///file:claude_registry.db' + query
+    assert start(tmp_path, url=configured, explicit=True) == configured
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()} == original
+    assert not (tmp_path / 'home').exists()
+
+
+def test_mode_memory_without_uri_is_a_real_disk_database(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    engine = create_engine('sqlite:///./claude_registry.db?mode=memory')
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE preserved(value TEXT)')
+    engine.dispose()
+    result = start(tmp_path, url='sqlite+aiosqlite:///./claude_registry.db?mode=memory', explicit=True)
+    assert Path(make_url(result).database) == tmp_path / 'synth_city.db'
+    assert not (tmp_path / 'claude_registry.db').exists()
+    assert make_url(result).query['mode'] == 'memory'
+
+
+@pytest.mark.parametrize('version', [True, 1.0, 1])
+def test_binding_version_requires_integer_one_and_preserves_invalid_evidence(tmp_path, version):
+    configured = 'sqlite+aiosqlite:///./claude_registry.db'
+    seed_bytes(tmp_path)
+    module = migration()
+
+    class Stop(module.FileOps):
+        def checkpoint(self, stage, path):
+            if stage == 'binding_durable':
+                raise Interrupted()
+
+    if type(version) is int:
+        effective = start(tmp_path, url=configured, explicit=True)
+    else:
+        with pytest.raises(Interrupted):
+            start(tmp_path, url=configured, explicit=True, ops=Stop())
+        assert list(tmp_path.glob(JOURNALS)), 'negative case must preserve real recovery evidence'
+    binding = tmp_path / 'home' / BINDING
+    value = json.loads(binding.read_text())
+    value['version'] = version
+    binding.write_text(json.dumps(value))
+    before = {str(path.relative_to(tmp_path)): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    if type(version) is int:
+        assert start(tmp_path, url=configured, explicit=True) == effective
+    else:
+        with pytest.raises(RuntimeError):
+            start(tmp_path, url=configured, explicit=True)
+    assert {str(path.relative_to(tmp_path)): path.read_bytes()
+            for path in tmp_path.rglob('*') if path.is_file()} == before
+
+
+@pytest.mark.parametrize('kind', ['file', 'directory'])
+def test_production_sync_boundary_calls_fsync_on_the_right_descriptor(tmp_path, monkeypatch, kind):
+    import os
+
+    module = migration()
+    path = tmp_path / 'regular-file'
+    path.write_bytes(b'preserved')
+    expected = (path if kind == 'file' else tmp_path).stat()
+    called = []
+    real_sync = os.fsync
+
+    def observe(descriptor):
+        actual = os.fstat(descriptor)
+        called.append((actual.st_dev, actual.st_ino, stat.S_ISDIR(actual.st_mode)))
+        return real_sync(descriptor)
+
+    monkeypatch.setattr(module.os, 'fsync', observe)
+    ops = module.FileOps()
+    (ops.sync_file if kind == 'file' else ops.sync_dir)(path if kind == 'file' else tmp_path)
+    assert called == [(expected.st_dev, expected.st_ino, kind == 'directory')]
+
+
+@pytest.mark.parametrize('kind', ['file', 'directory'])
+def test_production_sync_failure_propagates_and_closes_descriptor(tmp_path, monkeypatch, kind):
+    import os
+
+    module = migration()
+    path = tmp_path / 'regular-file'
+    path.write_bytes(b'preserved')
+    descriptors = []
+
+    def fail(descriptor):
+        descriptors.append(descriptor)
+        raise OSError(errno.EIO, 'injected actual fsync failure')
+
+    monkeypatch.setattr(module.os, 'fsync', fail)
+    ops = module.FileOps()
+    with pytest.raises(OSError) as error:
+        (ops.sync_file if kind == 'file' else ops.sync_dir)(path if kind == 'file' else tmp_path)
+    assert error.value.errno == errno.EIO
+    assert len(descriptors) == 1
+    with pytest.raises(OSError) as closed:
+        os.fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF
+    assert path.read_bytes() == b'preserved'
+
+
+@pytest.mark.parametrize('authority', ['', 'localhost'])
+def test_absolute_file_uri_resolves_the_same_default_database(tmp_path, monkeypatch, authority):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    engine = create_engine('sqlite:///./claude_registry.db')
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE preserved(value TEXT)')
+    engine.dispose()
+    uri = (tmp_path / 'claude_registry.db').as_uri()
+    if authority:
+        uri = uri.replace('file:///', 'file://localhost/', 1)
+    configured = 'sqlite+aiosqlite:///' + uri + '?uri=true'
+    result = start(tmp_path, url=configured, explicit=True)
+    assert not (tmp_path / 'claude_registry.db').exists()
+    engine = create_engine(make_url(result).set(drivername='sqlite'))
+    try:
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE name='preserved'").fetchall() == [('preserved',)]
+            assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == tmp_path / 'synth_city.db'
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize('mode', ['ro', 'memory'])
+def test_uri_enabled_without_file_scheme_keeps_the_dialects_literal_filename(tmp_path, monkeypatch, mode):
+    from sqlalchemy import create_engine
+
+    monkeypatch.chdir(tmp_path)
+    configured = 'sqlite+aiosqlite:///./claude_registry.db?uri=true&mode=' + mode
+    engine = create_engine(make_url(configured).set(drivername='sqlite'))
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE custom_data(value TEXT)')
+    engine.dispose()
+    assert (tmp_path / ('claude_registry.db?mode=' + mode)).exists()
+    # A real converted resource already has a binding. Choosing this other
+    # disk file must retire it; it is neither the old default nor memory.
+    seed_bytes(tmp_path)
+    start(tmp_path, url='sqlite+aiosqlite:///./claude_registry.db', explicit=True)
+    before = database_files(tmp_path)
+    assert start(tmp_path, url=configured, explicit=True) == configured
+    assert database_files(tmp_path) == before
+    assert 'database' not in json.loads((tmp_path / 'home' / BINDING).read_text())['resources']
+
+
+@pytest.mark.parametrize('query', ['', '?mode=memory', '?uri=false'])
+def test_plain_sqlite_url_in_question_mark_cwd_still_opens_the_moved_file(tmp_path, monkeypatch, query):
+    from sqlalchemy import create_engine
+
+    root = tmp_path / 'case?fragment'
+    root.mkdir()
+    monkeypatch.chdir(root)
+    engine = create_engine('sqlite:///./claude_registry.db' + query)
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE TABLE preserved(value TEXT)')
+    engine.dispose()
+    configured = 'sqlite+aiosqlite:///./claude_registry.db' + query
+    result = start(root, url=configured, explicit=True)
+    assert make_url(result).query == make_url(configured).query
+    engine = create_engine(make_url(result).set(drivername='sqlite'))
+    try:
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE name='preserved'").fetchall() == [('preserved',)]
+            assert Path(connection.exec_driver_sql('PRAGMA database_list').fetchone()[2]) == root / 'synth_city.db'
+    finally:
+        engine.dispose()
