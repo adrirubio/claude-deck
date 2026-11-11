@@ -19,6 +19,7 @@ class DurableFilesystem:
         self.root = root
         self.base = base
         self.cut = cut
+        self.interrupted = False
         self.events = []
         self.objects = root.parent / (root.name + '-durable-inodes')
         self.objects.mkdir()
@@ -49,10 +50,14 @@ class DurableFilesystem:
         }
 
     def sync_file(self, path):
+        if self.interrupted:
+            raise Interrupted('power is off')
         self.base.sync_file(path)
         self.durable_contents.add(self._remember(path))
 
     def sync_dir(self, path):
+        if self.interrupted:
+            raise Interrupted('power is off')
         self.base.sync_dir(path)
         if path.is_relative_to(self.root):
             self._directory(path)
@@ -60,6 +65,7 @@ class DurableFilesystem:
     def checkpoint(self, stage, path):
         self.events.append(stage)
         if stage == self.cut:
+            self.interrupted = True
             raise Interrupted(stage)
 
     def rmdir(self, path):
