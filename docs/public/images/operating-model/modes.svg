@@ -9,7 +9,7 @@
   <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#57534e"/></marker></defs>
 
   <text x="20" y="28" font-size="15" font-weight="700">A · Normal running</text>
-  <text x="186" y="28" font-size="12.5" fill="#57534e">Deck UI available · supervisor optional</text>
+  <text x="186" y="28" font-size="12.5" fill="#57534e">Albiex Synth City UI available · supervisor optional</text>
 
   <!-- A1 team (agent) -->
   <rect x="20" y="44" width="200" height="80" rx="8" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
@@ -20,7 +20,7 @@
   <!-- A2 deck (system) -->
   <rect x="265" y="44" width="210" height="80" rx="8" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
   <use href="#i-system" x="275" y="54" width="20" height="20" fill="#334155" color="#334155"/>
-  <text x="301" y="70" font-size="13.5" font-weight="700" fill="#1e293b">Deck flags it</text>
+  <text x="301" y="70" font-size="13.5" font-weight="700" fill="#1e293b">Synth City flags it</text>
     <text x="277" y="94" font-size="11" font-weight="700" fill="#334155">CONTROLLER · NON-AGENT</text>
   <text x="277" y="112" font-size="11.5" fill="#1e293b">existing signals, now on one card</text>
   <!-- A3 leader (agent) -->
@@ -45,7 +45,7 @@
   <line x1="20" y1="192" x2="980" y2="192" stroke="#d6d3d1" stroke-width="1.5"/>
   <use href="#i-human" x="20" y="172" width="14" height="14" fill="#b45309"/>
   <text x="38" y="183" font-size="11.5" fill="#78350f">The Director grooms the backlog at any time. The dispatch label is the Director’s “ready” signal.</text>
-  <text x="500" y="207" text-anchor="middle" font-size="11.5" fill="#78716c">a defect in Deck itself blocks the work ↓</text>
+  <text x="500" y="207" text-anchor="middle" font-size="11.5" fill="#78716c">a defect in Synth City itself blocks the work ↓</text>
 
   <text x="20" y="236" font-size="15" font-weight="700">B · Factory maintenance</text>
   <text x="236" y="236" font-size="12.5" fill="#57534e">supervisor required · the controller is down for a short period</text>

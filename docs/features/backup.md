@@ -35,7 +35,7 @@ Click **Restore** on any backup to open the restore wizard:
 Restoring overwrites existing configuration files for the selected components. Make a backup of your current configuration first if needed.
 :::
 
-Codex backups are export-only. The restore plan can show archive contents and explain why automatic restore is refused, but Claude Deck does not extract Codex exports back into `CODEX_HOME`.
+Codex backups are export-only. The restore plan can show archive contents and explain why automatic restore is refused, but Albiex Synth City does not extract Codex exports back into `CODEX_HOME`.
 
 ### Managing Backups
 
@@ -46,7 +46,7 @@ Stat cards at the top show total backups, combined size, and count with external
 
 ## Configuration
 
-Backups are stored in `~/.claude-registry/backups/` as ZIP files with a JSON manifest containing metadata, component list, and dependency information.
+Backups are stored in `~/.albiex-synth-city/backups/` as ZIP files with a JSON manifest containing metadata, component list, and dependency information.
 
 ### Codex Export Scope
 

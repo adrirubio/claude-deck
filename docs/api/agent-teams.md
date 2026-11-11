@@ -1,6 +1,6 @@
 # Agent Teams API
 
-Saved rosters for launching or reusing local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.
+Albiex Synth City saved rosters launch or reuse local Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, and Pi sessions.
 
 Response timestamps identify UTC with `Z` or `+00:00`. The JSON serializer leaves stored datetimes unchanged.
 Send the returned timestamp unchanged in `expected_updated_at` or `expected_leased_at`.
@@ -9,7 +9,7 @@ Naive confirmation values keep their existing UTC meaning. Stale instants still 
 
 ## Authorization
 
-"Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
+"Operator token" means the `X-Synth-City-Operator-Token` header. "Mail session" means an authenticated `X-Synth-City-Session-Token`.
 
 - A route marked **Operator token** accepts only the operator token. A session token never opens it. Without a configured backend operator token the route returns 503 `operator_token_unconfigured`; a missing or wrong header returns 401 `operator_token_required` or `operator_token_invalid`.
 - A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
@@ -163,7 +163,7 @@ Multiple enabled slots can point at the same repository. Use this for same-repo 
 
 ## Human Decisions in Backlog Assessments
 
-The current authenticated Leader publishes assessments through `deck_report_backlog_assessment`.
+The current authenticated Leader publishes assessments through `synth_city_report_backlog_assessment`.
 For a human decision, use `required_actor: "operator"`.
 This rule also applies to incomplete entries with `m1a_acceptance`, `m1b_acceptance`, or `pilot_decision` as the reason.
 It also applies to an incomplete entry with an explicit `milestone_acceptance` or `pilot_decision` action.
@@ -218,8 +218,8 @@ The current authenticated Leader can prepare one to sixteen unique actions and a
 This route checks scope, role, current inspection state, and PR identity. It returns text templates and section markers.
 It does not publish to GitHub or grant workflow authority. OFF and HOLD prevent this preparation.
 
-Use `deck_prepare_operator_action_contexts(scope_id, entries)` for intended Leader requests.
-Use `deck_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
+Use `synth_city_prepare_operator_action_contexts(scope_id, entries)` for intended Leader requests.
+Use `synth_city_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
 The latter reads `human-actions?include_templates=true`. Ordinary UI reads omit templates to keep responses small.
 
 ### Parent issue and team summary
@@ -248,9 +248,9 @@ An empty complete observation has zero remaining effort.
 `next_actors` preserves all observed actors. `next_actor_coverage_complete` states whether coverage is complete.
 Consumers must check `valid_until` and coverage. These observations grant no execution authority.
 
-MCP tools: `deck_get_team_summary` reads the summary.
-`deck_update_team_parent_issue` changes only the link. Its required nullable argument clears the link with `null`.
-`deck_create_team` accepts `parent_issue_url`. Existing preset reads return the link.
+MCP tools: `synth_city_get_team_summary` reads the summary.
+`synth_city_update_team_parent_issue` changes only the link. Its required nullable argument clears the link with `null`.
+`synth_city_create_team` accepts `parent_issue_url`. Existing preset reads return the link.
 
 ### Work remaining reports
 
@@ -261,7 +261,7 @@ The view contains three short fields: `remaining`, `estimate`, and `next_action`
 It includes report state, author, time, source SHA, and optional completed work and assumptions.
 The ordinary progress read makes no GitHub writes and changes no dispatch authority.
 
-The current Leader uses `deck_prepare_work_remaining_summary` to prepare a report.
+The current Leader uses `synth_city_prepare_work_remaining_summary` to prepare a report.
 The tool reads `/github-work-items/{item_id}/remaining-work-context` with its Agent Mail capability.
 That route requires the current Leader for this item's scope. It checks the Leader again after asynchronous observations.
 An unavailable published source returns `progress_context_unavailable`. It does not create a report for an unconfirmed checkpoint.
@@ -317,7 +317,7 @@ The returned markers enclose this shape. Fill the generated records; do not publ
 
 Use `Waiting for prerequisites` for a future decision gate. Its record must describe the remaining evidence.
 Records must remain visible Markdown prose. Do not put them in a code fence, HTML comment, or raw HTML container.
-Deck rejects raw HTML tags before or inside the section. Put the section before existing HTML content.
+Synth City rejects raw HTML tags before or inside the section. Put the section before existing HTML content.
 Keep at most sixteen records in the section. Do not alter a generated public ID or use a private nonce as an ID.
 
 ### Validation and incomplete records

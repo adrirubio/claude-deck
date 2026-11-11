@@ -1,14 +1,14 @@
 # Contributing
 
-Thanks for your interest in contributing to Claude Deck! We welcome pull requests and issues from everyone.
+Thanks for your interest in contributing to Albiex Synth City! We welcome pull requests and issues from everyone.
 
 ## Getting Started
 
 1. Fork the repo and clone it:
 
 ```bash
-git clone https://github.com/<your-username>/claude-deck.git
-cd claude-deck
+git clone https://github.com/<your-username>/synth-city.git
+cd synth-city
 ```
 
 2. Run the install script (requires Python 3.11+ and Node.js 18+):
@@ -59,7 +59,7 @@ Each feature lives in its own module under `frontend/src/features/`. When adding
 
 ## Reporting Issues
 
-Found a bug or have a feature idea? [Open an issue](https://github.com/adrirubio/claude-deck/issues) and include:
+Found a bug or have a feature idea? [Open an issue](https://github.com/albiexai/synth-city/issues) and include:
 
 - What you expected to happen
 - What actually happened

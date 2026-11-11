@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'Claude Deck',
-  description: 'Documentation for Claude Deck — observe and intervene in bounded coding-agent work on GitHub',
+  title: 'Albiex Synth City',
+  description: 'Documentation for Albiex Synth City — observe and intervene in bounded coding-agent work on GitHub',
   appearance: 'force-dark',
   base: '/docs/',
   srcExclude: [
@@ -11,12 +11,12 @@ export default defineConfig({
     'deploy/**',
   ],
   head: [
-    ['link', { rel: 'icon', href: '/docs/favicon.ico' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/docs/favicon.svg' }],
   ],
 
   themeConfig: {
-    logo: '/logo-dark.png',
-    siteTitle: 'Claude Deck',
+    logo: '/albiex-logo-compact-dark.svg',
+    siteTitle: 'Albiex Synth City',
 
     nav: [
       { text: 'Guide', link: '/guide/' },
@@ -24,7 +24,7 @@ export default defineConfig({
       { text: 'API Reference', link: '/api/' },
       {
         text: 'Product source',
-        link: 'https://github.com/adrirubio/claude-deck/tree/master',
+        link: 'https://github.com/albiexai/synth-city/tree/master',
       },
     ],
 
@@ -36,6 +36,7 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
+            { text: 'Moving to v4.0.0', link: '/guide/migration-v4' },
             { text: 'Autonomous GitHub Dispatch', link: '/autonomy' },
             { text: 'Factory Operating Model', link: '/guide/operating-model' },
             { text: 'Supervised Factory Playbook', link: '/guide/supervised-factory-playbook' },
@@ -108,7 +109,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/adrirubio/claude-deck' },
+      { icon: 'github', link: 'https://github.com/albiexai/synth-city' },
     ],
 
     search: {
@@ -116,13 +117,13 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/adrirubio/claude-deck/edit/master/docs/:path',
+      pattern: 'https://github.com/albiexai/synth-city/edit/master/docs/:path',
       text: 'Edit this page on GitHub',
     },
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2026 Claude Deck Contributors',
+      copyright: 'Copyright © 2026 Albiex Synth City Contributors',
     },
   },
 })

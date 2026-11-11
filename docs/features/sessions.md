@@ -37,7 +37,7 @@ Sessions are read-only. Claude Code stores transcripts as JSONL files in:
 ~/.claude/projects/{project-folder}/*.jsonl
 ```
 
-Claude Deck caches parsed sessions in its database with a 5-minute TTL and file hash validation for fast page loads.
+Albiex Synth City caches parsed sessions in its database with a 5-minute TTL and file hash validation for fast page loads.
 
 ## Tips
 

@@ -48,7 +48,7 @@ Usage data is read-only. Claude Code stores usage records in:
 ~/.claude/projects/{project-folder}/usage/*.jsonl
 ```
 
-Claude Deck caches parsed usage data in localStorage with a 5-minute TTL for instant page loads on return visits.
+Albiex Synth City caches parsed usage data in localStorage with a 5-minute TTL for instant page loads on return visits.
 
 ## Tips
 

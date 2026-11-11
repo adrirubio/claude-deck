@@ -1,6 +1,6 @@
 # Architecture
 
-Claude Deck is a full-stack application with a Python backend and React frontend.
+Albiex Synth City is a full-stack application with a Python backend and React frontend.
 
 ## Overview
 
@@ -50,13 +50,13 @@ All routes live under `/api/v1/`. The frontend's Vite dev server proxies `/api` 
 
 ### Provider Boundaries
 
-Claude Deck keeps shared terminal viewing in Agent Bridge and pushes provider-specific behavior into provider modules, config services, diagnostics, and backup policy. The UI reads provider capabilities before showing controls so Codex users do not land on Claude-only mutation pages.
+Synth City keeps shared terminal viewing in Agent Bridge and pushes provider-specific behavior into provider modules, config services, diagnostics, and backup policy. The UI reads provider capabilities before showing controls so Codex users do not land on Claude-only mutation pages.
 
 Codex diagnostics are intentionally privacy-conservative. History, model cache, and SQLite files are not product data sources; diagnostics may summarize shape and parse state but must not expose prompt text, raw cache payloads, or SQLite contents.
 
 ### Database
 
-SQLite at `backend/claude_registry.db`, auto-created on first run via `create_all()`. There is no general migration framework. At startup, Deck then runs SQLite compatibility steps that add listed missing columns and indexes in place, and records named one-time data migrations in the `deck_compat_migrations` table. Do not delete the database to upgrade; existing data stays in place. Back up the database before an upgrade. The compatibility steps do not support downgrade or rollback, and a repair step stops when it finds duplicate constrained rows.
+SQLite at `backend/synth_city.db`, auto-created on first run via `create_all()`. There is no general migration framework. At startup, Synth City then runs SQLite compatibility steps that add listed missing columns and indexes in place, and records named one-time data migrations in the `deck_compat_migrations` table. Do not delete the database to upgrade; existing data stays in place. Back up the database before an upgrade. The compatibility steps do not support downgrade or rollback, and a repair step stops when it finds duplicate constrained rows.
 
 ## Frontend
 

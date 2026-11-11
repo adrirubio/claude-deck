@@ -1,6 +1,6 @@
 # Multi-Provider and Codex CLI
 
-Claude Deck supports mixed local harness workflows with separate factory observations, native adapters and provider APIs. Codex includes sessions, safe TOML settings, diagnostics, MCP/plugin inventory and supported CLI-backed mutations. Native coverage differs from Claude Code; unsupported data remains unavailable.
+Albiex Synth City supports mixed local harness workflows with separate factory observations, native adapters and provider APIs. Codex includes sessions, safe TOML settings, diagnostics, MCP/plugin inventory and supported CLI-backed mutations. Native coverage differs from Claude Code; unsupported data remains unavailable.
 
 ## Browser pages in the product integration build
 
@@ -63,7 +63,7 @@ Some local Codex files are useful for support diagnostics but are not stable pro
 
 History and model cache diagnostics may report file existence, size, parse status, root keys, row counts, and whether metric-like key names appear. They must not return prompt text, session ids, raw history rows, model ids, raw model cache payloads, auth data, or SQLite contents.
 
-Usage and context parity are not supported for Codex. Claude Deck should not present Codex token usage, cost, billing block, or context-window metrics until Codex exposes a stable source that can be read without sensitive prompt or cache data.
+Usage and context parity are not supported for Codex. Synth City should not present Codex token usage, cost, billing block, or context-window metrics until Codex exposes a stable source that can be read without sensitive prompt or cache data.
 
 ## Backup and Restore Policy
 
