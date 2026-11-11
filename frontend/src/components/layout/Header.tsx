@@ -43,10 +43,7 @@ export function Header() {
             alt="Albiex Synth City"
             className="h-10 w-auto"
           />
-          <div>
-            <h1 className="text-xl md:text-2xl font-bold text-primary leading-tight">Albiex Synth City</h1>
-            <p className="text-xs text-muted-foreground">Your local agent command centre</p>
-          </div>
+          <p className="text-xs text-muted-foreground">Your local agent command centre</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {!status && (
