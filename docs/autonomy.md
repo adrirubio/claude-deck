@@ -1,24 +1,24 @@
 # Autonomous GitHub dispatch
 
-This guide is for the operator of a Deck team. Autonomy is off until you enable it for the team, and a watched repo can also be paused separately.
+This guide is for the operator of a Albiex Synth City team. Autonomy is off until you enable it for the team, and a watched repo can also be paused separately.
 
 ## Before enabling
 
-1. Give the watcher GitHub access and configure the operator token described below before editing the roster. The code defaults that start the dashboard do not supply these factory settings. Add `github_token=<token>` to `backend/.env` and restart the backend. The watcher uses this host token to poll GitHub; private repos cannot be polled through GitHub App settings alone. If you use App-backed dispatch, also configure `github_app_id`, `github_app_private_key_path`, and `github_app_bot_login`. The repo card distinguishes a missing polling token from a dispatch mode not yet selected. Deck selects the dispatch mode when eligible work is dispatched, not on the first poll. A selected mode is not proof of successful access; check the last poll and Activity.
+1. Give the watcher GitHub access and configure the operator token described below before editing the roster. The code defaults that start the dashboard do not supply these factory settings. Add `github_token=<token>` to `backend/.env` and restart the backend. The watcher uses this host token to poll GitHub; private repos cannot be polled through GitHub App settings alone. If you use App-backed dispatch, also configure `github_app_id`, `github_app_private_key_path`, and `github_app_bot_login`. The repo card distinguishes a missing polling token from a dispatch mode not yet selected. Synth City selects the dispatch mode when eligible work is dispatched, not on the first poll. A selected mode is not proof of successful access; check the last poll and Activity.
 2. Assign the Leader explicitly and launch it. Guided repository setup names the Leader slot for a new team. For an existing team, use **Set Leader** on an enabled slot in Roster while team automation is off; the server also requires a quiescent team. The team's `leader_slot_id` supplies Leader authority. Slot order and the Role field do not select it. The Leader approves plans and takes issues that no other slot matches.
-3. Add a watched repo. Give its GitHub owner/name and an existing primary clone under your home directory. Deck creates a separate issue worktree beside that clone; ordinary slot sessions keep using their own repo path.
-4. Create the dispatch and optional design/area labels on GitHub. Adding the dispatch label queues an issue; an area label routes it to a matching owner. Without one, Deck uses slot expertise and finally the Leader. A design label on the same issue uses the human-review design pipeline. Removing the dispatch label during an attempt escalates it.
+3. Add a watched repo. Give its GitHub owner/name and an existing primary clone under your home directory. Synth City creates a separate issue worktree beside that clone; ordinary slot sessions keep using their own repo path.
+4. Create the dispatch and optional design/area labels on GitHub. Adding the dispatch label queues an issue; an area label routes it to a matching owner. Without one, Synth City uses slot expertise and finally the Leader. A design label on the same issue uses the human-review design pipeline. Removing the dispatch label during an attempt escalates it.
 5. Choose merge policy and finite budgets. Human policy leaves PRs for review. Auto policy merges eligible code PRs after checks pass, subject to the daily cap; design PRs always need human review. Enable autonomy when the roster and watched repos are ready.
 
-Deck polls GitHub every 60 seconds by default. The Activity table refreshes every five seconds while open; it does not trigger another GitHub poll. Issues move through queued, dispatched, verifying, and ready for human review or merged. An escalated issue has stopped and needs attention.
+Synth City polls GitHub every 60 seconds by default. The Activity table refreshes every five seconds while open; it does not trigger another GitHub poll. Issues move through queued, dispatched, verifying, and ready for human review or merged. An escalated issue has stopped and needs attention.
 
 ### CI polling permissions
 
 The polling credential needs Checks:read and Actions:read for private repositories.
-Deck uses the configured host `github_token` for these reads. App dispatch credentials
+Synth City uses the configured host `github_token` for these reads. App dispatch credentials
 do not replace the polling credential. Do not grant Actions write permission for polling.
 
-Deck reads current workflow runs and jobs before it classifies CI results. It ignores
+Synth City reads current workflow runs and jobs before it classifies CI results. It ignores
 an older execution only when the workflow and execution context prove replacement.
 An incomplete or unavailable observation keeps the item unverified. It does not
 consume a verification retry or a diagnostic failure budget. The status note gives
@@ -31,7 +31,7 @@ conservative accounting for unclassified pushed heads.
 
 ## Build hints
 
-Deck does not run the build command. The optional build settings are instructions in the owner's brief. An out-of-tree build directory may include `{issue_number}`. The command hint may include `{build_dir}` and `{parallelism}`. The parallelism value also tells the agent to cap build jobs.
+Synth City does not run the build command. The optional build settings are instructions in the owner's brief. An out-of-tree build directory may include `{issue_number}`. The command hint may include `{build_dir}` and `{parallelism}`. The parallelism value also tells the agent to cap build jobs.
 
 ## Ordinary review corrections
 
@@ -65,7 +65,7 @@ new approval.
 
 An escalated issue with an open PR may be continued within a bounded scope revision. The owner proposes a plan, allowed files, and allowed commands; the Leader approves; the owner continues in the same workspace. A failed head is a pushed PR commit whose GitHub checks fail. The policy caps revisions and failed heads so recovery cannot loop indefinitely. A checkpoint hold pauses the Leader's decision or owner's acknowledgement until an operator releases it.
 
-To create an operator token on the Deck host, run `openssl rand -hex 32`, put the result in `backend/.env` as `operator_token=<value>`, run `chmod 600 backend/.env`, and restart the backend. Do not export this token into the agent environment. The UI stores it only in the current browser tab and asks for it when you edit the roster, watched repos, autonomy settings, recovery policy, or use operator remedies. The current authenticated Leader can request an eligible retry through Agent Mail without the operator token. Ordinary issue dispatch does not need the token. This token does not isolate agents running under the backend's OS user: such processes can read `backend/.env` despite its `0600` permissions.
+To create an operator token on the Synth City host, run `openssl rand -hex 32`, put the result in `backend/.env` as `operator_token=<value>`, run `chmod 600 backend/.env`, and restart the backend. Do not export this token into the agent environment. The UI stores it only in the current browser tab and asks for it when you edit the roster, watched repos, autonomy settings, recovery policy, or use operator remedies. The current authenticated Leader can request an eligible retry through Agent Mail without the operator token. Ordinary issue dispatch does not need the token. This token does not isolate agents running under the backend's OS user: such processes can read `backend/.env` despite its `0600` permissions.
 
 Planning or launching a team requires an authenticated agent session or the operator token. Agent sessions can use the configured roster but cannot override launch prompts or paths, include disabled slots, force a respawn, or bypass plan confirmation. Terminating a session through Agent Bridge requires the operator token.
 

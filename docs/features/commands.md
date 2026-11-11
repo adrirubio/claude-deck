@@ -4,7 +4,7 @@ Create, manage, and organize custom slash commands for Claude Code.
 
 ## Overview
 
-Slash commands are markdown files that Claude Code executes when you type `/command-name`. Claude Deck lets you browse all available commands across user, project, and plugin scopes, create new ones with a guided wizard, and edit existing ones.
+Slash commands are markdown files that Claude Code executes when you type `/command-name`. Albiex Synth City lets you browse all available commands across user, project, and plugin scopes, create new ones with a guided wizard, and edit existing ones.
 
 ## How to Use
 

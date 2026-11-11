@@ -54,7 +54,7 @@ This route requires the caller's Agent Mail session token. Supported kinds are `
 
 ```http
 POST /api/v1/agent-mail/broadcasts
-X-Deck-Operator-Token: <operator token>
+X-Albiex Synth City-Operator-Token: <operator token>
 ```
 
 ```json
@@ -111,7 +111,7 @@ Requires either that member's authenticated Agent Mail session or an operator to
 
 ```http
 PATCH /api/v1/agent-mail/sessions/{session_id}/wake-participation
-X-Deck-Operator-Token: {operator_token}
+X-Synth City-Operator-Token: {operator_token}
 ```
 
 This operator-only endpoint opts one session in or out of Agent Mail wake attempts:
@@ -176,7 +176,7 @@ GET /api/v1/external/agent-mail/requests/{message_id}/wait
 POST /api/v1/external/agent-mail/requests/{message_id}/ack
 ```
 
-Actor creation is loopback-only. External endpoints require a bearer token and are intended for Claude Deck's local trust boundary, not internet-facing automation.
+Actor creation is loopback-only. External endpoints require a bearer token and are intended for Albiex Synth City's local trust boundary, not internet-facing automation.
 
 External broadcasts require `audience_type` and `audience_id`. Supported scoped audiences are `team_preset` (preset ID), `repository` (the `repo_id` from the members response), and `work_item` (GitHub work-item ID). For example:
 

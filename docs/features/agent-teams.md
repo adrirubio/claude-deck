@@ -14,7 +14,7 @@ Autonomy configures watched repositories, existing primary checkout, labels, mer
 
 Team/scope enablement controls intake. Pausing retains configuration; inspect current attempts/processes separately. Code follows configured merge policy with the rolling automatic-merge cap; design-labelled work always requires human PR review. Leader plan approval, operator intervention and human PR review are separate.
 
-Build directory, command and parallelism fields are hints in the owner's brief; Deck does not run those build commands. Editable numeric drafts validate on save; clearing a field does not silently increase a budget or authorize recovery.
+Build directory, command and parallelism fields are hints in the owner's brief; Albiex Synth City does not run those build commands. Editable numeric drafts validate on save; clearing a field does not silently increase a budget or authorize recovery.
 
 ### Continuation path scope
 
@@ -57,7 +57,7 @@ Agent Teams do not create a second messaging system. Once agents are launched or
 Each member uses ASD-STE100 guidance by default. Clear **Controlled language (ASD-STE100)** in the member form to select another writing style.
 The option applies to one member. A copied roster keeps each member's choice. Existing slots use the enabled default after migration.
 
-Deck includes the guidance in launch prompts, Agent Mail identity and session-start context, and new work instructions.
+Synth City includes the guidance in launch prompts, Agent Mail identity and session-start context, and new work instructions.
 Custom bootstrap prompts and launch prompt overrides retain this guidance. A saved change does not rewrite an active conversation.
 An active member receives the new choice with its next identity or session-start context, or its next work instructions.
 
@@ -66,7 +66,7 @@ It asks agents to use short sentences, active voice, simple verb forms, and cons
 Agents must preserve code, commands, identifiers, quotations, safety conditions, decision gates, and evidence limits.
 
 The [official ASD-STE100 standard](https://www.asd-ste100.org/about_STE.html) contains writing rules and a controlled dictionary.
-Deck supplies agent instructions. It does not check the full dictionary or certify output compliance.
+Synth City supplies agent instructions. It does not check the full dictionary or certify output compliance.
 
 ## Summary for Human Review
 
@@ -83,7 +83,7 @@ The summary must state:
 
 Agents must preserve the original issue facts and PR metadata. They must update the summary when the head, results, or requested action changes.
 They must link detailed evidence below the summary. A comment alone does not meet this instruction.
-Deck supplies this rule in launch and Agent Mail context, work instructions, and review notifications.
+Synth City supplies this rule in launch and Agent Mail context, work instructions, and review notifications.
 These instructions do not prove summary quality or replace independent review and the configured merge policy.
 
 ## Work Remaining
@@ -104,7 +104,7 @@ Put completed work and estimate assumptions in the optional detail fields. The U
 
 The report names its author, update time, and source checkpoint. It expires after two hours.
 A changed item, dispatch, owner, scope revision, published source, or phase makes it historical.
-When Deck cannot confirm the source or find a current report, it shows **Unknown** and the current next action.
+When Synth City cannot confirm the source or find a current report, it shows **Unknown** and the current next action.
 Refresh the block after changes or review corrections. A team report does not clear approval, review, CI, merge, or milestone gates.
 
 ## Reported Human Decisions
@@ -113,12 +113,12 @@ The **Human actions and decision gates** section appears above the Roster and Au
 It shows the human requests from the Leader's current assessment and dispatch state.
 
 The Leader must assign human decisions to the operator. This includes milestone acceptance and pilot decisions.
-Deck rejects a new assessment that assigns an incomplete human decision to the Leader or another actor.
+Synth City rejects a new assessment that assigns an incomplete human decision to the Leader or another actor.
 The check covers the stated reason and explicit milestone or pilot actions.
 The Leader must include the action and its readiness before requesting human input.
 Use **requested** when the human can act now. Use **waiting for prerequisites** when required evidence is absent.
 
-Deck also shows a human gate from an older report with a conflicting actor.
+Synth City also shows a human gate from an older report with a conflicting actor.
 It marks that gate as waiting and warns that the assessment needs confirmation.
 It does not present the gate as ready or treat its evidence as accepted.
 
@@ -126,7 +126,7 @@ These reports describe the requested action. They do not approve work or satisfy
 
 ## Clear Instructions for Human Actions
 
-Deck keeps the detailed instructions in the main GitHub issue. A comment history or team Mail exchange is insufficient.
+Synth City keeps the detailed instructions in the main GitHub issue. A comment history or team Mail exchange is insufficient.
 The **Current operator actions** section belongs near the start of the issue body.
 It states why the request exists, who must act, the exact steps, the evidence, and the condition that clears it.
 It names delegated maintenance explicitly. A delegated repair must not look like an unexplained new decision for the operator.
@@ -136,7 +136,7 @@ This task covers automatic dispatch escalations and review requests as well as m
 The Leader updates the record when the request changes and clears or supersedes it when the request ends.
 Other issue facts and records from other scopes remain intact.
 
-Deck checks the current record before showing an action as ready. A PR record identifies its target and reviewed head.
+Synth City checks the current record before showing an action as ready. A PR record identifies its target and reviewed head.
 A new assessment with missing or stale instructions is refused. Older or automatic requests remain visible as **Action details pending**.
 The Leader must prepare those details. Autonomy inspection remains available for urgent recovery.
 Missing instructions do not clear a gate, hide the stopped attempt, or authorize a retry.
@@ -147,7 +147,7 @@ Instruction records expire after 24 hours and need an update if the request rema
 A failed GitHub read or publication cannot make an unexplained action ready.
 
 These records do not approve work, release a workspace, change merge policy, or satisfy a milestone.
-Deck checks the record's structure and identity. The Leader remains responsible for clear and accurate explanations.
+Synth City checks the record's structure and identity. The Leader remains responsible for clear and accurate explanations.
 See the [API publication contract](../api/agent-teams.md#current-operator-action-records) for the preparation tools and record format.
 
 ## Same-Repo Role Workflows
@@ -170,11 +170,11 @@ You can create a team manually, import selected Agent Mail members, or snapshot 
 
 `From Mail` uses Agent Mail participants and copies their current role and charter into slot-specific values. This is a snapshot; editing a team slot does not update existing mail history.
 
-`From Bridge` uses live Agent Bridge tmux sessions. If multiple sessions are visible for the same repo, Claude Deck keeps each session as a separate slot so the resulting team can have distinct same-repo roles.
+`From Bridge` uses live Agent Bridge tmux sessions. If multiple sessions are visible for the same repo, Albiex Synth City keeps each session as a separate slot so the resulting team can have distinct same-repo roles.
 
 ## Launch Planning
 
-Before launch, Claude Deck computes a plan. The plan checks:
+Before launch, Synth City computes a plan. The plan checks:
 
 - provider availability
 - Agent Mail MCP/hooks readiness
@@ -209,7 +209,7 @@ the team is waiting and link to the PR. The activity summary counts items needin
 your action and can filter them. Leader approvals are labeled separately. For
 operator recovery checkpoints or stranded initial approvals, the action remains
 visible for the operator instead of being labeled as a Leader decision. Under
-automatic merge policy, a review-ready item needs your action only when Deck has
+automatic merge policy, a review-ready item needs your action only when Synth City has
 explicitly fallen back to human merge. Passing checks do not prove independent
 review acceptance. Check the current PR head and review evidence before merging.
 
@@ -221,7 +221,7 @@ without a pinned native identity show Activity unknown. The controller must be
 able to read the process's open file descriptors and the corresponding native
 rollout log. An exact-ID lookup in the Codex state database is used as a fallback
 when the process has no open rollout descriptor and the database is readable.
-Each Codex slot must have a distinct UUID across Deck presets. Reused UUIDs show
+Each Codex slot must have a distinct UUID across Synth City presets. Reused UUIDs show
 Activity unknown, including reuse in disabled slots, because the shared log cannot
 distinguish which harness supplied an event.
 

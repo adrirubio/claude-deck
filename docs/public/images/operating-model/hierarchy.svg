@@ -69,7 +69,7 @@
   <text x="500" y="447" text-anchor="middle" font-size="11" fill="#78716c" font-weight="700" letter-spacing=".6">NOT RANKS · NON-AGENT SYSTEMS</text>
   <rect x="40" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
   <use href="#i-system" x="52" y="476" width="22" height="22" fill="#334155" color="#334155"/>
-  <text x="82" y="492" font-size="14" font-weight="700" fill="#1e293b">Deck controller</text>
+  <text x="82" y="492" font-size="14" font-weight="700" fill="#1e293b">Albiex Synth City controller</text>
   <text x="54" y="512" font-size="11.5" fill="#1e293b">enforces the hierarchy: tokens, leases, limits, Mail identity</text>
   <rect x="510" y="466" width="450" height="56" rx="9" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
   <use href="#i-system" x="522" y="476" width="22" height="22" fill="#334155" color="#334155"/>

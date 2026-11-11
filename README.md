@@ -1,12 +1,12 @@
-# Claude Deck
+# Albiex Synth City
 
-**Website**: [claudedeck.org](https://claudedeck.org)
+**Website**: [albiex.org](https://albiex.org)
 
 A self-hosted workspace to observe and intervene in bounded coding-agent attempts on GitHub issues, with mixed harnesses, visible policies and recovery controls.
 
 ## Why This Exists
 
-Returning to several agents should make it possible to find queued work, review requests and attempts needing attention. Claude Deck brings tracking observations across teams together with the existing session, Mail and configuration workflows. GitHub remains the source of issues and PRs. Native configuration and manual sessions are available without enabling automatic dispatch.
+Returning to several agents should make it possible to find queued work, review requests and attempts needing attention. Synth City brings tracking observations across teams together with the existing session, Mail and configuration workflows. GitHub remains the source of issues and PRs. Native configuration and manual sessions are available without enabling automatic dispatch.
 
 ## Best For
 
@@ -14,27 +14,27 @@ Technical operators with existing repositories, local agent CLIs, native toolcha
 
 ## Trust model
 
-- Local control plane and real agent/repository files; no Deck cloud account.
-- No Deck telemetry sent elsewhere. GitHub and native CLIs use their configured services and credentials.
+- Local control plane and real agent/repository files; no Synth City cloud account.
+- No Synth City telemetry sent elsewhere. GitHub and native CLIs use their configured services and credentials.
 - Protected roster, autonomy and recovery actions use the current browser tab's configured operator credential. It is separate from GitHub polling credentials and authenticated Mail-session authority; this is not cookie login or a remote multi-user isolation boundary.
 - Review real-file changes and retain backups.
 
 > [!WARNING]
-> Claude Deck reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code, Codex CLI, and installed agent integrations actually use. Review changes carefully, and create a backup before major edits.
+> Synth City reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code, Codex CLI, and installed agent integrations actually use. Review changes carefully, and create a backup before major edits.
 
 ## How a factory is operated
 
-A **factory** is a supervisor, the Deck controller and a team, working together on a GitHub backlog. The **Director** (the human) owns the outcome and the backlog and makes the retained decisions. GitHub is outside the factory: it holds the work and the record.
+A **factory** is a supervisor, the Synth City controller and a team, working together on a GitHub backlog. The **Director** (the human) owns the outcome and the backlog and makes the retained decisions. GitHub is outside the factory: it holds the work and the record.
 
-![Hierarchy of roles: the Director at the top; an optional supervisor and grooming helper as staff roles; the Leader; implementers and verifiers; the Deck controller and GitHub as non-agent systems](docs/public/images/operating-model/hierarchy.svg)
+![Hierarchy of roles: the Director at the top; an optional supervisor and grooming helper as staff roles; the Leader; implementers and verifiers; the Synth City controller and GitHub as non-agent systems](docs/public/images/operating-model/hierarchy.svg)
 
 - **Line of command:** Director → Leader → implementers and verifiers. Each team has one Leader. The Director chooses the number of implementers and verifiers.
 - **Staff roles:** an optional supervisor acts for the Director within the recorded delegation and maintains the factory. An optional grooming helper drafts issues. Neither takes the Leader's authority.
 - **Kinds of actor:** AI agents do the work that needs judgment. Non-agent software does the work that a rule can do: dispatch, leases, Mail and the maintenance operation. The Director makes the retained decisions.
 
-![The factory: the supervisor, the Deck controller and the team inside the factory boundary; the Director, the grooming helper and GitHub outside it](docs/public/images/operating-model/factory.svg)
+![The factory: the supervisor, the Synth City controller and the team inside the factory boundary; the Director, the grooming helper and GitHub outside it](docs/public/images/operating-model/factory.svg)
 
-Green boxes are planned for v3.1 ([#506](https://github.com/adrirubio/claude-deck/issues/506)). See the [Factory operating model](docs/guide/operating-model.md) for the operating modes, factory maintenance and the planned supervisor heartbeat. Deck 3.0.0 still calls the Director *operator* in the UI and API.
+Green boxes are planned for v3.1 ([#506](https://github.com/albiexai/synth-city/issues/506)). See the [Factory operating model](docs/guide/operating-model.md) for the operating modes, factory maintenance and the planned supervisor heartbeat. Deck 3.0.0 still calls the Director *operator* in the UI and API.
 
 ## Daily operating flow
 
@@ -153,25 +153,25 @@ These existing screenshots show retained native/session pages; they do not depic
 
 ## Installation
 
-Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Use the native install path below; Docker is not supported because containers cannot see host-installed CLIs, tmux sessions, native agent credentials, or your real repository environment.
+Synth City must run in the same environment where your agent CLIs and credentials are installed. Use the native install path below; Docker is not supported because containers cannot see host-installed CLIs, tmux sessions, native agent credentials, or your real repository environment.
 
 **Prerequisites**:
 
 - Python 3.11+
 - Node.js 22.12+
 - At least one supported local agent CLI installed on the same host: Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, or Pi
-- **Linux** for agent-team pane binding. Deck reads `/proc/net/tcp` and `/proc/<pid>/stat` to derive which tmux pane a registering agent is running in. On macOS or Windows every other feature works, but agents register unbound, and the Agent Mail capability-token enforcement described in `docs/deploy/pr0-capability-tokens-rollout.md` cannot be turned on
+- **Linux** for agent-team pane binding. Synth City reads `/proc/net/tcp` and `/proc/<pid>/stat` to derive which tmux pane a registering agent is running in. On macOS or Windows every other feature works, but agents register unbound, and the Agent Mail capability-token enforcement described in `docs/deploy/pr0-capability-tokens-rollout.md` cannot be turned on
 
-Pi integration requires Pi 0.87.1, Node >=22.19.0, and the repository-local Agent Mail extension dependencies. It supports OpenRouter (default model `moonshotai/kimi-k3`), plain launches and exact project-local resume. No global Pi configuration is installed, and Pi tools are not sandboxed by Deck. See [Pi rollout and team migration](docs/deploy/pi-provider-rollout.md) before deployment or replacing existing team sessions.
+Pi integration requires Pi 0.87.1, Node >=22.19.0, and the repository-local Agent Mail extension dependencies. It supports OpenRouter (default model `moonshotai/kimi-k3`), plain launches and exact project-local resume. No global Pi configuration is installed, and Pi tools are not sandboxed by Synth City. See [Pi rollout and team migration](docs/deploy/pi-provider-rollout.md) before deployment or replacing existing team sessions.
 
 ```bash
-git clone https://github.com/adrirubio/claude-deck.git
-cd claude-deck
+git clone https://github.com/albiexai/synth-city.git
+cd synth-city
 ./scripts/install.sh
 ```
 
 > [!WARNING]
-> Claude Deck is not a mock viewer. It works with your real local agent files, so changes made in the UI can change your working setup.
+> Synth City is not a mock viewer. It works with your real local agent files, so changes made in the UI can change your working setup.
 
 ## Development
 
@@ -198,17 +198,17 @@ To make the dev environment reachable from another machine on your LAN or tailne
 
 Both servers will then bind to all interfaces.
 
-Only use this option on a trusted network. Protected roster, autonomy and recovery routes require their documented credentials, while safe observations remain readable. These endpoint checks do not provide remote multi-user isolation. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Deck uses the same origin and needs no CORS entry.
+Only use this option on a trusted network. Protected roster, autonomy and recovery routes require their documented credentials, while safe observations remain readable. These endpoint checks do not provide remote multi-user isolation. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Synth City uses the same origin and needs no CORS entry.
 
-Remote use should still be native: run Claude Deck on the remote host where the agents, credentials, repositories, and tmux sessions exist, then connect from your browser over a trusted tunnel or network route.
+Remote use should still be native: run Synth City on the remote host where the agents, credentials, repositories, and tmux sessions exist, then connect from your browser over a trusted tunnel or network route.
 
-### Naming a Claude Deck instance
+### Naming a Synth City instance
 
-When running Claude Deck on several machines, set a display name and accent color so each browser window clearly identifies the backend it controls:
+When running Synth City on several machines, set a display name and accent color so each browser window clearly identifies the backend it controls:
 
 ```bash
-CLAUDE_DECK_INSTANCE_NAME="Studio Mac" \
-CLAUDE_DECK_INSTANCE_ACCENT="blue" \
+SYNTH_CITY_INSTANCE_NAME="Studio Mac" \
+SYNTH_CITY_INSTANCE_ACCENT="blue" \
 ./scripts/dev.sh --host 0.0.0.0
 ```
 
@@ -228,7 +228,7 @@ For a release check, `./scripts/build.sh` builds both the app frontend and the d
 
 ## Configuration Files
 
-Claude Deck reads and writes these Claude Code configuration files:
+Synth City reads and writes these Claude Code configuration files:
 
 | File/Directory | Scope | Description |
 |---------------|-------|-------------|
@@ -275,7 +275,7 @@ The usage tracking feature ports algorithms from [ccusage](https://github.com/ry
 
 ## Disclaimer
 
-Claude Deck is a community project and is not affiliated with or endorsed by Anthropic.
+Synth City is a community project and is not affiliated with or endorsed by Anthropic.
 
 ## License
 

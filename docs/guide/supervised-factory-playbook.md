@@ -1,6 +1,6 @@
 # Supervised factory playbook
 
-Use this playbook when an operator delegates a GitHub backlog to a supervising agent and a Deck team. It covers preparation, autonomous delivery, independent review, maintenance, recovery and completion.
+Use this playbook when an operator delegates a GitHub backlog to a supervising agent and a Albiex Synth City team. It covers preparation, autonomous delivery, independent review, maintenance, recovery and completion.
 
 This process comes from the product reposition work and the Deck v3 release. It describes the operating practice for Deck 3.0.0. Check the installed version before using a command. Team names, issue numbers, model choices and machine paths are campaign settings.
 
@@ -41,7 +41,7 @@ Use `deck_send_message(to_supervisor_actor_id=..., body=...)` to contact the cur
 The external actor reads direct messages with `GET /api/v1/external/agent-mail/supervisor-inbox`.
 Foreign actors and unbound teams cannot use this route.
 
-Deck recognizes supported question, trust and sign-in screens in the current authenticated pane.
+Synth City recognizes supported question, trust and sign-in screens in the current authenticated pane.
 It reads visible screen text locally. It never exports that text or sends keys.
 One fixed notice goes to the bound Supervisor per continuous wait.
 The Leader receives the notice only when no Supervisor is bound.
@@ -63,7 +63,7 @@ The supervisor records when it acts under delegation. It must not describe an ag
 
 | Part | Supplied by |
 |---|---|
-| Saved roster, authenticated Mail, dispatch, workspace leases and bounded recovery | Deck |
+| Saved roster, authenticated Mail, dispatch, workspace leases and bounded recovery | Synth City |
 | Repository labels, issues, PRs, checks and branch protection | GitHub and the project |
 | Outer goal and continued supervisor turns | The supervising harness, when it supports a goal tool |
 | Checks while the operator is absent | A running supervisor harness and a configured durable watcher or timer |
@@ -107,7 +107,7 @@ Use explicit delegation. This example is a starting point, not a default permiss
 |---|---|
 | Prepare workspaces, roster and startup evidence | Supervisor may proceed |
 | Enable autonomy after successful preflight | Already authorized by the campaign brief |
-| Approve implementation plans | Team Leader, through Deck |
+| Approve implementation plans | Team Leader, through Synth City |
 | Merge accepted implementation PRs into integration | Supervisor or configured automatic policy |
 | Repair a factory bug and deploy a reviewed fix | Supervisor, with recorded maintenance evidence |
 | Change models, credentials, authority or budgets | Operator decision unless specifically delegated |
@@ -141,7 +141,7 @@ effort_stop_rule: AGREED_LIMIT_AND_REQUIRED_DECISION
 private_installation_record: LOCAL_REFERENCE_ONLY
 ```
 
-This is a planning record. It is not a Deck API payload. Record each additional repository separately.
+This is a planning record. It is not a Synth City API payload. Record each additional repository separately.
 
 ## 2. Prepare the backlog and branches
 
@@ -151,7 +151,7 @@ Create an integration branch for a large campaign. Implementation PRs target tha
 
 Add the integration branch to the `pull_request` and `push` triggers of every required CI workflow in the same step that creates it. Open a small PR to confirm that the checks run. A PR without checks never satisfies the delivery policy, so automatic merge cannot succeed. Configure the delivery policy's required checks with the **job** names that GitHub reports, not the workflow file names. Make sure that each head runs CI once. For example, a `ready_for_review` trigger runs every check again on an unchanged head.
 
-Begin with human or delegated supervisor merges. Enable automatic integration only after the current-head checks and independent review have an enforceable gate. A review comment or label alone does not establish enforcement. Design-labelled work retains Deck's human-review pipeline.
+Begin with human or delegated supervisor merges. Enable automatic integration only after the current-head checks and independent review have an enforceable gate. A review comment or label alone does not establish enforcement. Design-labelled work retains Synth City’s human-review pipeline.
 
 For several repositories, configure one watched scope per repository in the same team. Each scope has its own checkout, base branch, labels, checks and delivery policy. The team shares slot capacity. Cross-repository dependencies still need explicit evidence and Leader assessment.
 
@@ -167,14 +167,14 @@ Choose models for the task's reasoning demands. Check access with the installed 
 
 The product work used several harness and model combinations. The v3 team used Claude Code Sonnet implementers and a Leader, with an Opus verifier. Earlier maintenance reviews used GPT-6 Astra. Claude Opus 5.5 supplied process retrospectives. These are examples of role assignments, not availability or performance guarantees.
 
-For every slot, record its role, charter, harness, model, repository context and writing style. Keep controlled language enabled unless the operator selects another style. Deck supplies ASD-STE100 guidance; it does not certify compliance. Preserve code, identifiers, commands and evidence limits.
+For every slot, record its role, charter, harness, model, repository context and writing style. Keep controlled language enabled unless the operator selects another style. Synth City supplies ASD-STE100 guidance; it does not certify compliance. Preserve code, identifiers, commands and evidence limits.
 
 ### Workspace layout
 
 Use one writable checkout and task branch per active writer. A worktree or a separate clone is suitable. Use separate review checkouts for exact PR heads. Keep the controller source outside implementation workspaces.
 
 ```text
-controller/                 Pinned running Deck source
+controller/                 Pinned running Synth City source
 campaign/
   leader/                   Coordination context
   repo-one-primary/         Watched repository context
@@ -188,7 +188,7 @@ private-state/              Installation record, receipts and backups
 
 These names are examples. Save the real paths. Check read and write access under the actual native session OS user.
 
-When the controller and the native sessions run as different OS users, git refuses a repository that another user owns. Add each checkout to that user's `safe.directory` list: the controller's list for the primary checkout and slot workspaces, and the native user's list for the dispatch workspaces. Then confirm that every slot reports the same repository identity as the scope. If the identities differ, dispatch cannot match the slots to the scope. After you correct the ownership, save each slot's repository path again so that Deck recomputes the identity.
+When the controller and the native sessions run as different OS users, git refuses a repository that another user owns. Add each checkout to that user's `safe.directory` list: the controller's list for the primary checkout and slot workspaces, and the native user's list for the dispatch workspaces. Then confirm that every slot reports the same repository identity as the scope. If the identities differ, dispatch cannot match the slots to the scope. After you correct the ownership, save each slot's repository path again so that Synth City recomputes the identity.
 
 Register one dispatch workspace for each concurrent item with `POST /api/v1/agent-teams/github-scopes/{scope_id}/workspaces`. Use a path that is a direct sibling of the scope checkout. The controller provisions the worktree. A scope without dispatchable workspaces dispatches nothing, and its items stay `pending` without an error. Separate directories alone do not isolate credentials or the operator token from same-user processes.
 
@@ -217,15 +217,15 @@ Before enabling intake:
 - Confirm GitHub polling access, dispatch authentication, configured labels and CI read permissions.
 - Prepare watched scopes and dispatch workspaces. Keep them disabled during setup.
 - Save the intended Leader and roster. Confirm the selected native CLI and model access.
-- Launch or reuse sessions through Deck. Reuse only sessions with valid intended slot bindings.
+- Launch or reuse sessions through Synth City. Reuse only sessions with valid intended slot bindings.
 - Check each member's authenticated Mail identity and one successful tool call.
-- Install Agent Mail through Deck before team launch. Confirm that Claude Code install status includes the prompt block.
+- Install Agent Mail through Synth City before team launch. Confirm that Claude Code install status includes the prompt block.
 - Check sign-in with one real model call as the native user. A sign-in status command reads saved state and does not prove token validity.
-- Check the launch result. Deck prepares Claude and Codex workspace trust before team spawn. It preserves other configuration entries.
+- Check the launch result. Synth City prepares Claude and Codex workspace trust before team spawn. It preserves other configuration entries.
   Claude trust uses the primary checkout. Inaccessible native configuration stops launch.
-- Check native activity before admitting work. Deck assigns new Claude sessions a UUID and saves it for later resume.
-  Deck captures a new Codex rollout ID from its bound process. Until that process resumes the ID, activity reports `restart_needed_for_observation`.
-  Restart that Codex session through Deck after the ID is saved. If capture is unavailable, use the documented progress-report policy.
+- Check native activity before admitting work. Synth City assigns new Claude sessions a UUID and saves it for later resume.
+  Synth City captures a new Codex rollout ID from its bound process. Until that process resumes the ID, activity reports `restart_needed_for_observation`.
+  Restart that Codex session through Synth City after the ID is saved. If capture is unavailable, use the documented progress-report policy.
   Do not admit work with `session_mismatch`. Unknown activity does not renew owner contact or prove that work stopped.
 - Check the conversation, native process lifetime, tmux pane, working directory and workspace ownership.
 - Configure supervision for the actual preset, slots and supported native event formats. Confirm that it survives the supervisor's interactive turn.
@@ -233,7 +233,7 @@ Before enabling intake:
 
 Do not treat a configured model card, live pane or HTTP 200 response as proof of the complete startup path. A simple authenticated Mail canary helps establish that the native member can use the controller.
 
-The installed Claude `PreToolUse` hook refuses `AskUserQuestion` only in Deck team sessions. It checks `CLAUDE_DECK_TEAM_SLOT_ID`.
+The installed Claude `PreToolUse` hook refuses `AskUserQuestion` only in Synth City team sessions. It checks `SYNTH_CITY_TEAM_SLOT_ID`.
 Its refusal sends questions to Agent Mail. The Leader handles plans. The Supervisor handles incidents. Retained operator decisions require operator action records.
 Removing Agent Mail also removes this managed hook. Other sessions of the same native user keep their question tool.
 
@@ -276,7 +276,7 @@ If the monitoring process ends, state that supervision stopped.
 The check-in requires the bound external actor credential in the MCP process environment.
 It accepts no credential argument. Member credentials cannot call it.
 Use an ISO 8601 next check time. It must be future time within 24 hours.
-Keep the optional note short. Deck removes credential-shaped text.
+Keep the optional note short. Synth City removes credential-shaped text.
 
 Read `supervisor_observation` in `deck_get_team_summary` for controller-derived health.
 `healthy` means the promised time has not passed.
@@ -326,7 +326,7 @@ Final hosted gates must still cover the actual PR head and current workflow exec
 
 Complete one bounded correction batch before final review. Keep one finding register with stable IDs, requirements, locations, decisive checks and state. Repair in-scope findings under valid existing authority. Use a new approved scope when the existing continuation no longer authorizes the change.
 
-The effective delivery policy belongs to each repository and attempt. New scope defaults do not silently update an active attempt. See the [Factory API](../api/factory.md) and the [delivery practices source](https://github.com/adrirubio/claude-deck/blob/master/docs/deploy/factory-delivery-practices.md).
+The effective delivery policy belongs to each repository and attempt. New scope defaults do not silently update an active attempt. See the [Factory API](../api/factory.md) and the [delivery practices source](https://github.com/albiexai/synth-city/blob/master/docs/deploy/factory-delivery-practices.md).
 
 ### Lane gates
 
@@ -398,9 +398,9 @@ Status grants no approval, lease renewal, wake delivery, or recovery permission.
 | A CLI warning appears | Check its structured result and effect; do not classify the display text alone as a security block |
 | A member waits at an interactive screen (question form, trust prompt, sign-in) | Read the pane. Fix the cause in the harness configuration. Cancel a question form once, then send the decision through Mail. Do not answer an operator decision with keystrokes |
 | Automatic merge fell back to a human after `mergeable_state` `unstable` or `blocked` | Check that every required check passed on the exact verified head and that the merge tree is unchanged; then merge with the head SHA match. A check that is still running can cause this |
-| A test instance starts sessions in the team tmux server or registers in production Mail | Treat it as an incident. Remove the exact sessions through Deck. Require a private tmux socket and no real agent CLIs before the harness work continues |
+| A test instance starts sessions in the team tmux server or registers in production Mail | Treat it as an incident. Remove the exact sessions through Synth City. Require a private tmux socket and no real agent CLIs before the harness work continues |
 
-Deck records `checks_unavailable_since` at the first unreadable check observation.
+Synth City records `checks_unavailable_since` at the first unreadable check observation.
 After 15 minutes, `required_ci_unreadable` supplies the signal, a safe reason code, and fixed next steps.
 This removes manual comparison of repeated status notes.
 A successful read clears the signal, including reads of pending or failed checks.
@@ -411,7 +411,7 @@ Verify a claim before you act on it or relay it. An agent's description of an in
 
 A suspected false positive is still an incident until classified. Preserve the notice and exact session context in protected evidence. Do not automatically retry, rephrase the task, clear a genuine HOLD or switch models to bypass it.
 
-State the cause, affected item, source head, required actor and action that removes the block. Keep those instructions in the main issue body and the current Deck operator-action record. Put delegated maintenance under `operator — supervisor` when appropriate. The operator must be able to tell whether their input is actually needed.
+State the cause, affected item, source head, required actor and action that removes the block. Keep those instructions in the main issue body and the current Synth City operator-action record. Put delegated maintenance under `operator — supervisor` when appropriate. The operator must be able to tell whether their input is actually needed.
 
 Use `deck_prepare_operator_action_contexts` and the Leader's current assessment for requested actions. When the request is completed, clear or supersede it and refresh the assessment. A comment alone is insufficient. See [Current operator action records](../api/agent-teams.md#current-operator-action-records).
 
@@ -421,7 +421,7 @@ Use `deck_prepare_operator_action_contexts` and the Leader's current assessment 
 
 1. Create or reconcile the defect issue. Separate the factory defect from the delivery issue it blocked.
 2. Preserve pushed work. Record dirty or unpushed work and ask the owner to publish a safe checkpoint where possible.
-3. Prepare the fix in an isolated checkout. For Deck maintenance, target upstream `master`; backport accepted fixes to affected integration branches and an operator fork when used.
+3. Prepare the fix in an isolated checkout. For Synth City maintenance, target upstream `master`; backport accepted fixes to affected integration branches and an operator fork when used.
 4. Obtain independent source and runtime review. Check the exact target and backport heads. Reuse valid check evidence.
 5. Prepare a machine-specific maintenance profile and request. Bind the old and target versions, accepted PRs, reviewed files and proof receipts.
 6. Obtain a current maintenance checkpoint from each affected active owner. The owner confirms that no source operation is in flight and holds work until the outcome.
@@ -429,7 +429,7 @@ Use `deck_prepare_operator_action_contexts` and the Leader's current assessment 
 Before you write the request, run a preflight on the target:
 
 - **Startup migrations.** Read the target's compatibility migrations. A column added at startup changes the retained-authority snapshot. Controllers before #654 then fail after cutover. For those, add nullable columns to the live database after a backup and before the operation, and measure the snapshot on a database copy.
-- **Owner checkpoints.** Controllers before #654 refuse a checkpoint from an owner whose session runs outside the dispatch workspace. For those, run the upgrade when no item is dispatched or verifying. Hold a pending item by removing its dispatch label; Deck resets it when the label returns.
+- **Owner checkpoints.** Controllers before #654 refuse a checkpoint from an owner whose session runs outside the dispatch workspace. For those, run the upgrade when no item is dispatched or verifying. Hold a pending item by removing its dispatch label; Synth City resets it when the label returns.
 - **Accepted pulls.** Each accepted pull must be merged, with all of its head's checks complete and successful.
 - **Proof receipts.** Run the proof in a clean checkout that the checking user owns. A test may write into the tree. The receipt binds the commit and tree, not the path.
 - **Refusal codes.** Older CLIs print only the exception type. Call the operation's function directly to read the reason code.
@@ -460,7 +460,7 @@ The first command validates only the data shape. It is not an operational dry ru
 
 The profile records controller and database paths, the operator environment file, loopback API, service, active supervisor, state directory, HOLD paths, arming marker, OS users, protected files and declared version records. Files must be regular, protected files owned by the executing operator or root, with mode `0600`.
 
-Use the exact schemas from [maintenance operations](https://github.com/adrirubio/claude-deck/blob/master/backend/app/services/maintenance_operations.py) and the [maintenance runbook](https://github.com/adrirubio/claude-deck/blob/master/docs/deploy/factory-maintenance-operations.md). The current helper uses Unix user/process checks and systemd service control. A profile does not add support for a different service manager.
+Use the exact schemas from [maintenance operations](https://github.com/albiexai/synth-city/blob/master/backend/app/services/maintenance_operations.py) and the [maintenance runbook](https://github.com/albiexai/synth-city/blob/master/docs/deploy/factory-maintenance-operations.md). The current helper uses Unix user/process checks and systemd service control. A profile does not add support for a different service manager.
 
 The operation checks accepted source, review, CI, owner checkpoints and retained authority. It pauses autonomy, removes the arming marker, obtains a consistent database backup, proves controller termination, changes the reviewed source, starts the controller and checks retained state.
 
@@ -507,7 +507,7 @@ Put a brief human summary at the top of the main issue and promotion PR. State t
 
 If the campaign retains publication approval, wait for it. Automatic goal continuation is not that approval. Once approved, pin the exact reviewed heads and complete the authorized publication sequence.
 
-For Deck releases, follow [Documentation publishing](https://github.com/adrirubio/claude-deck/blob/master/DOCUMENTATION_PUBLISHING.md). Record the tag/commit, artifact checksums, documentation source, website commit, workflow run and live result. A website master merge can deploy production; check that trigger before merging.
+For Synth City releases, follow [Documentation publishing](https://github.com/albiexai/synth-city/blob/master/DOCUMENTATION_PUBLISHING.md). Record the tag/commit, artifact checksums, documentation source, website commit, workflow run and live result. A website master merge can deploy production; check that trigger before merging.
 
 After the outcome is verified:
 
@@ -518,7 +518,7 @@ After the outcome is verified:
 5. State which services, previews and native sessions remain running. Stop sessions through supported controls when requested or planned.
 6. Mark the goal complete. Report the goal tool's final usage when its rules require it.
 
-The Deck v3 publication record is an example: [release issue #490](https://github.com/adrirubio/claude-deck/issues/490). The records establish that campaign's result. They do not establish performance or cost gains for other teams.
+The Deck v3 publication record is an example: [release issue #490](https://github.com/albiexai/synth-city/issues/490). The records establish that campaign's result. They do not establish performance or cost gains for other teams.
 
 ## Templates
 
@@ -528,7 +528,7 @@ Replace all bracketed fields. Keep the complete prompt in a readable file. Suppl
 
 ```text
 Create and start a goal to deliver [outcome].
-Read the supervised factory playbook in [Deck checkout].
+Read the supervised factory playbook in [Synth City checkout].
 Read campaign [parent issue or record] and private installation record [local reference].
 
 Complete only when [acceptance, publication and required records] are done.
@@ -598,15 +598,15 @@ Private evidence references: [protected paths; no secret values].
 
 ## Use the companion skill
 
-The repository contains `skills/deck-factory-supervisor/SKILL.md`. Give that directory to the supervising harness through its supported skill loader. Keep the Deck source checkout available: the skill reads this playbook from that checkout rather than keeping another copy.
+The repository contains `skills/deck-factory-supervisor/SKILL.md`. Give that directory to the supervising harness through its supported skill loader. Keep the Synth City source checkout available: the skill reads this playbook from that checkout rather than keeping another copy.
 
-For Claude Code, the current Deck skill documentation lists `.claude/skills/` and `~/.claude/skills/`. For Codex, the skill authoring convention uses `~/.codex/skills/`. Other harnesses can use their own loader or an explicit instruction to read the skill file. Installation and invocation differ; confirm the installed harness's behavior. Deck's native Skills page is not a universal installer for every harness.
+For Claude Code, the current Synth City skill documentation lists `.claude/skills/` and `~/.claude/skills/`. For Codex, the skill authoring convention uses `~/.codex/skills/`. Other harnesses can use their own loader or an explicit instruction to read the skill file. Installation and invocation differ; confirm the installed harness's behavior. Synth City’s native Skills page is not a universal installer for every harness.
 
 An explicit request can use this form:
 
 ```text
 Use the deck-factory-supervisor skill at [path]/SKILL.md.
-The Deck source checkout is [path]. The campaign brief is [reference].
+The Synth City source checkout is [path]. The campaign brief is [reference].
 Prepare or resume the team within the permissions in that brief.
 ```
 

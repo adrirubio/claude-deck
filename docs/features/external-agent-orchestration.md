@@ -1,6 +1,6 @@
 # External Agent Orchestration
 
-Claude Deck exposes a local Agent Mail API for tools such as OpenClaw to coordinate installed agents without pretending to be a repo agent or a UI user.
+Albiex Synth City exposes a local Agent Mail API for tools such as OpenClaw to coordinate installed agents without pretending to be a repo agent or a UI user.
 
 This API is for same-machine automation. It does not replace Agent Teams preset launch APIs, and it does not add a new wake path for non-tmux agent sessions.
 
@@ -39,8 +39,8 @@ The response includes each Agent Mail participant's repo, role, charter, connect
 
 Wake states mean:
 
-- `wakeable`: Claude Deck has a visible wake path, currently tmux-observed Claude Code or Codex through Agent Bridge.
-- `delivered_waiting`: the message can be stored and read through Agent Mail, but Claude Deck cannot wake the visible session.
+- `wakeable`: Synth City has a visible wake path, currently tmux-observed Claude Code or Codex through Agent Bridge.
+- `delivered_waiting`: the message can be stored and read through Agent Mail, but Synth City cannot wake the visible session.
 - `offline`: no live session is available.
 
 ## Send A Direct Message
@@ -129,12 +129,12 @@ The broadcast endpoint also accepts `team_preset` or `work_item` with the corres
 
 ## Agent Teams Integration
 
-External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Deck-Operator-Token`) or an authenticated Mail session token (`X-Deck-Session-Token`). A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected; otherwise the route returns 403 `authenticated_mcp_session_required`. The route authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token. The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
+External tools should use the existing Agent Teams API to launch or reuse a saved roster. Listing presets needs no credential. Planning and launching need the operator token (`X-Synth City-Operator-Token`) or an authenticated Mail session token (`X-Synth City-Session-Token`). A Mail session qualifies only when the backend enforces Agent Mail capability tokens (`mail_capability_tokens_required=true`), the session comes from MCP, and its mailbox is connected; otherwise the route returns 403 `authenticated_mcp_session_required`. The route authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token. The external Agent Mail bearer token above does not authorize team planning or launch. Use the operator token only from an operator-controlled tool; do not export it into an agent environment.
 
 ```bash
 curl -s "$DECK_API/agent-teams/presets"
 curl -s -X POST "$DECK_API/agent-teams/presets/3/plan-launch" \
-  -H "X-Deck-Operator-Token: $DECK_OPERATOR_TOKEN" \
+  -H "X-Synth City-Operator-Token: $DECK_OPERATOR_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"requested_by": "OpenClaw"}'
 ```
@@ -143,7 +143,7 @@ After reviewing the plan, launch with the returned plan hash:
 
 ```bash
 curl -s -X POST "$DECK_API/agent-teams/presets/3/launch" \
-  -H "X-Deck-Operator-Token: $DECK_OPERATOR_TOKEN" \
+  -H "X-Synth City-Operator-Token: $DECK_OPERATOR_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "requested_by": "OpenClaw",
@@ -164,7 +164,7 @@ External orchestrators should launch same-repo multi-agent workflows through Age
 
 After launch, discover participants with `/external/agent-mail/members` and route by the returned slot participant ids. Do not rely on manually started same-repo sessions for role-based routing; without Agent Team slot context they can appear as a single repo-level participant.
 
-If `wake_state` is `wakeable`, Deck can nudge the visible tmux session when mail arrives. If it is `delivered_waiting`, the message is stored but the recipient must poll or reach a hook boundary.
+If `wake_state` is `wakeable`, Synth City can nudge the visible tmux session when mail arrives. If it is `delivered_waiting`, the message is stored but the recipient must poll or reach a hook boundary.
 
 ## Safeguards
 

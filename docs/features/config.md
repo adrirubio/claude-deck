@@ -60,7 +60,7 @@ Sensitive values (tokens, secrets, passwords, API keys) are automatically masked
 
 ## Configuration
 
-The Config page reads and writes to the standard Claude Code configuration files. No additional Claude Deck configuration is needed.
+The Config page reads and writes to the standard Claude Code configuration files. No additional Albiex Synth City configuration is needed.
 
 ## Codex CLI
 
@@ -75,7 +75,7 @@ When the selected provider is Codex CLI, the Config page switches to Codex-speci
 - MCP and plugin inventory
 - Diagnostics from `codex doctor`
 
-Codex config writes are intentionally narrower than Claude Code settings. Claude Deck only updates whitelisted TOML keys, creates a backup before saving, and refuses unsafe paths. Auth, history, model cache, and log files are not shown in the raw viewer.
+Codex config writes are intentionally narrower than Claude Code settings. Synth City only updates whitelisted TOML keys, creates a backup before saving, and refuses unsafe paths. Auth, history, model cache, and log files are not shown in the raw viewer.
 
 ### Codex Settings Editor
 
@@ -92,7 +92,7 @@ The Codex editor keeps open-ended fields editable and uses dropdowns where Codex
 | Strict Config | Toggle | Makes Codex reject unrecognized config fields. |
 | No Alt Screen | Toggle | Runs the Codex TUI inline so terminal scrollback is preserved. |
 
-Settings and feature labels include help icons. When an official description is known, the tooltip explains the setting. When a Codex feature flag has no public description, Claude Deck says so and still shows the stage and current effective state reported by the installed CLI.
+Settings and feature labels include help icons. When an official description is known, the tooltip explains the setting. When a Codex feature flag has no public description, Synth City says so and still shows the stage and current effective state reported by the installed CLI.
 
 ### Codex Feature Flags
 

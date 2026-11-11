@@ -9,7 +9,7 @@ Naive confirmation values keep their existing UTC meaning. Stale instants still 
 
 ## Authorization
 
-"Operator token" means the `X-Deck-Operator-Token` header. "Mail session" means an authenticated `X-Deck-Session-Token`.
+"Operator token" means the `X-Albiex Synth City-Operator-Token` header. "Mail session" means an authenticated `X-Synth City-Session-Token`.
 
 - A route marked **Operator token** accepts only the operator token. A session token never opens it. Without a configured backend operator token the route returns 503 `operator_token_unconfigured`; a missing or wrong header returns 401 `operator_token_required` or `operator_token_invalid`.
 - A route that accepts both principals authenticates a non-empty session header first, also when both headers are sent. With no session header, or an empty one, it requires the operator token.
@@ -317,7 +317,7 @@ The returned markers enclose this shape. Fill the generated records; do not publ
 
 Use `Waiting for prerequisites` for a future decision gate. Its record must describe the remaining evidence.
 Records must remain visible Markdown prose. Do not put them in a code fence, HTML comment, or raw HTML container.
-Deck rejects raw HTML tags before or inside the section. Put the section before existing HTML content.
+Synth City rejects raw HTML tags before or inside the section. Put the section before existing HTML content.
 Keep at most sixteen records in the section. Do not alter a generated public ID or use a private nonce as an ID.
 
 ### Validation and incomplete records

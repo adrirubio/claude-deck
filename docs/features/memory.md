@@ -65,7 +65,7 @@ The import viewer detects circular references and shows them as warnings.
 
 ## Configuration
 
-Memory files are standard markdown. No special Claude Deck configuration needed — the Memory page reads and writes directly to the filesystem.
+Memory files are standard markdown. No special Albiex Synth City configuration needed — the Memory page reads and writes directly to the filesystem.
 
 ## Tips
 

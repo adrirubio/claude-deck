@@ -1,6 +1,6 @@
 # Quick Start
 
-Start Deck, inspect existing work, or launch a manual session before deciding whether to connect a repository.
+Start Albiex Synth City, inspect existing work, or launch a manual session before deciding whether to connect a repository.
 
 ## Start the Dev Servers
 
@@ -41,16 +41,16 @@ The operator credential uses the existing per-tab flow, separately from GitHub p
 
 ## Identify the Backend Instance
 
-When you run Claude Deck on more than one machine, or expose it over a LAN or tailnet, set an instance name so each browser window clearly shows the backend it controls:
+When you run Albiex Synth City on more than one machine, or expose it over a LAN or tailnet, set an instance name so each browser window clearly shows the backend it controls:
 
 ```bash
-CLAUDE_DECK_INSTANCE_NAME="Studio Mac" \
-CLAUDE_DECK_INSTANCE_ACCENT="blue" \
-CLAUDE_DECK_INSTANCE_ID="studio-mac" \
+SYNTH_CITY_INSTANCE_NAME="Studio Mac" \
+SYNTH_CITY_INSTANCE_ACCENT="blue" \
+SYNTH_CITY_INSTANCE_ID="studio-mac" \
 ./scripts/dev.sh --host 0.0.0.0
 ```
 
-Use a trusted network or tunnel when binding to all interfaces. Protected roster, autonomy and recovery controls require their documented credentials; safe reads remain observational. Local trust is not remote multi-user isolation. A Vite dev UI on another origin needs that exact origin in the JSON `CORS_ORIGINS` setting; Deck's production UI is same-origin.
+Use a trusted network or tunnel when binding to all interfaces. Protected roster, autonomy and recovery controls require their documented credentials; safe reads remain observational. Local trust is not remote multi-user isolation. A Vite dev UI on another origin needs that exact origin in the JSON `CORS_ORIGINS` setting; Synth City’s production UI is same-origin.
 
 The instance name appears in the header, browser tab title, Agent Bridge terminal panes, and kill-session confirmations. Supported accents are `blue`, `green`, `purple`, `orange`, `red`, `pink`, `cyan`, and `slate`.
 
