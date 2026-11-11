@@ -537,7 +537,7 @@ export function WorkItemActions({
                       ? `This may discard dirty or unpushed work in ${operatorAction.workspace.path}. Lease acquired ${formatDateTime(operatorAction.workspace.leased_at)}. Verify the owner is finished before continuing.`
                       : operatorAction?.kind === 'release_decision' || operatorAction?.kind === 'release_ack'
                         ? 'This starts a time-limited decision or acknowledgement window. Confirm the responsible agent is available now.'
-                        : 'Synth City will check current authority and reject stale or ineligible requests.'}
+                        : 'Albiex Synth City will check current authority and reject stale or ineligible requests.'}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 {operatorAction?.kind === 'resume' && (

@@ -25,12 +25,12 @@ vi.mock('../src/features/agent-teams/BacklogCoordination', () => ({ BacklogCoord
 vi.mock('../src/features/agent-teams/HumanActionSummary', () => ({ HumanActionSummary: () => null }))
 
 const stamp = '2026-10-12T12:00:00Z'
-const ISSUE = 'https://github.com/albiexai/synth-city/issues/490'
+const ISSUE = 'https://github.com/adrirubio/claude-deck/issues/490'
 
 function summary(overrides: Partial<AgentTeamSummary> = {}): AgentTeamSummary {
   return {
     preset_id: 1,
-    description: 'Release Synth City v3.0.1 and its website.',
+    description: 'Release Deck v3.0.1 and its website.',
     parent_issue_url: ISSUE,
     supervisor: 'none',
     checked_at: stamp,

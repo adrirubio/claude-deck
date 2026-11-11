@@ -215,7 +215,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'codex-cli:setup':
       return {
         title: 'Install Agent Mail for Codex',
-        description: 'A backup is attempted before Synth City installs the Codex MCP server and lifecycle hooks.',
+        description: 'A backup is attempted before Albiex Synth City installs the Codex MCP server and lifecycle hooks.',
         mutations: [
           'Codex CLI: run `codex mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=codex-cli claude-deck-mail -- ...`',
           `${status.codex_hooks_path || '~/.codex/hooks.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
@@ -225,7 +225,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'codex-cli:remove':
       return {
         title: 'Remove Agent Mail from Codex',
-        description: 'A backup is attempted before Synth City removes the managed MCP server and hooks.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP server and hooks.',
         mutations: [
           'Codex CLI: run `codex mcp remove claude-deck-mail`',
           `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
@@ -234,7 +234,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'copilot-cli:setup':
       return {
         title: 'Install Agent Mail for GitHub Copilot CLI',
-        description: 'A backup is attempted before Synth City installs the Copilot MCP server and lifecycle hooks.',
+        description: 'A backup is attempted before Albiex Synth City installs the Copilot MCP server and lifecycle hooks.',
         mutations: [
           'Copilot CLI: run `copilot mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=copilot-cli claude-deck-mail -- ...`',
           `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: write Agent Mail hook definitions`,
@@ -244,7 +244,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'copilot-cli:remove':
       return {
         title: 'Remove Agent Mail from GitHub Copilot CLI',
-        description: 'A backup is attempted before Synth City removes the managed MCP server and hooks.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP server and hooks.',
         mutations: [
           'Copilot CLI: run `copilot mcp remove claude-deck-mail`',
           `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: remove managed Agent Mail hook file`,
@@ -253,7 +253,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'muse-cli:setup':
       return {
         title: 'Install Agent Mail for Muse Code',
-        description: 'A backup is attempted before Synth City adds the Muse Code MCP server and lifecycle hooks to the Muse user settings.',
+        description: 'A backup is attempted before Albiex Synth City adds the Muse Code MCP server and lifecycle hooks to the Muse user settings.',
         mutations: [
           `${status.muse_settings_path || '~/.config/muse/settings.json'}: set mcpServers.claude-deck-mail`,
           `${status.muse_settings_path || '~/.config/muse/settings.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
@@ -263,7 +263,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'muse-cli:remove':
       return {
         title: 'Remove Agent Mail from Muse Code',
-        description: 'A backup is attempted before Synth City removes its MCP server and hooks. Other Muse settings stay as they are.',
+        description: 'A backup is attempted before Albiex Synth City removes its MCP server and hooks. Other Muse settings stay as they are.',
         mutations: [
           `${status.muse_settings_path || '~/.config/muse/settings.json'}: remove mcpServers.claude-deck-mail and the Agent Mail hook commands`,
         ],
@@ -271,7 +271,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'opencode-cli:setup':
       return {
         title: 'Install Agent Mail for OpenCode CLI',
-        description: 'A backup is attempted before Synth City writes the managed OpenCode MCP entry and lifecycle plugin.',
+        description: 'A backup is attempted before Albiex Synth City writes the managed OpenCode MCP entry and lifecycle plugin.',
         mutations: [
           `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: add MCP server ${server}`,
           `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: write Agent Mail lifecycle plugin`,
@@ -281,7 +281,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     default:
       return {
         title: 'Remove Agent Mail from OpenCode CLI',
-        description: 'A backup is attempted before Synth City removes the managed MCP entry and plugin file.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP entry and plugin file.',
         mutations: [
           `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: remove MCP server ${server}`,
           `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: remove managed Agent Mail plugin`,

@@ -220,8 +220,8 @@ describe('WaitingPanel', () => {
 describe('ConversationsTab', () => {
   const messages = [
     message(1, { kind: 'context_request', request_status: 'pending', is_stale: true }),
-    message(2, { sender_type: 'system', sender_member_id: null, subject: 'Synth City reminder' }),
-    message(3, { sender_type: 'system', sender_member_id: null, subject: 'Synth City reminder' }),
+    message(2, { sender_type: 'system', sender_member_id: null, subject: 'Deck reminder' }),
+    message(3, { sender_type: 'system', sender_member_id: null, subject: 'Deck reminder' }),
     message(4, { recipient_member_id: null, audience_type: 'operator_global', request_status: 'answered' }),
   ]
 
@@ -240,9 +240,9 @@ describe('ConversationsTab', () => {
     const rows = screen.getAllByTestId('conversation-row')
     expect(rows).toHaveLength(3)
     const notice = within(rows[1])
-    expect(notice.getByText('Synth City reminder')).toBeInTheDocument()
+    expect(notice.getByText('Deck reminder')).toBeInTheDocument()
     expect(notice.getByLabelText('2 notices')).toHaveTextContent('×2')
-    expect(rows[1].textContent).toContain('Synth City→B2 Backend')
+    expect(rows[1].textContent).toContain('Albiex Synth City→B2 Backend')
     expect(rows[0].textContent).toContain('A1 Reviewer→You')
     expect(within(rows[0]).getByText('Answered')).toBeInTheDocument()
     expect(within(rows[2]).getByText('Open')).toBeInTheDocument()

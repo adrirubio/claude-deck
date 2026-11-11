@@ -1747,7 +1747,7 @@ describe("guided repository setup", () => {
       mocks.projects = [{ name: "docs-source", path: "/home/me/docs-source" }];
       render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
       expect(screen.getByRole("button", { name: "Continue to configuration" })).toBeDisabled();
-      fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "https://github.com/albiexai/synth-city-docs" } });
+      fireEvent.change(screen.getByLabelText("GitHub repository"), { target: { value: "https://github.com/adrirubio/claude-deck-docs" } });
       fireEvent.change(screen.getByLabelText("Local checkout"), { target: { value: "/home/me/docs-source" } });
       expect(screen.getByLabelText("Primary checkout path")).toHaveValue("/home/me/docs-source");
       expect(screen.getByLabelText("Branch")).toHaveValue("origin/HEAD");

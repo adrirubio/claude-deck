@@ -30,7 +30,7 @@ const signal: RequiredCIUnreadableSignal = {
   reason: 'permission_missing',
   next_steps: [
     'Check GitHub access and the configured required workflows.',
-    'Synth City will poll again. Unreadable checks do not grant verification or consume a retry.',
+    'Deck will poll again. Unreadable checks do not grant verification or consume a retry.',
   ],
 }
 

@@ -88,7 +88,7 @@ function deliveryWarning(member: MailMemberResponse, kind: Exclude<MailMessageKi
   if (view.wake.state === 'cannot_wake') {
     return expectsAction
       ? `${member.display_name} cannot be woken. ${view.wake.reason} The ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but the agent may not see it until it checks Agent Mail or reaches a hook boundary.`
-      : `${member.display_name} cannot be woken. ${view.wake.reason} The message will be stored, but Synth City cannot nudge this session.`
+      : `${member.display_name} cannot be woken. ${view.wake.reason} The message will be stored, but Albiex Synth City cannot nudge this session.`
   }
   return null
 }

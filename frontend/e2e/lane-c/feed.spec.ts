@@ -24,7 +24,7 @@ test('@active every row names its team, its subject and its actor in plain words
     const text = await plainText(row)
     expect(text, 'a team name').toMatch(/Release crew|Quiet team|Retired crew/)
     expect(text, 'a subject (issue or team)').toMatch(/#\d+|team|scope|repository/i)
-    expect(text, 'an actor in plain words').toMatch(/Director|Deck|scheduler|B1 Backend|B2 Backend|Leader|Backend|Frontend/i)
+    expect(text, 'an actor in plain words').toMatch(/Director|Synth City|scheduler|B1 Backend|B2 Backend|Leader|Backend|Frontend/i)
     expect(text, 'no null, no code name, no ISO time').not.toMatch(new RegExp(`\\bnull\\b|${CODE_NAMES.source}|\\d{4}-\\d{2}-\\d{2}T`))
   }
 })

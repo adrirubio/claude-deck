@@ -42,7 +42,7 @@ export const LEGACY_SENDER_LABEL = 'Deck or Director (recorded before v3.1)'
  */
 export function senderName(message: MailMessageResponse, members: MailMemberResponse[]): string {
   switch (senderKind(message)) {
-    case 'deck': return 'Synth City'
+    case 'deck': return 'Albiex Synth City'
     case 'director': return 'Director'
     case 'legacy': return message.sender_name || LEGACY_SENDER_LABEL
     case 'external': return message.sender_name || 'External actor'
