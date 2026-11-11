@@ -55,6 +55,18 @@ class Backup(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class UpgradeReferenceStamp(Base):
+    """A committed resource rewrite bound to an immutable v1 reference record."""
+
+    __tablename__ = "upgrade_reference_stamps"
+
+    reference_record_id: Mapped[str] = mapped_column(String, primary_key=True)
+    resource: Mapped[str] = mapped_column(String, primary_key=True)
+    move_journal_id: Mapped[str] = mapped_column(String, nullable=False)
+    record_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class Marketplace(Base):
     """Marketplace model for plugin marketplace configurations."""
 
