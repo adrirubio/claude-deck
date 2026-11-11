@@ -84,3 +84,28 @@ def test_stamp_identity_mismatch_retains_all_records_without_rewrite(tmp_path, m
         run_reference(path, [record], home)
     assert (rows(path, 'backups'), rows(path, 'bridge_session_attachments')) == before
     assert journal(home, record).exists()
+
+
+@pytest.mark.parametrize('template', [
+    'No verifiable attachment path here', 'prefix{path}', '{path}.other',
+    'Inspect {path}; also {path}#unresolved',
+])
+def test_t_d8_unresolved_live_prompt_rolls_back_resource_and_keeps_shared_records(tmp_path, template):
+    home = tmp_path / 'home'
+    first = reference(home)
+    second = reference(home, move=first['move_journal_id'], suffix='b')
+    path = create_database(tmp_path / 'db', [first, second])
+    old = second['resources']['attachments']['mappings'][0]['source']
+    prompt = template.replace('{path}', old)
+    with sqlite3.connect(path) as db:
+        db.execute('UPDATE bridge_session_attachments SET prompt_text=? WHERE id=2', (prompt,))
+    before = rows(path, 'bridge_session_attachments')
+    history = rows(path, 'history')
+    with pytest.raises(RuntimeError, match='prompt') as failure:
+        run_reference(path, [first, second], home)
+    assert old not in str(failure.value) and prompt not in str(failure.value)
+    assert rows(path, 'bridge_session_attachments') == before
+    assert not [s for s in rows(path, 'upgrade_reference_stamps') if s['resource'] == 'attachments']
+    assert len(rows(path, 'upgrade_reference_stamps')) == 2  # prior backup transaction may commit
+    assert rows(path, 'history') == history
+    assert all(journal(home, record).exists() for record in (first, second))

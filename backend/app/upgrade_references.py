@@ -114,11 +114,28 @@ def _owned_target(value, source_root, mapping, excluded, known_sources, resource
 
 
 def _retarget_prompt(prompt, old, new):
-    if not old or old == new:
+    if old == new:
         return prompt
     # The stored agent path is the structured token in this one prompt field.
-    # Do not rewrite a longer filename, another path, or a history table.
-    pattern = r'''(?<![^\s"'`(\[<{=])''' + re.escape(old) + r'''(?=$|[\s"'`)\]}>])'''
+    # Sentence punctuation and image:path are supported custom templates. A
+    # period followed by filename characters still belongs to a longer name.
+    edge = r'''[\s"'`)\]}>;,!?=:]'''
+    pattern = (r'''(?<![^\s"'`(\[<{=:;,!?])''' + re.escape(old)
+               + rf'(?=$|{edge}|\.+(?=$|{edge}))')
+    matched = {match.span() for match in re.finditer(pattern, prompt)} if old else set()
+    for match in re.finditer(re.escape(old), prompt) if old else ():
+        if match.span() in matched:
+            continue
+        before = prompt[match.start() - 1:match.start()] if match.start() else ''
+        after = prompt[match.end():match.end() + 1]
+        # Preserve known filename/path continuations and prefix lookalikes.
+        # Any other unmatched occurrence is ambiguous, even if another token
+        # was matched: rolling back is safer than retiring a partial rewrite.
+        if any(char and (char.isalnum() or char in '/\\._-~') for char in (before, after)):
+            continue
+        raise RuntimeError('Upgrade live attachment prompt path cannot be verified; journals retained')
+    if not matched:
+        raise RuntimeError('Upgrade live attachment prompt path cannot be verified; journals retained')
     return re.sub(pattern, lambda _: new, prompt)
 
 

@@ -664,3 +664,44 @@ def test_t_d5_power_loss_can_keep_any_committed_resource_prefix_without_retireme
         row['target'] for record in records if 'attachments' in record['resources']
         for row in record['resources']['attachments']['mappings']}
     assert read_reference_journals(home=home) == []
+
+
+@pytest.mark.parametrize('template', [
+    'Inspect {path}.', 'Inspect {path}, then describe it.',
+    'image:{path}', 'Inspect "{path}"',
+])
+def test_t_d8_custom_prompt_punctuation_reaches_current_paste(tmp_path, template):
+    install = build_v31_install(tmp_path / 'install')
+    with sqlite3.connect(install.database) as db:
+        old = db.execute("SELECT agent_path FROM bridge_session_attachments "
+                         "WHERE original_filename='live.png'").fetchone()[0]
+        prompt = template.replace('{path}', old)
+        db.execute("UPDATE bridge_session_attachments SET prompt_text=? "
+                   "WHERE original_filename='live.png'", (prompt,))
+    run_fixture_code(install, r'''
+import asyncio
+from pathlib import Path
+from unittest.mock import patch
+from app.database import engine, init_db, AsyncSessionLocal
+from app.services.agent_bridge.attachments import AgentBridgeAttachmentService
+from app.models.schemas import BridgeAttachmentPasteRequest
+from app.upgrade_bootstrap import read_reference_journals
+service=AgentBridgeAttachmentService()
+assert service._build_prompt(provider='unknown',agent_path=OLD,prompt=TEMPLATE)==BEFORE
+async def check():
+    await init_db()
+    assert not read_reference_journals()
+    async with AsyncSessionLocal() as db:
+        live=next(a for a in await service.list_attachments(db,target='upgrade-fixture:0.0')
+                  if a.original_filename=='live.png')
+        sent=[]
+        with patch.object(service,'_require_live_session',return_value={}), \
+                patch.object(service,'_send_tmux_prompt',side_effect=lambda *a,**k:sent.append(a[1])):
+            await service.paste_attachment(db,target='upgrade-fixture:0.0',attachment_id=live.id,
+                request=BridgeAttachmentPasteRequest(submit=False))
+        assert Path(live.agent_path).is_file()
+        assert not Path(OLD).exists()
+        assert sent==[TEMPLATE.replace('{path}',live.agent_path)]
+    await engine.dispose()
+asyncio.run(check())
+'''.replace('OLD', repr(old)).replace('TEMPLATE', repr(template)).replace('BEFORE', repr(prompt)))
