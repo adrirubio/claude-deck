@@ -14,10 +14,10 @@ export interface AgentStatusView {
 
 const WAKE_REASONS: Record<string, string> = {
   wake_target_unbound: 'No session is bound to this agent.',
-  wake_target_stale: 'The wake target is out of date. Synth City cannot confirm it.',
+  wake_target_stale: 'The wake target is out of date. Albiex Synth City cannot confirm it.',
   wake_target_ambiguous: 'More than one session matches this agent.',
   wake_opted_out: 'Wake participation is turned off for this agent.',
-  observation_unavailable: 'Synth City cannot read or confirm the wake path.',
+  observation_unavailable: 'Albiex Synth City cannot read or confirm the wake path.',
 }
 
 const ACTIVITY_REASONS: Record<string, string> = {
@@ -34,8 +34,8 @@ const ACTIVITY_REASONS: Record<string, string> = {
 }
 
 export function wakeReasonText(reason: string | null | undefined): string {
-  if (!reason) return 'Synth City gave no reason.'
-  return WAKE_REASONS[reason] ?? 'Synth City cannot confirm a wake path.'
+  if (!reason) return 'Albiex Synth City gave no reason.'
+  return WAKE_REASONS[reason] ?? 'Albiex Synth City cannot confirm a wake path.'
 }
 
 /** True while the backend still stands behind the status. */

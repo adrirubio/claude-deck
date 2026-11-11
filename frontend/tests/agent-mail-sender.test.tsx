@@ -35,18 +35,35 @@ const BY_TYPE = {
 };
 
 describe("ComposeDialog delivery warning", () => {
+  const cannotWakeMember = (wakeReason: string | null) => ({
+    id: 9, display_name: "B9 Backend", repo_name: "repo", wake_methods: [],
+    agent_status: {
+      session_state: "online", activity_state: "idle", activity_reason: null,
+      wake_state: "cannot_wake", wake_reason: wakeReason, idle_since: null,
+      checked_at: "2026-10-13T08:00:00Z", valid_until: "2999-01-01T00:00:00Z",
+    },
+  }) as unknown as MailMemberResponse;
+
   it("names the full product name first when the recipient cannot be woken", async () => {
-    const member = {
-      id: 9, display_name: "B9 Backend", repo_name: "repo", wake_methods: [],
-      agent_status: {
-        session_state: "online", activity_state: "idle", activity_reason: null,
-        wake_state: "cannot_wake", wake_reason: "wake_target_unbound", idle_since: null,
-        checked_at: "2026-10-13T08:00:00Z", valid_until: "2999-01-01T00:00:00Z",
-      },
-    } as unknown as MailMemberResponse;
-    render(<ComposeDialog open members={[member]} preset={{ recipient_member_id: 9, kind: "message" }} onOpenChange={() => {}} onSend={vi.fn()} />);
+    render(<ComposeDialog open members={[cannotWakeMember("wake_target_unbound")]} preset={{ recipient_member_id: 9, kind: "message" }} onOpenChange={() => {}} onSend={vi.fn()} />);
     expect(await screen.findByText(/Albiex Synth City cannot nudge this session/)).toBeInTheDocument();
   });
+
+  // The warning interpolates the locally generated wake reason before its own
+  // product sentence, so the reason text itself carries the first mention.
+  it.each(["wake_target_stale", "observation_unavailable", null, "unlisted_reason_code"] as const)(
+    "uses the full product name as the first mention in the whole warning for wake reason %s",
+    async (wakeReason) => {
+      for (const kind of ["message", "handoff", "context_request"] as const) {
+        const view = render(
+          <ComposeDialog open members={[cannotWakeMember(wakeReason)]} preset={{ recipient_member_id: 9, kind }} onOpenChange={() => {}} onSend={vi.fn()} />,
+        );
+        const warning = await screen.findByText(/will be stored/);
+        expect(warning.textContent?.match(/Albiex Synth City|Synth City/)?.[0]).toBe("Albiex Synth City");
+        view.unmount();
+      }
+    },
+  );
 });
 
 describe("senderName and senderKind", () => {
