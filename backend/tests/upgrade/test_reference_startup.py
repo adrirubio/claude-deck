@@ -572,3 +572,95 @@ def test_no_pending_records_do_not_open_a_reference_connection(tmp_path):
             pytest.fail('completed startup opened an unnecessary reference connection')
 
     complete_reference_upgrade(None, [], home=tmp_path, ops=NoOpen())
+
+
+@pytest.mark.parametrize('kind', ['reference', 'file'])
+def test_test_instance_pending_recovery_fails_read_only_before_services(tmp_path, kind):
+    home = tmp_path / 'home'
+    if kind == 'reference':
+        reference(home)
+    else:
+        home.mkdir()
+        (home / '.albiex-synth-city-upgrade.pending.json').write_text('{}')
+    before = {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()}
+    from app.upgrade_references import reference_startup
+    with pytest.raises(RuntimeError, match='[Tt]est instance.*pending'):
+        with reference_startup('sqlite+aiosqlite:///:memory:', test_instance=True,
+                               home=home, cwd=tmp_path):
+            pytest.fail('test instance silently skipped pending recovery records')
+    assert {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()} == before
+    assert not list(tmp_path.rglob('*.lock'))
+
+
+def test_test_instance_without_pending_records_is_a_complete_filesystem_noop(tmp_path):
+    home = tmp_path / 'absent-home'
+    from app.upgrade_references import reference_startup
+    with reference_startup('sqlite+aiosqlite:///:memory:', test_instance=True,
+                           home=home, cwd=tmp_path) as state:
+        assert state.records == [] and state.database is None
+    assert not home.exists() and list(tmp_path.iterdir()) == []
+
+
+def test_test_instance_unreadable_recovery_directory_fails_closed(tmp_path, monkeypatch):
+    from app import upgrade_references
+
+    def unreadable(path):
+        raise PermissionError('synthetic unreadable HOME')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(upgrade_references.os, 'scandir', unreadable)
+        with pytest.raises(RuntimeError, match='safely inspect pending'):
+            with upgrade_references.reference_startup('sqlite+aiosqlite:///:memory:',
+                    test_instance=True, home=tmp_path):
+                pytest.fail('test instance treated uninspectable recovery as complete')
+
+
+@pytest.mark.parametrize('prefix', [0, 1, 2, 3])
+def test_t_d5_power_loss_can_keep_any_committed_resource_prefix_without_retirement(tmp_path, prefix):
+    home = tmp_path / 'home'
+    first = reference(home)
+    second = reference(home, move=first['move_journal_id'], suffix='b')
+    third = reference(home, resources=('backups',), suffix='c')
+    records = [first, second, third]
+    path = create_database(tmp_path / 'db', records)
+    model = ReferencePowerLoss(path, home, 'sql.before:PRAGMA wal_checkpoint(FULL)',
+                               durable_commit_prefix=prefix)
+    with pytest.raises(PowerCut):
+        run_reference(path, records, home, ops=model.operations())
+    model.restore()
+    assert model.commits == 3 and model.barriers == 0
+    from app.upgrade_bootstrap import read_reference_journals
+    from app.upgrade_references import ReferenceOps
+    remaining = read_reference_journals(home=home)
+    assert len(remaining) == 3, 'unverified commits retired a recovery record'
+    before = {(r['reference_record_id'], r['resource']): r
+              for r in rows(path, 'upgrade_reference_stamps')}
+    if prefix == 0:
+        assert before == {}
+    elif prefix == 3:
+        assert len(before) == 5
+    else:
+        assert 0 < len(before) < 5
+
+    class Replay(ReferenceOps):
+        barriers = 0
+
+        def execute(self, db, sql, parameters=()):
+            if prefix == 3:
+                assert not sql.startswith(('UPDATE ', 'INSERT ')), 'committed stamps were rewritten'
+            if sql == 'PRAGMA wal_checkpoint(FULL)':
+                self.barriers += 1
+            return super().execute(db, sql, parameters)
+
+    ops = Replay()
+    run_reference(path, remaining, home, ops=ops)
+    assert ops.barriers == 1
+    after = {(r['reference_record_id'], r['resource']): r
+             for r in rows(path, 'upgrade_reference_stamps')}
+    assert len(after) == 5 and all(after[key] == value for key, value in before.items())
+    assert {r['file_path'] for r in rows(path, 'backups')} == {
+        row['target'] for record in records for row in record['resources']['backups']['mappings']}
+    assert {r['storage_path'] for r in rows(path, 'bridge_session_attachments')} == {
+        row['target'] for record in records if 'attachments' in record['resources']
+        for row in record['resources']['attachments']['mappings']}
+    assert read_reference_journals(home=home) == []

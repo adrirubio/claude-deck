@@ -12,11 +12,13 @@ class PowerCut(BaseException):
 
 
 class ReferencePowerLoss:
-    def __init__(self, database, home, cut=None):
+    def __init__(self, database, home, cut=None, *, durable_commit_prefix=0):
         self.database, self.home, self.cut = database, home, cut
         self.events, self.sql = [], []
         self.mode, self.sync, self.cut_seen = None, None, False
         self.barriers = 0
+        self.commits = 0
+        self.durable_commit_prefix = durable_commit_prefix
         self.database_image = self.capture_database()
         self.namespace = self.capture_namespace()
 
@@ -45,6 +47,15 @@ class ReferencePowerLoss:
                 model.event('sql.before:' + sql)
                 cursor = super().execute(db, sql, parameters)
                 normalized = sql.upper()
+                if normalized == 'COMMIT':
+                    assert not db.in_transaction
+                    model.commits += 1
+                    if model.commits == model.durable_commit_prefix:
+                        # NORMAL permits OS writeback to preserve an earlier
+                        # complete WAL prefix while losing later commits. This
+                        # is an allowed power-loss outcome, never evidence that
+                        # the implementation verified a durability barrier.
+                        model.database_image = model.capture_database()
                 if normalized.startswith('PRAGMA') and cursor.description:
                     # Fetch the actual native result before returning it to the
                     # implementation. No declared "barrier passed" seam is used.

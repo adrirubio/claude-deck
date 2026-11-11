@@ -12,13 +12,14 @@ from datetime import UTC, datetime
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sqlite3
 from urllib.parse import quote
 
 from app.upgrade_bootstrap import (
-    FileOps, reference_phase_lock, retire_reference_record,
+    FileOps, HOME_JOURNAL_PREFIX, reference_phase_lock, retire_reference_record,
 )
 
 
@@ -55,7 +56,21 @@ def reference_startup(configured_url: str, *, test_instance=False,
     """Take startup ownership before the first engine connection is opened."""
     ops = ops or ReferenceOps()
     if test_instance:
-        yield ReferenceState(home or Path.home(), None, [], ops)
+        home = home or Path.home()
+        # Test instances must never move/replay operator data or create locks.
+        # They also cannot silently treat pending recovery as complete. Inspect
+        # names only; do not read payloads or suppress an unreadable directory.
+        try:
+            with os.scandir(home) as entries:
+                pending = any(entry.name.startswith(HOME_JOURNAL_PREFIX)
+                              and entry.name.endswith('.json') for entry in entries)
+        except FileNotFoundError:
+            pending = False
+        except OSError:
+            raise RuntimeError('Test instance cannot safely inspect pending upgrade recovery records') from None
+        if pending:
+            raise RuntimeError('Test instance cannot start with pending upgrade recovery records')
+        yield ReferenceState(home, None, [], ops)
         return
     try:
         with reference_phase_lock(configured_url, home=home, cwd=cwd, ops=ops) as (home, path, records):

@@ -69,14 +69,17 @@ def test_t_d8_expired_storage_only_and_exact_prompt_boundaries(tmp_path):
     assert (expired['storage_path'], expired['agent_path'], expired['prompt_text']) == (new, old, 'Expired ' + old)
 
 
-def test_stamp_identity_mismatch_retains_all_records_without_rewrite(tmp_path):
+@pytest.mark.parametrize('mismatch', ['digest', 'move'])
+def test_stamp_identity_mismatch_retains_all_records_without_rewrite(tmp_path, mismatch):
     home = tmp_path / 'home'
     record = reference(home)
     path = create_database(tmp_path / 'db', [record])
     before = rows(path, 'backups'), rows(path, 'bridge_session_attachments')
     with sqlite3.connect(path) as db:
         db.execute('INSERT INTO upgrade_reference_stamps VALUES (?,?,?,?,?)',
-                   (record['id'], 'backups', record['move_journal_id'], '0' * 64, '2026-01-01'))
+                   (record['id'], 'backups', record['move_journal_id'] if mismatch == 'digest'
+                    else '00000000-0000-0000-0000-000000000000',
+                    '0' * 64 if mismatch == 'digest' else digest(record), '2026-01-01'))
     with pytest.raises(RuntimeError, match='identity|digest'):
         run_reference(path, [record], home)
     assert (rows(path, 'backups'), rows(path, 'bridge_session_attachments')) == before
