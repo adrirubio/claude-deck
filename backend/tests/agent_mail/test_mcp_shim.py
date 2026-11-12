@@ -1190,3 +1190,20 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     assert shim._state["member_id"] is None and shim._state["capability_token"] is None
     assert calls == []
+
+    # A normal invocation retains the real registration and lifecycle guards.
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py"])
+    normal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(normal)
+    denied = {"ok": False, "error": {"code": "session_token_invalid"}}
+    normal_calls = []
+    def refuse(method, endpoint, **kwargs):
+        normal_calls.append((method, endpoint))
+        return denied
+    monkeypatch.setattr(normal, "_request", refuse)
+    assert normal.synth_city_ack_message(9) == denied
+    assert normal._state["member_id"] is None and normal._state["capability_token"] is None
+    assert normal_calls == [("POST", "/agent/register")]
+    normal._state["closing"] = True
+    assert normal.synth_city_ack_message(9) == {"ok": False, "error": {"code": "mail_generation_closing"}}
+    assert normal_calls == [("POST", "/agent/register")]
