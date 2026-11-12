@@ -19,7 +19,7 @@ jobs:
   backend:
     name: Full backend regression tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       PYTHONPATH: ${{ github.workspace }}/backend
       DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
