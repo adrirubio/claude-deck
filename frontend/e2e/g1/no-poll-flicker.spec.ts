@@ -122,24 +122,35 @@ const ATTEMPTS = 3
 // Timestamps and the seconds counter of a relative time change by themselves.
 const TIME = /\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:\d\d)?|"elapsed_seconds":\s*\d+/g
 
-/** Collect the masked body of every API read until `stop()` is called. */
-function trackBodies(page: Page) {
-  const bodies = new Map<string, Set<string>>()
+/** The last masked body seen for each API read on one page. */
+type BodyBaseline = Map<string, string>
+
+/**
+ * Collect the masked body of every API read until `stop()` is called. The
+ * collection starts from `baseline`, the last body seen for each read before
+ * this window, and keeps it updated: a read whose body differs from what the
+ * previous window rendered is therefore reported as changed data, even when
+ * it only arrives once, on the first poll of this window.
+ */
+function trackBodies(page: Page, baseline: BodyBaseline) {
+  const bodies = new Map([...baseline].map(([key, body]) => [key, new Set([body])]))
   const onResponse = async (response: Response) => {
     const request = response.request()
     if (request.method() !== 'GET' || !response.url().includes('/api/v1/') || response.status() !== 200) return
     const body = await response.text().catch(() => null)
     if (body === null) return
     const key = new URL(response.url()).pathname + new URL(response.url()).search
-    bodies.set(key, (bodies.get(key) ?? new Set()).add(body.replace(TIME, 'T')))
+    const masked = body.replace(TIME, 'T')
+    baseline.set(key, masked)
+    bodies.set(key, (bodies.get(key) ?? new Set()).add(masked))
   }
   page.on('response', onResponse)
   return { bodies, stop: () => page.off('response', onResponse) }
 }
 
 /** One unmeasured poll cycle, as a comparable snapshot of its masked bodies. */
-async function pollCycleSnapshot(page: Page): Promise<string> {
-  const { bodies, stop } = trackBodies(page)
+async function pollCycleSnapshot(page: Page, baseline: BodyBaseline): Promise<string> {
+  const { bodies, stop } = trackBodies(page, baseline)
   await page.waitForTimeout(WATCH_MS)
   stop()
   return [...bodies]
@@ -150,19 +161,21 @@ async function pollCycleSnapshot(page: Page): Promise<string> {
 
 // Measuring from the first render is not enough: a slow first read can still
 // complete at the first background poll, and that new data correctly grows the
-// page and shifts what is below it (#847). The changed-data guard inside the
-// measured window cannot see that, because the partial body arrived before
-// the window. So first wait for a stable state: fonts settled, then unmeasured
-// poll cycles until two consecutive cycles produce identical masked body
-// sets. Masking can only hide timestamp/elapsed fields, so a change in any
-// other field breaks the equality and keeps the cycles running. If the cycles
-// never agree, stop anyway: the measured window then runs and its
-// changed-data assertion reports the changing data instead of passing quietly.
-async function stabilize(page: Page): Promise<void> {
+// page and shifts what is below it (#847). So first wait for a stable state:
+// fonts settled, then unmeasured poll cycles until two consecutive cycles
+// produce identical masked body sets. Masking can only hide timestamp/elapsed
+// fields, so a change in any other field breaks the equality and keeps the
+// cycles running. If the cycles never agree, stop anyway: the measured window
+// then runs and its changed-data assertion reports the changing data instead
+// of passing quietly. The baseline of last-seen bodies is kept across
+// stabilization and every measured window, so a body that only completes on
+// the first measured poll still counts as changed data and that window is
+// re-watched instead of blaming its shift on the poll.
+async function stabilize(page: Page, baseline: BodyBaseline): Promise<void> {
   await page.evaluate(() => document.fonts.ready.then(() => undefined))
   let previous: string | null = null
   for (let cycle = 0; cycle < ATTEMPTS; cycle++) {
-    const current = await pollCycleSnapshot(page)
+    const current = await pollCycleSnapshot(page, baseline)
     if (current === previous) break
     previous = current
   }
@@ -170,8 +183,8 @@ async function stabilize(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle')
 }
 
-async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
-  const { bodies, stop } = trackBodies(page)
+async function watchWindow(page: Page, screen: (typeof SCREENS)[number], baseline: BodyBaseline) {
+  const { bodies, stop } = trackBodies(page, baseline)
   await watch(page)
   if (screen.name === 'Work item') await watchProgressButton(page)
   // The Work item page reads its progress every 15 seconds. Wait for one.
@@ -188,29 +201,59 @@ async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
   return { result, buttons, changed }
 }
 
+async function expectNoFlicker(page: Page, screen: (typeof SCREENS)[number], beforeMeasured?: () => void) {
+  await page.goto(screen.route)
+  await expect(page.getByRole('heading', { name: screen.heading, exact: typeof screen.heading === 'string' }).first()).toBeVisible()
+  // Settled: no loading text, and the first reads are done.
+  await expect(page.locator('main').getByText(/^Loading/)).toHaveCount(0)
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(1_500)
+  // Stable: the same masked data has rendered through two whole poll cycles.
+  // The baseline starts empty for this page and is carried into every window.
+  const baseline: BodyBaseline = new Map()
+  await stabilize(page, baseline)
+  beforeMeasured?.()
+
+  let watched = await watchWindow(page, screen, baseline)
+  for (let attempt = 1; attempt < ATTEMPTS && watched.changed.length; attempt++) watched = await watchWindow(page, screen, baseline)
+  const { result, buttons, changed } = watched
+
+  expect.soft(changed, `the polled data kept changing in ${ATTEMPTS} windows on ${screen.route}`).toEqual([])
+  expect.soft(result.transient, `elements that appeared and then disappeared on ${screen.route}`).toEqual([])
+  expect.soft(result.announced, `text added to a live region on ${screen.route}`).toEqual([])
+  expect.soft(result.shift, `layout shift on ${screen.route}`).toBeLessThanOrEqual(SHIFT_LIMIT)
+  // An automatic poll leaves the button label and state alone.
+  if (buttons) expect.soft(buttons, 'labels and states of the Refresh progress button').toEqual(['Refresh progress|enabled'])
+}
+
 for (const screen of SCREENS) {
   test(`@active ${screen.name} shows no flicker during two background polls`, async ({ page }) => {
     // Stabilization adds up to ATTEMPTS unmeasured poll cycles before the
     // measured windows, so the journey needs a larger time budget than before.
     test.setTimeout(240_000)
-    await page.goto(screen.route)
-    await expect(page.getByRole('heading', { name: screen.heading, exact: typeof screen.heading === 'string' }).first()).toBeVisible()
-    // Settled: no loading text, and the first reads are done.
-    await expect(page.locator('main').getByText(/^Loading/)).toHaveCount(0)
-    await page.waitForLoadState('networkidle')
-    await page.waitForTimeout(1_500)
-    // Stable: the same masked data has rendered through two whole poll cycles.
-    await stabilize(page)
-
-    let watched = await watchWindow(page, screen)
-    for (let attempt = 1; attempt < ATTEMPTS && watched.changed.length; attempt++) watched = await watchWindow(page, screen)
-    const { result, buttons, changed } = watched
-
-    expect.soft(changed, `the polled data kept changing in ${ATTEMPTS} windows on ${screen.route}`).toEqual([])
-    expect.soft(result.transient, `elements that appeared and then disappeared on ${screen.route}`).toEqual([])
-    expect.soft(result.announced, `text added to a live region on ${screen.route}`).toEqual([])
-    expect.soft(result.shift, `layout shift on ${screen.route}`).toBeLessThanOrEqual(SHIFT_LIMIT)
-    // An automatic poll leaves the button label and state alone.
-    if (buttons) expect.soft(buttons, 'labels and states of the Refresh progress button').toEqual(['Refresh progress|enabled'])
+    await expectNoFlicker(page, screen)
   })
 }
+
+// Regression for #847 F1: a summary that only completes on the first measured
+// poll changes the data, so that window proves nothing and must be re-watched
+// instead of reporting its legitimate data-driven shift as flicker. The route
+// below serves emptied summaries until the measured windows start, then serves
+// the real summaries, so the completion lands exactly on the first measured poll.
+test('@active Overview re-watches when a summary completes on the first measured poll', async ({ page }) => {
+  test.setTimeout(240_000)
+  let measured = false
+  await page.route('**/api/v1/agent-teams/presets/*/summary', async route => {
+    const response = await route.fetch()
+    if (measured) {
+      await route.fulfill({ response })
+      return
+    }
+    const body = await response.json() as Record<string, unknown>
+    body.human_actions = []
+    body.attention = []
+    body.reminder_attention = []
+    await route.fulfill({ response, json: body })
+  })
+  await expectNoFlicker(page, SCREENS[0], () => { measured = true })
+})
