@@ -122,7 +122,8 @@ const ATTEMPTS = 3
 // Timestamps and the seconds counter of a relative time change by themselves.
 const TIME = /\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:\d\d)?|"elapsed_seconds":\s*\d+/g
 
-async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
+/** Collect the masked body of every API read until `stop()` is called. */
+function trackBodies(page: Page) {
   const bodies = new Map<string, Set<string>>()
   const onResponse = async (response: Response) => {
     const request = response.request()
@@ -133,6 +134,44 @@ async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
     bodies.set(key, (bodies.get(key) ?? new Set()).add(body.replace(TIME, 'T')))
   }
   page.on('response', onResponse)
+  return { bodies, stop: () => page.off('response', onResponse) }
+}
+
+/** One unmeasured poll cycle, as a comparable snapshot of its masked bodies. */
+async function pollCycleSnapshot(page: Page): Promise<string> {
+  const { bodies, stop } = trackBodies(page)
+  await page.waitForTimeout(WATCH_MS)
+  stop()
+  return [...bodies]
+    .map(([key, set]) => `${key}\n${[...set].sort().join('\n')}`)
+    .sort()
+    .join('\n---\n')
+}
+
+// Measuring from the first render is not enough: a slow first read can still
+// complete at the first background poll, and that new data correctly grows the
+// page and shifts what is below it (#847). The changed-data guard inside the
+// measured window cannot see that, because the partial body arrived before
+// the window. So first wait for a stable state: fonts settled, then unmeasured
+// poll cycles until two consecutive cycles produce identical masked body
+// sets. Masking can only hide timestamp/elapsed fields, so a change in any
+// other field breaks the equality and keeps the cycles running. If the cycles
+// never agree, stop anyway: the measured window then runs and its
+// changed-data assertion reports the changing data instead of passing quietly.
+async function stabilize(page: Page): Promise<void> {
+  await page.evaluate(() => document.fonts.ready.then(() => undefined))
+  let previous: string | null = null
+  for (let cycle = 0; cycle < ATTEMPTS; cycle++) {
+    const current = await pollCycleSnapshot(page)
+    if (current === previous) break
+    previous = current
+  }
+  // Let the last cycle's answers render before the observers start.
+  await page.waitForLoadState('networkidle')
+}
+
+async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
+  const { bodies, stop } = trackBodies(page)
   await watch(page)
   if (screen.name === 'Work item') await watchProgressButton(page)
   // The Work item page reads its progress every 15 seconds. Wait for one.
@@ -144,20 +183,24 @@ async function watchWindow(page: Page, screen: (typeof SCREENS)[number]) {
   if (await progress) await page.waitForTimeout(1_000)
   const result = await read(page)
   const buttons = screen.name === 'Work item' ? await readProgressButton(page) : null
-  page.off('response', onResponse)
+  stop()
   const changed = [...bodies].filter(([, set]) => set.size > 1).map(([key]) => key)
   return { result, buttons, changed }
 }
 
 for (const screen of SCREENS) {
   test(`@active ${screen.name} shows no flicker during two background polls`, async ({ page }) => {
-    test.setTimeout(100_000)
+    // Stabilization adds up to ATTEMPTS unmeasured poll cycles before the
+    // measured windows, so the journey needs a larger time budget than before.
+    test.setTimeout(240_000)
     await page.goto(screen.route)
     await expect(page.getByRole('heading', { name: screen.heading, exact: typeof screen.heading === 'string' }).first()).toBeVisible()
     // Settled: no loading text, and the first reads are done.
     await expect(page.locator('main').getByText(/^Loading/)).toHaveCount(0)
     await page.waitForLoadState('networkidle')
     await page.waitForTimeout(1_500)
+    // Stable: the same masked data has rendered through two whole poll cycles.
+    await stabilize(page)
 
     let watched = await watchWindow(page, screen)
     for (let attempt = 1; attempt < ATTEMPTS && watched.changed.length; attempt++) watched = await watchWindow(page, screen)
