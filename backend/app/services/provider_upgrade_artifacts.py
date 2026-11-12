@@ -35,8 +35,29 @@ class Incomplete(RuntimeError):
     """A transient boundary failed; ordinary startup must retry it."""
 
 
-def is_owned_entry(entry, shim):
+def _local_transport(entry, provider):
+    # A stale command beside a remote URL or transport is not local-launch
+    # evidence. OpenCode and Muse require their explicit installer discriminator;
+    # the other providers also support implicit stdio command configurations.
+    if any(key in entry for key in ("url", "server_url")):
+        return False
+    array_command = isinstance(entry.get("command"), list)
+    if provider == "opencode-cli" or (provider is None and array_command):
+        return array_command and entry.get("type") == "local" and "transport" not in entry
+    if array_command:
+        return False
+    if "transport" in entry and entry["transport"] != "stdio":
+        return False
+    if provider == "muse-cli" and entry.get("transport") != "stdio":
+        return False
+    local_types = ("stdio", "local") if provider in (None, "copilot-cli") else ("stdio",)
+    return "type" not in entry or entry["type"] in local_types
+
+
+def is_owned_entry(entry, shim, *, provider=None):
     if not isinstance(entry, dict):
+        return False
+    if not _local_transport(entry, provider):
         return False
     command, args = entry.get("command"), entry.get("args", [])
     if isinstance(command, list):
@@ -87,6 +108,9 @@ def parse_cli_entries(provider, raw):
                 # Current Codex nests launch data under transport; older versions
                 # emit command/args/env directly. Neither is substring evidence.
                 transport = entry.get("transport")
+                if isinstance(transport, dict) and any(key in entry for key in
+                        ("type", "url", "server_url", "command", "args", "env")):
+                    raise ValueError
                 result[row["name"]] = transport if isinstance(transport, dict) else entry
             return result
         if provider == "copilot-cli" and isinstance(doc, dict) and isinstance(doc.get("mcpServers"), dict):
@@ -375,7 +399,7 @@ def discover(provider):
             if OLD not in servers:
                 continue
             old = servers[OLD]
-            if not is_owned_entry(old, shim):
+            if not is_owned_entry(old, shim, provider=provider):
                 raise Attention("ownership_unproven")
             new = renamed_entry(old)
             hookfiles = []
@@ -393,14 +417,14 @@ def discover(provider):
             if provider in ("codex-cli", "copilot-cli"):
                 listed = cli_entries(provider, executor(provider))
                 listed_old = listed.get(OLD)
-                if not is_owned_entry(listed_old, shim):
+                if not is_owned_entry(listed_old, shim, provider=provider):
                     raise Attention("cli_ownership_unproven")
                 # Full source config is captured; parsed CLI launch evidence
                 # must agree rather than silently selecting one of two values.
                 if not same_launch(listed_old, old):
                     raise Attention("cli_capture_disagrees")
             both = NEW in servers
-            if both and (not is_owned_entry(servers[NEW], shim) or servers[NEW] != new):
+            if both and (not is_owned_entry(servers[NEW], shim, provider=provider) or servers[NEW] != new):
                 raise Attention("registration_conflict")
             base = updated_hooks if hookpath == path else text
             source["removed"] = encoded(_registration_text(base, key, new, toml=toml, remove=True).encode())

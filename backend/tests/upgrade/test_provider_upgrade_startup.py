@@ -56,6 +56,38 @@ def test_t_i2_unowned_registration_remains_byte_identical_and_needs_attention(tm
     assert status["providers"]["claude-code"]["state"] == "needs_attention"
 
 
+@pytest.mark.parametrize("conflicting_transport", [
+    {"type": "remote", "url": "https://unrelated.invalid/mcp"},
+    {"type": "remote"},
+    {"url": "https://unrelated.invalid/mcp"},
+    {"transport": "http"},
+])
+def test_t_i2_remote_transport_with_residual_shim_is_preserved_at_startup(tmp_path, conflicting_transport):
+    install = provision(tmp_path / "install")
+    config = install.home / ".config/opencode/opencode.json"
+    doc = json.loads(config.read_text())
+    doc["mcp"][OLD].update(conflicting_transport)
+    config.write_text(json.dumps(doc, indent=3) + "\n")
+    before = config.read_bytes()
+    old_plugin = config.parent / "plugins/claude-deck-agent-mail.js"
+    new_plugin = old_plugin.with_name("albiex-synth-city-agent-mail.js")
+
+    result = run_startup(install)
+
+    assert result.returncode == 0, result.stderr[-4000:]
+    assert config.read_bytes() == before, "remote or contradictory transport is not owned local launch evidence"
+    status = json.loads((install.home / ".albiex-synth-city/provider-upgrade-status.json").read_text())
+    assert status["providers"]["opencode-cli"]["state"] == "needs_attention"
+    # The independently owned plugin still upgrades; the MCP entry is never
+    # captured as a migration record or falsely reported as verified.
+    assert not old_plugin.exists() and new_plugin.is_file()
+    assert "Albiex Synth City Agent Mail OpenCode plugin" in new_plugin.read_text()
+    records = [json.loads(path.read_text()) for path in
+               (install.home / ".albiex-synth-city/provider-upgrades").glob("*.json")]
+    assert not any(record["provider"] == "opencode-cli" and record["artifact"] == "mcp" for record in records)
+    assert not (install.root / "network-attempts").exists()
+
+
 @pytest.mark.parametrize("operation", ["remove", "add"])
 def test_t_i3_cli_failure_is_incomplete_and_normal_restart_finishes(tmp_path, operation):
     install = provision(tmp_path / "install")

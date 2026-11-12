@@ -26,6 +26,47 @@ def test_t_i2_server_name_and_hook_substrings_are_not_installation_identity(tmp_
     assert not is_owned_entry(own | {"command": str(impostor)}, shim)
 
 
+@pytest.mark.parametrize("transport", [
+    {"type": "remote"}, {"type": "http"}, {"transport": "sse"},
+    {"transport": {"type": "stdio"}}, {"url": "https://unrelated.invalid/mcp"},
+    {"server_url": "https://unrelated.invalid/mcp"},
+])
+def test_t_i2_remote_fields_override_residual_local_command_evidence(tmp_path, transport):
+    from app.services.provider_upgrade_artifacts import is_owned_entry
+    shim = tmp_path / "agent_mail_server.py"
+    shim.write_text("# actual installation")
+    local = {"command": sys.executable, "args": [str(shim)]}
+    assert is_owned_entry(local, shim)
+    assert not is_owned_entry(local | transport, shim)
+    opencode = {"type": "local", "command": [sys.executable, str(shim)]}
+    assert is_owned_entry(opencode, shim)
+    assert not is_owned_entry(opencode | transport, shim)
+
+
+@pytest.mark.parametrize("provider", ["claude-code", "muse-cli", "codex-cli", "copilot-cli", "opencode-cli"])
+def test_t_i2_transport_discriminators_match_the_provider_launch_shape(tmp_path, provider):
+    from app.services.provider_upgrade_artifacts import is_owned_entry
+    shim = tmp_path / "agent_mail_server.py"
+    shim.write_text("# actual installation")
+    scalar = {"command": sys.executable, "args": [str(shim)]}
+    array = {"type": "local", "command": [sys.executable, str(shim)]}
+    local = array if provider == "opencode-cli" else scalar
+    if provider == "muse-cli":
+        local = local | {"transport": "stdio"}
+    assert is_owned_entry(local, shim, provider=provider)
+    assert not is_owned_entry(local | {"type": "remote"}, shim, provider=provider)
+    assert not is_owned_entry(local | {"url": "https://unrelated.invalid/mcp"}, shim, provider=provider)
+    if provider == "opencode-cli":
+        assert not is_owned_entry(scalar | {"type": "local"}, shim, provider=provider)
+        assert not is_owned_entry({key: value for key, value in local.items() if key != "type"}, shim, provider=provider)
+    else:
+        assert not is_owned_entry(array, shim, provider=provider)
+    if provider == "muse-cli":
+        assert not is_owned_entry(scalar, shim, provider=provider)
+    if provider in ("claude-code", "codex-cli", "muse-cli"):
+        assert not is_owned_entry(local | {"type": "local"}, shim, provider=provider)
+
+
 @pytest.mark.parametrize("provider,payload", [
     ("codex-cli", [{"name": "claude-deck-mail", "command": "python", "args": ["/owned/shim"]}]),
     ("copilot-cli", {"mcpServers": {"claude-deck-mail": {"command": "python", "args": ["/owned/shim"]}}}),
@@ -36,6 +77,17 @@ def test_t_i2_cli_list_is_parsed_not_substring_matched(provider, payload):
     for text in ('notice: claude-deck-mail installed', '"claude-deck-mail"', '{"notice":"claude-deck-mail"}'):
         with pytest.raises(ValueError):
             parse_cli_entries(provider, text)
+
+
+def test_t_i2_nested_cli_transport_does_not_hide_contradictory_outer_fields():
+    from app.services.provider_upgrade_artifacts import parse_cli_entries
+    nested = {"type": "stdio", "command": "python", "args": ["/owned/shim"], "env": {}}
+    row = {"name": "claude-deck-mail", "transport": nested}
+    assert parse_cli_entries("codex-cli", json.dumps([row])) == {"claude-deck-mail": nested}
+    for conflict in ({"url": "https://unrelated.invalid/mcp"}, {"type": "remote"},
+                     {"command": "other"}, {"env": {"KEEP": "custom"}}):
+        with pytest.raises(ValueError):
+            parse_cli_entries("codex-cli", json.dumps([row | conflict]))
 
 
 def test_t_i1_full_entry_capture_preserves_custom_values_and_rejects_env_conflicts():

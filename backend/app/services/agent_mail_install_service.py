@@ -560,7 +560,7 @@ def _opencode_mcp_entry_is_current(entry: object) -> bool:
     return (
         entry.get("type") == "local"
         and entry.get("enabled", True) is not False
-        and is_owned_entry(entry, shim_path())
+        and is_owned_entry(entry, shim_path(), provider="opencode-cli")
         and isinstance(environment, dict)
         and isinstance(environment.get("SYNTH_CITY_URL"), str)
         and bool(environment.get("SYNTH_CITY_URL"))

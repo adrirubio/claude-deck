@@ -20,8 +20,19 @@ OFFLINE_BACKOFF_SECONDS = 2.0
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
 
-mcp = FastMCP("albiex-synth-city-mail")
 _UPGRADE_PROBE = "--synth-city-upgrade-tools-list-probe" in sys.argv[1:]
+
+
+class _UpgradeSafeFastMCP(FastMCP):
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        # The upgrade process needs initialize and tools/list only. Refuse all
+        # tools/call dispatch centrally, including tools without registration.
+        if _UPGRADE_PROBE:
+            return {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+        return await super().call_tool(name, arguments)
+
+
+mcp = _UpgradeSafeFastMCP("albiex-synth-city-mail")
 _register_lock = threading.Lock()
 _heartbeat_stop = threading.Event()
 _heartbeat_thread: threading.Thread | None = None

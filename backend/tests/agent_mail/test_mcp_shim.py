@@ -4,6 +4,8 @@ import inspect
 from io import StringIO
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_mcp_shim_imports_without_app_package_dependency():
     import mcp_shim.agent_mail_server as shim
@@ -1174,6 +1176,69 @@ def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
 
     assert hook.main() == 0
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("synth_city_create_team", {"name": "synthetic-probe-team"}),
+    ("synth_city_retry_work_item", {"work_item_id": 123}),
+])
+def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monkeypatch, name, arguments):
+    import asyncio
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from mcp import types
+
+    path = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
+    spec = importlib.util.spec_from_file_location("upgrade_dispatch_shim", path)
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py", "--synth-city-upgrade-tools-list-probe"])
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": 123}
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr(shim.httpx, "request", request)
+    denied = {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+
+    async def exercise_probe():
+        tools = await shim.mcp.list_tools()
+        # These paths bypass/ignore _ensure_registered. Exercise FastMCP and
+        # its installed wire handler, rather than calling the guard directly.
+        result = await shim.mcp.call_tool(name, arguments)
+        assert calls == [], "read-only probe emitted an HTTP mutation"
+        assert result == denied
+        wire = await shim.mcp._mcp_server.request_handlers[types.CallToolRequest](
+            types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
+                name=name, arguments=arguments)))
+        assert wire.root.structuredContent == denied
+        assert len(tools) == 36
+        # Every published tool is refused before validation or execution.
+        for tool in tools:
+            assert await shim.mcp.call_tool(tool.name, {}) == denied
+        assert shim._state["member_id"] is None and shim._state["capability_token"] is None
+        assert calls == []
+        return [tool.model_dump() for tool in tools]
+
+    probe_schemas = asyncio.run(exercise_probe())
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py"])
+    normal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(normal)
+    assert [tool.model_dump() for tool in asyncio.run(normal.mcp.list_tools())] == probe_schemas
+    # The same tool remains executable in ordinary mode (synthetic HTTP only).
+    asyncio.run(normal.mcp.call_tool("synth_city_create_team", {"name": "synthetic-normal-team"}))
+    assert len(calls) == 1 and calls[0][0][0] == "POST"
+
+
 def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_tools(monkeypatch):
     import asyncio
     import importlib.util

@@ -331,11 +331,11 @@ def _cli_operation(record, operation):
             raise a.Incomplete("cli_" + operation + "_unverified")
 
 
-async def _protocol(entry):
+async def _protocol(entry, provider):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from app.services import agent_mail_install_service as install
-    if not a.is_owned_entry(entry, install.shim_path()):
+    if not a.is_owned_entry(entry, install.shim_path(), provider=provider):
         raise a.Attention("probe_identity_changed")
     command, args = entry["command"], entry.get("args", [])
     if isinstance(command, list):
@@ -402,7 +402,7 @@ async def _resume(record):
             listed = a.cli_entries(record["provider"], a.executor(record["provider"]))
             if a.OLD in listed or not a.same_launch(listed.get(a.NEW), record["entry"]):
                 raise a.Incomplete("new_registration_unverified")
-        await _protocol(record["entry"])
+        await _protocol(record["entry"], record["provider"])
     record["stage"] = "verified"
     _persist(record)
     _checkpoint("verified", record)
