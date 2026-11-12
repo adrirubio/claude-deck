@@ -15,8 +15,8 @@ export default defineConfig({
   ],
 
   themeConfig: {
-    logo: '/albiex-logo-compact-dark.svg',
-    siteTitle: 'Albiex Synth City',
+    logo: { src: '/albiex-logo-compact-dark.svg', alt: 'Albiex Synth City' },
+    siteTitle: false,
 
     nav: [
       { text: 'Guide', link: '/guide/' },
