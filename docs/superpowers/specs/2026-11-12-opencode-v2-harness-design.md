@@ -71,7 +71,7 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 
 ### Acceptance questions that stay open
 
-These parts of #729 have no retained acceptance evidence. **The spike leaves them as open gaps, and #729 is not answered with acceptance evidence on these points.** The Supervisor's incident disposition allows no further probes in #729. The implementation issues #730–#733 must close these gaps with their own tests. The restoration-run observations (E1–E5, below) bear on all four, but they are research observations with explicit provenance, not acceptance evidence. The design below treats these points as unverified and gives no guarantee:
+These parts of #729 have no retained acceptance evidence. **The spike leaves them as open gaps, and #729 is not answered with acceptance evidence on these points.** The Supervisor's [incident disposition](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839418536) allows no further probes in #729. The implementation issues #730–#733 must close these gaps with their own tests. The restoration-run observations (E1–E5, below) bear on all four, but they are research observations with explicit provenance, not acceptance evidence. The design below treats these points as unverified and gives no guarantee:
 
 - **Q3:** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. In the original spike only the service-mode config effect is R. See E1 and E2.
 - **Q4:** the hook order and live payloads for `tool.execute.after` and `permission.evaluate`, and whether text pushed in the `context` hook reaches the model. In the original spike these are NR on both versions; only the 2.2.0 `context` and `prompt` hooks firing (P4) and the published types (A10) are retained. See E3.
@@ -200,9 +200,9 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 
 **Provenance.** After review, the owner ran a bounded evidence-restoration run on v2.2.7 only (2026-11-12, 23:28–23:35 UTC).
 - **Network and model:** it ran in a loopback-only network namespace that the Leader verified, with the stub provider only (`enabled_providers:["stub"]`).
-- **Retention:** every artifact was kept, and a hash manifest covers 50 files. The owner holds the artifacts privately; V1 verified the hashes.
+- **Retention:** every artifact was kept. The hash manifest is `evidence/MANIFEST.sha256` in the owner's private spike area: 50 files, manifest SHA-256 `98e3b45db0861405c7aa93d7b357fee745607adca05c217a537f84a61db2093f`. V1 verified the hashes.
 - **Authorization:** E1 ran within the Leader's authorization. **E2–E5 are a post-stop, unauthorized run.** The Leader had issued a stop, and the owner did not check Mail between probes, so E2–E5 ran after it.
-- **Status:** the Supervisor's incident disposition allows all five to be cited here as research observations. **They are not acceptance evidence for #729 or any later issue.**
+- **Status:** the Supervisor's [incident disposition](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839418536) allows all five to be cited here as research observations. **They are not acceptance evidence for #729 or any later issue.**
 - **Limits:** the namespace helper processes carried the owner's inherited token and identity variable names. The OpenCode processes' environment-name checks were printed only to the owner's session (NR). The Mail recorder is local, not Synth City. The recorder log kept the synthetic test prompts in one field and local paths.
 
 | Run | Question | Observation (v2.2.7, stub) |
@@ -264,13 +264,13 @@ opencode <directory> --standalone --session <ses_id> [--auto] [--prompt <text>]
 ### #733: Observation, guard and live check
 
 - **Activity:** use the plugin events as the primary source (answer 6). A `session_v2` reader for recovery, read-only, bound by session id and directory and schema-aware per version (F3), may only report `idle` or `unknown`. Proposed rule, **unverified** (an open #729 gap, Q6): report `working` only after the plugin has seen `session.execution.started` from the current server process. Report `unknown` for any busy-looking row with no such event, after a `session.execution.interrupted`, and while no live `serve --stdio` child is under the pane. `time_suspended` is set during every live execution, so it is not a crash marker (E5), and process liveness alone is not enough (E4). This spike does not guarantee the rule.
-- **Waiting for input:** `form.created` (question) and `permission.asked` raise the existing waiting-input notice, and the matching replied or cancelled events clear it (observed in E4, not acceptance evidence). #732 and #733 must prove these signals with their own tests before Deck relies on them.
+- **Waiting for input:** `form.created` (question) and `permission.asked` (approval) raise the existing waiting-input notice. `form.replied` / `form.cancelled` and `permission.replied` clear it. The question-form events were observed in E4 (a research observation, not acceptance evidence). E1–E5 contain no `permission.asked` or `permission.replied` records, so the approval signals rest only on the original spike's NR observations (answer 7) and stay proposed. `permission.evaluate` is a different hook. #732 and #733 must prove all of these signals with their own tests before Deck relies on them.
 - **Guard:** the team supervisor's OpenCode branch reads the bound session's assistant `content` text from `session_message` instead of a transcript file. It uses `session_part` only where that table exists (F3). Tool results and user prompts never create a hold, as for the other harnesses.
 - **Live check:** run one `--standalone` member on a real provider through Deck. It registers once with its own slot, Deck stores its `ses_` id, it resumes the same session after a restart, working and idle show correctly, and a forced question is denied. **The real-model behaviour this spike could not prove is checked here.**
 
 ## Rules for later harness probes (#730–#738)
 
-From the Supervisor's #729 incident disposition:
+From the Supervisor's [#729 incident disposition](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839418536):
 
 1. Start each third-party CLI with an empty environment and an explicit allowlist (for example `env -i HOME=… PATH=…`). Never inherit the agent session's environment.
 2. Configure only the local stub provider, and confirm that no hosted-provider fallback exists before the first turn.
