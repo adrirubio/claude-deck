@@ -299,6 +299,13 @@
       "count": 1,
       "category": "deny_only",
       "reason": "Historical ledger/repository safety pins for the live factory; refuse mismatches, do not retarget operations."
+    },
+    {
+      "path": ".gitignore",
+      "line": "~/.claude-registry/",
+      "count": 1,
+      "category": "deny_only",
+      "reason": "Prevent old installation data from being committed; do not read it as a runtime input."
     }
   ]
 }

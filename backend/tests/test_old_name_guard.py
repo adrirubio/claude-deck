@@ -12,18 +12,72 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci/old_names.py"
 
 
-def scan(tmp_path, files, exceptions=(), exclusions=()):
+def scan(tmp_path, files, exceptions=(), exclusions=(), executable=()):
     for name, content in files.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"schema_version": 1, "exclusions": list(exclusions),
-                                  "literal_exceptions": list(exceptions)}))
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    policy.write_text(json.dumps({"schema_version": 1, "exclusions": list(exclusions),
+                                  "literal_exceptions": list(exceptions)}))
+    for name in executable:
+        subprocess.run(["git", "-C", str(tmp_path), "update-index", "--chmod=+x", "--", name], check=True)
     return subprocess.run([sys.executable, str(SCRIPT), "--root", str(tmp_path),
                            "--policy", str(policy)], capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("name, executable, prefix", [
+    ("docs/package.json", False, ""),
+    ("docs/package-lock.json", False, ""),
+    ("docs/.vitepress/config.ts", False, ""),
+    ("docs/.vitepress/theme/custom.css", False, ""),
+    ("docs/public/favicon.svg", False, ""),
+    (".gitignore", False, ""),
+    (".config/service/settings.toml", False, ""),
+    ("future-config/.env.production", False, ""),
+    ("future-config/.babelrc", False, ""),
+    ("future-config/Dockerfile.release", False, ""),
+    ("future-machine.yml", False, ""),
+    ("future-source.py", False, ""),
+    ("future-config/Dockerfile", False, ""),
+    ("CLAUDE.md", False, ""),
+    ("future-agent/AGENTS.md", False, ""),
+    ("skills/example/SKILL.md", False, ""),
+    ("future-bin/runner", True, ""),
+    ("future-bin/script", False, "#!/bin/sh\n"),
+])
+def test_t_g1_tracked_machine_inputs_reject_old_names(tmp_path, name, executable, prefix):
+    result = scan(tmp_path, {name: prefix + "value = 'Claude Deck'\n"},
+                  executable=(name,) if executable else ())
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert name + ":" in result.stdout
+
+
+@pytest.mark.parametrize("name, executable, content", [
+    ("docs/package.json", False, '{"name": "albiex-synth-city"}\n'),
+    (".gitignore", False, "~/.albiex-synth-city/\n"),
+    ("future-bin/runner", True, "echo ready\n"),
+    ("future-bin/script", False, "#!/bin/sh\necho ready\n"),
+    ("future-agent/AGENTS.md", False, "Use Synth City.\n"),
+])
+def test_t_g1_selected_inputs_allow_clean_content(tmp_path, name, executable, content):
+    result = scan(tmp_path, {name: content}, executable=(name,) if executable else ())
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("content, expected", [
+    ("~/.claude-registry/\n", 0),
+    ("~/.claude-registry/\n~/.claude-registry/\n", 1),
+    ("", 1),
+    ("~/.claude-registry/\nCLAUDE_DECK_URL=old\n", 1),
+])
+def test_t_g1_old_home_deny_line_is_exact_and_counted(tmp_path, content, expected):
+    rule = {"path": ".gitignore", "line": "~/.claude-registry/", "count": 1,
+            "category": "deny_only", "reason": "Do not commit old installation data."}
+    result = scan(tmp_path, {".gitignore": content}, [rule])
+    assert result.returncode == expected, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("old", ["Claude Deck", "CLAUDE_DECK_URL", "claude_registry.db",

@@ -57,7 +57,8 @@ htmlcov/
 *.bak
 *.backup
 
-# Claude Deck specific
+# Synth City data
+~/.albiex-synth-city/
 ~/.claude-registry/
 .claude/commands/
 
