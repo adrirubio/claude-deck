@@ -5,7 +5,7 @@ import { defineConfig, devices } from '@playwright/test'
 import { resolvePorts } from './e2e/support/ports'
 import { E2E_LOCALE, E2E_TIMEZONE } from './e2e/support/time'
 
-// One isolated Deck instance serves the built UI and the API on one origin.
+// One isolated Albiex Synth City instance serves the built UI and the API on one origin.
 // scripts/e2e-instance.sh owns its temporary HOME, database and tmux server.
 // Free ports and a run token, chosen once in the main process. Workers load
 // this config again and inherit the values through process.env.

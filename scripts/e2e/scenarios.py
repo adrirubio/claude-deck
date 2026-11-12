@@ -1,4 +1,4 @@
-"""Synthetic E2E scenarios for the Deck v3.1 design reference.
+"""Synthetic E2E scenarios for the Albiex Synth City v3.1 design reference.
 
 Each scenario names the design-reference state it serves. IDs are fixed, so a
 journey can open ``/work/2`` or ``/teams/1``. Journeys should still find rows
@@ -266,7 +266,7 @@ def seed_core(s: Seeder, root: Path) -> None:
 
     # One agent, one state (#540): slot 5 has a live fake pane (start_panes),
     # a live MCP session and an old observation. "Live" is relative to the
-    # real clock: SEED_NOW can be up to an hour old, and Deck treats an MCP
+    # real clock: SEED_NOW can be up to an hour old, and Albiex Synth City treats an MCP
     # heartbeat older than 3600 s as offline. Only this row uses the real clock.
     heartbeat = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=2)).isoformat(sep=" ")
     idle = next(slot for slot in RELEASE_SLOTS if slot["id"] == IDLE_AGENT_SLOT)

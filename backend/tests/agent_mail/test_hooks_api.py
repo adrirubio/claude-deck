@@ -175,7 +175,7 @@ async def test_codex_hook_session_key_is_team_slot_qualified(client, db, tmp_pat
 async def test_session_start_without_session_id_fails_soft(client):
     resp = await client.post("/api/v1/agent-mail/hooks/session-start", json={"cwd": "/tmp"})
     assert resp.status_code == 200
-    assert resp.json()["hookSpecificOutput"]["additionalContext"] == "Check your Deck inbox."
+    assert resp.json()["hookSpecificOutput"]["additionalContext"] == "Check your Albiex Synth City inbox."
 
 
 @pytest.mark.asyncio

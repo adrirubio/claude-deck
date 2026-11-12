@@ -44,7 +44,7 @@ export function workLink(params: URLSearchParams, category: string) {
 }
 
 // The plain state of a watched repository: On, Off or Needs attention. The
-// reason is the one line that Deck gives for the intake state.
+// reason is the one line that Albiex Synth City gives for the intake state.
 export function repositoryState(r: {
   configured_enabled: boolean;
   team_automation_enabled: boolean;

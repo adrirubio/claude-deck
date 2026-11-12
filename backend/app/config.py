@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     )
 
     # Application settings
-    app_name: str = "Claude Deck"
-    app_version: str = "3.1.0"
+    app_name: str = "Albiex Synth City"
+    app_version: str = "4.0.0"
     debug: bool = False
 
     # API settings

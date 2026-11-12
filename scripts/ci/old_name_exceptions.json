@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "exclusions": [
+    {
+      "category": "negative_fixture",
+      "path": "backend/tests/**",
+      "reason": "Pinned old installations, old-input rejection tests and synthetic historical records."
+    },
+    {
+      "category": "negative_fixture",
+      "path": "frontend/tests/**",
+      "reason": "Old browser storage and sender fixtures prove upgrade behavior."
+    },
+    {
+      "category": "negative_fixture",
+      "path": "frontend/e2e/**",
+      "reason": "Synthetic historical input records in isolated browser journeys."
+    },
+    {
+      "category": "history",
+      "path": "docs/plans/**",
+      "reason": "Dated accepted planning records preserve exact historical source."
+    },
+    {
+      "category": "history",
+      "path": "docs/superpowers/**",
+      "reason": "Dated historical specifications and plans."
+    },
+    {
+      "category": "history",
+      "path": "CHANGELOG.md",
+      "reason": "Historical release prose, including the approved formerly line and old-to-new migration table."
+    },
+    {
+      "category": "guard_definition",
+      "path": "scripts/ci/old_names.py",
+      "reason": "Old-name patterns are rejection criteria, never accepted runtime input."
+    },
+    {
+      "category": "guard_definition",
+      "path": "scripts/ci/old_name_exceptions.json",
+      "reason": "Audited literal exception definitions, not runtime name acceptance."
+    },
+    {
+      "category": "negative_fixture",
+      "path": "integrations/pi-agent-mail/tests/**",
+      "reason": "T-P1 fixtures deliberately set old opt-in and environment names to prove they are refused; runtime extension remains scanned."
+    }
+  ],
+  "literal_exceptions": [
+    {
+      "path": "backend/app/database.py",
+      "line": "\"CREATE TABLE IF NOT EXISTS deck_compat_migrations (\"",
+      "count": 2,
+      "category": "frozen_constant",
+      "reason": "Section4.8 applied compatibility bookkeeping table is immutable."
+    },
+    {
+      "path": "backend/app/database.py",
+      "line": "\"INSERT INTO deck_compat_migrations (name, applied_at) \"",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Section4.8 applied compatibility bookkeeping table is immutable."
+    },
+    {
+      "path": "backend/app/database.py",
+      "line": "\"INSERT OR IGNORE INTO deck_compat_migrations \"",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Section4.8 applied compatibility bookkeeping table is immutable."
+    },
+    {
+      "path": "backend/app/database.py",
+      "line": "\"SELECT 1 FROM deck_compat_migrations WHERE name = :name\"",
+      "count": 2,
+      "category": "frozen_constant",
+      "reason": "Section4.8 applied compatibility bookkeeping table is immutable."
+    },
+    {
+      "path": "backend/app/services/factory_audit_service.py",
+      "line": "\" AND name = 'deck_compat_migrations'\"))).first()",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Read/write the same immutable applied-migration table; this is internal bookkeeping."
+    },
+    {
+      "path": "backend/app/services/factory_audit_service.py",
+      "line": "\"CREATE TABLE IF NOT EXISTS deck_compat_migrations (\"",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Read/write the same immutable applied-migration table; this is internal bookkeeping."
+    },
+    {
+      "path": "backend/app/services/factory_audit_service.py",
+      "line": "\"INSERT OR IGNORE INTO deck_compat_migrations (name, applied_at)\"",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Read/write the same immutable applied-migration table; this is internal bookkeeping."
+    },
+    {
+      "path": "backend/app/services/factory_audit_service.py",
+      "line": "\"SELECT applied_at FROM deck_compat_migrations WHERE name = :name\"),",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Read/write the same immutable applied-migration table; this is internal bookkeeping."
+    },
+    {
+      "path": "backend/app/services/github_approval_service.py",
+      "line": "_LEASE_HASH_DOMAIN = b\"claude-deck:github-workspace-lease:v1\\x00\"",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Section4.8 workspace-lease domain preserves stored hashes; no authorization is extended."
+    },
+    {
+      "path": "backend/app/services/instance_identity.py",
+      "line": "return hashlib.sha256(f\"claude-deck:{hostname}\".encode(\"utf-8\")).hexdigest()[:12]",
+      "count": 1,
+      "category": "frozen_constant",
+      "reason": "Section4.8 instance-ID v1 domain must preserve existing installation identities."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade.py",
+      "line": "if key.startswith((\"SYNTH_CITY_\", \"CLAUDE_DECK_\")):",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Old environment key names are retained only while converting captured provider registrations."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "OLD = \"claude-deck-mail\"",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "OLD_MARKER = \"Claude Deck Agent Mail OpenCode plugin\"",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "OLD_PLUGIN = \"claude-deck-agent-mail.js\"",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "args[args.index(\"--deck-url\")] = \"--synth-city-url\"",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "elif len(args) == 8 and args[2] in (\"--deck-url\", \"--synth-city-url\"):",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "for old, new in ((\"CLAUDE_DECK_URL\", \"SYNTH_CITY_URL\"), (\"CLAUDE_DECK_PROVIDER\", \"SYNTH_CITY_PROVIDER\")):",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "if \"--deck-url\" in args:",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "prefix = \"const DECK_URL = (\"",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "tail = re.sub(r\"(?m)^(const PROVIDER = process\\.env\\.)CLAUDE_DECK_PROVIDER\\b\", r\"\\1SYNTH_CITY_PROVIDER\", tail)",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "tail = re.sub(r\"^( \\|\\| process\\.env\\.)CLAUDE_DECK_URL\\b\", r\"\\1SYNTH_CITY_URL\", tail, count=1)",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "tail = re.sub(r'(?m)^(    const teamPresetID = envInt\\(\")CLAUDE_DECK_TEAM_PRESET_ID(\"\\);)$',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/services/provider_upgrade_artifacts.py",
+      "line": "tail = re.sub(r'(?m)^(    const teamSlotID = envInt\\(\")CLAUDE_DECK_TEAM_SLOT_ID(\"\\);)$',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Identify and rewrite positively owned old registrations, plugin markers and environment keys."
+    },
+    {
+      "path": "backend/app/upgrade_bootstrap.py",
+      "line": "OLD_HOME = '.claude-registry'",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Old default paths identify one-time journalled conversion sources."
+    },
+    {
+      "path": "backend/app/upgrade_bootstrap.py",
+      "line": "OLD_NAME = 'claude_registry.db'",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Old default paths identify one-time journalled conversion sources."
+    },
+    {
+      "path": "backend/mcp_shim/environment_warning.py",
+      "line": "names = sorted(name for name in os.environ if name.startswith(\"CLAUDE_DECK_\"))",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Enumerate obsolete variable names for a value-free warning; no old value is read."
+    },
+    {
+      "path": "backend/mcp_shim/environment_warning.py",
+      "line": "replacements = \"; \".join(f\"{name} -> SYNTH_CITY_{name[len('CLAUDE_DECK_'):]}\" for name in names)",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Enumerate obsolete variable names for a value-free warning; no old value is read."
+    },
+    {
+      "path": "frontend/src/lib/browserStorageMigration.ts",
+      "line": "actorKey: 'deck-agent-mail-actor-key',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Copy old browser keys once, then current readers use only the new keys."
+    },
+    {
+      "path": "frontend/src/lib/browserStorageMigration.ts",
+      "line": "actorToken: 'deck-agent-mail-actor-token',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Copy old browser keys once, then current readers use only the new keys."
+    },
+    {
+      "path": "frontend/src/lib/browserStorageMigration.ts",
+      "line": "operator: 'claude-deck.agent-teams.operator-token',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Copy old browser keys once, then current readers use only the new keys."
+    },
+    {
+      "path": "frontend/src/lib/browserStorageMigration.ts",
+      "line": "provider: 'claude-deck:selected-provider',",
+      "count": 1,
+      "category": "conversion_only",
+      "reason": "Copy old browser keys once, then current readers use only the new keys."
+    },
+    {
+      "path": "scripts/e2e-instance.sh",
+      "line": "\"BRIDGE_ATTACHMENT_DIR=$E2E_HOME/.claude-registry/bridge-attachments\"",
+      "count": 1,
+      "category": "negative_fixture",
+      "reason": "Explicit shipped old-default attachment path exercises first-start migration in the isolated fixture."
+    },
+    {
+      "path": "scripts/e2e-instance.sh",
+      "line": "if grep -rqsE 'claude-deck-mail|albiex-synth-city-mail|synth_city_check_inbox|/api/v1/agent-mail' \"$E2E_HOME\"; then",
+      "count": 1,
+      "category": "deny_only",
+      "reason": "Refuse a HOME that could connect fake agents to either old or new real Mail endpoints."
+    },
+    {
+      "path": "scripts/product-factory/agent-tmux",
+      "line": "_LEGACY_LIVE_SOCKET = \"/home/deckproduct/.local/state/claude-deck-product/tmux.sock\"",
+      "count": 1,
+      "category": "deny_only",
+      "reason": "Protect the existing live socket from kill-server; never select it as the default."
+    },
+    {
+      "path": "scripts/product-factory/productctl",
+      "line": "if queue['repo']!='juanrubio/claude-deck' or queue['integration']!='feature/software-delivery-product-reposition':sys.exit('Ledger destination mismatch.')",
+      "count": 1,
+      "category": "deny_only",
+      "reason": "Historical ledger/repository safety pins for the live factory; refuse mismatches, do not retarget operations."
+    },
+    {
+      "path": "scripts/product-factory/productctl",
+      "line": "if s['repo']!='juanrubio/claude-deck' or s['merge_policy']!='human' or s['concurrency']!=1:sys.exit('Recorded repository, human merge and concurrency one policy required.')",
+      "count": 1,
+      "category": "deny_only",
+      "reason": "Historical ledger/repository safety pins for the live factory; refuse mismatches, do not retarget operations."
+    }
+  ]
+}

@@ -211,8 +211,8 @@ def operations(provider_id):
     if provider_id == "claude-code":
         sources[0] = "backend/app/services/providers/claude_code.py"
     shared = {
-        "launch": ("Deck has a validated native launch contract.", ["Binary and Mail prerequisites", "Validated provider launch options", "Existing launch actor authorization"]),
-        "observe_session": ("Deck can associate native sessions under identity checks.", ["Provider-specific discovery", "Exact team/slot/member and pane identity", "Fresh observations"]),
+        "launch": ("Albiex Synth City has a validated native launch contract.", ["Binary and Mail prerequisites", "Validated provider launch options", "Existing launch actor authorization"]),
+        "observe_session": ("Albiex Synth City can associate native sessions under identity checks.", ["Provider-specific discovery", "Exact team/slot/member and pane identity", "Fresh observations"]),
         "mail_identity": ("Authenticated Mail identifies a team slot under the server binding contract.", ["Installed provider Mail integration", "Connected MCP session", "Matching team slot and capability"]),
         "receive_work": ("Mail briefs and wake delivery require a verified runnable recipient.", ["Current owned dispatch", "Authenticated Mail identity", "Verified wake target"]),
         "report_work_status": ("Structured status reporting preserves current owner authority.", ["Current owned work item", "Fresh dispatch and workspace lease", "Supported status transition"]),
@@ -230,7 +230,7 @@ def operations(provider_id):
     if provider_id == "pi-cli":
         result["launch"].conditions += ["Explicit extension opt-in", "Supported Pi/Node/Python integration runtime", "platform=openrouter"]
         result["resume_exact"].conditions += ["Exact full ID or project-local session file and matching header", "No foreign or guessed session"]
-        result["execution_controls"] = wire.Operation(state="unsupported", reason="Deck does not provide a Pi sandbox or native permission-enforcement controls.", evidence=sources, conditions=["Pi integration must not imply added isolation"])
+        result["execution_controls"] = wire.Operation(state="unsupported", reason="Albiex Synth City does not provide a Pi sandbox or native permission-enforcement controls.", evidence=sources, conditions=["Pi integration must not imply added isolation"])
     elif provider_id in {"copilot-cli", "opencode-cli"}:
         result["resume_exact"].conditions.append("Latest/continue is not exact resume; same-repository ambiguity blocks launch")
         result["execution_controls"].state = "unknown"

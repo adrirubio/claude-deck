@@ -2,7 +2,7 @@ import type { TeamCampaignSummary } from "@/types/agentTeams";
 import { campaignBarLabel } from "./campaign";
 
 // The bar is always drawn when there is known work. With a readable backlog it
-// shows the whole campaign. Without one it shows only the work that Deck has
+// shows the whole campaign. Without one it shows only the work that Albiex Synth City has
 // seen, and a dashed end marks the part that nobody knows, so the bar never
 // suggests that the campaign is nearly done.
 export function CampaignBar({ campaign: c }: { campaign: TeamCampaignSummary }) {

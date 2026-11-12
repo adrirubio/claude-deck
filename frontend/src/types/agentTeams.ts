@@ -191,7 +191,7 @@ export interface AgentTeamSummary {
   description: string | null
   parent_issue_url: string | null
   supervisor: 'none'
-  // Missing on an older server. Null means Deck could not read it.
+  // Missing on an older server. Null means Albiex Synth City could not read it.
   supervisor_observation?: SupervisorObservation | null
   waiting_input?: TeamWaitingInput[] | null
   // Missing on an older server. A row that cannot be read is ignored.

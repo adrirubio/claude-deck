@@ -1490,7 +1490,7 @@ async def test_pull_presentation_is_deterministic(db, issue_type, draft):
         "Closes #42\n\n"
         "Make identity explicit\n\n"
         "---\n"
-        "Claude Deck provenance\n"
+        "Albiex Synth City provenance\n"
         f"- Work item: {item.id}\n"
         f"- Owner slot: {owner.id}\n"
         "- Dispatch nonce: 0123456789abcdef\n"

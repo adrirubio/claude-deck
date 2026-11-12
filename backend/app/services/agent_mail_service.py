@@ -1725,10 +1725,10 @@ class AgentMailService:
             return "unknown external actor", "external_actor", None
         if sender_member_id is None:
             if sender_type == "system":
-                return "Deck", "system", None
+                return "Albiex Synth City", "system", None
             if sender_type == "director":
                 return "Director", "director", None
-            return "Deck or Director (recorded before v3.1)", "legacy", None
+            return "Albiex Synth City or Director (recorded before v3.1)", "legacy", None
         member = await db.get(MailTeamMember, sender_member_id)
         return (member.display_name if member else "unknown", "member", None)
 
@@ -2632,7 +2632,7 @@ class AgentMailService:
         me = next((candidate for candidate in team if candidate.id == member_id), None)
         others = [candidate for candidate in team if candidate.id != member_id]
 
-        lines = ["[Claude Deck Agent Mail]"]
+        lines = ["[Albiex Synth City Agent Mail]"]
         effective_role = slot.role if slot and slot.role else member.role
         role = f" ({effective_role})" if effective_role else ""
         lines.append(f'You are "{member.display_name}"{role} - repo: {member.repo_name}.')

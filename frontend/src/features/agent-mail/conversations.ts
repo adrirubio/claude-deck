@@ -33,7 +33,7 @@ export interface Conversation {
   lastAt: string
   state: ThreadState | null
   stale: boolean
-  /** Deck notices with the same subject and recipient collapse into one row. */
+  /** Albiex Synth City notices with the same subject and recipient collapse into one row. */
   notice: boolean
   count: number
 }
@@ -67,7 +67,7 @@ function isNotice(message: MailMessageResponse): boolean {
   return message.sender_type === 'system' && (message.kind === 'message' || message.kind === 'broadcast')
 }
 
-/** One row for each thread and one row for each group of Deck notices. Newest first. */
+/** One row for each thread and one row for each group of Albiex Synth City notices. Newest first. */
 export function buildConversations(messages: MailMessageResponse[], members: MailMemberResponse[]): Conversation[] {
   const byId = new Map(members.map((member) => [member.id, member]))
   const rows = new Map<string, Conversation>()

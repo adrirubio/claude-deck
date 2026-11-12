@@ -34,10 +34,10 @@ export function senderKind(message: MailMessageResponse): SenderKind {
   }
 }
 
-export const LEGACY_SENDER_LABEL = 'Deck or Director (recorded before v3.1)'
+export const LEGACY_SENDER_LABEL = 'Albiex Synth City or Director (recorded before v3.1)'
 
 /**
- * The sender label. Deck's own messages say Deck, never Director. A sender
+ * The sender label. Albiex Synth City's own messages say Albiex Synth City, never Director. A sender
  * with no known type reads "Unknown sender". The label grants no authority.
  */
 export function senderName(message: MailMessageResponse, members: MailMemberResponse[]): string {

@@ -1,4 +1,4 @@
-"""Claude Deck Agent Mail lifecycle hook shim."""
+"""Albiex Synth City Agent Mail lifecycle hook shim."""
 import argparse
 import json
 import os

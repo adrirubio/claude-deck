@@ -93,7 +93,7 @@ def render_summary(body: str, summary: CurrentSummary, *, expected_body_sha256: 
                 or re.search(r"<(?!\!--)[^>]+>", prefix)):
             raise ValueError("summary_markers_invalid")
         old = body[begin:finish + len(END)]
-        # Another Deck section inside this block belongs to another writer.
+        # Another Albiex Synth City section inside this block belongs to another writer.
         if "<!-- deck:" in old[len(START):-len(END)]:
             raise ValueError("summary_contains_foreign_section")
         rendered = prefix + summary.markdown() + body[finish + len(END):]

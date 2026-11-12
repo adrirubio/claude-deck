@@ -165,5 +165,5 @@ def option_keys_for(provider_id: str) -> tuple[str, ...]:
 
 
 def supports_bedrock(provider_id: str) -> bool:
-    """Return whether a provider exposes a Deck Bedrock launch path."""
+    """Return whether a provider exposes an Albiex Synth City Bedrock launch path."""
     return PROVIDER_BEDROCK_SUPPORT.get(provider_id, False)

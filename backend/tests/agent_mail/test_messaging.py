@@ -110,11 +110,11 @@ async def test_service_and_director_messages_have_distinct_senders(db, svc):
                               subject="Director note", body_markdown="Keep the change small."),
         sender_type="director", operator_authorized=True, auto_nudge=False,
     )
-    assert (system.sender_name, system.sender_type) == ("Deck", "system")
+    assert (system.sender_name, system.sender_type) == ("Albiex Synth City", "system")
     assert (director.sender_name, director.sender_type) == ("Director", "director")
     inbox = await svc.get_inbox(db, recipient.id)
     assert {(row.sender_name, row.sender_type) for row in inbox.messages} == {
-        ("Deck", "system"), ("Director", "director"),
+        ("Albiex Synth City", "system"), ("Director", "director"),
     }
 
 
@@ -134,24 +134,24 @@ async def test_system_broadcast_and_directly_created_notice_show_deck(db, svc):
     db.add(notice)
     await db.commit()
     response = await svc._message_response(db, notice, for_member_id=None)
-    assert (broadcast.sender_name, broadcast.sender_type) == ("Deck", "system")
-    assert (response.sender_name, response.sender_type) == ("Deck", "system")
+    assert (broadcast.sender_name, broadcast.sender_type) == ("Albiex Synth City", "system")
+    assert (response.sender_name, response.sender_type) == ("Albiex Synth City", "system")
     assert notice.sender_type == "system"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("subject,payload,delivery_key,expected", [
-    ("A notice", {"kind": "github_dispatch_idle_nudge"}, None, "Deck"),
-    ("Reconcile assigned backlog and independent work", None, None, "Deck"),
-    ("Release needed: issue #5", None, None, "Deck"),
-    ("Code PR ready for review", None, None, "Deck"),
-    ("Continuation progress check: issue #2", None, None, "Deck"),
-    ("An old notice", None, "backlog:1:2:3", "Deck"),
-    ("Waiting for input", {"notice": "native_input_wait"}, None, "Deck"),
-    ("An old note", None, None, "Deck or Director (recorded before v3.1)"),
-    ("An old note", {"sender_type": "director"}, None, "Deck or Director (recorded before v3.1)"),
-    ("An old note", {"kind": []}, None, "Deck or Director (recorded before v3.1)"),
-    ("Progress check: unrelated text", None, None, "Deck or Director (recorded before v3.1)"),
+    ("A notice", {"kind": "github_dispatch_idle_nudge"}, None, "Albiex Synth City"),
+    ("Reconcile assigned backlog and independent work", None, None, "Albiex Synth City"),
+    ("Release needed: issue #5", None, None, "Albiex Synth City"),
+    ("Code PR ready for review", None, None, "Albiex Synth City"),
+    ("Continuation progress check: issue #2", None, None, "Albiex Synth City"),
+    ("An old notice", None, "backlog:1:2:3", "Albiex Synth City"),
+    ("Waiting for input", {"notice": "native_input_wait"}, None, "Albiex Synth City"),
+    ("An old note", None, None, "Albiex Synth City or Director (recorded before v3.1)"),
+    ("An old note", {"sender_type": "director"}, None, "Albiex Synth City or Director (recorded before v3.1)"),
+    ("An old note", {"kind": []}, None, "Albiex Synth City or Director (recorded before v3.1)"),
+    ("Progress check: unrelated text", None, None, "Albiex Synth City or Director (recorded before v3.1)"),
 ])
 async def test_legacy_senderless_rows_use_reliable_or_uncertain_attribution(
     db, svc, subject, payload, delivery_key, expected,
@@ -166,7 +166,7 @@ async def test_legacy_senderless_rows_use_reliable_or_uncertain_attribution(
     await db.refresh(row)
     response = await svc._message_response(db, row, for_member_id=None)
     assert response.sender_name == expected
-    assert response.sender_type == ("system" if expected == "Deck" else "legacy")
+    assert response.sender_type == ("system" if expected == "Albiex Synth City" else "legacy")
     assert row.sender_type is None
 
 
@@ -190,7 +190,7 @@ async def test_dispatch_brief_is_attributed_to_deck(db, svc, monkeypatch):
     member = await agent_mail_service.get_or_create_slot_member(db, slot)
     inbox = await svc.get_inbox(db, member.id)
     assert len(inbox.messages) == 1
-    assert (inbox.messages[0].sender_name, inbox.messages[0].sender_type) == ("Deck", "system")
+    assert (inbox.messages[0].sender_name, inbox.messages[0].sender_type) == ("Albiex Synth City", "system")
     assert inbox.messages[0].id == item.brief_message_id
 
 

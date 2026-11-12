@@ -1,4 +1,4 @@
-"""Refuse interactive questions in unattended Deck team sessions."""
+"""Refuse interactive questions in unattended Albiex Synth City team sessions."""
 import json
 import os
 import sys
@@ -24,7 +24,7 @@ def main() -> int:
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
         "permissionDecisionReason": (
-            "Deck team sessions cannot use interactive question prompts. "
+            "Albiex Synth City team sessions cannot use interactive question prompts. "
             "Use Agent Mail. Ask the Leader about assignments, plans, and sequencing. "
             "Ask the Supervisor about incidents, gates, harnesses, workspaces, and stalls. "
             "Use an operator action record for a retained operator decision. "

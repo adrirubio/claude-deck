@@ -3256,7 +3256,7 @@ async def test_content_hooks_use_the_authenticated_member_or_a_fixed_reminder(au
         response = await auth_client.post(endpoint, headers=headers, json=payload)
         assert response.status_code == 200
         assert response.json() == {"hookSpecificOutput": {
-            "hookEventName": event, "additionalContext": "Check your Deck inbox."}}
+            "hookEventName": event, "additionalContext": "Check your Albiex Synth City inbox."}}
         build.assert_not_awaited()
     response = await auth_client.post(endpoint, headers=own, json=payload)
     assert response.status_code == 200
