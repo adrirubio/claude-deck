@@ -120,7 +120,7 @@ for (const width of [390, 320]) {
   })
 }
 
-for (const width of [390, 320]) {
+for (const width of [390, 375, 320]) {
   test.describe(`the container warning at ${width} px`, () => {
     test.use({ viewport: { width, height: 844 }, hasTouch: true })
 
@@ -137,6 +137,18 @@ for (const width of [390, 320]) {
       await page.keyboard.press('Enter')
       const dialog = page.getByRole('dialog')
       await expect(dialog).toContainText(WARNING)
+      // The title keeps 4 px clear of the close button's focus ring (2 px ring, 2 px offset).
+      const { titleRight, ringLeft } = await dialog.evaluate(element => {
+        const title = element.querySelector('h2')!
+        const range = document.createRange()
+        range.selectNodeContents(title)
+        const close = [...element.querySelectorAll('button')].find(button => button.textContent?.includes('Close'))!
+        return {
+          titleRight: Math.max(...[...range.getClientRects()].map(rect => rect.right)),
+          ringLeft: close.getBoundingClientRect().left - 4,
+        }
+      })
+      expect(ringLeft - titleRight, 'the title crowds the close button').toBeGreaterThanOrEqual(4)
       await page.keyboard.press('Escape')
       await expect(dialog).toBeHidden()
 

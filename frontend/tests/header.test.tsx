@@ -97,7 +97,10 @@ describe("Header", () => {
       const warning = screen.getByRole("button", { name: new RegExp(LABEL) });
       warning.focus();
       await user.keyboard("{Enter}");
-      expect(await screen.findByRole("dialog")).toHaveTextContent(WARNING);
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent(WARNING);
+      // Side padding keeps the title clear of the close button and its focus ring.
+      expect(screen.getByRole("heading", { name: LABEL }).parentElement).toHaveClass("px-5");
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });

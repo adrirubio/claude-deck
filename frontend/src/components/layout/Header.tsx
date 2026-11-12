@@ -102,7 +102,8 @@ export function Header() {
                     </button>
                   </DialogTrigger>
                   <DialogContent className={MODAL_SIZES.SM}>
-                    <DialogHeader>
+                    {/* Side padding keeps the title clear of the close button and its focus ring. */}
+                    <DialogHeader className="px-5">
                       <DialogTitle>{CLI_WARNING_LABEL}</DialogTitle>
                       <DialogDescription>{status.environment.agent_cli_warning}</DialogDescription>
                     </DialogHeader>
