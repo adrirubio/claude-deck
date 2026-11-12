@@ -236,14 +236,47 @@ async def test_stopped_attempts_and_recorded_pauses_use_existing_signals(db, mon
 @pytest.mark.asyncio
 async def test_shared_time_limit_and_item_limit_keep_unknown_coverage(db, monkeypatch):
     team, _, items = await seed(db, ("dispatched", "dispatched"))
-    async def slow(db, item_id):
-        await asyncio.sleep(2)
-    summary, reads = service(monkeypatch, {items[0].id: slow}, observation_seconds=0.5)
+    # Deterministic collaborators for this test only: the pre-item activity and
+    # supervisor reads return instantly, so the shared budget below is spent
+    # only on the real snapshot/pauses reads and the blocked item read. The
+    # budget does not race their scheduling latency (the old flake: when those
+    # reads ate the 0.5s budget, the item read was never invoked).
+    from types import SimpleNamespace
+
+    async def no_supervisor(db, preset_id, now=None):
+        return None
+
+    async def empty_activity(db, preset_id, **kwargs):
+        return SimpleNamespace(slots=[], valid_until=datetime.now(timezone.utc) + timedelta(seconds=60))
+
+    async def empty_inputs(db, preset_id, max_rows=None):
+        return []
+
+    monkeypatch.setattr("app.services.agent_team_summary_service.observe_supervisor", no_supervisor)
+    monkeypatch.setattr("app.services.agent_activity_service.observe_team", empty_activity)
+    monkeypatch.setattr("app.services.agent_activity_service._team_inputs", empty_inputs)
+    started, cancelled = [], []
+    never = asyncio.Event()
+
+    async def blocked(db, item_id):
+        started.append(item_id)
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled.append(item_id)
+            raise
+
+    # The blocked read can never complete on its own, at any budget length, so
+    # a 1s budget (vs ~0.01-0.03s of real pre-item sqlite reads) keeps the same
+    # time-limit semantics as 0.5s: only deadline cancellation can end the read.
+    summary, reads = service(monkeypatch, {items[0].id: blocked}, observation_seconds=1)
     item_id, team_id = items[0].id, team.id
     result = await summary.summary(db, team.id)
     assert result.remaining_work.state == "unknown"
     assert not result.next_actor_coverage_complete
     assert reads.calls == [item_id]
+    assert started == [item_id]
+    assert cancelled == [item_id]
     summary, reads = service(monkeypatch, item_limit=1)
     result = await summary.summary(db, team_id)
     assert result.remaining_work.unfinished_items == 2
