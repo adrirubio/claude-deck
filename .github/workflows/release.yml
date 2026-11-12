@@ -99,10 +99,10 @@ jobs:
       - name: Create release archive
         run: |
           cd frontend/dist
-          zip -r "../../claude-deck-frontend-v${RELEASE_VERSION}.zip" .
+          zip -r "../../albiex-synth-city-frontend-v${RELEASE_VERSION}.zip" .
           cd ../..
-          tar -czvf "claude-deck-frontend-v${RELEASE_VERSION}.tar.gz" -C frontend/dist .
-          sha256sum "claude-deck-frontend-v${RELEASE_VERSION}.zip" "claude-deck-frontend-v${RELEASE_VERSION}.tar.gz" > SHA256SUMS.txt
+          tar -czvf "albiex-synth-city-frontend-v${RELEASE_VERSION}.tar.gz" -C frontend/dist .
+          sha256sum "albiex-synth-city-frontend-v${RELEASE_VERSION}.zip" "albiex-synth-city-frontend-v${RELEASE_VERSION}.tar.gz" > SHA256SUMS.txt
 
       - name: Prepare release description
         run: |
@@ -130,8 +130,8 @@ jobs:
           path: |
             release-description.md
             SHA256SUMS.txt
-            claude-deck-frontend-v${{ inputs.version }}.zip
-            claude-deck-frontend-v${{ inputs.version }}.tar.gz
+            albiex-synth-city-frontend-v${{ inputs.version }}.zip
+            albiex-synth-city-frontend-v${{ inputs.version }}.tar.gz
 
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
@@ -139,13 +139,13 @@ jobs:
         with:
           tag_name: v${{ inputs.version }}
           target_commitish: ${{ inputs.commit }}
-          name: Claude Deck v${{ inputs.version }}
+          name: Albiex Synth City v${{ inputs.version }}
           body_path: release-description.md
           draft: false
           prerelease: ${{ contains(inputs.version, '-') }}
           files: |
-            claude-deck-frontend-v${{ inputs.version }}.zip
-            claude-deck-frontend-v${{ inputs.version }}.tar.gz
+            albiex-synth-city-frontend-v${{ inputs.version }}.zip
+            albiex-synth-city-frontend-v${{ inputs.version }}.tar.gz
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

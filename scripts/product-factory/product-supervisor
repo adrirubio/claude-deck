@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Pause this product factory on recognised safety notices; never retry or change roster."""
 import datetime,json,pathlib,re,sqlite3,subprocess,urllib.request,urllib.error,os,signal,tempfile
-BASE=pathlib.Path('/opt/claude-deck-product'); OPS=pathlib.Path('/home/deckproductctl/work/operations'); STATE=BASE/'state'; API='http://127.0.0.1:8011/api/v1'
+BASE=pathlib.Path('/opt/albiex-synth-city-product'); OPS=pathlib.Path('/home/deckproductctl/work/operations'); STATE=BASE/'state'; API='http://127.0.0.1:8011/api/v1'
 RULES={'cybersecurity_notice':re.compile(r'this content was flagged for possible cybersecurity risk',re.I),'cyber_authorization_notice':re.compile(r'to get authorized for security work.{0,100}trusted access for cyber',re.I|re.S),'cyber_safety_error':re.compile(r'cyber(?:security)?[_ -](?:safety[_ -])?(?:block(?:ed)?|restriction|content[_ -]filter)|content_policy_violation|safety[_ -]check[_ -]failed',re.I)}
 def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def request(method,path,body=None):
@@ -46,7 +46,7 @@ def freeze_product_execution():
  roots=set()
  targets={i.get('tmux_target') for i in json.loads(launch.read_text()).get('items',[]) if i.get('slot_id') in {1,2,3,4}}
  # Trusted controller-owned binding rows avoid dependence on a responsive tmux command.
- with sqlite3.connect('file:/home/deckproductctl/.local/state/claude-deck-product/factory.db?mode=ro',uri=True,timeout=2) as db:
+ with sqlite3.connect('file:/home/deckproductctl/.local/state/albiex-synth-city-product/factory.db?mode=ro',uri=True,timeout=2) as db:
   rows=db.execute('SELECT pane_pid,pane_proc_start,tmux_target FROM agent_pane_bindings WHERE preset_id=1 AND slot_id IN (1,2,3,4)').fetchall()
  for pid,start,target in rows:
   if target in targets and starts.get(pid)==str(start) and uids.get(pid)==1002:roots.add(pid)
@@ -115,7 +115,7 @@ def tick():
   for item in json.loads(launch.read_text()).get('items',[]):
    target=item.get('tmux_target')
    if not target or item.get('slot_id') not in {slot['id'] for slot in preset['slots']}:continue
-   result=subprocess.run(['sudo','-H','-u','deckproduct','/opt/claude-deck-product/agent-bin/tmux','capture-pane','-t',target,'-p','-S','-100'],capture_output=True,text=True,timeout=5,cwd='/tmp')
+   result=subprocess.run(['sudo','-H','-u','deckproduct','/opt/albiex-synth-city-product/agent-bin/tmux','capture-pane','-t',target,'-p','-S','-100'],capture_output=True,text=True,timeout=5,cwd='/tmp')
    if result.returncode==0:
     for key in ['cybersecurity_notice','cyber_authorization_notice']:
      if RULES[key].search(result.stdout):

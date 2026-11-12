@@ -1,0 +1,8 @@
+[Unit]
+Description=Lane B cybersecurity and controller supervision guard
+After=albiex-synth-city-product.service
+OnFailure=albiex-synth-city-product-supervisor-failure.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/albiex-synth-city-product/libexec/product-supervisor
+UMask=0077

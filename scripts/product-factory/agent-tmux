@@ -13,7 +13,10 @@ import pwd
 import sys
 
 TMUX = "/usr/bin/tmux"
-LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
+LIVE_SOCKET = "/home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock"
+# Deny-only safety boundary for the factory that still runs during cutover.
+# This is never selected as a default or a compatibility launch target.
+_LEGACY_LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
 _ARG_OPTION_CHARS = frozenset("cfTLS")
 _SEPARATORS = (";", "\\;")
 
@@ -24,7 +27,7 @@ def sanitized_env():
         "HOME": u.pw_dir,
         "USER": u.pw_name,
         "LOGNAME": u.pw_name,
-        "PATH": "/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin",
+        "PATH": "/opt/albiex-synth-city-product/agent-bin:/opt/albiex-synth-city-product/tools:/usr/bin:/bin",
         "LANG": "C.UTF-8",
         "TERM": os.environ.get("TERM", "xterm-256color"),
         "SYNTH_CITY_URL": "http://127.0.0.1:8011",
@@ -113,17 +116,18 @@ def command_names(argv):
     return names
 
 
-def targets_live(socket):
+def targets_live(socket, *, deny_legacy=False):
     if socket is None:
         return True
     kind, value = socket
-    return kind == "-S" and os.path.realpath(value) == os.path.realpath(LIVE_SOCKET)
+    targets = (LIVE_SOCKET, _LEGACY_LIVE_SOCKET) if deny_legacy else (LIVE_SOCKET,)
+    return kind == "-S" and any(os.path.realpath(value) == os.path.realpath(target) for target in targets)
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     socket = caller_socket(args)
-    if "kill-server" in command_names(args) and targets_live(socket):
+    if "kill-server" in command_names(args) and targets_live(socket, deny_legacy=True):
         print("agent-tmux: refusing kill-server against the live agent server", file=sys.stderr)
         return 1
     if socket is not None and not targets_live(socket):
