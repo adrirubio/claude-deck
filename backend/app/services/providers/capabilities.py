@@ -40,7 +40,7 @@ def capability(state: str, label: str, reason: str | None = None) -> dict[str, s
 
 PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
     "muse-cli": {
-        "spawn": capability("write_capable", "Spawn Sessions", "Deck can launch Muse Code on a Muse subscription or API key."),
+        "spawn": capability("write_capable", "Spawn Sessions", "Albiex Synth City can launch Muse Code on a Muse subscription or API key."),
         "resume": capability("write_capable", "Resume Sessions", "Exact Muse Code sessions can be resumed by UUID."),
         "sessions": capability("read_only", "Agent Bridge Sessions", "Discover running Muse Code panes and read their event logs."),
         "mcp": capability("write_capable", "MCP Servers", "Agent Mail can install a Muse Code MCP server entry in the user settings."),
@@ -48,7 +48,7 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "permissions": capability("unsupported", "Permissions", "Questions are detected and escalated; a hook cannot block them."),
     },
     "pi-cli": {
-        "spawn": capability("write_capable", "Spawn Sessions", "Deck can launch Pi with its opt-in mail extension."),
+        "spawn": capability("write_capable", "Spawn Sessions", "Albiex Synth City can launch Pi with its opt-in mail extension."),
         "resume": capability("write_capable", "Resume Sessions", "Exact project-local Pi sessions can be resumed."),
         "sessions": capability("read_only", "Agent Bridge Sessions", "Discover running Pi panes; transcript inventory is not exposed."),
     },
@@ -103,10 +103,10 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "sessions": capability("write_capable", "Agent Bridge Sessions", "Agent Bridge can discover and launch Copilot CLI sessions."),
         "spawn": capability("write_capable", "Spawn Sessions", "Agent Bridge can launch Copilot CLI sessions."),
         "resume": capability("write_capable", "Resume Sessions", "Copilot CLI resume and continue flags are available."),
-        "fork": capability("unsupported", "Fork Sessions", "Copilot CLI does not expose a Deck-compatible fork workflow."),
+        "fork": capability("unsupported", "Fork Sessions", "Copilot CLI does not expose an Albiex Synth City-compatible fork workflow."),
         "mcp": capability("write_capable", "MCP Servers", "Copilot CLI MCP servers can be managed through the Copilot CLI."),
         "plugins": capability("read_only", "Plugins", "Copilot CLI plugin inventory exists but is not managed in this build."),
-        "permissions": capability("unsupported", "Permissions", "Copilot CLI permissions are launch flags and hooks, not a Deck-managed page yet."),
+        "permissions": capability("unsupported", "Permissions", "Copilot CLI permissions are launch flags and hooks, not an Albiex Synth City-managed page yet."),
         "commands": capability("unsupported", "Commands", "Copilot CLI command configuration is not surfaced in this build."),
         "agents": capability("read_only", "Agents", "Copilot CLI custom agents can be selected at launch but not edited in this build."),
         "skills": capability("read_only", "Skills", "Copilot CLI skills can be discovered locally but not edited in this build."),
@@ -126,10 +126,10 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "sessions": capability("write_capable", "Agent Bridge Sessions", "Agent Bridge can discover and launch OpenCode sessions."),
         "spawn": capability("write_capable", "Spawn Sessions", "Agent Bridge can launch OpenCode sessions."),
         "resume": capability("write_capable", "Resume Sessions", "OpenCode continue and session flags are available."),
-        "fork": capability("unsupported", "Fork Sessions", "OpenCode fork mode is not exposed through Deck yet."),
+        "fork": capability("unsupported", "Fork Sessions", "OpenCode fork mode is not exposed through Albiex Synth City yet."),
         "mcp": capability("write_capable", "MCP Servers", "Agent Mail can install an OpenCode MCP server entry."),
         "plugins": capability("write_capable", "Plugins", "Agent Mail can install a small OpenCode lifecycle plugin."),
-        "permissions": capability("unsupported", "Permissions", "OpenCode permissions are launch flags and provider config, not a Deck-managed page yet."),
+        "permissions": capability("unsupported", "Permissions", "OpenCode permissions are launch flags and provider config, not an Albiex Synth City-managed page yet."),
         "commands": capability("unsupported", "Commands", "OpenCode command configuration is not surfaced in this build."),
         "agents": capability("read_only", "Agents", "OpenCode agents can be selected at launch but not edited in this build."),
         "skills": capability("unsupported", "Skills", "OpenCode skills are not surfaced in this build."),

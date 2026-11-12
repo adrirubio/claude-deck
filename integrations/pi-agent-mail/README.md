@@ -9,7 +9,7 @@ python sync_manifest.py
 python sync_manifest.py --check
 ```
 
-The command reads tool definitions. It does not register an agent or call the Deck API.
+The command reads tool definitions. It does not register an agent or call the Albiex Synth City API.
 
 Backend tests compare the complete list with the real server. The pinned Pi runtime tests check argument validation. Fixture transport tests keep the existing schema check, pane fence, and uncertain outcome rules.
 
@@ -20,10 +20,10 @@ session. The file contains process identity, session identity, state, and time.
 It contains no prompt, reply, tool argument, credential, or UI prompt title.
 It does not grant dispatch, approval, or Mail authority.
 
-Deck reads this file through the current authenticated Mail pane binding. It
+Albiex Synth City reads this file through the current authenticated Mail pane binding. It
 checks the authenticated session's exact native PID, its kernel start, its pane ancestry, its project,
 and the native session header. Pi keeps the first turn in memory until the first
-assistant reply. The extension supplies the SDK header during that turn. Deck
+assistant reply. The extension supplies the SDK header during that turn. Albiex Synth City
 also checks the file header as soon as the file exists. It does not select the
 newest session file.
 The native process must have existed when its authenticated Mail session was

@@ -1018,7 +1018,7 @@ class AgentTeamService:
             if slot.provider == "codex-cli" and options.mode != "resume":
                 observation_message = (
                     ". Codex: restart needed for observation. "
-                    "Resume the saved rollout ID through Deck after capture"
+                    "Resume the saved rollout ID through Albiex Synth City after capture"
                 )
             result = AgentTeamLaunchResultItem(
                 slot_id=slot.id,
@@ -1693,7 +1693,7 @@ class AgentTeamService:
             base = slot.bootstrap_prompt
         else:
             parts = [
-                f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
+                f'You are being started by Albiex Synth City as part of Agent Team "{preset.name}".',
                 f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
                 "Call `synth_city_whoami` when the session starts, then check your inbox with `synth_city_check_inbox(unread_only=False)`.",
             ]

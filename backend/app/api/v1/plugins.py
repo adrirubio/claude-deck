@@ -1,5 +1,5 @@
 """
-Plugin API endpoints for Claude Deck
+Plugin API endpoints for Albiex Synth City
 """
 
 from typing import Optional

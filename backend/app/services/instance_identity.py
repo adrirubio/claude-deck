@@ -1,4 +1,4 @@
-"""Runtime identity metadata for this Claude Deck backend instance."""
+"""Runtime identity metadata for this Albiex Synth City backend instance."""
 
 from __future__ import annotations
 

@@ -67,6 +67,11 @@ describe("ComposeDialog delivery warning", () => {
 });
 
 describe("senderName and senderKind", () => {
+  it("uses the approved full product name in the pre-v3.1 fallback", () => {
+    expect(LEGACY_SENDER_LABEL).toBe("Albiex Synth City or Director (recorded before v3.1)");
+    expect(senderName(message(99, { sender_type: "legacy" }), MEMBERS)).toBe("Albiex Synth City or Director (recorded before v3.1)");
+  });
+
   it("reads the label only from sender_type and sender_name", () => {
     expect(senderName(BY_TYPE.deck, MEMBERS)).toBe("Albiex Synth City");
     expect(senderName(BY_TYPE.director, MEMBERS)).toBe("Director");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the Deck E2E database with deterministic, synthetic state.
+"""Seed the Albiex Synth City E2E database with deterministic, synthetic state.
 
 The ORM creates the schema (``init_db``). Rows are then written with stdlib
 ``sqlite3``: SQLAlchemy defaults are Python-side, so every NOT NULL column is
@@ -27,7 +27,7 @@ def _seed_now() -> datetime:
 
     playwright.config.ts sets E2E_SEED_NOW once per run, so the instance and
     the journeys share one value. Offsets from it are identical on every run,
-    and the data stays inside Deck's recent windows (for example Audit's 7 days).
+    and the data stays inside Albiex Synth City's recent windows (for example Audit's 7 days).
     """
     value = os.environ.get("E2E_SEED_NOW")
     if value:
@@ -36,7 +36,7 @@ def _seed_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None, minute=0, second=0, microsecond=0)
 
 
-SEED_NOW = _seed_now()  # naive UTC, as Deck stores it
+SEED_NOW = _seed_now()  # naive UTC, as Albiex Synth City stores it
 
 
 def at(**delta: float) -> str:

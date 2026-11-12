@@ -529,7 +529,7 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
 def _inputs_from_rows(slots, options, members, bound_rows):
     """Build the same native inputs from an existing read snapshot."""
     # A rollout identifies a conversation, not its writer PID. Conservatively
-    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
+    # reject UUID reuse anywhere in Albiex Synth City, including other presets/disabled slots,
     # so another harness cannot supply a false Working event for this owner.
     native_identity_counts: dict[str, int] = {}
     for (launch_options,) in options:
@@ -698,7 +698,7 @@ async def _record_input_waits(db, preset_id, inputs, metadata, current, *, now) 
     return changed
 
 
-# First-launch session ids that Deck discovers from the live process.
+# First-launch session ids that Albiex Synth City discovers from the live process.
 _DISCOVERED_IDENTITY_PROVIDERS = {"codex-cli", "muse-cli"}
 
 

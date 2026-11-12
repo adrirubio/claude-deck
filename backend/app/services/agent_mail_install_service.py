@@ -821,7 +821,7 @@ def installed_muse_hooks() -> list[str]:
 
 
 def _muse_hook_group_is_current(group: object, slug: str) -> bool:
-    # Deck's Muse groups carry no matcher, so they run for every session source.
+    # Albiex Synth City's Muse groups carry no matcher, so they run for every session source.
     if not isinstance(group, dict) or group.get("matcher") is not None:
         return False
     hooks = group.get("hooks")
@@ -1101,8 +1101,8 @@ def get_snippets() -> AgentMailSnippets:
         f'env = {{ SYNTH_CITY_URL = "{synth_city_base_url()}", SYNTH_CITY_PROVIDER = "codex-cli" }}\n'
     )
     agents_md = (
-        "## Claude Deck Agent Mail\n"
-        "You are part of a local agent team coordinated through Claude Deck.\n"
+        "## Albiex Synth City Agent Mail\n"
+        "You are part of a local agent team coordinated through Albiex Synth City.\n"
         "- Call `synth_city_whoami` once when you start working to register and learn your role.\n"
         "- Call `synth_city_check_inbox` before starting major tasks and after finishing one.\n"
         "- Use `synth_city_request_context` to ask another repo's agent a question, and\n"

@@ -27,7 +27,7 @@ export default function deckMail(pi: ExtensionAPI) {
       await startup
       if (generation === selected) activity.start(ctx, pane, () => generation === selected && selected.ownsActivity())
     } catch {
-      ctx.ui.notify('Deck Agent Mail is unavailable or fenced. Tools remain disabled; operator recovery may be required.', 'error')
+      ctx.ui.notify('Albiex Synth City Agent Mail is unavailable or fenced. Tools remain disabled; operator recovery may be required.', 'error')
     }
   })
   pi.on('session_shutdown', stop)

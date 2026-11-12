@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end probe for two same-repo Codex agents communicating through Agent Mail.
-# The planner intentionally stops after requesting review, so success requires Deck
+# The planner intentionally stops after requesting review, so success requires Albiex Synth City
 # to wake it before it reads the reviewer feedback.
 #
 # Requirements:
-# - Claude Deck backend running on DECK_URL, default http://127.0.0.1:8000
+# - Albiex Synth City backend running on DECK_URL, default http://127.0.0.1:8000
 # - Codex Agent Mail MCP/hooks installed
 # - tmux, codex, curl, jq
 #
@@ -29,7 +29,7 @@ SUCCESS_TOKEN="E2E_AGENT_MAIL_ROUNDTRIP_${RUN_ID}"
 FEEDBACK_TOKEN="E2E_REVIEW_FEEDBACK_${RUN_ID}"
 WAITING_TOKEN="E2E_PLANNER_WAITING_FOR_NUDGE_${RUN_ID}"
 INBOX_NUDGE_PREFIX='Albiex Synth City Agent Mail: call `synth_city_check_inbox'
-TMP_DIR="${TMPDIR:-/tmp}/claude-deck-agent-mail-e2e-${RUN_ID}"
+TMP_DIR="${TMPDIR:-/tmp}/albiex-synth-city-agent-mail-e2e-${RUN_ID}"
 
 PRESET_ID=""
 PLANNER_ID=""
@@ -85,7 +85,7 @@ approve_visible_prompts() {
   local target pane
   jq -r '.items[].tmux_target // empty' "$TMP_DIR/launch.json" | while IFS= read -r target; do
     pane="$(capture_pane "$target")"
-    if printf '%s' "$pane" | rg -q 'Allow the claude-deck-mail MCP server to run tool'; then
+    if printf '%s' "$pane" | rg -q 'Allow the albiex-synth-city-mail MCP server to run tool'; then
       tmux send-keys -t "$target" Down Enter
       sleep 0.8
     fi
@@ -227,14 +227,14 @@ payload="$(
           role: "Planner",
           charter: "Create a tiny plan, request review from the reviewer slot, then confirm when feedback is received.",
           bootstrap_prompt: (
-            "You are the planner in an automated Claude Deck Agent Mail E2E test. " +
+            "You are the planner in an automated Albiex Synth City Agent Mail E2E test. " +
             "First call synth_city_whoami and synth_city_list_team. Find the teammate named \"" + $reviewer + "\". " +
             "Send synth_city_request_context to that teammate. The topic must start with \"" + $subject + "\" and include this tiny markdown plan:\n\n" +
             "## Tiny Plan\n\n1. Confirm the planner and reviewer can exchange Agent Mail.\n2. Ask the reviewer to sanity-check this tiny plan.\n3. Report the reviewer feedback once received.\n\n" +
             "Use why_needed \"Automated same-repo Agent Mail test\". " +
             "After sending the request, do not call synth_city_check_inbox again in this turn. " +
             "Print exactly " + $waiting + " and end your turn. " +
-            "When a later Claude Deck Agent Mail nudge prompt arrives in a new turn, call synth_city_check_inbox(unread_only=false), read the reviewer answer, then print exactly " + $success + " and summarize the feedback. " +
+            "When a later Albiex Synth City Agent Mail nudge prompt arrives in a new turn, call synth_city_check_inbox(unread_only=false), read the reviewer answer, then print exactly " + $success + " and summarize the feedback. " +
             "Do not edit files."
           ),
           launch_mode: "plain",
@@ -249,7 +249,7 @@ payload="$(
           role: "Reviewer",
           charter: "Review planner requests and reply with concise feedback.",
           bootstrap_prompt: (
-            "You are the reviewer in an automated Claude Deck Agent Mail E2E test. " +
+            "You are the reviewer in an automated Albiex Synth City Agent Mail E2E test. " +
             "First call synth_city_whoami and synth_city_check_inbox(unread_only=false). " +
             "If you receive a context request from \"" + $planner + "\" whose subject starts with \"" + $subject + "\", " +
             "reply using synth_city_reply with this exact token in the body: " + $feedback + ". " +

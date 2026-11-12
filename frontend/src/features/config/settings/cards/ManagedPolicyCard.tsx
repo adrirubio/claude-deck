@@ -5,7 +5,7 @@ import type { SettingsCardProps } from '../types'
 /**
  * Managed-only policy controls. Only rendered when viewing the managed scope —
  * the editor wraps the whole grid in a disabled fieldset, so fields surface as
- * read-only. Claude Deck is not a policy authoring tool; this card exists so
+ * read-only. Albiex Synth City is not a policy authoring tool; this card exists so
  * users can see what policy their org has pushed.
  */
 export function ManagedPolicyCard({ getSetting, scope }: SettingsCardProps) {

@@ -63,7 +63,7 @@ def build_provider_launch_options(provider: Any) -> dict[str, Any]:
 
     if provider.id == "pi-cli":
         descriptor.update(platform_options=["openrouter"], default_platform="openrouter")
-        descriptor["warnings"] = ["Agent Mail requires the Deck Pi extension. Pi tools are not a Deck sandbox."]
+        descriptor["warnings"] = ["Agent Mail requires the Albiex Synth City Pi extension. Pi tools are not an Albiex Synth City sandbox."]
 
     return descriptor
 

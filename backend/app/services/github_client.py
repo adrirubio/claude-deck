@@ -28,7 +28,7 @@ _GIT_ENTRY_MODES = {
 
 
 class GithubClientResponseError(RuntimeError):
-    """GitHub returned a response Deck cannot safely interpret."""
+    """GitHub returned a response Albiex Synth City cannot safely interpret."""
 
 
 # Explicit bound for shared GitHub list pagination. Exceeding it is an

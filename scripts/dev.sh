@@ -21,7 +21,7 @@ Usage: $0 [start|stop|restart] [--host <host>]
 
 Commands:
   start           Start backend and frontend dev servers (default)
-  stop            Stop Claude Deck dev servers for this checkout
+  stop            Stop Albiex Synth City dev servers for this checkout
   restart         Stop then start the dev servers
 
 Options:
@@ -159,15 +159,15 @@ stop_servers() {
     pids="$(collect_dev_server_pids)"
 
     if [ -z "$pids" ]; then
-        [ "$quiet" = "quiet" ] || echo "No Claude Deck dev servers found for this checkout."
+        [ "$quiet" = "quiet" ] || echo "No Albiex Synth City dev servers found for this checkout."
         return 0
     fi
 
-    [ "$quiet" = "quiet" ] || echo "Stopping Claude Deck dev servers..."
+    [ "$quiet" = "quiet" ] || echo "Stopping Albiex Synth City dev servers..."
     for pid in $pids; do
         kill_tree "$pid"
     done
-    [ "$quiet" = "quiet" ] || echo "Stopped Claude Deck dev servers."
+    [ "$quiet" = "quiet" ] || echo "Stopped Albiex Synth City dev servers."
 }
 
 ensure_port_available() {
@@ -229,7 +229,7 @@ check_dependencies() {
 }
 
 start_servers() {
-    echo "Starting Claude Deck development servers..."
+    echo "Starting Albiex Synth City development servers..."
     check_dependencies
     stop_servers quiet
     ensure_port_available "$BACKEND_PORT" "Backend"

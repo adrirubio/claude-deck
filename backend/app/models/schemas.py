@@ -1793,7 +1793,7 @@ InstanceAccent = Literal["blue", "green", "purple", "orange", "red", "pink", "cy
 
 
 class InstanceIdentity(BaseModel):
-    """Runtime identity for the Claude Deck backend instance."""
+    """Runtime identity for the Albiex Synth City backend instance."""
 
     id: str
     name: str
@@ -2735,7 +2735,7 @@ class RequiredCIUnreadableSignal(BaseModel):
     reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"]
     next_steps: List[str] = Field(default_factory=lambda: [
         "Check GitHub access and the configured required workflows.",
-        "Deck will poll again. Unreadable checks do not grant verification or consume a retry.",
+        "Albiex Synth City will poll again. Unreadable checks do not grant verification or consume a retry.",
     ])
 
 

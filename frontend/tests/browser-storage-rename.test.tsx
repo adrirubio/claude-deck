@@ -16,6 +16,41 @@ const keys = {
 beforeEach(() => { vi.resetModules(); localStorage.clear(); sessionStorage.clear() })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+it('T-G2: a downgrade needs both pre-upgrade namespaces, not a files-only or one-namespace restore', async () => {
+  localStorage.setItem(keys.provider[0], 'pi-cli')
+  sessionStorage.setItem(keys.operator[0], 'synthetic-upgrade-operator')
+  const snapshot = () => ({ localStorage: { ...localStorage }, sessionStorage: { ...sessionStorage } })
+  const backup = JSON.parse(JSON.stringify(snapshot())) as ReturnType<typeof snapshot>
+  const { migrateBrowserStorage } = await import('@/lib/browserStorageMigration')
+  migrateBrowserStorage()
+  const converted = snapshot()
+  migrateBrowserStorage()
+  expect(snapshot()).toEqual(converted)
+  // These are the two namespaces/keys used by the pinned old fixture's readers.
+  expect(localStorage.getItem(keys.provider[0])).toBeNull()
+  expect(sessionStorage.getItem(keys.operator[0])).toBeNull()
+  for (const restored of ['localStorage', 'sessionStorage'] as const) {
+    window[restored].clear()
+    for (const [key, value] of Object.entries(backup[restored])) window[restored].setItem(key, value)
+    const omitted = restored === 'localStorage' ? 'sessionStorage' : 'localStorage'
+    const oldKey = omitted === 'localStorage' ? keys.provider[0] : keys.operator[0]
+    expect(window[omitted].getItem(oldKey)).toBeNull()
+    window[restored].clear()
+    for (const [key, value] of Object.entries(converted[restored])) window[restored].setItem(key, value)
+  }
+  // D3 says to discard the post-upgrade state, then restore the complete export.
+  localStorage.setItem(keys.provider[1], 'codex-cli')
+  for (const area of ['localStorage', 'sessionStorage'] as const) {
+    window[area].clear()
+    for (const [key, value] of Object.entries(backup[area])) window[area].setItem(key, value)
+  }
+  expect(snapshot()).toEqual(backup)
+  expect(localStorage.getItem(keys.provider[0])).toBe('pi-cli')
+  expect(sessionStorage.getItem(keys.operator[0])).toBe('synthetic-upgrade-operator')
+  expect(localStorage.getItem(keys.provider[1])).toBeNull()
+  expect(sessionStorage.getItem(keys.operator[1])).toBeNull()
+})
+
 async function readProvider() {
   const { ProviderProvider, useProviderContext } = await import('@/contexts/ProviderContext')
   function Probe() { return <output aria-label="provider">{useProviderContext().selectedProviderId}</output> }

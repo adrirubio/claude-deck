@@ -1,5 +1,5 @@
 /**
- * "Folders Deck knows about": the folders that a project-scoped Harness page can use.
+ * "Folders Albiex Synth City knows about": the folders that a project-scoped Harness page can use.
  */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';

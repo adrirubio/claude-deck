@@ -1374,10 +1374,10 @@ class GithubDispatchService:
         ]
         body = issue_body.strip() or "(No issue body provided.)"
         if len(body) > 12000:
-            body = f"{body[:12000]}\n\n[Issue body truncated by Claude Deck.]"
+            body = f"{body[:12000]}\n\n[Issue body truncated by Albiex Synth City.]"
 
         lines = [
-            "You are handling an autonomous GitHub dispatch from Claude Deck.",
+            "You are handling an autonomous GitHub dispatch from Albiex Synth City.",
             "",
             f"- Work item ID: {item.id}",
             f"- Repo: {scope.repo_owner}/{scope.repo_name}",
@@ -1398,7 +1398,7 @@ class GithubDispatchService:
                     f"- Assigned branch: `{item.dispatch_head_ref}`. Run "
                     f"`git switch -c {item.dispatch_head_ref}` and do not rename or "
                     "recompose it.",
-                    "- Do NOT create, move or remove git worktrees yourself. Claude Deck "
+                    "- Do NOT create, move or remove git worktrees yourself. Albiex Synth City "
                     "provisions the workspace; you work inside the one you were given.",
                     "- Do NOT work in any other checkout of this repository.",
                 ]
@@ -1406,8 +1406,8 @@ class GithubDispatchService:
         else:
             lines.extend(
                 [
-                    "- This is a shared human checkout, not a Deck-managed worktree. Its "
-                    "current branch is not Deck's to change; confirm with the team leader "
+                    "- This is a shared human checkout, not an Albiex Synth City-managed worktree. Its "
+                    "current branch is not Albiex Synth City's to change; confirm with the team leader "
                     "before switching branches.",
                     "- Do NOT work in any other checkout of this repository.",
                 ]
@@ -1443,7 +1443,7 @@ class GithubDispatchService:
         if scope.github_auth_mode == "app":
             lines.extend(
                 [
-                    "- Claude Deck opens the pull request with its GitHub App identity; "
+                    "- Albiex Synth City opens the pull request with its GitHub App identity; "
                     "do not create the PR yourself.",
                     f"- Add commit trailers `Synth-City-Agent-Slot: {owner_slot_id} "
                     f"({owner.display_name if owner else owner_slot_id})` and "
@@ -1452,7 +1452,7 @@ class GithubDispatchService:
                     f"{item.dispatch_head_ref}`.",
                     f"- After the push, call `synth_city_report_dispatch_status(work_item_id={item.id}, "
                     f"status=\"pr_ready\", lease_token=\"{workspace.lease_token}\", "
-                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck creates the initial PR title and body.",
+                    f"head_ref=\"{item.dispatch_head_ref}\")`. Albiex Synth City creates the initial PR title and body.",
                 ]
             )
         else:
@@ -1505,7 +1505,7 @@ class GithubDispatchService:
                     [
                         "- Keep the change inside the issue scope and run the issue's "
                         "requested local verification commands.",
-                        "- Push the assigned branch and report `pr_ready`; Claude Deck "
+                        "- Push the assigned branch and report `pr_ready`; Albiex Synth City "
                         "creates the draft PR and starts CI verification.",
                     ]
                 )
@@ -1880,7 +1880,7 @@ class GithubDispatchService:
                 },
                 bypass_nudge_cooldown=True,
                 nudge_prompt=(
-                    "Claude Deck autonomous dispatch: call "
+                    "Albiex Synth City autonomous dispatch: call "
                     "`synth_city_check_inbox(unread_only=False)` now, find the "
                     f"`Autonomous dispatch: issue #{item.issue_number}` message for "
                     f"work item {item.id}, and execute that assignment now. Follow "
@@ -3286,7 +3286,7 @@ class GithubDispatchService:
                 {owner.id},
                 bypass_cooldown=True,
                 nudge_prompt=(
-                    "Claude Deck autonomous recovery: call "
+                    "Albiex Synth City autonomous recovery: call "
                     "`synth_city_check_inbox(unread_only=False)` now, find the "
                     f"`Recovery proposal requested: issue #{item.issue_number}` "
                     f"message for work item {item.id}, and execute that instruction "

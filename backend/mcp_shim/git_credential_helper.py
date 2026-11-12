@@ -1,4 +1,4 @@
-"""Git credential helper that requests a short-lived token from Claude Deck."""
+"""Git credential helper that requests a short-lived token from Albiex Synth City."""
 
 from __future__ import annotations
 
@@ -42,12 +42,12 @@ def _request_credential(
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         if response.status != 200:
-            raise RuntimeError(f"Claude Deck refused credential request ({response.status})")
+            raise RuntimeError(f"Albiex Synth City refused credential request ({response.status})")
         body = json.loads(response.read().decode("utf-8"))
     username = body.get("username")
     password = body.get("password")
     if not isinstance(username, str) or not isinstance(password, str):
-        raise RuntimeError("Claude Deck returned a malformed credential response")
+        raise RuntimeError("Albiex Synth City returned a malformed credential response")
     return username, password
 
 
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         username, password = _request_credential(args.synth_city_url, args.lease, values)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError):
-        print("Claude Deck could not provide a GitHub credential", file=sys.stderr)
+        print("Albiex Synth City could not provide a GitHub credential", file=sys.stderr)
         return 1
     payload = f"username={username}\npassword={password}\n\n".encode("utf-8")
     sys.stdout.buffer.write(payload)

@@ -125,7 +125,7 @@ class MCPOAuthService:
         """Perform Dynamic Client Registration (RFC 7591)."""
         async with httpx.AsyncClient(timeout=10.0) as client:
             reg_data = {
-                "client_name": f"Claude Deck - {server_name}",
+                "client_name": f"Albiex Synth City - {server_name}",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
                 "response_types": ["code"],

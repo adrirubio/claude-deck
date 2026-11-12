@@ -23,7 +23,7 @@ def _probe(time_bucket: int) -> tuple[bool, str | None]:
     assets = integration_path()
     shim = Path(__file__).resolve().parents[2] / "mcp_shim" / "agent_mail_server.py"
     if not all(candidate.is_file() for candidate in [assets / "extension.ts", assets / "manifest.ts", assets / "readiness.mjs", shim]):
-        return False, "Deck Pi extension assets are missing"
+        return False, "Albiex Synth City Pi extension assets are missing"
     try:
         python = subprocess.run([sys.executable, "-I", "-c", "import mcp, httpx"], capture_output=True, timeout=5)
         runtime = subprocess.run([node, str(assets / "readiness.mjs"), str(Path(binary).resolve())], capture_output=True, timeout=10)

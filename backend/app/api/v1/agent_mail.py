@@ -1228,7 +1228,7 @@ async def _content_hook_session(db, token):
 
 def _hook_inbox_reminder(event):
     """The unauthenticated native hook contains no Mail data."""
-    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "Check your Deck inbox."}}
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "Check your Albiex Synth City inbox."}}
 
 
 @router.post("/hooks/session-start")

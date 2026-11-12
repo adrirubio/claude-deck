@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any
 
 CONTAINER_AGENT_CLI_WARNING = (
-    "No agent CLIs detected. Claude Deck must run in the same environment where "
+    "No agent CLIs detected. Albiex Synth City must run in the same environment where "
     "your agents are installed — Docker can't see your host's CLIs."
 )
 
 
 def is_containerized() -> bool:
-    """Return True when Claude Deck appears to be running in a container."""
+    """Return True when Albiex Synth City appears to be running in a container."""
     return Path("/.dockerenv").exists()
 
 
