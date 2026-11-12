@@ -33,6 +33,44 @@ conservative accounting for unclassified pushed heads.
 
 Synth City does not run the build command. The optional build settings are instructions in the owner's brief. An out-of-tree build directory may include `{issue_number}`. The command hint may include `{build_dir}` and `{parallelism}`. The parallelism value also tells the agent to cap build jobs.
 
+## Leader plan-approval wait
+
+The initial plan clock starts when the bound approval request is created.
+`github_leader_ack_timeout_seconds` defaults to 300 seconds. At that boundary,
+Synth City sends one Leader reminder and a system notice to the team's currently
+bound Supervisor. The pending request, builder lease and workspace stay intact.
+The reminder cannot interrupt a running provider turn.
+
+Positive activity from the current authenticated, bound Leader can preserve the
+request until `github_leader_ack_max_wait_seconds` (default 1800 seconds) from its
+creation. This is a fixed maximum, not a sliding renewal. Native working evidence
+is read with bounded effort and checked against the current process/session
+identity. Recent authenticated Mail/MCP contact within the initial window can
+also qualify. Display status, stale or future contact, retired panes, unknown or
+ambiguous identity, and native requests waiting for human input do not qualify.
+An inactive request can expire after the one reminder's existing
+`github_nudge_grace_seconds` (default 180 seconds). The hard maximum always ends
+an unanswered request with `leader_ack_timeout`. Durable reminder and extension
+records survive service restarts and prevent repeated notices.
+
+An operator can set nullable `leader_ack_timeout_seconds` and
+`leader_ack_max_wait_seconds` on the team preset through the existing protected
+`POST /api/v1/agent-teams/presets` and `PATCH .../presets/{preset_id}` routes.
+Both fields accept integer seconds from 30 through 86400. The effective maximum
+must be at least the effective initial window. Omission on PATCH preserves the
+value; explicit `null` restores the global default. Preset responses expose the
+overrides, and duplication and creation from Mail/Agent Bridge preserve them.
+For example, `{ "leader_ack_timeout_seconds": 600,
+"leader_ack_max_wait_seconds": 2400 }` gives a team a ten-minute initial window
+and a forty-minute maximum. Design items multiply both windows by
+`github_design_ack_multiplier` (default 3).
+
+Leader guidance: finish a running turn normally, then read the pending request
+and record an explicit approval or rejection. Activity and a soft notice grant
+no approval. The owner still needs the current normalized plan decision and
+acknowledgement before implementation. Pause, HOLD, offline, binding, dispatch,
+lease and review gates retain their existing force.
+
 ## Ordinary review corrections
 
 An initial implementation plan remains the basis for work while its normalized

@@ -21,11 +21,13 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
+    AgentPaneBinding,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
+    MailPaneLifecycle,
     MailMessage,
     MailReceipt,
     MailTeamMember,
@@ -7843,3 +7845,101 @@ async def test_new_lease_and_release_reset_the_reminder_budget(db):
     assert acquired.id == workspace.id
     assert acquired.lease_release_reminder_count == 0
     assert acquired.lease_release_reminder_started_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case,expected', [
+    ('native', True), ('recent_mcp', True), ('stale', False), ('future', False),
+    ('observed_session', False), ('retired', False), ('closed', False),
+    ('no_capability', False), ('wrong_provider', False), ('duplicate_binding', False),
+    ('duplicate_native_identity', False), ('waiting_input', False), ('dead_process', False),
+    ('binding_changed', False), ('native_timeout', False), ('native_future', False),
+])
+async def test_leader_activity_requires_current_authenticated_bound_evidence(db, monkeypatch, case, expected):
+    from app.services import agent_activity_service as activity
+    from app.utils import peer_process
+    preset, slots, _scope = await _team(db)
+    leader = slots[0]
+    leader.launch_options = {'session_id': '12345678-1234-1234-1234-123456789abc'}
+    member = await agent_mail_service.get_or_create_slot_member(db, leader)
+    now = datetime.utcnow()
+    binding = AgentPaneBinding(preset_id=preset.id, slot_id=leader.id,
+                              pane_pid=9191, pane_proc_start='fixture-start')
+    session = MailAgentSession(member_id=member.id, provider=leader.provider, source='mcp',
+        session_key='ack-activity-fixture', team_preset_id=preset.id, team_slot_id=leader.id,
+        capability_token_hash='synthetic-hash', bound_pane_pid=9191,
+        bound_pane_proc_start='fixture-start', cwd='/tmp/ack-activity',
+        last_seen_at=now)
+    if case in {'native', 'stale', 'native_future'}:
+        session.last_seen_at = now - timedelta(minutes=10)
+    if case == 'recent_mcp':
+        session.last_seen_at = now
+    elif case == 'future':
+        session.last_seen_at = now + timedelta(minutes=1)
+    elif case == 'observed_session':
+        session.source = 'observed'
+        session.last_seen_at = now
+    elif case == 'retired':
+        db.add(MailPaneLifecycle(pane_pid=9191, pane_proc_start='fixture-start', retired_at=now))
+    elif case == 'closed':
+        session.closed_at = now
+    elif case == 'no_capability':
+        session.capability_token_hash = None
+    elif case == 'wrong_provider':
+        session.provider = 'claude-code'
+    elif case == 'duplicate_binding':
+        db.add(AgentPaneBinding(preset_id=preset.id, slot_id=leader.id,
+                              pane_pid=9292, pane_proc_start='another-start'))
+        db.add(MailAgentSession(member_id=member.id, provider=leader.provider, source='mcp',
+            session_key='other-ack-fixture', team_preset_id=preset.id, team_slot_id=leader.id,
+            capability_token_hash='synthetic-other', bound_pane_pid=9292,
+            bound_pane_proc_start='another-start', cwd='/tmp/ack-activity', last_seen_at=now))
+    elif case == 'duplicate_native_identity':
+        slots[1].launch_options = dict(leader.launch_options)
+    db.add_all([binding, session])
+    await db.commit()
+    state = 'working' if case in {'native', 'native_future'} else 'unknown'
+    observed_at = now + timedelta(minutes=1) if case == 'native_future' else now - timedelta(minutes=15)
+    observation = SimpleNamespace(state=state, observed_at=observed_at,
+        waiting_input=object() if case == 'waiting_input' else None)
+    monkeypatch.setattr(activity, '_observe', lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(peer_process, 'pane_is_alive_strict', lambda *_args: case != 'dead_process')
+    if case == 'waiting_input':
+        session.last_seen_at = now
+        await db.commit()
+    if case == 'binding_changed':
+        async def changed(read):
+            binding.pane_proc_start = 'replaced-start'
+            await db.commit()
+            return read()
+        monkeypatch.setattr(activity, '_bounded_native_read', changed)
+    elif case == 'native_timeout':
+        monkeypatch.setattr(activity, '_bounded_native_read', AsyncMock(side_effect=TimeoutError))
+    fence = []
+    result = await github_dispatch_service._leader_is_active(
+        db, preset.id, member.id, leader.id, 300, fence=fence)
+    assert result is expected
+    if expected:
+        assert fence
+        assert await db.scalar(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id, *fence)) == preset.id
+        # A retirement between observation and the write invalidates the same fence.
+        db.add(MailPaneLifecycle(pane_pid=9191, pane_proc_start='fixture-start', retired_at=now))
+        await db.flush()
+        assert await db.scalar(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id, *fence)) is None
+
+
+def test_ack_deadlines_apply_explicit_team_values_and_design_multiplier(monkeypatch):
+    monkeypatch.setattr(settings, 'github_design_ack_multiplier', 4)
+    preset = AgentTeamPreset(leader_ack_timeout_seconds=450, leader_ack_max_wait_seconds=2100)
+    item = GithubWorkItem(issue_type='design')
+    assert github_dispatch_service._ack_deadline_seconds(item, preset) == 1800
+    assert github_dispatch_service._ack_deadline_seconds(item, preset, maximum=True) == 8400
+    item.issue_type = 'code'
+    assert github_dispatch_service._ack_deadline_seconds(item, preset) == 450
+    assert github_dispatch_service._ack_deadline_seconds(item, preset, maximum=True) == 2100
+
+
+def test_default_ack_guidance_explains_busy_leader_wait_without_approval():
+    text = github_dispatch_service._leader_ack_instruction(None, None, before='implementation')
+    assert 'finite' in text and 'activity' in text
+    assert 'does not approve' in text

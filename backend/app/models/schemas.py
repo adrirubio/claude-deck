@@ -2387,6 +2387,15 @@ class PlannedCampaignDecision(BaseModel):
 class CampaignPresetFields(BaseModel):
     backlog_milestone: Optional[str] = Field(default=None, max_length=160)
     planned_decisions: Optional[List[PlannedCampaignDecision]] = Field(default=None, max_length=12)
+    leader_ack_timeout_seconds: Optional[int] = Field(default=None, strict=True, ge=30, le=86400)
+    leader_ack_max_wait_seconds: Optional[int] = Field(default=None, strict=True, ge=30, le=86400)
+
+    @model_validator(mode="after")
+    def ordered_ack_windows(self):
+        if (self.leader_ack_timeout_seconds is not None and self.leader_ack_max_wait_seconds is not None
+                and self.leader_ack_max_wait_seconds < self.leader_ack_timeout_seconds):
+            raise ValueError("leader_ack_max_wait_seconds must be at least leader_ack_timeout_seconds")
+        return self
 
     @field_validator("backlog_milestone")
     @classmethod

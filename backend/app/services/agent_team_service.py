@@ -102,6 +102,16 @@ _BEDROCK_LAUNCH_OPTION_KEYS = {"platform", "aws_region", "aws_profile", "bedrock
 _TEAM_SLOT_UI_COLORS = {"blue", "purple", "green", "amber", "red", "cyan", "slate"}
 
 
+def _validate_ack_windows(initial, maximum):
+    from app.config import settings
+
+    AgentTeamPresetUpdate(leader_ack_timeout_seconds=initial, leader_ack_max_wait_seconds=maximum)
+    initial = initial if initial is not None else settings.github_leader_ack_timeout_seconds
+    maximum = maximum if maximum is not None else settings.github_leader_ack_max_wait_seconds
+    if maximum < initial:
+        raise ValueError("leader_ack_max_wait_seconds must be at least the effective initial window")
+
+
 class AgentTeamService:
     """Persistence and orchestration for local saved agent rosters."""
 
@@ -125,11 +135,14 @@ class AgentTeamService:
         self, db: AsyncSession, request: AgentTeamPresetCreate
     ) -> AgentTeamPresetResponse:
         name = self._clean_required(request.name, "Team name")
+        _validate_ack_windows(request.leader_ack_timeout_seconds, request.leader_ack_max_wait_seconds)
         await self._ensure_preset_name_is_unique(db, name)
         preset = AgentTeamPreset(
             name=name,
             description=self._clean_optional(request.description),
             parent_issue_url=request.parent_issue_url,
+            leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
             backlog_milestone=request.backlog_milestone,
             planned_decisions=([decision.model_dump() for decision in request.planned_decisions]
                                if request.planned_decisions is not None else None),
@@ -252,6 +265,8 @@ class AgentTeamService:
         parent_issue_url: str | None | object = _UNSET,
         backlog_milestone: str | None | object = _UNSET,
         planned_decisions: list | None | object = _UNSET,
+        leader_ack_timeout_seconds: int | None | object = _UNSET,
+        leader_ack_max_wait_seconds: int | None | object = _UNSET,
     ) -> AgentTeamPresetResponse:
         campaign_changes = {}
         if backlog_milestone is not _UNSET:
@@ -262,6 +277,13 @@ class AgentTeamService:
         if parent_issue_url is not _UNSET:
             parent_issue_url = AgentTeamPresetUpdate(parent_issue_url=parent_issue_url).parent_issue_url
         preset = await self._require_preset(db, preset_id)
+        initial = (preset.leader_ack_timeout_seconds if leader_ack_timeout_seconds is _UNSET
+                   else leader_ack_timeout_seconds)
+        maximum = (preset.leader_ack_max_wait_seconds if leader_ack_max_wait_seconds is _UNSET
+                   else leader_ack_max_wait_seconds)
+        _validate_ack_windows(initial, maximum)
+        preset.leader_ack_timeout_seconds = initial
+        preset.leader_ack_max_wait_seconds = maximum
         if parent_issue_url is not _UNSET:
             preset.parent_issue_url = parent_issue_url
         if backlog_milestone is not _UNSET:
@@ -466,6 +488,8 @@ class AgentTeamService:
             name=self._clean_required(name or f"{source.name} copy", "Team name"),
             description=source.description,
             parent_issue_url=source.parent_issue_url,
+            leader_ack_timeout_seconds=source.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=source.leader_ack_max_wait_seconds,
             backlog_milestone=source.backlog_milestone,
             planned_decisions=([dict(decision) for decision in source.planned_decisions]
                                if source.planned_decisions is not None else None),
@@ -561,6 +585,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-mail",
                 parent_issue_url=request.parent_issue_url,
+                leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+                leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
                 backlog_milestone=request.backlog_milestone,
                 planned_decisions=request.planned_decisions,
                 slots=slot_requests,
@@ -610,6 +636,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-bridge",
                 parent_issue_url=request.parent_issue_url,
+                leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+                leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
                 backlog_milestone=request.backlog_milestone,
                 planned_decisions=request.planned_decisions,
                 slots=slot_requests,
@@ -1772,6 +1800,8 @@ class AgentTeamService:
             name=preset.name,
             description=preset.description,
             parent_issue_url=preset.parent_issue_url,
+            leader_ack_timeout_seconds=preset.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=preset.leader_ack_max_wait_seconds,
             backlog_milestone=preset.backlog_milestone,
             planned_decisions=preset.planned_decisions,
             created_by=preset.created_by,

@@ -782,6 +782,9 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if preset_columns and "leader_slot_id" not in preset_columns:
         await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    for column in ("leader_ack_timeout_seconds", "leader_ack_max_wait_seconds"):
+        if preset_columns and column not in preset_columns:
+            await conn.execute(text(f"ALTER TABLE agent_team_presets ADD COLUMN {column} INTEGER"))
     for column, definition in (
         ("supervisor_actor_id", "INTEGER REFERENCES mail_external_actors(id) ON DELETE SET NULL"),
         ("supervisor_checked_at", "DATETIME"), ("supervisor_next_check_at", "DATETIME"),
@@ -1116,6 +1119,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "ADD COLUMN recovery_checkpoint_stage VARCHAR"
             )
         )
+    approval_columns = await _sqlite_columns(conn, "github_approval_requests")
+    for column in ("leader_ack_reminded_at", "leader_activity_extended_at"):
+        if approval_columns and column not in approval_columns:
+            await conn.execute(text(f"ALTER TABLE github_approval_requests ADD COLUMN {column} DATETIME"))
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",

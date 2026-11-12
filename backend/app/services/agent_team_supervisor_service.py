@@ -227,9 +227,22 @@ def _is_native_wait_notice(root) -> bool:
         and payload["reason"] in {"question", "trust", "sign_in"})
 
 
+def _is_leader_ack_wait_notice(root) -> bool:
+    payload = root.payload
+    return (getattr(root, "sender_type", None) == "system"
+        and root.sender_member_id is None and root.sender_actor_id is None
+        and root.recipient_member_id is None and root.subject == "Leader approval waiting"
+        and isinstance(payload, dict) and set(payload) == {
+            "notice", "work_item_id", "approval_request_id", "leader_slot_id", "supervisor_actor_id"}
+        and payload["notice"] == "leader_ack_wait"
+        and all(type(payload[key]) is int and payload[key] > 0 for key in (
+            "work_item_id", "approval_request_id", "leader_slot_id", "supervisor_actor_id")))
+
+
 def is_supervisor_message(root) -> bool:
     return (root.kind == "message" and root.audience_type == "team_preset"
-            and (root.sender_member_id is not None or _is_native_wait_notice(root)) and root.thread_root_id is None
+            and (root.sender_member_id is not None or _is_native_wait_notice(root)
+                 or _is_leader_ack_wait_notice(root)) and root.thread_root_id is None
             and isinstance(root.payload, dict) and "supervisor_actor_id" in root.payload)
 
 
