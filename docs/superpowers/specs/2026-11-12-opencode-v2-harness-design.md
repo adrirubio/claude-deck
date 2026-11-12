@@ -69,14 +69,14 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 | Silent hosted-model fallback (F5) | R (DB, log) | not seen |
 | Cold-start race (F6) | not seen | R (log) |
 
-### Acceptance questions without retained evidence
+### Acceptance questions that stay open
 
-These parts of #729 rest only on NR observations, so **#729 is not yet answered with evidence on these points and is not complete.** Settling them needs new, separately approved evidence probes. Until then, the design below treats these points as unverified and gives no guarantee:
+These parts of #729 have no retained acceptance evidence. **The spike leaves them as open gaps, and #729 is not answered with acceptance evidence on these points.** The Supervisor's incident disposition allows no further probes in #729. The implementation issues #730–#733 must close these gaps with their own tests. The restoration-run observations (E1–E5, below) bear on all four, but they are research observations with explicit provenance, not acceptance evidence. The design below treats these points as unverified and gives no guarantee:
 
-- **Q3:** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. Process listings and tmux output were not saved. Only the service-mode config effect is R.
-- **Q5, second half:** which event shows an open question (`form.created`) and what a row looks like while the question is open. Only rows of sessions killed during a question are R.
-- **Q4:** the hook order and live payloads for `tool.execute.after` and `permission.evaluate`, and whether text pushed in the `context` hook reaches the model. These are NR on both versions; only the 2.2.0 `context` and `prompt` hooks firing (P4) and the published types (A10) are retained.
-- **Q6:** a reliable activity source after a crash or a relaunch. The plugin events are R only for 2.2.0 (P4), and no retained evidence shows what clears a stale `session_v2` row.
+- **Q3:** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. In the original spike only the service-mode config effect is R. See E1 and E2.
+- **Q4:** the hook order and live payloads for `tool.execute.after` and `permission.evaluate`, and whether text pushed in the `context` hook reaches the model. In the original spike these are NR on both versions; only the 2.2.0 `context` and `prompt` hooks firing (P4) and the published types (A10) are retained. See E3.
+- **Q5, second half:** which event shows an open question and what a row looks like while it is open. See E4.
+- **Q6:** a reliable activity source after a crash, an interrupt or a relaunch. See E4 and E5.
 
 ### Evidence retention
 
@@ -196,6 +196,27 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 - The hidden flags `--yolo` and `--dangerously-skip-permissions` are accepted by both versions and show the same "Build auto" mode as `--auto` (footer NR; 2.2.7 sessions under both flags R). On 2.2.7, deny rules still applied under both flags [stub]. They are not in `--help`, so Deck should use only `--auto`.
 - 2.2.7's default rules allowed everything tried without asking, including reading `/etc/hostname` through `external_directory`. Only the `question` tool interrupted a default session.
 
+## Restoration-run observations (E1–E5)
+
+**Provenance.** After review, the owner ran a bounded evidence-restoration run on v2.2.7 only (2026-11-12, 23:28–23:35 UTC).
+- **Network and model:** it ran in a loopback-only network namespace that the Leader verified, with the stub provider only (`enabled_providers:["stub"]`).
+- **Retention:** every artifact was kept, and a hash manifest covers 50 files. The owner holds the artifacts privately; V1 verified the hashes.
+- **Authorization:** E1 ran within the Leader's authorization. **E2–E5 are a post-stop, unauthorized run.** The Leader had issued a stop, and the owner did not check Mail between probes, so E2–E5 ran after it.
+- **Status:** the Supervisor's incident disposition allows all five to be cited here as research observations. **They are not acceptance evidence for #729 or any later issue.**
+- **Limits:** the namespace helper processes carried the owner's inherited token and identity variable names. The OpenCode processes' environment-name checks were printed only to the owner's session (NR). The Mail recorder is local, not Synth City. The recorder log kept the synthetic test prompts in one field and local paths.
+
+| Run | Question | Observation (v2.2.7, stub) |
+|---|---|---|
+| E1 (authorized) | Q3 | With `--standalone`, the ancestry is TUI → `opencode serve --stdio --port 0` → MCP shim. The probe plugin's init record and the shim's registration payload both report the `serve --stdio` pid, a child of the pane process, with the fake slot (`team_slot_id` 9601). `pane_current_command` is `opencode`. The TUI footer shows "1 plugin failed", which is Deck's v1 plugin. No `session_v2` row exists until the first prompt. |
+| E2 (post-stop, unauthorized) | Q3 | Without `--standalone`: member A starts `opencode serve --service` as its own child, and that service runs the only MCP shim. Member B's pane has no server child. One registration payload is sent, carrying A's slot (9602). Member B's (slot 9603) `session.created` and `session.execution.*` events come from the service process labelled with A's slot. B's `OPENCODE_CONFIG_CONTENT` asked for `stub/m2`, but B's session runs and is stored with `stub/m1`. |
+| E3 (post-stop, unauthorized) | Q4 | Arrival order for one turn with one tool call: `session.created`, then the `prompt` hook, `context` hook, `session.execution.started`, `tool.execute.before`, `permission.evaluate`, the `session.tool.*` events, `tool.execute.after` (`status:"completed"`), a second `context`, the `experimental.idle` hook, and `session.execution.succeeded`. Durable `seq` values are kept. A marker pushed onto `system` in the `context` hook was present in both agent-loop model requests (`marker_present=true`; the prompt text was not logged). After `opencode session delete` from a separate CLI, the member's plugin received no `session.deleted` or any other record within 60 s, and the CLI produced no plugin records. |
+| E4 (post-stop, unauthorized) | Q5 | **Answered:** `form.created` (`data.form.metadata.kind:"question"`, linked to the tool call). While open, the tool part is `running`, `time_busy` is set, `time_idle` is null and `time_suspended` is set. Then `form.replied` (`answer`), the part becomes `completed`, and the row goes idle and `succeeded`. **Cancelled with Esc:** `form.cancelled`, the tool part ends `aborted`, and a `session.execution.interrupted` event fires. The row then still looks busy (`time_idle` null, `time_suspended` set) while the TUI is alive and shows "interrupted". **Denied by the config rule:** `question` is absent from the offered tools (11 instead of 12), and the forced call fails with "No tool named". |
+| E5 (post-stop, unauthorized) | Q6 | `time_suspended` is set during every live execution and cleared at idle, so it is **not** a crash marker. After a kill mid-turn, the row keeps `time_busy > time_idle` with `time_suspended` set. A relaunch with the same `--session` and no prompt left the row unchanged for 40 s, and the new server sent only its plugin init and registration, with no execution event. The first new prompt produced `session.execution.started` and `.succeeded` from the new server process and cleared the row. |
+
+**Consequences for the design** (still unverified for acceptance):
+- A `session_v2` row can look busy both after a crash and after an interrupt with a live process (E4, E5), and `time_suspended` does not tell these cases apart. The recovery reader in #733 must never report `working` from the row alone.
+- The plugin's `session.execution.started`, `.succeeded`, `.failed` and `.interrupted` events, seen from the current server process, are the candidate activity source.
+
 ## Other findings
 
 - **F1. Config keys renamed.** The v2 schema (`https://opencode.ai/config.json`) deprecates `agent`, `permission`, `plugin`, `provider` and the flat `mcp.<name>` map. Their replacements are `agents`, `permissions` (an ordered rule list `{action, resource, effect}`), `plugins`, `providers` and `mcp.servers.<name>`. The deprecated forms still work in 2.2.x. New Deck writes should use the v2 forms.
@@ -242,10 +263,18 @@ opencode <directory> --standalone --session <ses_id> [--auto] [--prompt <text>]
 
 ### #733: Observation, guard and live check
 
-- **Activity:** use the plugin events as the primary source (answer 6). A `session_v2` reader for recovery, read-only, bound by session id and directory and schema-aware per version (F3), may only report `idle` or `unknown`. Proposed rule, **unverified** (an open #729 gap, Q6): report `working` only after the plugin has seen `session.execution.started` from the current server process. Report `unknown` for a row with `time_suspended` set, a busy-looking row with no such event, and any row while no live `serve --stdio` child is under the pane. Process liveness alone is not enough (answer 6). This spike does not guarantee the rule.
-- **Waiting for input:** `form.created` (question) and `permission.asked` raise the existing waiting-input notice, and the matching replied or cancelled events clear it. These signals are NR (an open #729 gap, Q5), so Deck must not rely on them until they are evidenced.
+- **Activity:** use the plugin events as the primary source (answer 6). A `session_v2` reader for recovery, read-only, bound by session id and directory and schema-aware per version (F3), may only report `idle` or `unknown`. Proposed rule, **unverified** (an open #729 gap, Q6): report `working` only after the plugin has seen `session.execution.started` from the current server process. Report `unknown` for any busy-looking row with no such event, after a `session.execution.interrupted`, and while no live `serve --stdio` child is under the pane. `time_suspended` is set during every live execution, so it is not a crash marker (E5), and process liveness alone is not enough (E4). This spike does not guarantee the rule.
+- **Waiting for input:** `form.created` (question) and `permission.asked` raise the existing waiting-input notice, and the matching replied or cancelled events clear it (observed in E4, not acceptance evidence). #732 and #733 must prove these signals with their own tests before Deck relies on them.
 - **Guard:** the team supervisor's OpenCode branch reads the bound session's assistant `content` text from `session_message` instead of a transcript file. It uses `session_part` only where that table exists (F3). Tool results and user prompts never create a hold, as for the other harnesses.
 - **Live check:** run one `--standalone` member on a real provider through Deck. It registers once with its own slot, Deck stores its `ses_` id, it resumes the same session after a restart, working and idle show correctly, and a forced question is denied. **The real-model behaviour this spike could not prove is checked here.**
+
+## Rules for later harness probes (#730–#738)
+
+From the Supervisor's #729 incident disposition:
+
+1. Start each third-party CLI with an empty environment and an explicit allowlist (for example `env -i HOME=… PATH=…`). Never inherit the agent session's environment.
+2. Configure only the local stub provider, and confirm that no hosted-provider fallback exists before the first turn.
+3. Check Mail before each probe, and stop at once on a stop message.
 
 ## Out of scope
 
