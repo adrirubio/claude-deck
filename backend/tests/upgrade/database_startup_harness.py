@@ -157,7 +157,7 @@ except Exception:
     if mode == 'uvicorn':
         command = [sys.executable, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', str(port)]
     elif mode == 'factory':
-        text = (REPOSITORY / 'scripts/product-factory/claude-deck-product.service').read_text()
+        text = (REPOSITORY / 'scripts/product-factory/albiex-synth-city-product.service').read_text()
         args = shlex.split(next(line.split('=', 1)[1] for line in text.splitlines() if line.startswith('ExecStart=')))
         assert args[1:4] == ['-m', 'uvicorn', 'app.main:app']
         assert args[args.index('--port') + 1] == '8011'
