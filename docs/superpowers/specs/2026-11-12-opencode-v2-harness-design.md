@@ -23,35 +23,76 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 - **Model.** Model turns came from a local scripted OpenAI-compatible stub provider (`stub/m1`, `stub/m2`). It returns fixed text or forced tool calls. Observations marked **[stub]** show harness mechanics: flags, ids, processes, events, hooks, DB rows, tool lists and the tool results the agent receives. **They do not show how a real model behaves**, for example whether a real model tries to ask questions or copes with Code Mode. That is still unproven.
 - **Incident.** One 2.2.7 test session silently ran on OpenCode's hosted free model, `opencode/iceman-free`, instead of the stub, and got a 429 free-limit error (see finding F5). It was reported to the Leader and contained with `enabled_providers`. No other session used a hosted model. After the incident, model-turn probes stopped until a loopback-only network namespace was in place (see Isolation limits).
 
-### Version coverage
+### Version coverage and evidence retention
+
+**R** means the observation is kept in an artifact that survives the spike (listed under "Evidence retention"), so a reviewer can check it. **NR** means it was seen during the spike, but the log that held it was cleared between probes. NR claims rest only on the owner's session record and **have not been independently verified**. They are not inferred from nearby probes.
 
 | Item | v2.2.7 | v2.2.0 |
 |---|---|---|
-| TUI flags: `--model` / `--agent` refused; `--auto`, `--yolo`, `--dangerously-skip-permissions` accepted | observed | observed |
-| `OPENCODE_CONFIG_CONTENT` model and `default_agent` on a new session | observed [stub] | observed [stub] |
-| `--session` needs the `ses` prefix; Deck-chosen id created | observed | observed |
-| Relaunch resumes the same session; resumed session keeps its model; plugin `switchModel` | observed [stub] | observed [stub] |
-| `--standalone` process tree; plugin and shim in `serve --stdio`; registration pid and slot | observed [stub] | observed [stub] |
-| Shared service mixes up members | observed [stub] | **gap** (not run, by decision) |
-| v1 plugin refused; v2 plugin loads; `session.created`, `session.execution.started`, `session.context` injection, `permission.evaluate` | observed [stub] | observed [stub] |
-| `tool.execute.after`, `session.execution.succeeded` | observed [stub] | observed [stub] |
-| `experimental.idle` hook | fired [stub] | **registered without error, never fired** |
-| `session.execution.failed` | observed (real hosted model, F5) | **gap** |
-| Question form and `form.created` | observed [stub] | observed [stub] |
-| Question deny by config rule | observed [stub] | observed [stub] |
-| Question deny by plugin `permission.evaluate` | observed [stub] | **gap** |
-| `--auto` with an `ask` rule; deny under `--auto` | observed [stub] | observed [stub] |
-| MCP Code Mode by default; `codemode:false` gives direct tools | observed [stub] | observed [stub] |
-| `session_v2` activity columns, crash staleness | observed [stub] | columns present; staleness **gap** |
+| `--model` / `--agent` refused | R (log) | R (log) |
+| `--auto` accepted | R (DB) | R (DB) |
+| `--yolo`, `--dangerously-skip-permissions` accepted | R (DB) | NR |
+| `OPENCODE_CONFIG_CONTENT` model and `default_agent` on a new session | R (DB) | R (DB) |
+| Custom primary agent from config: agent and model | R (DB) | not run |
+| Custom agent's system prompt reaches the model | NR | not run |
+| `--session` id refused without the `ses` prefix | R (log) | R (log) |
+| Deck-chosen `ses…` id created | R (DB) | R (DB) |
+| Relaunch resumes the same session | R (DB) | R (DB, P4) |
+| Config default `model` does not change a resumed session | NR | R (stub log, P4) |
+| `agents.build.model` does not change a resumed session | NR | not run |
+| Plugin `switchModel` changes a resumed session | R (DB row); same-turn use NR | R (recorder and stub log, P4) |
+| `--standalone` process tree, `pane_current_command`, plugin and shim process | NR | NR |
+| Shim sends a registration payload | NR | R (recorder, P4) |
+| Shared service ignores the second member's config | R (DB) | **gap** (not run, by decision) |
+| Shared service reports the first member's slot for the second member | NR | **gap** (not run, by decision) |
+| v1 plugin refused | R (log) | R (log) |
+| v2 plugin loads; `session.created`, `session.execution.started` / `.succeeded`; `context` and `prompt` hooks fire | NR | R (recorder, P4) |
+| Text pushed in the `context` hook reaches the model | NR | NR |
+| `tool.execute.after`, `permission.evaluate` hooks fire | NR | NR |
+| `experimental.idle` hook | fired, NR | never fired in 3 turns, R (recorder, P4) |
+| A failed turn: `idle_outcome:"failed"` with the error | R (DB, F5) | **gap** |
+| `question` call blocks the turn | R (DB) | R (DB) |
+| `form.created` / `.replied` / `.cancelled` payloads | NR | NR |
+| Question deny by config: the call fails with "No tool named" | R (DB) | R (DB) |
+| Question deny by config: the tool is left out of the model's tool list | NR | NR |
+| Question deny by plugin `permission.evaluate` | R (DB) | **gap** |
+| `ask` rule: auto-approved with `--auto`, blocks without it | R (DB) | auto-approved, R (DB) |
+| `permission.asked` / `.replied` events | NR | NR |
+| Deny rules still apply under `--auto` and its aliases | R (DB) | R (DB) |
+| MCP Code Mode by default ("36 tools, 11 shown") | NR | NR |
+| `codemode:false` makes Agent Mail tools direct calls | R (DB) | R (DB) |
+| `session_v2` activity columns | R (DB) | R (DB) |
+| A row stays busy after its TUI is killed | R (DB) | **gap** |
+| Relaunch without a prompt leaves a stale row unchanged for 40 s | NR (that session was later deleted) | **gap** |
+| Silent hosted-model fallback (F5) | R (DB, log) | not seen |
+| Cold-start race (F6) | not seen | R (log) |
+
+### Evidence retention
+
+The owner keeps these artifacts read-only in the spike's private scratch area. They are not published, because they hold local paths and runtime values.
+
+- A1, A2: the OpenCode SQLite DBs (2.2.7, 2.2.0): sessions, messages and parts, with tool outcomes and errors.
+- A3, A4: the OpenCode logs (2.2.7, 2.2.0): CLI failures, including flag and id refusals; plugin loading and v1 plugin failures; the free-limit error.
+- A5: the Agent Mail recorder log, **for the last 2.2.0 run (P4) only**.
+- A6: the stub model request log, **for P4 only**.
+- A7: the namespace and route checks for the 2.2.0 probes.
+- A8: the downloaded release archives and their `SHA256SUMS`.
+- A9: the v2 config schema (`opencode.ai/config.json`).
+- A10: the `@opencode/plugin` 2.2.7 type definitions. The hook and event payload shapes quoted in answers 4–7 match these types. The captured payloads themselves are NR.
+- A11: the stub model, the recorder, the probe plugins and the probe scripts.
+
+The recorder and stub request logs were cleared before each probe, so their content from every run before P4 is gone. Screen captures and process listings were never saved.
 
 ### Isolation limits
 
-- Runtime: its own `HOME`, `XDG_*` and `TMPDIR`, a private tmux server, and a scratch Python venv for Deck's MCP shim. Agent Mail identity and credential variables were removed from the environment. Mail calls went to a local recorder that answers like Deck, so the shim's later tool replies are fake (the error text in F2 is a recorder artifact).
+- Runtime: its own `HOME`, `XDG_*` and `TMPDIR`, a private tmux server, and a scratch Python venv for Deck's MCP shim. Agent Mail identity and credential variables were removed from the environment. **No member ever registered with a real Synth City.** Mail calls went to a local recorder that logs the request and answers with a fake member. Every "registration" in this spec is the payload the real shim sent to that recorder, and the shim's later tool replies are artifacts of the fake answer (for example, the error text in F2).
 - Network: until the incident (F5), the only network limit was the stub provider config, and that **did not stop a fallback to a hosted model**. From then on, both configs allowed only `stub` (`enabled_providers`). The four 2.2.0 probes after the incident ran in an unprivileged user and network namespace (`unshare -rn`, then mapped back to the real uid). Its only interface is `lo`, and it has no IPv4 or IPv6 routes. Each OpenCode process tree was checked to be in that namespace before its turn, and the Leader verified the namespace independently. Earlier runs, on both versions, had normal host networking: OpenCode refreshed its models.dev catalog, and one turn reached the hosted model.
 - Inside the namespace, OpenCode cannot refresh its models.dev catalog and uses the cached copy. No effect on the probes was seen.
 - Not tested: real-model behaviour, OpenCode's GUI and web clients, Windows and macOS, and more than one standalone member running at the same time (other than the cold-start race in F6).
 
 ## Answers
+
+Retention (R or NR) for each claim is in the coverage table above. Answers 4–7 quote payload shapes. The captured payloads are NR, and the shapes match the published `@opencode/plugin` types (A10).
 
 ### 1. Model and agent
 
@@ -63,7 +104,7 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 
 **How Deck selects them:** set the environment variable `OPENCODE_CONFIG_CONTENT` on the launch. It is merged on top of the user config. **[stub]** `{"model":"stub/m2","default_agent":"plan"}` started a new session with the Plan agent on `stub/m2`, on both versions. A custom primary agent works too: `{"agents":{"deckmember":{"mode":"primary","model":"stub/m2","system":"…"}},"default_agent":"deckmember"}` gave a new session that agent's model and system prompt.
 
-**A resumed session keeps its model.** The model is stored per session (`session_v2.model`). On relaunch with `--session <id>`, the config default `model` did not change it (both versions [stub]), and neither did `agents.build.model` (2.2.7 [stub]). The plugin API can change it: calling `ctx.session.switchModel({sessionID, model:{providerID, id}})` from the plugin's `prompt` hook moved a resumed session from `m1` to `m2`. The same turn already used `m2`, and the row was updated (both versions [stub]). `switchAgent` exists too, but this spike did not test it.
+**A resumed session keeps its model.** The model is stored per session (`session_v2.model`). On relaunch with `--session <id>`, the config default `model` did not change it (both versions [stub]; R only for 2.2.0), and neither did `agents.build.model` (2.2.7 [stub], NR). The plugin API can change it: calling `ctx.session.switchModel({sessionID, model:{providerID, id}})` from the plugin's `prompt` hook moved a resumed session from `m1` to `m2`. The same turn already used `m2`, and the row was updated (both versions [stub]). `switchAgent` exists too, but this spike did not test it.
 
 ### 2. Identity
 
@@ -73,7 +114,7 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 
 ### 3. Process model
 
-**With `--standalone` (both versions):**
+**With `--standalone` (both versions; process listings NR):**
 
 ```
 tmux pane: opencode --standalone --session ses_…      pane_current_command = "opencode"
@@ -82,14 +123,14 @@ tmux pane: opencode --standalone --session ses_…      pane_current_command = "
 ```
 
 - The MCP shim and the plugins run in the private `serve --stdio` process. The probe plugin's `process.pid` matched that process.
-- The Agent Mail shim registers `pid = os.getppid()`, which is the private server's pid: a direct child of the pane's process, not the pane's process itself. The slot environment (`SYNTH_CITY_TEAM_SLOT_ID`) reaches both the shim and the plugin.
+- The Agent Mail shim's registration payload (sent to the recorder) carries `pid = os.getppid()`, which is the private server's pid: a direct child of the pane's process, not the pane's process itself. The slot environment (`SYNTH_CITY_TEAM_SLOT_ID`) reaches both the shim and the plugin (NR).
 - The private server also listens on a random `127.0.0.1` port and requires authentication (`/api/event` returns 401). Its password is in the server's environment (`OPENCODE_PASSWORD`) and is not published anywhere. Deck should not use this endpoint (see 6).
-- When the TUI is killed, the private server shuts down a few seconds later (`location.shutdown`, 2.2.7).
+- When the TUI is killed, the private server shuts down a few seconds later (`location.shutdown`, 2.2.7; NR).
 
 **Without `--standalone` (2.2.7):**
 
 - The first TUI starts `opencode serve --service` as its own child, using its own environment, and writes `~/.local/state/opencode/service.json` with the URL, pid and a password. Later TUIs connect to that service and start no server of their own. Non-TUI commands such as `opencode models` also start the service, detached.
-- **The members get mixed up [stub].** Member B1 (slot 9002) started the service, and then member B2 (slot 9003) connected to it. All of B2's session events and hooks came from the service with `slot 9002`. The shim registered once, as slot 9002, with the service pid. B2's `OPENCODE_CONFIG_CONTENT` model was ignored, and its turns ran on the service's model.
+- **The members get mixed up [stub].** Member B1 (slot 9002) started the service, and then member B2 (slot 9003) connected to it. All of B2's session events and hooks came from the service with `slot 9002`, and the shim sent one registration payload, as slot 9002, with the service pid (NR). B2's `OPENCODE_CONFIG_CONTENT` asked for `stub/m2`, but B2's session row has `stub/m1`, the service's model (R).
 - The service outlives the TUI that started it: it is reparented to pid 1 and keeps serving other TUIs with the first member's environment.
 
 **Decision:** team members **must** run with `--standalone`. Without it, Deck cannot tie the shim, the plugin, the slot identity or the per-launch config to a member.
@@ -110,7 +151,7 @@ A v2 plugin is a default export `{ id, setup(ctx) }`. Its types come from **`@op
 | `event` `session.idle` | No event with that name. Use `session.execution.succeeded` / `.failed`. The `ctx.session.hook("experimental.idle")` hook fired on 2.2.7 but not on 2.2.0. | Execution events: `data:{sessionID}`; failures add `data.error:{type, message, status}`. Idle hook: `{sessionID, background:[]}` |
 | `event` `session.deleted` | Not observed. Deleting a session from a separate CLI process produced no event in the member's private server. | — |
 | `tool.execute.after` | `ctx.tool.hook("execute.after")` (also `execute.before`) | `{tool, sessionID, agent, messageID, id, input, status:"completed", result:{output, content}}` or `status:"error"` with `error` |
-| `experimental.chat.system.transform` | `ctx.session.hook("context")` | `{sessionID, agent, model, system:[{type:"text", text, metadata?}], messages, tools, options}`. Pushing `{type:"text", text}` onto `system` reached the model request. |
+| `experimental.chat.system.transform` | `ctx.session.hook("context")` | `{sessionID, agent, model, system:[{type:"text", text, metadata?}], messages, tools, options}`. Pushing `{type:"text", text}` onto `system` reached the model request (NR). |
 
 Other events seen in a turn: `session.execution.started`, `session.inbox.enqueued` / `.delivered`, `session.step.started` / `.streamed` / `.ended` / `.failed`, `session.text.*`, `session.tool.input.started` / `.ended`, `session.tool.called` / `.success` / `.failed`, `session.usage.updated`, `session.renamed`, `session.viewed`, `form.created` / `.replied` / `.cancelled`, `permission.asked` / `.replied`, `mcp.status.changed` and `location.shutdown`. The `ctx.session.hook("prompt")` hook gets `{sessionID, messageID, prompt:{text, files, agents}, delivery:"steer"}`.
 
@@ -119,9 +160,9 @@ Event order in a turn varies, because handlers run asynchronously. Use `created`
 ### 5. Questions
 
 - **The tool:** `question` is in the default tool list. A call opens a TUI form (`Questions … ↑↓ select  enter submit  esc dismiss`) and blocks the turn (both versions [stub]).
-- **Open-question signal:** a `form.created` event with `data.form.metadata.kind:"question"`, a `tool` reference and the `fields`. The form ends with `form.replied` (`answer`) or `form.cancelled`. The 2.0.29 `question.v2.asked` event did not appear in 2.2.x. Durable state: the `session_part` row for the `question` tool has `state.status:"running"`, `session_v2.time_busy` is set, and `time_idle` is null.
-- **What the agent sees after an answer:** `User has answered your questions: "Pick one?"="A". You can now continue with the user's answers in mind.`
-- **Denying the tool by config works.** Both the deprecated v1 form `"permission":{"question":"deny"}` and the v2 rule `"permissions":[{"action":"question","resource":"*","effect":"deny"}]` remove `question` from the tools sent to the model (12 tools become 11). When the stub forced the call anyway, the agent got `{"error":{"type":"tool.execution","message":"No tool named \"question\" is currently available. …"}}` (v2 rule: both versions [stub]; v1 form: 2.2.7 [stub]). A real model should not see the tool at all, but that is not proven with a real model.
+- **Open-question signal:** a `form.created` event with `data.form.metadata.kind:"question"`, a `tool` reference and the `fields`. The form ends with `form.replied` (`answer`) or `form.cancelled`. The 2.0.29 `question.v2.asked` event did not appear in 2.2.x. Durable state while the question is open: the `question` tool part has `state.status:"running"`, `session_v2.time_busy` is set, and `time_idle` is null (NR while open; the R rows of sessions killed during a question still show busy).
+- **What the agent sees after an answer (NR):** `User has answered your questions: "Pick one?"="A". You can now continue with the user's answers in mind.`
+- **Denying the tool by config works.** Both the deprecated v1 form `"permission":{"question":"deny"}` and the v2 rule `"permissions":[{"action":"question","resource":"*","effect":"deny"}]` remove `question` from the tools sent to the model (12 tools become 11; NR). When the stub forced the call anyway, the agent got `{"error":{"type":"tool.execution","message":"No tool named \"question\" is currently available. …"}}` (v2 rule: both versions [stub]; v1 form: 2.2.7 [stub]). A real model should not see the tool at all, but that is not proven with a real model.
 - **Denying from the plugin hook works too, but the tool stays visible.** `ctx.permission.hook("evaluate")` gets `{sessionID, agent, action:"question", resources:["*"], source, effect}`. Setting `effect = "deny"` and `message = …` rejects the call. The agent gets `{"error":{"type":"permission.rejected","message":<our message>}}`, and the event is `session.tool.failed`. The tool is still offered to the model.
 - `--auto` does **not** stop questions: the form still opens.
 
@@ -132,26 +173,26 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 | Source | Working | Idle | Waiting for input | Verdict |
 |---|---|---|---|---|
 | Plugin events (in the member's own `--standalone` server) | `session.execution.started` | `session.execution.succeeded` (or `.failed` with `error.type`) | `form.created` (question), `permission.asked` (approval); cleared by `form.replied` / `form.cancelled` / `permission.replied` | **Primary.** Exact, immediate, and tied to the slot because the plugin runs with the member's environment. |
-| `session_v2` row | `time_busy > time_idle` (or `time_idle` null) | `time_idle ≥ time_busy`, `idle_outcome` `succeeded` / `failed` | Not visible: looks like working | **Secondary**, for recovery after a Deck restart. It is stale after a crash: a TUI killed mid-turn left `time_busy > time_idle` and `time_suspended` set, and a relaunch without a prompt did not clear it in 40 s. Use it only with process liveness. A running `question` part in `session_part` marks waiting. |
+| `session_v2` row | `time_busy > time_idle` (or `time_idle` null) | `time_idle ≥ time_busy`, `idle_outcome` `succeeded` / `failed` | Not visible: looks like working | **Secondary**, for recovery after a Deck restart. It goes stale when a TUI dies: two 2.2.7 sessions whose TUIs were killed while waiting for input still show `time_busy > time_idle` with `time_suspended` set (R). A third session, killed mid-turn, was not cleared by a relaunch without a prompt within 40 s (NR). Use it only with process liveness. A running `question` part in `session_part` marks waiting. |
 | Service `/event` stream | — | — | — | **Not usable.** Members use `--standalone`, whose server is private and password-protected, and the shared service mixes up members (3). |
 
 `session_message` also stores an `idle` row with `outcome` after each turn. The `event` table stayed empty in every run.
 
 ### 7. Skip permissions
 
-- `--auto` ("Auto-approve permissions that are not explicitly denied") does what Deck needs. With a `shell` `ask` rule, `permission.asked` was followed by an automatic `permission.replied` `"once"`, and the command ran (both versions [stub]). Without `--auto`, the TUI stopped on `Permission required … Allow once / Always allow / Reject` (2.2.7 [stub]).
+- `--auto` ("Auto-approve permissions that are not explicitly denied") does what Deck needs. With a `shell` `ask` rule, `permission.asked` was followed by an automatic `permission.replied` `"once"` (events NR), and the command ran (both versions [stub], R). Without `--auto`, the TUI stopped on `Permission required … Allow once / Always allow / Reject` (2.2.7 [stub]).
 - **Deny rules still apply under `--auto`.** An `external_directory` deny gave `permission.rejected` (both versions [stub]), and the `question` deny held (2.2.7 [stub]).
-- The hidden flags `--yolo` and `--dangerously-skip-permissions` are accepted by both versions and show the same "Build auto" mode as `--auto`. On 2.2.7, deny rules still applied under both flags [stub]. They are not in `--help`, so Deck should use only `--auto`.
+- The hidden flags `--yolo` and `--dangerously-skip-permissions` are accepted by both versions and show the same "Build auto" mode as `--auto` (footer NR; 2.2.7 sessions under both flags R). On 2.2.7, deny rules still applied under both flags [stub]. They are not in `--help`, so Deck should use only `--auto`.
 - 2.2.7's default rules allowed everything tried without asking, including reading `/etc/hostname` through `external_directory`. Only the `question` tool interrupted a default session.
 
 ## Other findings
 
 - **F1. Config keys renamed.** The v2 schema (`https://opencode.ai/config.json`) deprecates `agent`, `permission`, `plugin`, `provider` and the flat `mcp.<name>` map. Their replacements are `agents`, `permissions` (an ordered rule list `{action, resource, effect}`), `plugins`, `providers` and `mcp.servers.<name>`. The deprecated forms still work in 2.2.x. New Deck writes should use the v2 forms.
-- **F2. MCP tools are in "Code Mode" by default.** The Agent Mail tools are not direct tool calls. The system prompt says they "only work as JavaScript inside the `execute` tool" and lists only 11 of the 36 tools (`albiex-synth-city-mail (36 tools, 11 shown)`). The model must use `search(...)` to find the rest. Setting `"codemode": false` on the server entry (`mcp.servers.<name>` or the flat form) makes them direct tools named `albiex-synth-city-mail_<tool>`, all 36 of them. `execute` is still offered for other code. **[stub]** A direct `albiex-synth-city-mail_synth_city_check_inbox` call reached the shim, which registered with the member's slot (both versions).
+- **F2. MCP tools are in "Code Mode" by default.** The Agent Mail tools are not direct tool calls. The system prompt says they "only work as JavaScript inside the `execute` tool" and lists only 11 of the 36 tools (`albiex-synth-city-mail (36 tools, 11 shown)`, NR). The model must use `search(...)` to find the rest. Setting `"codemode": false` on the server entry (`mcp.servers.<name>` or the flat form) makes them direct tools named `albiex-synth-city-mail_<tool>`, all 36 of them (NR). `execute` is still offered for other code (NR). **[stub]** A direct `albiex-synth-city-mail_synth_city_check_inbox` call was executed by the shim on both versions (R). The recorder's fake reply produced the tool error, and the slot in the registration payload is NR.
 - **F3. The DB schema changed.** The 2.2.x tables are `session_v2`, `session_message`, `session_part`, `session_inbox` and `event`, among others. The 2.0.29 tables `session`, `message` and `part` are gone. New `session_v2` columns include `time_busy`, `time_idle`, `idle_outcome`, `time_suspended` and `resume_attempts`. 2.2.7 stores message parts in a `session_part` table. 2.2.0 has no `session_part` table, and its part storage was not examined. In 2.2.7 the assistant message's `content` is also inside `session_message.data`, so a reader should not depend on `session_part` alone.
 - **F4. Config hot-reload.** Running TUIs reload `opencode.json` and the plugin files when they change. Writing the MCP entry made running members start the shim straight away. An Agent Mail install therefore affects live members.
 - **F5. Silent fallback to a hosted model.** One 2.2.7 session whose default was the custom `stub/m1` ran on `opencode/iceman-free` (OpenCode's hosted free models; the turn ended in a 429 `provider.free-limit` error). The cause was not reproduced. It happened about 20 s after a models.dev catalog refresh, and the custom provider was probably not resolved yet. Without an allowlist, `opencode models` lists 12 hosted `opencode/*-free` models with no credentials needed. `"enabled_providers":[…]`, or `"disabled_providers":["opencode"]`, removes them.
-- **F6. Cold-start race.** Five `--standalone` launches started at once against a fresh data dir (2.2.0). One failed with `Error: Standalone server exited before reporting readiness`, and another exited before its output was captured. Serial launches always worked.
+- **F6. Cold-start race.** Five `--standalone` launches started at once against a fresh 2.2.0 data dir. The retained 2.2.0 log shows two `Standalone server exited before reporting readiness` failures, one `SQLiteError: database is locked`, and one failed `CREATE TABLE` migration query (R). Serial launches always worked.
 - **F7. The first launch shows a "what's new" overlay** (2.2.7) over the session view. Keys typed during startup could be lost.
 - **F8. Prompt delivery.** `--prompt` on the TUI submits immediately (both versions). `send-keys -l <text>` followed by one `Enter` submitted a prompt in an idle TUI (both versions; the 2.2.0 probes used this).
 - **F9. Updates.** The `update` key (`disable` / `notify` / `auto`) replaces `autoupdate`. Members should run with `"update":"disable"` so that a campaign keeps one version.
