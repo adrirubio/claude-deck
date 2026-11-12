@@ -1,14 +1,18 @@
 import { Terminal, AlertCircle, Server } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
 import { useInstanceDocumentTitle } from "@/hooks/useInstanceDocumentTitle";
 import { useProviderContext } from "@/contexts/ProviderContext";
 import { getInstanceAccentClasses } from "@/lib/instanceAccent";
+import { MODAL_SIZES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { harnessSummary } from "./harnessSummary";
+
+const CLI_WARNING_LABEL = "Container cannot see host agent CLIs";
 
 export function Header() {
   const { theme } = useTheme();
@@ -80,14 +84,30 @@ export function Header() {
                 </Link>
               )}
               {status.environment?.agent_cli_warning && (
-                <Badge
-                  variant="outline"
-                  className="min-w-0 gap-1 text-xs border-destructive/40 text-destructive max-w-88"
-                  title={status.environment.agent_cli_warning}
-                >
-                  <AlertCircle className="h-3 w-3 shrink-0" />
-                  <span className="truncate">Container cannot see host agent CLIs</span>
-                </Badge>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <button
+                      type="button"
+                      title={status.environment.agent_cli_warning}
+                      aria-label={`${CLI_WARNING_LABEL}. ${status.environment.agent_cli_warning}`}
+                      className="inline-flex shrink-0 max-w-88 rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:min-w-0 sm:shrink"
+                    >
+                      <Badge
+                        variant="outline"
+                        className="min-w-0 gap-1 text-xs border-destructive/40 text-destructive"
+                      >
+                        <AlertCircle className="h-3 w-3 shrink-0" />
+                        <span className="hidden truncate sm:inline">{CLI_WARNING_LABEL}</span>
+                      </Badge>
+                    </button>
+                  </DialogTrigger>
+                  <DialogContent className={MODAL_SIZES.SM}>
+                    <DialogHeader>
+                      <DialogTitle>{CLI_WARNING_LABEL}</DialogTitle>
+                      <DialogDescription>{status.environment.agent_cli_warning}</DialogDescription>
+                    </DialogHeader>
+                  </DialogContent>
+                </Dialog>
               )}
             </>
           )}
