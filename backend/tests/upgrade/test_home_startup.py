@@ -1,7 +1,9 @@
 """C5 import isolation, real supported starts, explicit settings and lock order."""
 import json
+import errno
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import time
@@ -97,6 +99,109 @@ with patch.object(sql, 'create_async_engine', observed):
         env=env, capture_output=True, text=True, timeout=15)
     assert process.returncode == 0, process.stderr
     assert not source.exists()
+
+
+def test_explicit_database_first_start_migrates_home_from_unwritable_cwd(tmp_path):
+    home, cwd = tmp_path / 'home', tmp_path / 'readonly-backend'
+    cwd.mkdir()
+    source = put(home / OLD / 'backups/a.zip', b'backup')
+    database = tmp_path / 'data/custom.db'
+    database.parent.mkdir()
+    with sqlite3.connect(database) as db:
+        db.execute('CREATE TABLE custom_probe (value TEXT)')
+        db.execute("INSERT INTO custom_probe VALUES ('custom-database')")
+    identity = database.stat().st_ino
+    script = '''
+import asyncio, errno, os
+from pathlib import Path
+cwd = Path.cwd()
+# The probe proves the real filesystem permission boundary, before startup.
+try:
+    descriptor = os.open(cwd/'write-probe', os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
+except PermissionError as error:
+    assert error.errno == errno.EACCES
+else:
+    os.close(descriptor)
+    raise AssertionError('permission regression requires an unwritable cwd')
+database = Path(os.environ['CUSTOM_DATABASE'])
+original = database.read_bytes()
+from app.database import engine, init_db
+from app.config import settings
+from app.upgrade_references import reference_startup
+assert 'database_url' in settings.model_fields_set
+with reference_startup(settings.database_url) as state:
+    assert state.database == Path(os.environ['CUSTOM_DATABASE'])
+    assert state.records, 'HOME move must publish reference recovery evidence'
+assert engine.url.database == os.environ['CUSTOM_DATABASE']
+assert database.read_bytes() == original, 'file phase changed an explicit database'
+async def start():
+    await init_db()
+    await engine.dispose()
+asyncio.run(start())
+assert not (cwd/'.albiex-synth-city-db-upgrade.lock').exists()
+'''
+    cwd.chmod(0o555)
+    try:
+        process = subprocess.run([sys.executable, '-c', script], cwd=cwd,
+            env=environment(home) | {'DATABASE_URL': 'sqlite+aiosqlite:///' + str(database),
+                                     'CUSTOM_DATABASE': str(database)},
+            capture_output=True, text=True, timeout=15)
+    finally:
+        cwd.chmod(0o755)
+    assert process.returncode == 0, process.stderr
+    assert not source.exists()
+    assert (home / NEW / 'backups/a.zip').read_bytes() == b'backup'
+    assert database.stat().st_ino == identity
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT value FROM custom_probe').fetchall() == [('custom-database',)]
+    assert (home / '.albiex-synth-city-db-upgrade.lock').is_file()
+    assert (database.parent / '.albiex-synth-city-db-upgrade.lock').is_file()
+    assert not list(cwd.iterdir())
+
+
+@pytest.mark.parametrize('anchor', ['home', 'default-database', 'custom-database'])
+def test_lock_creation_failure_names_the_lock_and_operation(tmp_path, anchor):
+    from app import upgrade_bootstrap as upgrade
+    home, cwd, data = (tmp_path / name for name in ('home', 'backend', 'data'))
+    source = put(home / OLD / 'backups/a.zip', b'backup')
+    cwd.mkdir()
+    data.mkdir()
+    parent = {'home': home, 'default-database': cwd, 'custom-database': data}[anchor]
+    denied = parent / upgrade.LOCK_NAME
+    before = files(home), files(cwd), files(data)
+    parent.chmod(0o555)
+    try:
+        # A root run must not turn this permission regression into a false pass.
+        assert not os.access(parent, os.W_OK), 'permission regression requires an unwritable lock parent'
+        with pytest.raises(RuntimeError) as failure:
+            if anchor == 'custom-database':
+                with upgrade.reference_phase_lock('sqlite+aiosqlite:///' + str(data / 'custom.db'),
+                                                   home=home, cwd=cwd):
+                    pytest.fail('startup continued without the database lock')
+            else:
+                upgrade.prepare_resource_locations('sqlite+aiosqlite:///./synth_city.db',
+                    '~/.albiex-synth-city/bridge-attachments', database_explicit=False,
+                    attachment_explicit=False, home=home, cwd=cwd)
+    finally:
+        parent.chmod(0o755)
+    assert str(denied) in str(failure.value)
+    assert 'open lock' in str(failure.value).lower()
+    assert source.read_bytes() == b'backup'
+    assert (files(home), files(cwd), files(data)) == before
+
+
+def test_lock_acquisition_failure_names_the_lock_and_operation(tmp_path, monkeypatch):
+    from app import upgrade_bootstrap as upgrade
+
+    def fail_acquire(descriptor, operation):
+        raise OSError(errno.EIO, 'synthetic lock acquisition failure')
+
+    monkeypatch.setattr(upgrade.fcntl, 'flock', fail_acquire)
+    with pytest.raises(RuntimeError) as failure:
+        with upgrade._migration_lock(tmp_path):
+            pytest.fail('startup continued without acquiring the lock')
+    assert str(tmp_path / upgrade.LOCK_NAME) in str(failure.value)
+    assert 'acquire lock' in str(failure.value).lower()
 
 
 @pytest.mark.parametrize('boundary', ['home_journal_durable', 'home_landed:0'])
