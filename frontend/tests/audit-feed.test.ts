@@ -36,7 +36,7 @@ describe("buildFeed rows", () => {
       event("handoff_acceptance", 30, { actor_kind: "member", actor_reference: "member:2" }),
     ], CTX);
     expect(rows.map((row) => [row.actor, row.action, row.subject?.text])).toEqual([
-      ["Deck", "delivered", "adrirubio/claude-deck #101"],
+      ["Synth City", "delivered", "adrirubio/claude-deck #101"],
       ["Director", "changed the settings of", "repository adrirubio/claude-deck"],
       ["B1 Backend", "accepted a handoff for", "adrirubio/claude-deck #101"],
     ]);
@@ -48,7 +48,7 @@ describe("buildFeed rows", () => {
 
   it("falls back for an unknown kind and never shows the kind code", () => {
     const { rows } = buildFeed([event("brand_new_kind", 5)], CTX);
-    expect(rows[0].action).toBe("did something that Deck does not describe on");
+    expect(rows[0].action).toBe("did something that Synth City does not describe on");
     expect(JSON.stringify([rows[0].actor, rows[0].action, rows[0].subject, rows[0].reason])).not.toContain("brand_new_kind");
   });
 

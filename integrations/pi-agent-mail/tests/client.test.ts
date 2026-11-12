@@ -13,26 +13,60 @@ function fixture() {
   const fence = new PaneFence({ pid: process.pid, start: '1' }, root)
   const generation = new MailGeneration(fence, {
     PATH: process.env.PATH, HOME: root,
-    CLAUDE_DECK_MAIL_PYTHON: process.execPath,
-    CLAUDE_DECK_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
+    SYNTH_CITY_MAIL_PYTHON: process.execPath,
+    SYNTH_CITY_MAIL_SHIM: join(import.meta.dirname, 'fake-server.mjs'),
     OPENROUTER_API_KEY: 'synthetic-secret', GITHUB_TOKEN: 'synthetic-secret', OPERATOR_TOKEN: 'synthetic-secret',
   })
   return { root, fence, generation }
 }
 
-test('no opt-in means no tools, listeners, transport or prompts', () => {
+test('T-P1 old opt-in alone never activates the extension', () => {
   const old = process.env.CLAUDE_DECK_MAIL_OPT_IN
-  delete process.env.CLAUDE_DECK_MAIL_OPT_IN
+  const current = process.env.SYNTH_CITY_MAIL_OPT_IN
+  process.env.CLAUDE_DECK_MAIL_OPT_IN = '1'
+  delete process.env.SYNTH_CITY_MAIL_OPT_IN
+  try { deckMail(new Proxy({}, { get() { throw new Error('legacy opt-in activated Mail') } }) as ExtensionAPI) }
+  finally {
+    if (old === undefined) delete process.env.CLAUDE_DECK_MAIL_OPT_IN
+    else process.env.CLAUDE_DECK_MAIL_OPT_IN = old
+    if (current !== undefined) process.env.SYNTH_CITY_MAIL_OPT_IN = current
+  }
+})
+
+test('T-P1 child environment carries new keys only and never translates old input', () => {
+  const environment = childEnvironment({
+    SYNTH_CITY_URL: 'http://fixture.invalid/new', SYNTH_CITY_TEAM_PRESET_ID: '71', SYNTH_CITY_TEAM_SLOT_ID: '72',
+    CLAUDE_DECK_URL: 'http://fixture.invalid/old', CLAUDE_DECK_TEAM_PRESET_ID: '81', CLAUDE_DECK_TEAM_SLOT_ID: '82',
+    CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN: 'synthetic-private',
+  })
+  assert.deepEqual(environment, { PYTHONUNBUFFERED: '1', SYNTH_CITY_PROVIDER: 'pi-cli',
+    SYNTH_CITY_URL: 'http://fixture.invalid/new', SYNTH_CITY_TEAM_PRESET_ID: '71', SYNTH_CITY_TEAM_SLOT_ID: '72' })
+  assert.deepEqual(childEnvironment({ CLAUDE_DECK_URL: 'http://fixture.invalid/old' }),
+    { PYTHONUNBUFFERED: '1', SYNTH_CITY_PROVIDER: 'pi-cli' })
+})
+
+test('T-P1 per-generation fence uses the new ephemeral namespace', () => {
+  const root = mkdtempSync(join(tmpdir(), 'synth-city-fence-contract-'))
+  try {
+    const fence = new PaneFence({ pid: 12, start: '23' }, root)
+    assert.equal(fence.file, join(root, 'albiex-synth-city-pi', '12-23.json'))
+    fence.release()
+  } finally { rmSync(root, { recursive: true }) }
+})
+
+test('no opt-in means no tools, listeners, transport or prompts', () => {
+  const old = process.env.SYNTH_CITY_MAIL_OPT_IN
+  delete process.env.SYNTH_CITY_MAIL_OPT_IN
   try { deckMail(new Proxy({}, { get() { throw new Error('unexpected side effect') } }) as ExtensionAPI) }
-  finally { if (old !== undefined) process.env.CLAUDE_DECK_MAIL_OPT_IN = old }
+  finally { if (old !== undefined) process.env.SYNTH_CITY_MAIL_OPT_IN = old }
 })
 
 test('public tools contain authority schemas but never private close', () => {
-  assert(manifest.some(tool => tool.name === 'deck_decide_continuation' && tool.inputSchema.required.includes('approval_request_id' as never)))
-  assert(manifest.every(tool => tool.name.startsWith('deck_')))
-  assert.equal(privateTools[0].name, '__deck_mail_close_generation')
+  assert(manifest.some(tool => tool.name === 'synth_city_decide_continuation' && tool.inputSchema.required.includes('approval_request_id' as never)))
+  assert(manifest.every(tool => tool.name.startsWith('synth_city_')))
+  assert.equal(privateTools[0].name, '__synth_city_mail_close_generation')
   assert.equal(privateTools[0].inputSchema.additionalProperties, false)
-  const remaining = manifest.find(tool => tool.name === 'deck_prepare_work_remaining_summary')
+  const remaining = manifest.find(tool => tool.name === 'synth_city_prepare_work_remaining_summary')
   assert(remaining)
   assert.deepEqual(remaining.inputSchema.required, ['work_item_id', 'remaining', 'next_action'])
   assert.match(remaining.description, /Leader-only/)
@@ -41,7 +75,7 @@ test('public tools contain authority schemas but never private close', () => {
 
 for (const status of [403, 409]) test(`final Pi result event preserves ${status} and error semantics`, () => {
   const result = adaptResult({ content: [], structuredContent: { ok: false, error: { code: 'conflict', status_code: status } } })
-  const override = toolResultOverride({ toolName: 'deck_send_message', ...result })
+  const override = toolResultOverride({ toolName: 'synth_city_send_message', ...result })
   assert.equal(override?.isError, true)
   assert.equal((override?.details.deck.error as { status_code: number }).status_code, status)
   assert.match(result.content[0].type === 'text' ? result.content[0].text : '', new RegExp(String(status)))
@@ -90,7 +124,7 @@ test('real stdio transport has parity, one registration, safe env and acknowledg
     assert.equal(generation.ownsActivity(), false)
     await generation.start(root)
     assert.equal(generation.ownsActivity(), true)
-    const results = await Promise.all([generation.call('deck_list_team', {}), generation.call('deck_list_team', {})])
+    const results = await Promise.all([generation.call('synth_city_list_team', {}), generation.call('synth_city_list_team', {})])
     assert.deepEqual(results.map(result => result.details.deck.calls), [2, 3])
     for (const result of results) {
       const keys = result.details.deck.environmentKeys as string[]
@@ -100,7 +134,7 @@ test('real stdio transport has parity, one registration, safe env and acknowledg
     assert.equal(generation.ownsActivity(), false)
     await generation.close()
     assert(!existsSync(fence.file))
-    assert.equal(generation.call && (await generation.call('deck_list_team', {})).details.deckError, true)
+    assert.equal(generation.call && (await generation.call('synth_city_list_team', {})).details.deckError, true)
   } finally { await generation.close(); rmSync(root, { recursive: true }) }
 })
 
@@ -108,7 +142,7 @@ for (const body of ['offline', 'disconnect', 'protocol-error', 'malformed-json',
   const { root, fence, generation } = fixture()
   try {
     await generation.start(root)
-    const result = await generation.call('deck_send_message', { body_markdown: body })
+    const result = await generation.call('synth_city_send_message', { body_markdown: body })
     assert.equal((result.details.deck.error as { code: string }).code, 'mutation_outcome_unknown')
     assert.equal(result.details.deck.outcome, 'unknown')
     if (body === 'disconnect') { await generation.close(); assert(existsSync(fence.file)) }
@@ -119,7 +153,7 @@ for (const body of ['lose-close', 'error-close']) test(`${body} persists the fen
   const { root, fence, generation } = fixture()
   try {
     await generation.start(root)
-    await generation.call('deck_send_message', { body_markdown: body })
+    await generation.call('synth_city_send_message', { body_markdown: body })
     await generation.close()
     assert(existsSync(fence.file))
     assert.throws(() => new PaneFence({ pid: process.pid, start: '1' }, root))
@@ -132,7 +166,7 @@ test('mapping failure preserves a definitive Deck outcome rather than replacing 
   const result = adaptResult({ structuredContent: envelope, content: [{ type: 'resource' }] })
   assert.deepEqual(result.details.deck, envelope)
   assert.equal(result.details.mappingError, 'unsupported_mcp_content')
-  assert.equal(toolResultOverride({ toolName: 'deck_send_message', ...result })?.isError, true)
+  assert.equal(toolResultOverride({ toolName: 'synth_city_send_message', ...result })?.isError, true)
 })
 
 test('abort before dispatch is definite; abort after dispatch is unknown', async () => {
@@ -140,10 +174,10 @@ test('abort before dispatch is definite; abort after dispatch is unknown', async
   try {
     await generation.start(root)
     const before = AbortSignal.abort()
-    const result = await generation.call('deck_send_message', {}, before)
+    const result = await generation.call('synth_city_send_message', {}, before)
     assert.equal((result.details.deck.error as { code: string }).code, 'tool_not_dispatched')
     const controller = new AbortController()
-    const pending = generation.call('deck_send_message', { body_markdown: 'delay' }, controller.signal)
+    const pending = generation.call('synth_city_send_message', { body_markdown: 'delay' }, controller.signal)
     controller.abort()
     assert.equal((await pending).details.deck.outcome, 'unknown')
   } finally { await generation.close(); rmSync(root, { recursive: true }) }

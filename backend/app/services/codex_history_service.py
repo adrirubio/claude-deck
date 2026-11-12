@@ -39,7 +39,7 @@ class CodexHistoryService:
                 "surface": "diagnostics_only",
                 "reason": (
                     "Codex history currently exposes session_id, ts, and sensitive prompt text. "
-                    "Claude Deck summarizes structure only until stable non-sensitive history "
+                    "Albiex Synth City summarizes structure only until stable non-sensitive history "
                     "metadata is available."
                 ),
             },

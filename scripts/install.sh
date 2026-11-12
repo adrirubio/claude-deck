@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-echo "Setting up Claude Deck..."
+echo "Setting up Albiex Synth City..."
 
 # Check Python version
 PYTHON_CMD="python3"
@@ -78,7 +78,7 @@ echo "Documentation setup complete!"
 # Create required directories
 echo ""
 echo "Creating required directories..."
-mkdir -p ~/.claude-registry/backups
+mkdir -p ~/.albiex-synth-city/backups
 
 echo ""
 echo "Setup complete!"

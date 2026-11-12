@@ -18,10 +18,10 @@ Codex has no native Backup/Usage/Context/transcript adapter here; export and dia
 
 ## Muse Code
 
-Muse Code is Meta's CLI (`muse`). Deck runs it as a team member with the provider `muse-cli`, for example with the model `muse-wonder-1.0`.
+Muse Code is Meta's CLI (`muse`). Albiex Synth City runs it as a team member with the provider `muse-cli`, for example with the model `muse-wonder-1.0`.
 
-- **Subscription:** a Muse subscription works only inside Muse Code. Deck therefore launches Muse Code itself; it does not run the Muse models in another harness.
-- **Launch:** `muse --trust-workspace --model <model> [--reasoning-effort <tier>] [--yolo] [<prompt>]`. **Skip permissions** maps to `--yolo`. Muse Code cannot be given a session id, so Deck discovers it from the `SessionStart` hook or from the session lock that the process holds, saves it on the slot, and relaunches with `muse resume <session id>`.
-- **Agent Mail:** **Set up** on the Muse Code page writes the user-wide settings file `~/.config/muse/settings.json` (or `$MUSE_CONFIG_DIR/settings.json`). It adds the `claude-deck-mail` MCP server and the `SessionStart` and `UserPromptSubmit` hooks, and keeps every other setting. **Remove** deletes only Deck's entries. Deck refuses to change a file that it cannot read as settings.
-- **Questions:** a hook cannot block Muse Code's question tool. Deck reads the session's event log, shows a question as **waiting for input**, and notifies the bound Supervisor. Team charters should tell Muse members to write to the Supervisor instead of asking.
-- **Updates:** the `muse` launcher updates Muse Code by itself. Each observation records the session's Muse Code version and model, so a change during a campaign is visible. Deck does not pin the version.
+- **Subscription:** a Muse subscription works only inside Muse Code. Synth City therefore launches Muse Code itself; it does not run the Muse models in another harness.
+- **Launch:** `muse --trust-workspace --model <model> [--reasoning-effort <tier>] [--yolo] [<prompt>]`. **Skip permissions** maps to `--yolo`. Muse Code cannot be given a session id, so Synth City discovers it from the `SessionStart` hook or from the session lock that the process holds, saves it on the slot, and relaunches with `muse resume <session id>`.
+- **Agent Mail:** **Set up** on the Muse Code page writes the user-wide settings file `~/.config/muse/settings.json` (or `$MUSE_CONFIG_DIR/settings.json`). It adds the `albiex-synth-city-mail` MCP server and the `SessionStart` and `UserPromptSubmit` hooks, and keeps every other setting. **Remove** deletes only Synth City’s entries. Synth City refuses to change a file that it cannot read as settings.
+- **Questions:** a hook cannot block Muse Code's question tool. Synth City reads the session's event log, shows a question as **waiting for input**, and notifies the bound Supervisor. Team charters should tell Muse members to write to the Supervisor instead of asking.
+- **Updates:** the `muse` launcher updates Muse Code by itself. Each observation records the session's Muse Code version and model, so a change during a campaign is visible. Synth City does not pin the version.

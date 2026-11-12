@@ -1374,10 +1374,10 @@ class GithubDispatchService:
         ]
         body = issue_body.strip() or "(No issue body provided.)"
         if len(body) > 12000:
-            body = f"{body[:12000]}\n\n[Issue body truncated by Claude Deck.]"
+            body = f"{body[:12000]}\n\n[Issue body truncated by Albiex Synth City.]"
 
         lines = [
-            "You are handling an autonomous GitHub dispatch from Claude Deck.",
+            "You are handling an autonomous GitHub dispatch from Albiex Synth City.",
             "",
             f"- Work item ID: {item.id}",
             f"- Repo: {scope.repo_owner}/{scope.repo_name}",
@@ -1398,7 +1398,7 @@ class GithubDispatchService:
                     f"- Assigned branch: `{item.dispatch_head_ref}`. Run "
                     f"`git switch -c {item.dispatch_head_ref}` and do not rename or "
                     "recompose it.",
-                    "- Do NOT create, move or remove git worktrees yourself. Claude Deck "
+                    "- Do NOT create, move or remove git worktrees yourself. Albiex Synth City "
                     "provisions the workspace; you work inside the one you were given.",
                     "- Do NOT work in any other checkout of this repository.",
                 ]
@@ -1406,8 +1406,8 @@ class GithubDispatchService:
         else:
             lines.extend(
                 [
-                    "- This is a shared human checkout, not a Deck-managed worktree. Its "
-                    "current branch is not Deck's to change; confirm with the team leader "
+                    "- This is a shared human checkout, not an Albiex Synth City-managed worktree. Its "
+                    "current branch is not Albiex Synth City's to change; confirm with the team leader "
                     "before switching branches.",
                     "- Do NOT work in any other checkout of this repository.",
                 ]
@@ -1428,7 +1428,7 @@ class GithubDispatchService:
         if supervisor is not None:
             lines.extend([
                 f"- Supervisor address: {supervisor['address']} (actor_id={supervisor['actor_id']}).",
-                "- Use deck_send_message with to_supervisor_actor_id for the current bound Supervisor.",
+                "- Use synth_city_send_message with to_supervisor_actor_id for the current bound Supervisor.",
                 "- Escalate to the Leader first. Then contact the Supervisor.",
                 "- Retained operator decisions require the current operator-action record.",
                 "- Supervisor binding and check-ins grant no approval, retry, lease or merge authority.",
@@ -1437,36 +1437,36 @@ class GithubDispatchService:
             lines.append(f"- Labels: {', '.join(labels)}")
         lines.extend(["", "Issue body:", body, "", "Required status reporting:"])
         lines.append(
-            f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+            f"- When triaging, call `synth_city_report_dispatch_status(work_item_id={item.id}, "
             f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`."
         )
         if scope.github_auth_mode == "app":
             lines.extend(
                 [
-                    "- Claude Deck opens the pull request with its GitHub App identity; "
+                    "- Albiex Synth City opens the pull request with its GitHub App identity; "
                     "do not create the PR yourself.",
-                    f"- Add commit trailers `Deck-Agent-Slot: {owner_slot_id} "
+                    f"- Add commit trailers `Synth-City-Agent-Slot: {owner_slot_id} "
                     f"({owner.display_name if owner else owner_slot_id})` and "
-                    f"`Deck-Work-Item: {item.id}`.",
+                    f"`Synth-City-Work-Item: {item.id}`.",
                     f"- Push the exact assigned branch with `git push -u origin "
                     f"{item.dispatch_head_ref}`.",
-                    f"- After the push, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                    f"- After the push, call `synth_city_report_dispatch_status(work_item_id={item.id}, "
                     f"status=\"pr_ready\", lease_token=\"{workspace.lease_token}\", "
-                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck creates the initial PR title and body.",
+                    f"head_ref=\"{item.dispatch_head_ref}\")`. Albiex Synth City creates the initial PR title and body.",
                 ]
             )
         else:
             lines.append(
-                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"- When you open a PR, call `synth_city_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"pr_opened\", lease_token=\"{workspace.lease_token}\", "
                 "pr_number=<PR number>)`."
             )
         lines.extend(
             [
-                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"- If blocked, call `synth_city_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"blocked\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
                 f"- Once the item reaches a terminal state, commit and push all work, then call "
-                f"`deck_report_dispatch_status(work_item_id={item.id}, "
+                f"`synth_city_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"workspace_released\", lease_token=\"{workspace.lease_token}\")`.",
             ]
         )
@@ -1497,7 +1497,7 @@ class GithubDispatchService:
                         before="starting implementation",
                         item=item,
                     ),
-                    "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
+                    "- Use `synth_city_request_context` when you need an explicit answer from the leader/approver.",
                 ]
             )
             if scope.github_auth_mode == "app":
@@ -1505,7 +1505,7 @@ class GithubDispatchService:
                     [
                         "- Keep the change inside the issue scope and run the issue's "
                         "requested local verification commands.",
-                        "- Push the assigned branch and report `pr_ready`; Claude Deck "
+                        "- Push the assigned branch and report `pr_ready`; Albiex Synth City "
                         "creates the draft PR and starts CI verification.",
                     ]
                 )
@@ -1779,11 +1779,11 @@ class GithubDispatchService:
             )
         report = (
             " Approval exists only when the designated leader calls "
-            f"`deck_approve_work_item`{linkage} for the current round. A prose "
+            f"`synth_city_approve_work_item`{linkage} for the current round. A prose "
             "reply is not approval, and self-approval is refused. After approval, "
-            "call `deck_report_dispatch_status(status=\"ack_received\")` before "
+            "call `synth_city_report_dispatch_status(status=\"ack_received\")` before "
             f"{before}. A rejection opens the next round automatically; revise the "
-            "plan and call `deck_request_work_item_approval` again with the same work "
+            "plan and call `synth_city_request_work_item_approval` again with the same work "
             "item and nonce. Do not report `revision_requested`."
         )
         if item is not None and item.issue_type == "code":
@@ -1791,19 +1791,19 @@ class GithubDispatchService:
         if leader_member is not None:
             return (
                 "- Submit the short plan for Leader approval using "
-                f"`deck_request_work_item_approval(work_item_id="
+                f"`synth_city_request_work_item_approval(work_item_id="
                 f"{item.id if item is not None else '<id>'}, dispatch_nonce=\""
                 f"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
                 f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:
             return (
-                "- Submit the short plan with `deck_request_work_item_approval` and wait "
+                "- Submit the short plan with `synth_city_request_work_item_approval` and wait "
                 f"for an explicit decision before {before}."
                 + report
             )
         return (
-            "- Submit the short plan with `deck_request_work_item_approval` and wait for "
+            "- Submit the short plan with `synth_city_request_work_item_approval` and wait for "
             f"an explicit decision before {before}; if no leader is registered, report blocked."
             + report
         )
@@ -1814,10 +1814,10 @@ class GithubDispatchService:
             "- On team start, scan the roadmap issues and build a dependency map "
             "(parse 'Blocked by #N' / 'Dependencies' from each issue body): "
             "issue -> [blocker issues]. Note which blockers are already closed.\n"
-            "- ALSO at team start (cold-start recovery): call `deck_list_work_items"
+            "- ALSO at team start (cold-start recovery): call `synth_city_list_work_items"
             "(status=\"escalated\")` to get the current escalated items with their "
             "work_item_ids. For each escalated dependent whose blockers are ALL already "
-            "closed (per your map), call `deck_retry_work_item(work_item_id=<id>, "
+            "closed (per your map), call `synth_city_retry_work_item(work_item_id=<id>, "
             "reason=\"prerequisite #<n> already merged\")`. This handles blockers that "
             "merged before you started (resume/respawn), where no notification arrives.\n"
             "- When you receive a `github_dispatch_blocker_merged` notification, mark "
@@ -1825,7 +1825,7 @@ class GithubDispatchService:
             "notification's `escalated_items`, check whether ALL of its blockers are now "
             "resolved.\n"
             "- For each dependent whose blockers are ALL resolved, call "
-            "`deck_retry_work_item(work_item_id=<id from escalated_items>, "
+            "`synth_city_retry_work_item(work_item_id=<id from escalated_items>, "
             "reason=\"prerequisite #<n> merged\")` to re-dispatch it.\n"
             "- Only retry when ALL blockers are resolved (never on a single blocker for a "
             "multi-blocker issue). Do not retry the same dependent twice for one event. If "
@@ -1839,13 +1839,13 @@ class GithubDispatchService:
             "does not accept it."
             "\n\nUNFINISHED OWNER WORK (leader duty):\n"
             "- Record the remaining authorized task and its next trigger before ending your turn. "
-            "When backlog coordination is enabled, read deck_get_backlog_coordination. "
+            "When backlog coordination is enabled, read synth_city_get_backlog_coordination. "
             "For current initial implementation, use its private owner_followups challenge with "
-            "deck_report_owner_followup(action=\"watch\", reason=\"unfinished_authorized_work\"). "
+            "synth_city_report_owner_followup(action=\"watch\", reason=\"unfinished_authorized_work\"). "
             "This covers an owner that finishes after your last observation.\n"
             "- On an owner settlement notice, read current authority and evidence. Arrange the next "
             "permitted action or report the specific blocker or evidenced completion. Assess the "
-            "exact event through deck_report_owner_followup. If work remains, register its next "
+            "exact event through synth_city_report_owner_followup. If work remains, register its next "
             "watch after arranging the action. A Mail read is not an event assessment. "
             "A watch grants no approval, retry, lease, merge or milestone authority. Stop on OFF/HOLD."
             "\n\n" + HUMAN_REVIEW_SUMMARY_GUIDANCE
@@ -1880,8 +1880,8 @@ class GithubDispatchService:
                 },
                 bypass_nudge_cooldown=True,
                 nudge_prompt=(
-                    "Claude Deck autonomous dispatch: call "
-                    "`deck_check_inbox(unread_only=False)` now, find the "
+                    "Albiex Synth City autonomous dispatch: call "
+                    "`synth_city_check_inbox(unread_only=False)` now, find the "
                     f"`Autonomous dispatch: issue #{item.issue_number}` message for "
                     f"work item {item.id}, and execute that assignment now. Follow "
                     "its leader-ack and status-reporting instructions."
@@ -2228,9 +2228,9 @@ class GithubDispatchService:
                 body_markdown=(
                     f"Work item {item_id} is being handed to your slot. Do not work in "
                     "the workspace yet. First call "
-                    f"`deck_report_dispatch_status(work_item_id={item_id}, "
+                    f"`synth_city_report_dispatch_status(work_item_id={item_id}, "
                     "status=\"handoff_accepted\")` and wait for a 200 response. Then "
-                    "call `deck_get_work_item_context` to receive the preserved branch "
+                    "call `synth_city_get_work_item_context` to receive the preserved branch "
                     "and lease capability."
                 ),
                 payload={
@@ -3258,7 +3258,7 @@ class GithubDispatchService:
                     "workspace, branch, owner, nonce, and history after escalation "
                     f"`{item.escalation_reason}`. Perform read-only diagnosis first. "
                     "Do not edit, build, push, or report completion yet. Then call "
-                    "`deck_request_continuation` with the smallest exact paths, actions, "
+                    "`synth_city_request_continuation` with the smallest exact paths, actions, "
                     "commands, execution target, failed-head budget, and tool fallbacks "
                     "needed for the next step. Use phase `diagnostic` for evidence "
                     "collection, temporary hosted instrumentation, hosted log collection, "
@@ -3286,12 +3286,12 @@ class GithubDispatchService:
                 {owner.id},
                 bypass_cooldown=True,
                 nudge_prompt=(
-                    "Claude Deck autonomous recovery: call "
-                    "`deck_check_inbox(unread_only=False)` now, find the "
+                    "Albiex Synth City autonomous recovery: call "
+                    "`synth_city_check_inbox(unread_only=False)` now, find the "
                     f"`Recovery proposal requested: issue #{item.issue_number}` "
                     f"message for work item {item.id}, and execute that instruction "
                     "now. Perform read-only diagnosis and call "
-                    "`deck_request_continuation` with the smallest bounded proposal. "
+                    "`synth_city_request_continuation` with the smallest bounded proposal. "
                     "Use `diagnostic` with `revert_diagnostic_changes` for evidence, "
                     "temporary instrumentation, hosted logs, or restoration. Use "
                     "`implementation` only for a bounded fix and include "
@@ -3496,8 +3496,8 @@ class GithubDispatchService:
                 f"Reminder {count + 1} of {LEASE_RELEASE_REMINDER_CAP}.\n\n"
                 f"Issue #{number} is `{item.dispatch_status}` and still holds its workspace.\n"
                 "Commit and push the work you need to keep.\n"
-                f"Call `deck_get_work_item_context(work_item_id={item_id})` for the current lease context.\n"
-                "Use its lease token with `deck_report_dispatch_status` and status `workspace_released`.\n"
+                f"Call `synth_city_get_work_item_context(work_item_id={item_id})` for the current lease context.\n"
+                "Use its lease token with `synth_city_report_dispatch_status` and status `workspace_released`.\n"
                 "Keep the lease token private."
                 + urgency
             )
@@ -3579,7 +3579,7 @@ class GithubDispatchService:
                 body_markdown=(
                     f"The owner is waiting on your explicit decision for issue "
                     f"#{item.issue_number} ({item.issue_title}). Review the plan, then "
-                    f"call `deck_approve_work_item(work_item_id={item.id}, "
+                    f"call `synth_city_approve_work_item(work_item_id={item.id}, "
                     f'dispatch_nonce="{item.dispatch_nonce}", decision="approved", '
                     "reason=...)` or use `decision=\"rejected\"`. A prose reply does not "
                     "approve the work."
@@ -3604,7 +3604,7 @@ class GithubDispatchService:
             subject=f"Unread dispatch brief: issue #{item.issue_number}",
             body_markdown=(
                 f"You were assigned issue #{item.issue_number} ({item.issue_title}) "
-                "but the brief is still unread. Call `deck_check_inbox` now and "
+                "but the brief is still unread. Call `synth_city_check_inbox` now and "
                 "report your status."
             ),
             payload={
@@ -3836,7 +3836,7 @@ class GithubDispatchService:
         if item.issue_url:
             lines.append(f"- URL: {item.issue_url}")
         lines.extend([
-            "", "Leader: call deck_get_operator_action_contexts for this preset.",
+            "", "Leader: call synth_city_get_operator_action_contexts for this preset.",
             "Publish the completed current-action record near the start of the main GitHub issue.",
             "State the reason, responsible person, exact action, evidence, and completion condition.",
             "Use the returned markers and existing authorized GitHub access. Preserve other issue facts and scopes.",
@@ -3944,7 +3944,7 @@ class GithubDispatchService:
             "",
             "If any of these were blocked ONLY by the merged issue (and all their "
             "other blockers are resolved), call "
-            "`deck_retry_work_item(work_item_id=<id>, reason=\"prerequisite #"
+            "`synth_city_retry_work_item(work_item_id=<id>, reason=\"prerequisite #"
             f"{item.issue_number} merged\")` to re-dispatch them.",
         ]
         from app.services.agent_mail_service import agent_mail_service

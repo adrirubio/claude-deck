@@ -570,10 +570,10 @@ async def _launcher_that_must_not_run(*_args, **_kwargs):
 def test_leader_unblock_instructions_text():
     text = github_dispatch_service._leader_unblock_instructions()
     assert "dependency map" in text.lower()
-    assert "deck_retry_work_item" in text
+    assert "synth_city_retry_work_item" in text
     assert "github_dispatch_blocker_merged" in text
     assert "all" in text.lower()
-    assert "deck_list_work_items" in text
+    assert "synth_city_list_work_items" in text
     assert "start" in text.lower()
 
 
@@ -587,9 +587,9 @@ async def test_bootstrap_prompt_appends_unblock_only_for_leader(db):
     leader_text = await agent_team_service._bootstrap_prompt(db, preset, leader)
     non_leader_text = await agent_team_service._bootstrap_prompt(db, preset, non_leader)
 
-    assert "deck_retry_work_item" in leader_text
+    assert "synth_city_retry_work_item" in leader_text
     assert "dependency map" in leader_text.lower()
-    assert "deck_retry_work_item" not in non_leader_text
+    assert "synth_city_retry_work_item" not in non_leader_text
 
 
 @pytest.mark.asyncio
@@ -604,7 +604,7 @@ async def test_bootstrap_prompt_appends_unblock_even_with_custom_prompt(db):
     text = await agent_team_service._bootstrap_prompt(db, preset, leader)
 
     assert text.startswith("CUSTOM standing prompt.")
-    assert "deck_retry_work_item" in text
+    assert "synth_city_retry_work_item" in text
 
 
 @pytest.mark.asyncio
@@ -2064,15 +2064,15 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert "Issue: #833 — Add agent docs" in prompt
     assert "https://github.com/o/r/issues/833" in prompt
     assert "Acceptance criteria and verification steps." in prompt
-    assert "deck_report_dispatch_status" in prompt
-    assert "deck_request_work_item_approval" in prompt
+    assert "synth_city_report_dispatch_status" in prompt
+    assert "synth_city_request_work_item_approval" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
     assert f"work_item_id={item.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
     assert "wait for the explicit decision before starting implementation" in prompt
     assert "A prose reply is not approval" in prompt
-    assert "deck_approve_work_item" in prompt
+    assert "synth_city_approve_work_item" in prompt
     assert "open a draft PR" in prompt
     assert "Workspace: /tmp/r-ws-1" in prompt
     assert "leased exclusively" in prompt
@@ -2131,7 +2131,7 @@ async def test_every_report_instruction_carries_the_lease_token(db):
     call_lines = [
         line
         for line in brief.splitlines()
-        if "deck_report_dispatch_status(work_item_id=" in line
+        if "synth_city_report_dispatch_status(work_item_id=" in line
     ]
     assert len(call_lines) >= 4
     for line in call_lines:
@@ -2174,13 +2174,13 @@ async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
     assert item.dispatch_head_ref in brief
     assert "detached HEAD at origin/master" in brief
     assert "detached HEAD at origin/release" not in brief
-    assert f"Deck-Agent-Slot: {owner.id} ({owner.display_name})" in brief
-    assert f"Deck-Work-Item: {item.id}" in brief
+    assert f"Synth-City-Agent-Slot: {owner.id} ({owner.display_name})" in brief
+    assert f"Synth-City-Work-Item: {item.id}" in brief
     assert f"git push -u origin {item.dispatch_head_ref}" in brief
     assert f'head_ref="{item.dispatch_head_ref}"' in brief
     assert 'status="pr_ready"' in brief
     assert "pr_opened" not in brief
-    assert "Deck creates the initial PR title and body" in brief
+    assert "Albiex Synth City creates the initial PR title and body" in brief
 
 
 @pytest.mark.asyncio
@@ -3542,7 +3542,7 @@ async def test_two_phase_handoff(db, monkeypatch):
     assert workspace.lease_last_owner_contact_at is not None
     assert revoked == [("lease-kept", architect.id)]
     assert any(
-        call[-2:] == ["user.name", "Backend SME (Deck agent)"]
+        call[-2:] == ["user.name", "Backend SME (Synth City agent)"]
         for call in config_calls
     )
     target_member = (
@@ -3999,7 +3999,7 @@ async def test_lease_release_reminder_keeps_capability_and_path_private(db):
     message = (await db.execute(select(MailMessage))).scalars().one()
     assert "tok-921" not in message.body_markdown
     assert "workspace_path" not in message.payload
-    assert "deck_get_work_item_context" in message.body_markdown
+    assert "synth_city_get_work_item_context" in message.body_markdown
     assert "Reminder 1 of 4" in message.body_markdown
 
 
@@ -4600,8 +4600,8 @@ def _assert_actionable_owner_ack_nudge(
     assert f"work item {item.id}" in prompt
     assert f"revision {revision.revision}" in prompt
     assert f"message {revision.delivery_message_id}" in prompt
-    assert "`deck_check_inbox(unread_only=False)`" in prompt
-    assert "`deck_ack_continuation`" in prompt
+    assert "`synth_city_check_inbox(unread_only=False)`" in prompt
+    assert "`synth_city_ack_continuation`" in prompt
     assert "Do not execute" in prompt
     assert workspace.lease_token not in prompt
 
@@ -4793,17 +4793,17 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert workspace.lease_token == "t1"
     assert await github_approval_service.current_pending(db, item.id) is None
     assert "Perform read-only diagnosis first" in messages[0].body_markdown
-    assert "deck_request_continuation" in messages[0].body_markdown
+    assert "synth_city_request_continuation" in messages[0].body_markdown
     assert len(nudges) == 1
     member_ids, nudge_options = nudges[0]
     assert member_ids == {owner.id}
     assert nudge_options["bypass_cooldown"] is True
     nudge_prompt = nudge_options["nudge_prompt"]
-    assert "deck_check_inbox(unread_only=False)" in nudge_prompt
+    assert "synth_city_check_inbox(unread_only=False)" in nudge_prompt
     assert f"work item {item.id}" in nudge_prompt
     assert f"issue #{item.issue_number}" in nudge_prompt
     assert "read-only diagnosis" in nudge_prompt
-    assert "deck_request_continuation" in nudge_prompt
+    assert "synth_city_request_continuation" in nudge_prompt
     assert "diagnostic" in nudge_prompt
     assert "revert_diagnostic_changes" in nudge_prompt
     assert "implementation" in nudge_prompt
@@ -5069,7 +5069,7 @@ async def test_recovery_monitor_replays_actionable_wake_after_post_mail_crash(
     member_ids, nudge_options = nudges[1]
     assert member_ids == {owner.id}
     assert nudge_options["bypass_cooldown"] is True
-    assert "deck_request_continuation" in nudge_options["nudge_prompt"]
+    assert "synth_city_request_continuation" in nudge_options["nudge_prompt"]
 
 
 @pytest.mark.asyncio
@@ -5214,8 +5214,8 @@ async def test_recovery_monitor_repairs_pending_request_transport_once(
     assert member_ids == {leader.id}
     assert nudge_options["bypass_cooldown"] is True
     leader_prompt = nudge_options["nudge_prompt"]
-    assert "deck_check_inbox(unread_only=False)" in leader_prompt
-    assert "deck_decide_continuation" in leader_prompt
+    assert "synth_city_check_inbox(unread_only=False)" in leader_prompt
+    assert "synth_city_decide_continuation" in leader_prompt
     assert f"work item {item.id}" in leader_prompt
     assert f"revision {revision.revision}" in leader_prompt
     assert "diagnostic" in leader_prompt
@@ -5772,7 +5772,7 @@ async def test_read_continuation_delivery_remains_wakeable_until_owner_ack(
         db, revision, cooldown=timedelta(minutes=3)
     ) is True
     assert len(delivered) == 1
-    assert "`deck_ack_continuation`" in delivered[0][1]
+    assert "`synth_city_ack_continuation`" in delivered[0][1]
     attempts = (
         await db.execute(
             select(MailWakeAttempt).where(

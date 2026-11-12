@@ -1793,7 +1793,7 @@ InstanceAccent = Literal["blue", "green", "purple", "orange", "red", "pink", "cy
 
 
 class InstanceIdentity(BaseModel):
-    """Runtime identity for the Claude Deck backend instance."""
+    """Runtime identity for the Albiex Synth City backend instance."""
 
     id: str
     name: str
@@ -2229,6 +2229,7 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    provider_upgrades: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     mail_capability_tokens_required: bool = Field(default_factory=lambda: settings.mail_capability_tokens_required)
     pi_cli_available: bool = False
     pi_mail_ready: bool = False
@@ -2257,7 +2258,7 @@ class AgentMailInstallStatus(BaseModel):
     curl_available: bool
     shim_path: str
     python_path: str
-    deck_url: str
+    synth_city_url: str
     claude_settings_path: Optional[str] = None
     claude_mcp_config_path: Optional[str] = None
     codex_hooks_path: Optional[str] = None
@@ -2541,8 +2542,8 @@ class TeamGithubScopeCreate(BaseModel):
     repo_owner: str
     repo_name: str
     repo_path: str
-    dispatch_label: str = "claude-deck-ready"
-    design_label: str = "claude-deck-design"
+    dispatch_label: str = "albiex-synth-city-ready"
+    design_label: str = "albiex-synth-city-design"
     merge_policy: Literal["human", "auto"] = "human"
     review_hold_label: Optional[str] = None
     max_approval_rounds: int = Field(default=3, ge=1)
@@ -2734,7 +2735,7 @@ class RequiredCIUnreadableSignal(BaseModel):
     reason: Literal["permission_missing", "workflow_missing", "api_error", "unknown"]
     next_steps: List[str] = Field(default_factory=lambda: [
         "Check GitHub access and the configured required workflows.",
-        "Deck will poll again. Unreadable checks do not grant verification or consume a retry.",
+        "Albiex Synth City will poll again. Unreadable checks do not grant verification or consume a retry.",
     ])
 
 

@@ -88,7 +88,7 @@ def kill_session(session_name: str, cleanup_worktree: bool = False) -> dict:
 
 
 def get_spawned_sessions() -> dict[str, dict]:
-    """Return all sessions spawned by Deck."""
+    """Return all sessions spawned by Albiex Synth City."""
     from app.services.agent_bridge.spawn import get_spawned_sessions as get_provider_sessions
 
     return get_provider_sessions()

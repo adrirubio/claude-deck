@@ -52,10 +52,10 @@ async def get_terminal_token(
     response: Response,
     target: str = Query(min_length=1),
     purpose: Literal["readonly", "interactive"] = "readonly",
-    x_deck_operator_token: str | None = Header(default=None),
+    x_synth_city_operator_token: str | None = Header(default=None),
 ):
     if purpose == "interactive":
-        await require_operator(x_deck_operator_token)
+        await require_operator(x_synth_city_operator_token)
     response.headers["Cache-Control"] = "no-store"
     return {"token": _terminal_tokens.issue(target, purpose)}
 

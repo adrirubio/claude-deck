@@ -80,7 +80,7 @@ const reasons: Record<string, string> = {
 }
 const statuses: Record<string, string> = {
   disabled: 'Leader backlog coordination is disabled', paused: 'Coordination is paused with autonomy off',
-  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Deck has not read the backlog yet',
+  awaiting_assessment: 'Waiting for the Leader’s backlog assessment', unknown: 'Synth City has not read the backlog yet',
   stale: 'Backlog data is out of date', backlog_unavailable: 'Backlog data is unavailable',
   leader_unavailable: 'The current Leader is unavailable', leader_identity_unavailable: 'Leader identity cannot be confirmed',
   coordination_capped: 'Coordination notification limit reached', hold: 'Coordination is paused by a safety hold',
@@ -210,7 +210,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       const latest = await apiClient<Summary>(path, { cache: 'no-store' })
       if (JSON.stringify(policy(latest)) !== JSON.stringify(originalPolicy.current)) throw new Error('Coordination policy changed. Close and reopen this dialog to review it.')
       await withOperatorToken((token) => apiClient<Summary>(`${path}-policy`, {
-        method: 'PUT', headers: { 'X-Deck-Operator-Token': token },
+        method: 'PUT', headers: { 'X-Synth-City-Operator-Token': token },
         body: JSON.stringify({ expected_version: latest.version, enabled, issue_numbers: selected,
           fallback_seconds: fallback, max_daily_requests: cap }),
       }))

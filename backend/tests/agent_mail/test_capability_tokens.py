@@ -325,7 +325,7 @@ async def test_register_route_returns_the_token_once(client, tmp_path, monkeypat
     second = await client.post(
         "/api/v1/agent-mail/agent/register",
         json=body,
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert second.status_code == 200
     assert second.json()["capability_token"] is None
@@ -353,7 +353,7 @@ async def test_hashed_rebind_requires_the_existing_token_under_enforcement(
     invalid = await client.post(
         "/api/v1/agent-mail/agent/register",
         json=body,
-        headers={"X-Deck-Session-Token": "wrong-token"},
+        headers={"X-Synth-City-Session-Token": "wrong-token"},
     )
 
     assert missing.status_code == 409
@@ -398,7 +398,7 @@ async def test_stale_slot_token_cannot_rebind_the_row_to_another_pane(
     replay = await client.post(
         "/api/v1/agent-mail/agent/register",
         json=body,
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
 
     assert replay.status_code == 401, replay.text
@@ -711,7 +711,7 @@ async def test_live_slot_session_token_authenticates_under_enforcement(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": "live-slot-token"},
+        headers={"X-Synth-City-Session-Token": "live-slot-token"},
     )
 
     assert response.status_code == 200
@@ -735,7 +735,7 @@ async def test_dead_or_reused_slot_session_token_is_stale(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
 
     assert response.status_code == 401
@@ -750,7 +750,7 @@ async def test_unobservable_slot_session_fails_closed(client, db, slot, monkeypa
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": "unobservable-slot-token"},
+        headers={"X-Synth-City-Session-Token": "unobservable-slot-token"},
     )
 
     assert response.status_code == 401
@@ -777,7 +777,7 @@ async def test_slot_session_without_a_complete_binding_is_stale(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": "missing-binding-token"},
+        headers={"X-Synth-City-Session-Token": "missing-binding-token"},
     )
 
     assert response.status_code == 401
@@ -812,7 +812,7 @@ async def test_unbound_manual_session_remains_valid_under_enforcement(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
 
     assert response.status_code == 200
@@ -844,7 +844,7 @@ async def test_explicitly_offline_session_token_is_stale(client, db, monkeypatch
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
 
     assert response.status_code == 401
@@ -865,7 +865,7 @@ async def test_grace_mode_does_not_apply_slot_liveness_gate(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": "grace-slot-token"},
+        headers={"X-Synth-City-Session-Token": "grace-slot-token"},
     )
 
     assert response.status_code == 200
@@ -917,7 +917,7 @@ async def test_write_with_a_valid_token_derives_the_sender(client, db, tmp_path,
             "subject": "hello",
             "body_markdown": "hi",
         },
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert response.status_code == 200
     assert response.json()["sender_member_id"] == sender_id
@@ -955,7 +955,7 @@ async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypat
             "subject": "s",
             "body_markdown": "b",
         },
-        headers={"X-Deck-Session-Token": "not-a-real-token"},
+        headers={"X-Synth-City-Session-Token": "not-a-real-token"},
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "session_token_invalid"
@@ -1001,7 +1001,7 @@ async def test_a_disagreeing_sender_is_403(client, db, tmp_path, monkeypatch):
             "subject": "s",
             "body_markdown": "b",
         },
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "sender_not_token_holder"
@@ -1088,21 +1088,21 @@ async def test_inbox_with_a_token_ignores_a_disagreeing_member_id(
 
     response = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert response.status_code == 200
     assert response.json()["member_id"] == holder_id
 
     response = await client.get(
         f"/api/v1/agent-mail/agent/inbox?member_id={holder_id}",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert response.status_code == 200
     assert response.json()["member_id"] == holder_id
 
     response = await client.get(
         f"/api/v1/agent-mail/agent/inbox?member_id={victim.id}",
-        headers={"X-Deck-Session-Token": token},
+        headers={"X-Synth-City-Session-Token": token},
     )
     assert response.status_code == 200
     assert response.json()["member_id"] == holder_id

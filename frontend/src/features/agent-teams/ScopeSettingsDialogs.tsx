@@ -101,8 +101,8 @@ const emptyScope: TeamGithubScopeInput = {
   repo_owner: '',
   repo_name: '',
   repo_path: '',
-  dispatch_label: 'claude-deck-ready',
-  design_label: 'claude-deck-design',
+  dispatch_label: 'albiex-synth-city-ready',
+  design_label: 'albiex-synth-city-design',
   merge_policy: 'human',
   max_approval_rounds: 3,
   max_concurrent_dispatched: 3,
@@ -191,8 +191,8 @@ export function ScopeDialog({
         base_ref: form.base_ref?.trim() || 'origin/HEAD',
         build_dir_template: form.build_dir_template?.trim() || 'build',
         build_command_hint: form.build_command_hint?.trim() || null,
-        dispatch_label: form.dispatch_label?.trim() || 'claude-deck-ready',
-        design_label: form.design_label?.trim() || 'claude-deck-design',
+        dispatch_label: form.dispatch_label?.trim() || 'albiex-synth-city-ready',
+        design_label: form.design_label?.trim() || 'albiex-synth-city-design',
       }
       setNumberInputs(Object.fromEntries(scopeNumberKeys.map((key) => [key, String(input[key])])) as Record<ScopeNumberKey, string>)
       if (state?.mode === 'edit' && state.scope) {
@@ -254,7 +254,7 @@ export function ScopeDialog({
               placeholder="/home/user/repos/project"
             />
             <p className="text-xs text-muted-foreground">
-              Existing clone under your home directory. Deck creates one worktree per issue next to it, in the same parent folder, and launches the owner there. Normal slot sessions keep their own repo path.
+              Existing clone under your home directory. Albiex Synth City creates one worktree per issue next to it, in the same parent folder, and launches the owner there. Normal slot sessions keep their own repo path.
             </p>
           </div>
           <div className="grid gap-2 md:col-span-2">
@@ -304,7 +304,7 @@ export function ScopeDialog({
             <p className="text-xs text-amber-700 dark:text-amber-400">
               Applies to the code pipeline only. Design-pipeline PRs always require a human review.
             </p>
-            <p className="text-xs text-muted-foreground">Human: Deck marks the PR ready for review. Auto: merges after GitHub checks pass, within the rolling daily cap; otherwise it waits for a human.</p>
+            <p className="text-xs text-muted-foreground">Human: Synth City marks the PR ready for review. Auto: merges after GitHub checks pass, within the rolling daily cap; otherwise it waits for a human.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="approval-rounds">Max approval rounds</Label>
@@ -353,7 +353,7 @@ export function ScopeDialog({
           </div>
           <div className="md:col-span-2">
             <h3 className="text-sm font-medium">Build instructions for the agent (optional)</h3>
-            <p className="text-xs text-muted-foreground">Deck does not run a build. These settings become hints in the owner&apos;s brief.</p>
+            <p className="text-xs text-muted-foreground">Synth City does not run a build. These settings become hints in the owner&apos;s brief.</p>
           </div>
           <label className="flex items-center gap-2 text-sm md:col-span-2">
             <Checkbox checked={form.builds_out_of_tree ?? false} onCheckedChange={(checked) => update({ builds_out_of_tree: checked === true })} />
@@ -388,7 +388,7 @@ export function ScopeDialog({
               onChange={(event) => update({ build_command_hint: event.target.value })}
               placeholder="meson test -C build"
             />
-            <p className="text-xs text-muted-foreground">Sent to the agent, not executed by Deck. May use {'{build_dir}'} and {'{parallelism}'}.</p>
+            <p className="text-xs text-muted-foreground">Sent to the agent, not executed by Synth City. May use {'{build_dir}'} and {'{parallelism}'}.</p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={form.enabled} onCheckedChange={(checked) => update({ enabled: checked === true })} />

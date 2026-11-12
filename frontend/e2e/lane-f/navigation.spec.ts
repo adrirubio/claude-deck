@@ -58,7 +58,7 @@ for (const harness of HARNESSES) {
     }
     expect(new Set(titles).size, `distinct tab titles: ${JSON.stringify(titles)}`).toBe(pages.length)
     expect(new Set(headings).size, `distinct headings: ${JSON.stringify(headings)}`).toBe(pages.length)
-    expect(titles.filter(title => title === 'Claude Deck'), 'no page keeps the bare app title').toEqual([])
+    expect(titles.filter(title => title === 'Albiex Synth City'), 'no page keeps the bare app title').toEqual([])
   })
 }
 

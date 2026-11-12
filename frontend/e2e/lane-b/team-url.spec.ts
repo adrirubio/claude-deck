@@ -50,7 +50,7 @@ test('@active Plan launch asks for the key and says why', async ({ page }) => {
   await page.goto('/teams/1?tab=roster')
   await page.getByRole('button', { name: 'Plan launch' }).click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog).toContainText('Deck needs the key to plan a launch.')
+  await expect(dialog).toContainText('Synth City needs the key to plan a launch.')
   await dialog.getByRole('button', { name: /cancel/i }).first().click()
   await expect(dialog).toHaveCount(0)
 })

@@ -39,7 +39,7 @@ async def client(monkeypatch):
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Operator-Token": OPERATOR},
+        headers={"X-Synth-City-Operator-Token": OPERATOR},
     ) as client:
         yield client
 
@@ -376,7 +376,7 @@ async def test_preflight_checks_explicit_base_branch_and_rejects_invalid_value(c
 async def test_preflight_requires_operator_and_uses_safe_validation(client):
     denied = await client.post(
         "/api/v1/factory/setup-preflight",
-        headers={"X-Deck-Operator-Token": ""},
+        headers={"X-Synth-City-Operator-Token": ""},
         json={},
     )
     assert denied.status_code == 401

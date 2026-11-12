@@ -5,7 +5,7 @@ Writes `run_suites=false` to $GITHUB_OUTPUT only when every changed file of a
 pull request is documentation. Every other case writes `run_suites=true`: a
 push, any API or parsing failure, and a file list that does not match the
 pull request's changed-file count. The required jobs keep running and finish
-`success` either way, because Deck accepts a required check only with that
+`success` either way, because Albiex Synth City accepts a required check only with that
 conclusion. Standard library only: it runs before any setup step.
 """
 from __future__ import annotations

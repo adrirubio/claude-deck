@@ -48,7 +48,7 @@ describe("Repositories list", () => {
     serve();
     renderRoute(<RepositoriesPage />, "/repositories", "/repositories");
     await settle();
-    const table = await screen.findByRole("table", { name: "Repositories that Deck watches" });
+    const table = await screen.findByRole("table", { name: "Repositories that Synth City watches" });
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows.length).toBe(repositories.normal.response.repositories.length);
     const paused = rows.find((row) => within(row).queryByText("fixture/paused"))!;

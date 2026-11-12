@@ -834,7 +834,7 @@ async def test_operator_pause_routes_require_operator_and_exclude_private_contex
     url=f'/presets/{preset_id}/work-items/{item_id}'
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
         assert (await client.get(url+'/observation-pauses')).status_code==401
-        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        headers={'X-Synth-City-Operator-Token':'fixture-operator'}
         observed=await client.get(url+'/observation-pauses',headers=headers)
         assert observed.status_code==200 and observed.json()['pauses'][0]['status']=='paused'
         assert all(value not in observed.text for value in ('fixture-lease','fixture-hash','authority_sha256','wait_key'))
@@ -865,7 +865,7 @@ async def test_integration_failure_route_retains_approval_budget_and_rejects_con
           'expected_scope_revision':item.active_scope_revision,'expected_owner_slot':item.owner_slot_id,'outcome':'needs_coordination'}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
         assert (await client.post(url,json=body)).status_code==401
-        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        headers={'X-Synth-City-Operator-Token':'fixture-operator'}
         assert (await client.post(url,json=body|{'expected_dispatch_nonce':'stale'},headers=headers)).status_code==409
         result=await client.post(url,json=body,headers=headers)
         assert result.status_code==200 and result.json()['status']=='recorded'

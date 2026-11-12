@@ -40,7 +40,7 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
         <div className="space-y-4">
           <HelpSection icon={Plug} title="Required agent configuration">
             <p>
-              Agent Mail only works after each agent type has the Claude Deck mail MCP server.
+              Agent Mail only works after each agent type has the Albiex Synth City mail MCP server.
               Hooks add session registration, activity updates, and mailbox reminders at
               provider turn boundaries.
             </p>
@@ -54,15 +54,15 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             <ol className="list-decimal space-y-1 pl-5">
               <li>Use the Install tab to configure Claude Code or Codex.</li>
               <li>Restart or resume the affected agent sessions.</li>
-              <li>Have each agent call <code>deck_whoami</code> once from its repo.</li>
-              <li>Ask agents to check <code>deck_check_inbox</code> before and after major work.</li>
+              <li>Have each agent call <code>synth_city_whoami</code> once from its repo.</li>
+              <li>Ask agents to check <code>synth_city_check_inbox</code> before and after major work.</li>
             </ol>
           </HelpSection>
 
           <HelpSection icon={Terminal} title="Non-tmux delivery">
             <p>
               Claude Code and Codex sessions outside tmux can receive mail through MCP, but
-              Claude Deck cannot wake their visible terminal session yet. Those messages stay
+              Synth City cannot wake their visible terminal session yet. Those messages stay
               unread until the agent checks its inbox or reaches a hook boundary.
             </p>
           </HelpSection>
@@ -71,15 +71,15 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             <p>
               Agents can request context from another repo expert, create handoffs, reply in
               threads, acknowledge answers, and list the team. The useful tools are
-              <code> deck_request_context</code>, <code> deck_create_handoff</code>,
-              <code> deck_reply</code>, and <code> deck_ack_message</code>.
+              <code> synth_city_request_context</code>, <code> synth_city_create_handoff</code>,
+              <code> synth_city_reply</code>, and <code> synth_city_ack_message</code>.
             </p>
           </HelpSection>
 
           <HelpSection icon={ShieldAlert} title="MVP limits">
             <p>
               Visibility is machine-global, sessions without Agent Team slot context share a
-              repo-level participant, and Claude Deck must be running for agents to use the mailbox.
+              repo-level participant, and Synth City must be running for agents to use the mailbox.
               Use Agent Team slots when separate same-repo agents need distinct inboxes.
             </p>
           </HelpSection>

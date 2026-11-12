@@ -14,7 +14,7 @@ export function isCompleteInstallStatus(value: unknown): value is AgentMailInsta
     .every((name) => Array.isArray(status[name]))
 }
 
-export type MailSetupState = 'connected' | 'partial' | 'not_set_up' | 'automatic_ready' | 'automatic_unavailable'
+export type MailSetupState = 'connected' | 'partial' | 'not_set_up' | 'automatic_ready' | 'automatic_unavailable' | 'upgrade_incomplete' | 'upgrade_needs_attention'
 
 /** The four harnesses with a managed Set up and Remove action. */
 export type MailActionHarness = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'muse-cli'
@@ -36,6 +36,10 @@ export function hasMailAction(providerId: AgentProviderId): providerId is MailAc
 
 /** The state of one harness. Whole = every part installed; partial = some parts. */
 export function mailSetupState(providerId: AgentProviderId, status: AgentMailInstallStatus): MailSetupState {
+  const upgrade = status.provider_upgrades?.[providerId]?.state
+  if (upgrade === 'incomplete') return 'upgrade_incomplete'
+  if (upgrade === 'needs_attention') return 'upgrade_needs_attention'
+
   switch (providerId) {
     case 'claude-code': {
       const whole = status.claude_code_hooks_missing.length === 0 && status.claude_code_mcp_installed
@@ -72,9 +76,11 @@ export function mailSetupState(providerId: AgentProviderId, status: AgentMailIns
 /** The one line of the harness page. It names no path and no code. */
 export function mailSetupLine(state: MailSetupState): string {
   switch (state) {
+    case 'upgrade_incomplete': return 'Upgrade incomplete · Synth City will retry at the next start'
+    case 'upgrade_needs_attention': return 'Upgrade needs attention · Review the existing setup before changing it'
     case 'connected': return '✓ Connected · Restart sessions to apply changes'
     case 'partial': return 'Needs repair · Some parts are missing'
-    case 'automatic_ready': return '✓ Ready · Deck adds it when it launches Pi'
+    case 'automatic_ready': return '✓ Ready · Synth City adds it when it launches Pi'
     case 'automatic_unavailable': return 'Not ready · See Technical details'
     default: return 'Not set up'
   }
@@ -112,7 +118,7 @@ export interface TechnicalLine {
 export function mailTechnicalLines(providerId: AgentProviderId, status: AgentMailInstallStatus): TechnicalLine[] {
   const common: TechnicalLine[] = [
     { label: 'MCP server command', value: `${status.python_path} ${status.shim_path}` },
-    { label: 'Deck URL', value: status.deck_url },
+    { label: 'Albiex Synth City URL', value: status.synth_city_url },
     { label: 'curl', value: status.curl_available ? 'available' : 'missing' },
   ]
   switch (providerId) {
@@ -175,7 +181,7 @@ export function mailTechnicalLines(providerId: AgentProviderId, status: AgentMai
         { label: 'Pi CLI', value: status.pi_cli_available ? 'available' : 'missing' },
         { label: 'Extension', value: status.pi_mail_ready ? 'ready' : 'unavailable' },
         ...(status.pi_mail_reason ? [{ label: 'Reason', value: status.pi_mail_reason }] : []),
-        { label: 'Scope', value: 'Explicit Deck launches only. No global Pi configuration is changed.' },
+        { label: 'Scope', value: 'Explicit Synth City launches only. No global Pi configuration is changed.' },
       ]
   }
 }
@@ -190,7 +196,7 @@ export interface MailConfirm {
 
 /** The confirm dialog texts, moved unchanged from the Install tab. */
 export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, status: AgentMailInstallStatus): MailConfirm {
-  const server = 'claude-deck-mail'
+  const server = 'albiex-synth-city-mail'
   const command = `MCP server command: ${status.python_path} ${status.shim_path}`
   const key = `${harness}:${mode}`
   switch (key) {
@@ -215,9 +221,9 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'codex-cli:setup':
       return {
         title: 'Install Agent Mail for Codex',
-        description: 'A backup is attempted before Claude Deck installs the Codex MCP server and lifecycle hooks.',
+        description: 'A backup is attempted before Albiex Synth City installs the Codex MCP server and lifecycle hooks.',
         mutations: [
-          'Codex CLI: run `codex mcp add --env CLAUDE_DECK_URL=... --env CLAUDE_DECK_PROVIDER=codex-cli claude-deck-mail -- ...`',
+          'Codex CLI: run `codex mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=codex-cli albiex-synth-city-mail -- ...`',
           `${status.codex_hooks_path || '~/.codex/hooks.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
           command,
         ],
@@ -225,37 +231,37 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'codex-cli:remove':
       return {
         title: 'Remove Agent Mail from Codex',
-        description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP server and hooks.',
         mutations: [
-          'Codex CLI: run `codex mcp remove claude-deck-mail`',
+          'Codex CLI: run `codex mcp remove albiex-synth-city-mail`',
           `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
         ],
       }
     case 'copilot-cli:setup':
       return {
         title: 'Install Agent Mail for GitHub Copilot CLI',
-        description: 'A backup is attempted before Claude Deck installs the Copilot MCP server and lifecycle hooks.',
+        description: 'A backup is attempted before Albiex Synth City installs the Copilot MCP server and lifecycle hooks.',
         mutations: [
-          'Copilot CLI: run `copilot mcp add --env CLAUDE_DECK_URL=... --env CLAUDE_DECK_PROVIDER=copilot-cli claude-deck-mail -- ...`',
-          `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: write Agent Mail hook definitions`,
+          'Copilot CLI: run `copilot mcp add --env SYNTH_CITY_URL=... --env SYNTH_CITY_PROVIDER=copilot-cli albiex-synth-city-mail -- ...`',
+          `${status.copilot_hooks_path || '~/.copilot/hooks/albiex-synth-city-mail.json'}: write Agent Mail hook definitions`,
           command,
         ],
       }
     case 'copilot-cli:remove':
       return {
         title: 'Remove Agent Mail from GitHub Copilot CLI',
-        description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP server and hooks.',
         mutations: [
-          'Copilot CLI: run `copilot mcp remove claude-deck-mail`',
-          `${status.copilot_hooks_path || '~/.copilot/hooks/claude-deck-mail.json'}: remove managed Agent Mail hook file`,
+          'Copilot CLI: run `copilot mcp remove albiex-synth-city-mail`',
+          `${status.copilot_hooks_path || '~/.copilot/hooks/albiex-synth-city-mail.json'}: remove managed Agent Mail hook file`,
         ],
       }
     case 'muse-cli:setup':
       return {
         title: 'Install Agent Mail for Muse Code',
-        description: 'A backup is attempted before Claude Deck adds the Muse Code MCP server and lifecycle hooks to the Muse user settings.',
+        description: 'A backup is attempted before Albiex Synth City adds the Muse Code MCP server and lifecycle hooks to the Muse user settings.',
         mutations: [
-          `${status.muse_settings_path || '~/.config/muse/settings.json'}: set mcpServers.claude-deck-mail`,
+          `${status.muse_settings_path || '~/.config/muse/settings.json'}: set mcpServers.albiex-synth-city-mail`,
           `${status.muse_settings_path || '~/.config/muse/settings.json'}: add Agent Mail SessionStart and UserPromptSubmit hooks`,
           command,
         ],
@@ -263,28 +269,28 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
     case 'muse-cli:remove':
       return {
         title: 'Remove Agent Mail from Muse Code',
-        description: 'A backup is attempted before Claude Deck removes its MCP server and hooks. Other Muse settings stay as they are.',
+        description: 'A backup is attempted before Albiex Synth City removes its MCP server and hooks. Other Muse settings stay as they are.',
         mutations: [
-          `${status.muse_settings_path || '~/.config/muse/settings.json'}: remove mcpServers.claude-deck-mail and the Agent Mail hook commands`,
+          `${status.muse_settings_path || '~/.config/muse/settings.json'}: remove mcpServers.albiex-synth-city-mail and the Agent Mail hook commands`,
         ],
       }
     case 'opencode-cli:setup':
       return {
         title: 'Install Agent Mail for OpenCode CLI',
-        description: 'A backup is attempted before Claude Deck writes the managed OpenCode MCP entry and lifecycle plugin.',
+        description: 'A backup is attempted before Albiex Synth City writes the managed OpenCode MCP entry and lifecycle plugin.',
         mutations: [
           `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: add MCP server ${server}`,
-          `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: write Agent Mail lifecycle plugin`,
+          `${status.opencode_plugin_path || '~/.config/opencode/plugins/albiex-synth-city-agent-mail.js'}: write Agent Mail lifecycle plugin`,
           command,
         ],
       }
     default:
       return {
         title: 'Remove Agent Mail from OpenCode CLI',
-        description: 'A backup is attempted before Claude Deck removes the managed MCP entry and plugin file.',
+        description: 'A backup is attempted before Albiex Synth City removes the managed MCP entry and plugin file.',
         mutations: [
           `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: remove MCP server ${server}`,
-          `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: remove managed Agent Mail plugin`,
+          `${status.opencode_plugin_path || '~/.config/opencode/plugins/albiex-synth-city-agent-mail.js'}: remove managed Agent Mail plugin`,
         ],
       }
   }

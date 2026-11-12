@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
-from app.services.agent_mail_install_service import deck_base_url
+from app.services.agent_mail_install_service import synth_city_base_url
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
@@ -257,11 +257,11 @@ class GithubWorkspaceService:
             slug = "agent"
         suffix = f"+slot{slot_id}"
         slug = slug[: 64 - len(suffix)].rstrip("-") or "agent"
-        return f"{slug}{suffix}@claude-deck.local"
+        return f"{slug}{suffix}@synth-city.local"
 
     @staticmethod
     def slot_name(display_name: str) -> str:
-        return f"{display_name} (Deck agent)"
+        return f"{display_name} (Synth City agent)"
 
     @staticmethod
     def _credential_helper_command(lease_token: str) -> str:
@@ -270,8 +270,8 @@ class GithubWorkspaceService:
             [
                 sys.executable,
                 str(helper_path),
-                "--deck-url",
-                deck_base_url(),
+                "--synth-city-url",
+                synth_city_base_url(),
                 "--lease",
                 lease_token,
             ]

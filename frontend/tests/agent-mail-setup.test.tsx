@@ -60,7 +60,7 @@ function status(overrides: Partial<AgentMailInstallStatus> = {}): AgentMailInsta
     curl_available: true,
     shim_path: '/opt/deck/agent_mail_server.py',
     python_path: '/opt/deck/python',
-    deck_url: 'http://localhost:8000',
+    synth_city_url: 'http://localhost:8000',
     claude_settings_path: '/home/user/.claude/settings.json',
     claude_mcp_config_path: '/home/user/.claude.json',
     codex_hooks_path: '/home/user/.codex/hooks.json',
@@ -119,8 +119,25 @@ describe('mailSetupState', () => {
       title: 'Install Agent Mail for Claude Code',
       description: 'A backup is attempted before these user-scope config changes are made.',
     })
-    expect(mailConfirm('codex-cli', 'remove', status()).mutations[0]).toBe('Codex CLI: run `codex mcp remove claude-deck-mail`')
+    expect(mailConfirm('codex-cli', 'remove', status()).mutations[0]).toBe('Codex CLI: run `codex mcp remove albiex-synth-city-mail`')
     expect(mailConfirm('opencode-cli', 'remove', status()).title).toBe('Remove Agent Mail from OpenCode CLI')
+  })
+
+  it('names the full product name first in every install and remove confirmation', () => {
+    for (const provider of ['codex-cli', 'copilot-cli', 'muse-cli', 'opencode-cli'] as const) {
+      for (const action of ['setup', 'remove'] as const) {
+        expect(mailConfirm(provider, action, status()).description).toContain('before Albiex Synth City')
+      }
+    }
+  })
+
+  it('uses only new environment names in manual setup commands', () => {
+    for (const provider of ['codex-cli', 'copilot-cli'] as const) {
+      const text = mailConfirm(provider, 'setup', status()).mutations.join('\n')
+      expect(text).toContain('SYNTH_CITY_URL')
+      expect(text).toContain('SYNTH_CITY_PROVIDER')
+      expect(text).not.toContain('CLAUDE_DECK_')
+    }
   })
 
   it('treats a status without its lists as unavailable', () => {
@@ -158,9 +175,19 @@ describe('HarnessMailSetup', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
+  it.each(['incomplete', 'needs_attention'] as const)('shows an upgrade %s before harness availability and offers no mutation', (state) => {
+    render(<HarnessMailSetup providerId="codex-cli" harnessInstalled={false} setup={setup(status({
+      provider_upgrades: { 'codex-cli': { state, stage: 'old_removed' } },
+    }))} />)
+    expect(screen.getByText(state === 'incomplete' ? /Upgrade incomplete/ : /Upgrade needs attention/)).toBeInTheDocument()
+    expect(screen.queryByText(/Connected/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Set up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
+  })
+
   it('shows Pi as ready with no button', () => {
     render(<HarnessMailSetup providerId="pi-cli" harnessInstalled setup={setup(status())} />)
-    expect(screen.getByText(/✓ Ready · Deck adds it when it launches Pi/)).toBeInTheDocument()
+    expect(screen.getByText(/✓ Ready · Synth City adds it when it launches Pi/)).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 

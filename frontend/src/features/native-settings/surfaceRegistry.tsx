@@ -1,4 +1,5 @@
 import type { AgentProviderId, AgentProviderStatus, ProviderOperations } from "@/types/providers";
+import { migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from "@/lib/browserStorageMigration";
 
 export type NativeSurface =
   | "summary"
@@ -177,6 +178,7 @@ export function updateNativeMetadata(providers: AgentProviderStatus[]) {
 }
 export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
   if (typeof window === "undefined") return;
+  migrateBrowserStorage();
   const path = endpoint.replace(/^\/?api\/v1\//, "").split("?")[0];
   // Only this fixed read can bootstrap the required catalog. It does not grant
   // access to any returned adapter/API path or exempt nested native mutations.
@@ -192,7 +194,7 @@ export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
   if (!surface || !Object.keys(claude).includes(surface)) return;
   const provider = canonical
     ? route[1]
-    : (window.localStorage.getItem("claude-deck:selected-provider") ??
+    : (window.localStorage.getItem(PRODUCT_STORAGE_KEYS.provider) ??
       "claude-code");
   const nativeRoots = [
     "codex-config",

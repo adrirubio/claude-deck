@@ -52,7 +52,7 @@ function Detail({ member }: { member: MailMemberResponse }) {
           <p className="mt-1">{formatDateTime(member.last_inbox_checked_at)}</p>
           <AgentStatusBadges status={member.agent_status} className="mt-2" />
           {member.agent_status?.wake_state === 'can_wake' && wakeMethods && (
-            <p className="text-xs text-muted-foreground" title="How Deck wakes this agent.">Wake method: {wakeMethods}</p>
+            <p className="text-xs text-muted-foreground" title="How Synth City wakes this agent.">Wake method: {wakeMethods}</p>
           )}
         </div>
       </div>

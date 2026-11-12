@@ -182,7 +182,7 @@ describe('Leader backlog coordination', () => {
     fireEvent.click(screen.getByText('Save coordination'))
     await waitFor(() => expect(apiClient).toHaveBeenCalledWith(
       'agent-teams/github-scopes/1/coordination-policy', expect.objectContaining({
-        method: 'PUT', headers: { 'X-Deck-Operator-Token': 'fixture-token' },
+        method: 'PUT', headers: { 'X-Synth-City-Operator-Token': 'fixture-token' },
         body: JSON.stringify({ expected_version: 1, enabled: true, issue_numbers: [7, 8, 11], fallback_seconds: 1800, max_daily_requests: 12 }),
       }),
     ))
@@ -194,7 +194,7 @@ describe('Leader backlog coordination', () => {
       : Promise.resolve({ ...summary, scope_id: 2, repo: 'o/new', status: 'unknown', assessment_current: false }))
     const view = render(<StrictMode><BacklogCoordination scopeId={1} withOperatorToken={withToken} /></StrictMode>)
     view.rerender(<StrictMode><BacklogCoordination scopeId={2} withOperatorToken={withToken} /></StrictMode>)
-    await screen.findByText('Deck has not read the backlog yet')
+    await screen.findByText('Synth City has not read the backlog yet')
     resolveOld(summary)
     await waitFor(() => expect(screen.queryByText('No eligible implementation work')).toBeNull())
   })

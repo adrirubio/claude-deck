@@ -4,12 +4,14 @@ import inspect
 from io import StringIO
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_mcp_shim_imports_without_app_package_dependency():
     import mcp_shim.agent_mail_server as shim
 
     assert shim.mcp is not None
-    assert callable(shim.deck_whoami)
+    assert callable(shim.synth_city_whoami)
 
 
 def test_remaining_summary_uses_authenticated_context_and_makes_no_writes(monkeypatch):
@@ -24,17 +26,17 @@ def test_remaining_summary_uses_authenticated_context_and_makes_no_writes(monkey
         requests.append((method, path, kwargs))
         return {"ok": True, "data": {"remaining_work_context": context, "remaining_work": {"source_url": "https://github.com/o/r/issues/7#work-remaining"}}}
     monkeypatch.setattr(shim, "_team_request", read)
-    result = shim.deck_prepare_work_remaining_summary(7, "Fix the interface, then review and merge.", "B2 publishes the next checkpoint.")
+    result = shim.synth_city_prepare_work_remaining_summary(7, "Fix the interface, then review and merge.", "B2 publishes the next checkpoint.")
     assert result["ok"]
     parsed = parse_report(result["body_markdown"])
     assert parsed.work_item_id == 7 and parsed.reported_by == "Team member 3" and parsed.estimate() == "Unknown."
     assert requests == [("GET", "/github-work-items/7/remaining-work-context", {})]
-    invalid = shim.deck_prepare_work_remaining_summary(7, "token=private", "Publish.")
+    invalid = shim.synth_city_prepare_work_remaining_summary(7, "token=private", "Publish.")
     assert invalid["error"]["code"] == "invalid_remaining_summary" and "private" not in str(invalid)
     monkeypatch.setattr(shim, "_team_request", lambda *_: {"ok": True, "data": {"remaining_work_context": None}})
-    assert shim.deck_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "progress_context_unavailable"
+    assert shim.synth_city_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "progress_context_unavailable"
     monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": False, "error": {"code": "session_token_stale"}})
-    assert shim.deck_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "session_token_stale"
+    assert shim.synth_city_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "session_token_stale"
 
 
 def test_remaining_guidance_applies_to_each_member_writing_style():
@@ -53,8 +55,8 @@ def test_backlog_assessment_forwards_optional_private_snapshot_token(monkeypatch
     monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
     monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs: posted.append(
         (method, path, kwargs)) or {"ok": True})
-    shim.deck_report_backlog_assessment(1, 2, 0, [], "fixture-private-read")
-    shim.deck_report_backlog_assessment(1, 2, 3, [])
+    shim.synth_city_report_backlog_assessment(1, 2, 0, [], "fixture-private-read")
+    shim.synth_city_report_backlog_assessment(1, 2, 3, [])
     assert posted[0] == ("POST", "/github-scopes/1/coordination-assessments", {"json": {
         "generation": 2, "request_sequence": 0, "entries": [], "snapshot_token": "fixture-private-read"}})
     assert posted[1][2]["json"]["snapshot_token"] is None
@@ -66,7 +68,7 @@ def test_owner_followup_forwards_explicit_event_and_private_challenge(monkeypatc
     monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
     monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs: posted.append(
         (method, path, kwargs)) or {"ok": True})
-    shim.deck_report_owner_followup(1, 2, "assess", "next_action_arranged", 3, "fixture-private-followup")
+    shim.synth_city_report_owner_followup(1, 2, "assess", "next_action_arranged", 3, "fixture-private-followup")
     assert posted == [("POST", "/github-scopes/1/owner-followups", {"json": {
         "work_item_id": 2, "action": "assess", "reason": "next_action_arranged",
         "expected_sequence": 3, "followup_token": "fixture-private-followup"}})]
@@ -75,8 +77,8 @@ def test_owner_followup_forwards_explicit_event_and_private_challenge(monkeypatc
 def test_ensure_registered_refreshes_cached_member(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_SLOT_ID", "2")
 
     requests = []
     monkeypatch.setitem(shim._state, "member_id", 7)
@@ -150,11 +152,11 @@ def test_start_heartbeat_thread_uses_daemon_thread(monkeypatch):
 
     assert started == [thread]
     assert thread.target == shim._heartbeat_loop
-    assert thread.name == "claude-deck-agent-mail-heartbeat"
+    assert thread.name == "albiex-synth-city-agent-mail-heartbeat"
     assert thread.daemon is True
 
 
-def test_deck_reply_only_uses_answer_for_context_requests(monkeypatch):
+def test_synth_city_reply_only_uses_answer_for_context_requests(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     posted = []
@@ -182,13 +184,13 @@ def test_deck_reply_only_uses_answer_for_context_requests(monkeypatch):
     monkeypatch.setattr(shim, "_request", fake_request)
     monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
 
-    result = shim.deck_reply(10, "Completed the work.")
+    result = shim.synth_city_reply(10, "Completed the work.")
 
     assert result["ok"] is True
     assert posted[0]["kind"] == "message"
 
 
-def test_deck_list_team_uses_cached_roster(monkeypatch):
+def test_synth_city_list_team_uses_cached_roster(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     requests = []
@@ -224,14 +226,14 @@ def test_deck_list_team_uses_cached_roster(monkeypatch):
     monkeypatch.setattr(shim, "_request", fake_request)
     monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
 
-    result = shim.deck_list_team()
+    result = shim.synth_city_list_team()
 
     assert result["ok"] is True
     assert requests[0][1] == "/team?sync=false"
     assert result["members"][0]["agent_status"]["wake_state"] == "cannot_wake"
 
 
-def test_deck_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):
+def test_synth_city_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     def fake_http_request(*args, **kwargs):
@@ -242,10 +244,10 @@ def test_deck_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):
     shim._state["last_error"] = None
     monkeypatch.setattr(shim.httpx, "request", fake_http_request)
 
-    result = shim.deck_check_inbox()
+    result = shim.synth_city_check_inbox()
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "deck_unreachable"
+    assert result["error"]["code"] == "synth_city_unreachable"
 
 
 def test_mcp_request_uses_short_timeout_and_offline_backoff(monkeypatch):
@@ -304,7 +306,7 @@ def test_registration_captures_the_capability_token(monkeypatch):
     assert shim._state["capability_token"] == "tok-abc"
 
 
-def test_deck_request_sends_the_session_token(monkeypatch):
+def test_synth_city_request_sends_the_session_token(monkeypatch):
     from mcp_shim import agent_mail_server as shim
 
     captured = {}
@@ -325,11 +327,11 @@ def test_deck_request_sends_the_session_token(monkeypatch):
     shim._state["capability_token"] = "tok-abc"
     shim._state["offline_until"] = 0.0
 
-    shim._deck_request("GET", "agent-mail", "/team")
-    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+    shim._synth_city_request("GET", "agent-mail", "/team")
+    assert captured["headers"]["X-Synth-City-Session-Token"] == "tok-abc"
 
 
-def test_deck_request_preserves_a_callers_headers(monkeypatch):
+def test_synth_city_request_preserves_a_callers_headers(monkeypatch):
     from mcp_shim import agent_mail_server as shim
 
     captured = {}
@@ -350,17 +352,17 @@ def test_deck_request_preserves_a_callers_headers(monkeypatch):
     shim._state["capability_token"] = "tok-abc"
     shim._state["offline_until"] = 0.0
 
-    shim._deck_request(
+    shim._synth_city_request(
         "GET",
         "agent-bridge",
         "/x",
-        headers={"X-Claude-Deck-Terminal-Token": "term"},
+        headers={"X-Synth-City-Terminal-Token": "term"},
     )
-    assert captured["headers"]["X-Claude-Deck-Terminal-Token"] == "term"
-    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+    assert captured["headers"]["X-Synth-City-Terminal-Token"] == "term"
+    assert captured["headers"]["X-Synth-City-Session-Token"] == "tok-abc"
 
 
-def test_deck_request_sends_no_header_without_a_token(monkeypatch):
+def test_synth_city_request_sends_no_header_without_a_token(monkeypatch):
     from mcp_shim import agent_mail_server as shim
 
     captured = {}
@@ -381,11 +383,11 @@ def test_deck_request_sends_no_header_without_a_token(monkeypatch):
     shim._state["capability_token"] = None
     shim._state["offline_until"] = 0.0
 
-    shim._deck_request("GET", "agent-mail", "/team")
-    assert "X-Deck-Session-Token" not in (captured["headers"] or {})
+    shim._synth_city_request("GET", "agent-mail", "/team")
+    assert "X-Synth-City-Session-Token" not in (captured["headers"] or {})
 
 
-def test_deck_request_routes_by_api_prefix(monkeypatch):
+def test_synth_city_request_routes_by_api_prefix(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     urls = []
@@ -444,7 +446,7 @@ def test_http_conflict_preserves_detail_code_without_credentials():
     request = shim.httpx.Request(
         "POST",
         "http://deck/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": "request-secret"},
+        headers={"X-Synth-City-Session-Token": "request-secret"},
     )
     response = shim.httpx.Response(
         409,
@@ -526,7 +528,7 @@ def test_request_work_item_approval_uses_agent_mail_authority_route(monkeypatch)
 
     monkeypatch.setattr(shim, "_request", fake_request)
 
-    result = shim.deck_request_work_item_approval(
+    result = shim.synth_city_request_work_item_approval(
         19,
         "nonce-19",
         "Change one file.",
@@ -572,7 +574,7 @@ def test_approve_work_item_sends_required_request_id(monkeypatch):
 
     monkeypatch.setattr(shim, "_request", fake_request)
 
-    result = shim.deck_approve_work_item(
+    result = shim.synth_city_approve_work_item(
         19,
         "nonce-19",
         "approved",
@@ -627,7 +629,7 @@ def test_continuation_mcp_tools_forward_explicit_authority(monkeypatch):
     monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch)
     monkeypatch.setattr(shim, "_request", fake_mail)
 
-    requested = shim.deck_request_continuation(
+    requested = shim.synth_city_request_continuation(
         19,
         "nonce-19",
         "implementation",
@@ -641,20 +643,20 @@ def test_continuation_mcp_tools_forward_explicit_authority(monkeypatch):
         {},
         "lease-secret",
     )
-    decided = shim.deck_decide_continuation(
+    decided = shim.synth_city_decide_continuation(
         71,
         19,
         "nonce-19",
         "approved",
         "Approved",
     )
-    acknowledged = shim.deck_ack_continuation(
+    acknowledged = shim.synth_city_ack_continuation(
         19,
         2,
         "nonce-19",
         "lease-secret",
     )
-    listed = shim.deck_list_scope_revisions(19)
+    listed = shim.synth_city_list_scope_revisions(19)
 
     assert requested["approval"]["id"] == 71
     assert decided == {"ok": True, "message_id": 91, "decision": "approved"}
@@ -698,7 +700,7 @@ def test_continuation_mcp_tools_forward_explicit_authority(monkeypatch):
             },
         )
     ]
-    signature = inspect.signature(shim.deck_decide_continuation)
+    signature = inspect.signature(shim.synth_city_decide_continuation)
     assert list(signature.parameters) == [
         "approval_request_id",
         "work_item_id",
@@ -729,7 +731,7 @@ def test_continuation_mcp_preserves_backend_conflict_code(monkeypatch):
         },
     )
 
-    result = shim.deck_ack_continuation(
+    result = shim.synth_city_ack_continuation(
         19,
         2,
         "nonce-19",
@@ -756,7 +758,7 @@ def test_dispatch_status_tool_carries_completion_evidence(monkeypatch):
         or {"ok": True},
     )
 
-    result = shim.deck_report_dispatch_status(
+    result = shim.synth_city_report_dispatch_status(
         19,
         "continuation_completed",
         lease_token="lease-secret",
@@ -816,7 +818,7 @@ def test_list_work_items_projects_safe_continuation_fields(monkeypatch):
         },
     )
 
-    result = shim.deck_list_work_items(status="")
+    result = shim.synth_city_list_work_items(status="")
 
     assert result["items"][0]["active_scope_revision"] == 2
     assert result["items"][0]["pr_number"] == 875
@@ -824,7 +826,7 @@ def test_list_work_items_projects_safe_continuation_fields(monkeypatch):
     assert "must-not-project" not in repr(result)
 
 
-def test_deck_create_team_posts_to_team_api(monkeypatch):
+def test_synth_city_create_team_posts_to_team_api(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     requests = []
@@ -835,7 +837,7 @@ def test_deck_create_team_posts_to_team_api(monkeypatch):
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_create_team(
+    result = shim.synth_city_create_team(
         "Team",
         "Generated by an agent",
         [{"display_name": "Dev", "provider": "codex-cli", "repo_path": "/tmp/repo", "ui_color": "blue"}],
@@ -855,31 +857,31 @@ def test_campaign_setter_sends_director_key_only_as_header(monkeypatch):
     requests = []
     def request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if kwargs.get("headers", {}).get("X-Deck-Operator-Token") != "synthetic-director-key":
+        if kwargs.get("headers", {}).get("X-Synth-City-Operator-Token") != "synthetic-director-key":
             return {"ok": False, "error": {"code": "operator_token_invalid"}}
         return {"ok": True, "data": {"id": 12, "backlog_milestone": "Campaign",
                                      "launch_options": {"secret": "private-launch"}}}
     monkeypatch.setattr(shim, "_team_request", request)
     planned = [{"text": "Decide promotion.", "state": "later"}]
-    missing = shim.deck_update_team_campaign(12, "Campaign", planned)
+    missing = shim.synth_city_update_team_campaign(12, "Campaign", planned)
     assert missing["ok"] is False and not requests
-    wrong = shim.deck_update_team_campaign(12, "Campaign", planned, director_key="wrong-key")
+    wrong = shim.synth_city_update_team_campaign(12, "Campaign", planned, director_key="wrong-key")
     assert wrong["ok"] is False
-    result = shim.deck_update_team_campaign(12, "Campaign", planned, director_key="synthetic-director-key")
+    result = shim.synth_city_update_team_campaign(12, "Campaign", planned, director_key="synthetic-director-key")
     assert result["ok"] is True
     assert "synthetic-director-key" not in repr(result)
     assert "private-launch" not in repr(result)
     assert requests[-1] == ("PATCH", "/presets/12", {
-        "headers": {"X-Deck-Operator-Token": "synthetic-director-key"},
+        "headers": {"X-Synth-City-Operator-Token": "synthetic-director-key"},
         "json": {"backlog_milestone": "Campaign", "planned_decisions": planned}})
 
 
 def test_campaign_setter_preserves_unknown_write_outcome_without_private_errors(monkeypatch):
     import mcp_shim.agent_mail_server as shim
     monkeypatch.setattr(shim, "_team_request", lambda *args, **kwargs: {
-        "ok": False, "error": {"code": "deck_unreachable", "message": "synthetic-director-key"},
+        "ok": False, "error": {"code": "synth_city_unreachable", "message": "synthetic-director-key"},
         "outcome": "unknown", "suggestion": "private-request-details"})
-    result = shim.deck_update_team_campaign(12, None, None, director_key="synthetic-director-key")
+    result = shim.synth_city_update_team_campaign(12, None, None, director_key="synthetic-director-key")
     assert result["ok"] is False and result["outcome"] == "unknown"
     assert result["suggestion"] == "Do not repeat this mutation blindly; reconcile its outcome first."
     assert "synthetic-director-key" not in repr(result) and "private-request-details" not in repr(result)
@@ -890,7 +892,7 @@ def test_campaign_setter_keeps_session_key_out_of_director_header(monkeypatch):
     requests = []
     monkeypatch.setitem(shim._state, "capability_token", "synthetic-session-key")
     monkeypatch.setattr(shim, "_team_request", lambda *args, **kwargs: requests.append(kwargs))
-    result = shim.deck_update_team_campaign(12, None, None)
+    result = shim.synth_city_update_team_campaign(12, None, None)
     assert result["ok"] is False
     assert not requests
 
@@ -902,16 +904,16 @@ def test_team_summary_and_parent_link_tools_use_narrow_team_routes(monkeypatch):
         requests.append((method, path, kwargs))
         return {"ok": True, "data": {"preset_id": 12}}
     monkeypatch.setattr(shim, "_team_request", request)
-    assert shim.deck_get_team_summary(12) == {"ok": True, "summary": {"preset_id": 12}}
-    assert shim.deck_update_team_parent_issue(12, None)["ok"]
+    assert shim.synth_city_get_team_summary(12) == {"ok": True, "summary": {"preset_id": 12}}
+    assert shim.synth_city_update_team_parent_issue(12, None)["ok"]
     assert requests == [("GET", "/presets/12/summary", {}),
                         ("PATCH", "/presets/12", {"json": {"parent_issue_url": None}})]
     monkeypatch.setattr(shim, "_team_request", lambda *args, **kwargs: {"ok": False, "error": "blocked"})
-    assert not shim.deck_get_team_summary(12)["ok"]
-    assert not shim.deck_update_team_parent_issue(12, None)["ok"]
+    assert not shim.synth_city_get_team_summary(12)["ok"]
+    assert not shim.synth_city_update_team_parent_issue(12, None)["ok"]
 
 
-def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp_path):
+def test_synth_city_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp_path):
     import mcp_shim.agent_mail_server as shim
 
     image_path = tmp_path / "screen.png"
@@ -922,7 +924,7 @@ def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp
         requests.append((method, path, kwargs))
         if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": f"token-{len(requests)}"}}
-        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"].startswith("token-")
+        assert kwargs["headers"]["X-Synth-City-Terminal-Token"].startswith("token-")
         if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments":
             assert kwargs["data"]["created_by"] == "mcp"
             assert kwargs["data"]["prompt"] == "Inspect {path}"
@@ -935,7 +937,7 @@ def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp
 
     monkeypatch.setattr(shim, "_bridge_request", fake_bridge_request)
 
-    result = shim.deck_attach_image_to_bridge_session(
+    result = shim.synth_city_attach_image_to_bridge_session(
         "snazzy:0.0",
         str(image_path),
         submit=True,
@@ -947,16 +949,16 @@ def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp
     assert result["paste"]["submitted"] is True
 
 
-def test_deck_attach_image_to_bridge_session_rejects_missing_file():
+def test_synth_city_attach_image_to_bridge_session_rejects_missing_file():
     import mcp_shim.agent_mail_server as shim
 
-    result = shim.deck_attach_image_to_bridge_session("snazzy:0.0", "/tmp/does-not-exist.png")
+    result = shim.synth_city_attach_image_to_bridge_session("snazzy:0.0", "/tmp/does-not-exist.png")
 
     assert result["ok"] is False
     assert result["error"]["code"] == "image_file_not_found"
 
 
-def test_deck_list_bridge_attachments_uses_bridge_api(monkeypatch):
+def test_synth_city_list_bridge_attachments_uses_bridge_api(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     requests = []
@@ -965,18 +967,18 @@ def test_deck_list_bridge_attachments_uses_bridge_api(monkeypatch):
         requests.append((method, path, kwargs))
         if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": "token"}}
-        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"] == "token"
+        assert kwargs["headers"]["X-Synth-City-Terminal-Token"] == "token"
         return {"ok": True, "data": {"attachments": [{"id": 1}]}}
 
     monkeypatch.setattr(shim, "_bridge_request", fake_bridge_request)
 
-    result = shim.deck_list_bridge_attachments("snazzy:0.0")
+    result = shim.synth_city_list_bridge_attachments("snazzy:0.0")
 
     assert result == {"ok": True, "attachments": [{"id": 1}]}
     assert requests[1][0:2] == ("GET", "/sessions/snazzy%3A0.0/attachments")
 
 
-def test_deck_plan_team_launch_returns_plan_hash(monkeypatch):
+def test_synth_city_plan_team_launch_returns_plan_hash(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     def fake_team_request(method, path, **kwargs):
@@ -986,7 +988,7 @@ def test_deck_plan_team_launch_returns_plan_hash(monkeypatch):
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_plan_team_launch(12)
+    result = shim.synth_city_plan_team_launch(12)
 
     assert result == {"ok": True, "plan": {"plan_hash": "abc", "items": []}}
 
@@ -998,13 +1000,13 @@ def test_agent_team_tools_refuse_launch_overrides_without_http(monkeypatch):
         raise AssertionError("agent launch override reached Deck HTTP")
 
     monkeypatch.setattr(shim, "_team_request", forbidden)
-    assert shim.deck_plan_team_launch(12, reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
-    assert shim.deck_plan_team_launch(12, include_disabled=True)["error"]["code"] == "operator_launch_override_required"
-    assert shim.deck_launch_team(12, confirm_plan_hash="abc", reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
-    assert shim.deck_launch_team(12, force_without_plan=True)["error"]["code"] == "operator_launch_override_required"
+    assert shim.synth_city_plan_team_launch(12, reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.synth_city_plan_team_launch(12, include_disabled=True)["error"]["code"] == "operator_launch_override_required"
+    assert shim.synth_city_launch_team(12, confirm_plan_hash="abc", reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.synth_city_launch_team(12, force_without_plan=True)["error"]["code"] == "operator_launch_override_required"
 
 
-def test_deck_launch_team_requires_plan_hash(monkeypatch):
+def test_synth_city_launch_team_requires_plan_hash(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     called = False
@@ -1016,14 +1018,14 @@ def test_deck_launch_team_requires_plan_hash(monkeypatch):
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_launch_team(12)
+    result = shim.synth_city_launch_team(12)
 
     assert result["ok"] is False
     assert result["error"]["code"] == "plan_hash_required"
     assert called is False
 
 
-def test_deck_launch_team_forwards_confirm_hash(monkeypatch):
+def test_synth_city_launch_team_forwards_confirm_hash(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     requests = []
@@ -1034,7 +1036,7 @@ def test_deck_launch_team_forwards_confirm_hash(monkeypatch):
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_launch_team(12, confirm_plan_hash="abc")
+    result = shim.synth_city_launch_team(12, confirm_plan_hash="abc")
 
     assert result["ok"] is True
     assert result["launch"]["launch_id"] == 9
@@ -1045,8 +1047,8 @@ def test_deck_launch_team_forwards_confirm_hash(monkeypatch):
 
 def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
     import mcp_shim.agent_mail_hook as hook
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_PRESET_ID", "1")
-    monkeypatch.setenv("CLAUDE_DECK_TEAM_SLOT_ID", "2")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_PRESET_ID", "1")
+    monkeypatch.setenv("SYNTH_CITY_TEAM_SLOT_ID", "2")
 
     body = {
         "hookSpecificOutput": {
@@ -1073,7 +1075,7 @@ def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
         "argv",
         [
             "agent_mail_hook.py",
-            "--deck-url",
+            "--synth-city-url",
             "http://deck",
             "--event",
             "user-prompt-submit",
@@ -1132,7 +1134,7 @@ def test_copilot_hook_shim_emits_additional_context(monkeypatch, capsys):
         "argv",
         [
             "agent_mail_hook.py",
-            "--deck-url",
+            "--synth-city-url",
             "http://deck",
             "--event",
             "user-prompt-submit",
@@ -1166,7 +1168,7 @@ def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
     monkeypatch.setattr(
         hook.sys,
         "argv",
-        ["agent_mail_hook.py", "--deck-url", "http://deck", "--event", "session-start"],
+        ["agent_mail_hook.py", "--synth-city-url", "http://deck", "--event", "session-start"],
     )
     monkeypatch.setattr(hook.sys, "stdin", StringIO("{}"))
     monkeypatch.setattr(hook.os, "getcwd", lambda: "/repo")
@@ -1174,3 +1176,99 @@ def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
 
     assert hook.main() == 0
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("synth_city_create_team", {"name": "synthetic-probe-team"}),
+    ("synth_city_retry_work_item", {"work_item_id": 123}),
+])
+def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monkeypatch, name, arguments):
+    import asyncio
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from mcp import types
+
+    path = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
+    spec = importlib.util.spec_from_file_location("upgrade_dispatch_shim", path)
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py", "--synth-city-upgrade-tools-list-probe"])
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": 123}
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr(shim.httpx, "request", request)
+    denied = {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+
+    async def exercise_probe():
+        tools = await shim.mcp.list_tools()
+        # These paths bypass/ignore _ensure_registered. Exercise FastMCP and
+        # its installed wire handler, rather than calling the guard directly.
+        result = await shim.mcp.call_tool(name, arguments)
+        assert calls == [], "read-only probe emitted an HTTP mutation"
+        assert result == denied
+        wire = await shim.mcp._mcp_server.request_handlers[types.CallToolRequest](
+            types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
+                name=name, arguments=arguments)))
+        assert wire.root.structuredContent == denied
+        assert len(tools) == 36
+        # Every published tool is refused before validation or execution.
+        for tool in tools:
+            assert await shim.mcp.call_tool(tool.name, {}) == denied
+        assert shim._state["member_id"] is None and shim._state["capability_token"] is None
+        assert calls == []
+        return [tool.model_dump() for tool in tools]
+
+    probe_schemas = asyncio.run(exercise_probe())
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py"])
+    normal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(normal)
+    assert [tool.model_dump() for tool in asyncio.run(normal.mcp.list_tools())] == probe_schemas
+    # The same tool remains executable in ordinary mode (synthetic HTTP only).
+    asyncio.run(normal.mcp.call_tool("synth_city_create_team", {"name": "synthetic-normal-team"}))
+    assert len(calls) == 1 and calls[0][0][0] == "POST"
+
+
+def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_tools(monkeypatch):
+    import asyncio
+    import importlib.util
+    import sys
+    from pathlib import Path
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py", "--synth-city-upgrade-tools-list-probe"])
+    path = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
+    spec = importlib.util.spec_from_file_location("upgrade_probe_shim", path)
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    calls = []
+    monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert len(asyncio.run(shim.mcp.list_tools())) == 36
+    assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+    assert shim._state["member_id"] is None and shim._state["capability_token"] is None
+    assert calls == []
+
+    # A normal invocation retains the real registration and lifecycle guards.
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py"])
+    normal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(normal)
+    denied = {"ok": False, "error": {"code": "session_token_invalid"}}
+    normal_calls = []
+    def refuse(method, endpoint, **kwargs):
+        normal_calls.append((method, endpoint))
+        return denied
+    monkeypatch.setattr(normal, "_request", refuse)
+    assert normal.synth_city_ack_message(9) == denied
+    assert normal._state["member_id"] is None and normal._state["capability_token"] is None
+    assert normal_calls == [("POST", "/agent/register")]
+    normal._state["closing"] = True
+    assert normal.synth_city_ack_message(9) == {"ok": False, "error": {"code": "mail_generation_closing"}}
+    assert normal_calls == [("POST", "/agent/register")]

@@ -23,7 +23,7 @@ def _probe(time_bucket: int) -> tuple[bool, str | None]:
     assets = integration_path()
     shim = Path(__file__).resolve().parents[2] / "mcp_shim" / "agent_mail_server.py"
     if not all(candidate.is_file() for candidate in [assets / "extension.ts", assets / "manifest.ts", assets / "readiness.mjs", shim]):
-        return False, "Deck Pi extension assets are missing"
+        return False, "Albiex Synth City Pi extension assets are missing"
     try:
         python = subprocess.run([sys.executable, "-I", "-c", "import mcp, httpx"], capture_output=True, timeout=5)
         runtime = subprocess.run([node, str(assets / "readiness.mjs"), str(Path(binary).resolve())], capture_output=True, timeout=10)
@@ -39,12 +39,12 @@ def pi_mail_readiness() -> tuple[bool, str | None]:
 
 
 def pi_mail_environment() -> dict[str, str]:
-    from app.services.agent_mail_install_service import deck_base_url, shim_path
+    from app.services.agent_mail_install_service import synth_city_base_url, shim_path
 
     return {
-        "CLAUDE_DECK_MAIL_OPT_IN": "1",
-        "CLAUDE_DECK_PROVIDER": "pi-cli",
-        "CLAUDE_DECK_URL": deck_base_url(),
-        "CLAUDE_DECK_MAIL_PYTHON": str(Path(sys.executable).absolute()),
-        "CLAUDE_DECK_MAIL_SHIM": shim_path(),
+        "SYNTH_CITY_MAIL_OPT_IN": "1",
+        "SYNTH_CITY_PROVIDER": "pi-cli",
+        "SYNTH_CITY_URL": synth_city_base_url(),
+        "SYNTH_CITY_MAIL_PYTHON": str(Path(sys.executable).absolute()),
+        "SYNTH_CITY_MAIL_SHIM": shim_path(),
     }

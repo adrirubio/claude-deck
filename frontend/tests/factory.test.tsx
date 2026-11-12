@@ -87,7 +87,7 @@ describe("delivery read authority and filters", () => {
   });
 
   it("does not inherit native preferences and links complete-set counts with URL filters", async () => {
-    localStorage.setItem("claude-deck:selected-provider", "pi-cli");
+    localStorage.setItem("albiex-synth-city:selected-provider", "pi-cli");
     localStorage.setItem("claude-deck:active-project", "/native/project");
     const { requests } = fixtureFetch((path) => standard(path));
     renderRoute(<OverviewPage />, "/?team_id=1", "/");
@@ -451,7 +451,7 @@ describe("work details and protected controls", () => {
     const { requests } = fixtureFetch((path, _query, options) =>
       path.endsWith("/retry")
         ? options?.headers &&
-          new Headers(options.headers).get("X-Deck-Operator-Token") ===
+          new Headers(options.headers).get("X-Synth-City-Operator-Token") ===
             "test-operator"
           ? jsonResponse(
               {
@@ -521,7 +521,7 @@ describe("work details and protected controls", () => {
     const credentials: (string | null)[] = [];
     const { requests } = fixtureFetch((path, _query, options) => {
       if (!path.endsWith("/retry")) return jsonResponse(eligible);
-      credentials.push(new Headers(options?.headers).get("X-Deck-Operator-Token"));
+      credentials.push(new Headers(options?.headers).get("X-Synth-City-Operator-Token"));
       return jsonResponse(response);
     });
     setOperatorToken("synthetic-operator");
@@ -535,7 +535,7 @@ describe("work details and protected controls", () => {
     expect(credentials).toEqual(["synthetic-operator"]);
     expect(requests.filter((r) => r.path.startsWith("factory/"))).toHaveLength(2);
     const message = screen.getByRole("status");
-    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Deck has not yet seen a new dispatch");
+    expect(message).toHaveTextContent(status === "deferred" ? "re-dispatch is deferred" : "Synth City has not yet seen a new dispatch");
     if (status === "pending") expect(message).toHaveTextContent("reset this work item to pending");
     if (status === "retained") expect(message).toHaveTextContent("Retry response status: escalated");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -548,7 +548,7 @@ describe("work details and protected controls", () => {
     const credentials: (string | null)[] = [];
     const { requests } = fixtureFetch((path, _query, options) => {
       if (!path.endsWith("/retry")) return jsonResponse(eligible);
-      credentials.push(new Headers(options?.headers).get("X-Deck-Operator-Token"));
+      credentials.push(new Headers(options?.headers).get("X-Synth-City-Operator-Token"));
       return ++posts === 1 ? jsonResponse({ detail: "Expired authorization" }, 401)
         : jsonResponse({ ...eligible.work_item.item, dispatch_status: "pending" });
     });
@@ -889,7 +889,7 @@ describe("work item page", () => {
     itemFor(detail.completed.response);
     renderRoute(<WorkDetailPage />, "/work/9", "/work/:workItemId");
     await settle();
-    const record = screen.getByText(/Deck record updated:/);
+    const record = screen.getByText(/Synth City record updated:/);
     const observed = screen.getByText(/Details updated:/);
     expect(record).not.toBe(observed);
     expect(record.textContent).not.toMatch(/Details updated/);

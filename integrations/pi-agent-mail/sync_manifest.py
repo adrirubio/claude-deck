@@ -12,7 +12,7 @@ from pathlib import Path
 
 def render_manifest() -> str:
     root = Path(__file__).resolve().parents[2]
-    os.environ["CLAUDE_DECK_PROVIDER"] = "pi-cli"
+    os.environ["SYNTH_CITY_PROVIDER"] = "pi-cli"
     spec = importlib.util.spec_from_file_location(
         "pi_manifest_shim", root / "backend/mcp_shim/agent_mail_server.py"
     )
@@ -27,9 +27,9 @@ def render_manifest() -> str:
             "description": tool.description,
             "inputSchema": tool.inputSchema,
         }
-        if tool.name.startswith("deck_"):
+        if tool.name.startswith("synth_city_"):
             public.append(entry)
-        elif tool.name == "__deck_mail_close_generation":
+        elif tool.name == "__synth_city_mail_close_generation":
             private.append(entry)
         else:
             raise ValueError(f"Unexpected MCP tool: {tool.name}")

@@ -150,24 +150,24 @@ async def test_pi_migration_claim_and_rollback_preserve_pending_authority_and_hi
     app.dependency_overrides[get_db] = override
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            retired = await client.post("/api/v1/agent-mail/sessions/retire-dead-pane", headers={"X-Deck-Operator-Token": "migration-operator"}, json={"pane_pid": 10001, "pane_proc_start": "111"})
+            retired = await client.post("/api/v1/agent-mail/sessions/retire-dead-pane", headers={"X-Synth-City-Operator-Token": "migration-operator"}, json={"pane_pid": 10001, "pane_proc_start": "111"})
             assert retired.status_code == 200 and retired.json()["retired_count"] == 1
-            assert (await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Deck-Session-Token": old_token})).status_code == 401
+            assert (await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Synth-City-Session-Token": old_token})).status_code == 401
             await agent_team_service.update_slot(db, slot.id, AgentTeamSlotUpdate(provider="pi-cli", launch_options={"platform": "openrouter"}))
             db.add(AgentPaneBinding(pane_pid=10002, pane_proc_start="112", slot_id=slot.id, preset_id=preset.id))
             await db.commit()
             replacement_owner, replacement = await agent_mail_service.register_session(db, old_request.model_copy(update={"provider": "pi-cli", "session_key": "mcp:migrate-pi"}), pane=peer_process.PeerPane(10002, "112", None, 1))
             new_token = await agent_mail_service.ensure_capability_token(db, replacement)
             assert replacement_owner.id == owner.id and new_token != old_token
-            claimed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Deck-Session-Token": new_token})
+            claimed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Synth-City-Session-Token": new_token})
             assert claimed.status_code == 200 and claimed.headers["Cache-Control"] == "no-store"
             assert claimed.json()["pending_revision"]["recovery_checkpoint_stage"] == "decision_hold"
             await db.refresh(workspace)
             assert workspace.leased_owner_pid == 10002 and workspace.leased_owner_proc_start == "112"
             assert workspace.lease_last_owner_contact_at is not None
-            assert (await client.post("/api/v1/agent-mail/agent/close", headers={"X-Deck-Session-Token": new_token})).status_code == 200
+            assert (await client.post("/api/v1/agent-mail/agent/close", headers={"X-Synth-City-Session-Token": new_token})).status_code == 200
             await agent_team_service.update_slot(db, slot.id, AgentTeamSlotUpdate(provider="codex-cli", launch_options={}))
-            assert (await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Deck-Session-Token": new_token})).status_code == 401
+            assert (await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation", headers={"X-Synth-City-Session-Token": new_token})).status_code == 401
     finally:
         app.dependency_overrides.clear()
     for row in rows:

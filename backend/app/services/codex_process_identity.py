@@ -1,4 +1,4 @@
-"""Recognize only the explicit resume command forms emitted by Deck."""
+"""Recognize only the explicit resume command forms emitted by Albiex Synth City."""
 from pathlib import Path
 import os
 import uuid
@@ -28,7 +28,7 @@ def explicit_resume(argv: list[bytes], session_id: str) -> bool:
             break
     if argv[index:index + 2] != [b"resume", session_id.encode()]:
         return False
-    # Deck emits at most one prompt after its explicit selector. Option text
+    # Albiex Synth City emits at most one prompt after its explicit selector. Option text
     # after a delimiter cannot select a conversation. Unsupported forms refuse.
     tail = argv[index + 2:]
     if tail and tail[-1] == b"":

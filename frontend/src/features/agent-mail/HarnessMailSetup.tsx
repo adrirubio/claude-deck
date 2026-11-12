@@ -59,7 +59,8 @@ export function HarnessMailSetup({ providerId, harnessInstalled, setup }: Harnes
   const [confirming, setConfirming] = useState<MailActionMode | null>(null)
   const [running, setRunning] = useState(false)
 
-  if (!harnessInstalled) {
+  const upgradeState = status?.provider_upgrades?.[providerId]?.state
+  if (!harnessInstalled && upgradeState !== 'incomplete' && upgradeState !== 'needs_attention') {
     return (
       <section aria-label="Agent Mail" className="rounded-lg border bg-card p-3 text-sm">
         <span className="font-medium">Agent Mail:</span> Install the harness first.

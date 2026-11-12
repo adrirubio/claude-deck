@@ -93,7 +93,7 @@ async def _session_headers(db, member, key):
         )
     )
     await db.commit()
-    return {"X-Deck-Session-Token": token}
+    return {"X-Synth-City-Session-Token": token}
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_message_http_timestamp_names_utc_without_changing_storage(client,
                          body_markdown="UTC fixture", created_at=datetime(2026, 10, 9, 6, 20, 53, 83886))
     db.add(stored)
     await db.commit()
-    response = await client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Operator-Token": "test-director-key"})
+    response = await client.get("/api/v1/agent-mail/messages", headers={"X-Synth-City-Operator-Token": "test-director-key"})
     assert response.status_code == 200
     data = next(row for row in response.json() if row["id"] == stored.id)
     stamp = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
@@ -119,7 +119,7 @@ async def test_wake_attempt_http_timestamp_names_utc_without_changing_storage(cl
                               result="refused", created_at=stamp)
     db.add(attempt)
     await db.commit()
-    response = await client.get("/api/v1/agent-mail/wake-attempts", headers={"X-Deck-Operator-Token": "utc-fixture"})
+    response = await client.get("/api/v1/agent-mail/wake-attempts", headers={"X-Synth-City-Operator-Token": "utc-fixture"})
     assert response.status_code == 200
     data = response.json()["attempts"][0]
     parsed = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
@@ -190,7 +190,7 @@ async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
     anonymous = await client.post(endpoint, json=payload)
     actor = await client.post(
         "/api/v1/external/agent-mail/actors",
-        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
+        headers={"X-Synth-City-Operator-Token": "operator-broadcast-test"},
         json={"actor_key": "broadcast-actor", "display_name": "Broadcast actor"},
     )
     actor_token = actor.json()["token"]
@@ -201,17 +201,17 @@ async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
     )
     invalid_operator = await client.post(
         endpoint,
-        headers={"X-Deck-Operator-Token": "invalid"},
+        headers={"X-Synth-City-Operator-Token": "invalid"},
         json=payload,
     )
     missing_intent = await client.post(
         endpoint,
-        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
+        headers={"X-Synth-City-Operator-Token": "operator-broadcast-test"},
         json={"subject": "Global notice", "body_markdown": "For everyone."},
     )
     sent = await client.post(
         endpoint,
-        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
+        headers={"X-Synth-City-Operator-Token": "operator-broadcast-test"},
         json=payload,
     )
 
@@ -247,10 +247,10 @@ async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypat
 
     anonymous = await client.post(endpoint)
     invalid_session = await client.post(
-        endpoint, headers={"X-Deck-Session-Token": "invalid-session"}
+        endpoint, headers={"X-Synth-City-Session-Token": "invalid-session"}
     )
     invalid_operator = await client.post(
-        endpoint, headers={"X-Deck-Operator-Token": "invalid-operator"}
+        endpoint, headers={"X-Synth-City-Operator-Token": "invalid-operator"}
     )
     cross_member = await client.post(
         f"/api/v1/agent-mail/members/{other.id}/queue-inbox-check", headers=headers
@@ -258,7 +258,7 @@ async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypat
     empty = await client.post(endpoint, headers=headers)
     force_without_reason = await client.post(
         endpoint,
-        headers={"X-Deck-Operator-Token": "operator-wake-test"},
+        headers={"X-Synth-City-Operator-Token": "operator-wake-test"},
         json={"force": True},
     )
     agent_force = await client.post(endpoint, headers=headers, json={"force": True, "reason": "maintenance"})
@@ -319,17 +319,17 @@ async def test_wake_participation_is_operator_only_and_rejects_extra_fields(
     anonymous = await client.patch(endpoint, json=payload)
     session_token = await client.patch(
         endpoint,
-        headers={"X-Deck-Session-Token": "agent-session-token"},
+        headers={"X-Synth-City-Session-Token": "agent-session-token"},
         json=payload,
     )
     invalid_operator = await client.patch(
         endpoint,
-        headers={"X-Deck-Operator-Token": "invalid"},
+        headers={"X-Synth-City-Operator-Token": "invalid"},
         json=payload,
     )
     privilege_field = await client.patch(
         endpoint,
-        headers={"X-Deck-Operator-Token": "operator-participation"},
+        headers={"X-Synth-City-Operator-Token": "operator-participation"},
         json={
             **payload,
             "member_id": 999,
@@ -341,7 +341,7 @@ async def test_wake_participation_is_operator_only_and_rejects_extra_fields(
     )
     response = await client.patch(
         endpoint,
-        headers={"X-Deck-Operator-Token": "operator-participation"},
+        headers={"X-Synth-City-Operator-Token": "operator-participation"},
         json=payload,
     )
 
@@ -415,7 +415,7 @@ async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, 
     monkeypatch.setattr(settings, "operator_token", "operator-wake-test")
     endpoint = f"/api/v1/agent-mail/members/{member.id}/queue-inbox-check"
 
-    empty = await client.post(endpoint, headers={"X-Deck-Session-Token": token})
+    empty = await client.post(endpoint, headers={"X-Synth-City-Session-Token": token})
     assert empty.status_code == 409
     message = MailMessage(
         recipient_member_id=member.id,
@@ -434,15 +434,15 @@ async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, 
     ))
     await db.commit()
     wrong_pane = await client.post(
-        endpoint, headers={"X-Deck-Session-Token": "wrong-pane-token"}
+        endpoint, headers={"X-Synth-City-Session-Token": "wrong-pane-token"}
     )
     assert (wrong_pane.status_code, wrong_pane.json()["detail"]) == (
         403, "wake_session_mismatch"
     )
-    own_session = await client.post(endpoint, headers={"X-Deck-Session-Token": token})
+    own_session = await client.post(endpoint, headers={"X-Synth-City-Session-Token": token})
     assert own_session.status_code == 200
     operator_force = await client.post(
-        endpoint, headers={"X-Deck-Operator-Token": "operator-wake-test"},
+        endpoint, headers={"X-Synth-City-Operator-Token": "operator-wake-test"},
         json={"force": True, "reason": "operator_maintenance"},
     )
     assert operator_force.status_code == 200
@@ -459,7 +459,7 @@ async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, 
     assert unauthenticated_audit.status_code == 401
     audit = await client.get(
         "/api/v1/agent-mail/wake-attempts",
-        headers={"X-Deck-Operator-Token": "operator-wake-test"},
+        headers={"X-Synth-City-Operator-Token": "operator-wake-test"},
     )
     assert audit.status_code == 200
     assert audit.json()["attempts"][0]["target_pane_id"] == "%7"
@@ -662,12 +662,12 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
 
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     replay = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
 
@@ -696,7 +696,7 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     )
     leader_inbox = await client.get(
         f"/api/v1/agent-mail/agent/inbox?member_id={members[0].id}",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
     )
     assert "pytest -q" not in public_messages.text
     assert "pytest -q" not in public_thread.text
@@ -711,18 +711,18 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     }
     cross_decision = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=decision_body,
     )
     assert cross_decision.status_code == 403
     decided = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=decision_body,
     )
     decision_replay = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=decision_body,
     )
 
@@ -751,7 +751,7 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     assert decisions[0].sender_member_id == members[0].id
     late_replay = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     assert late_replay.status_code == 409
@@ -760,7 +760,7 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     changed_body["summary"] = "A second overlapping continuation"
     changed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=changed_body,
     )
     assert changed.status_code == 409
@@ -776,14 +776,14 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     ) == 1
     cross_ack = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/{revision.revision}/ack",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={"dispatch_nonce": item.dispatch_nonce, "lease_token": "lease-secret"},
     )
     assert cross_ack.status_code == 403
     activated = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision.revision}/ack",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "dispatch_nonce": item.dispatch_nonce,
             "lease_token": "lease-secret",
@@ -792,7 +792,7 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     activation_replay = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision.revision}/ack",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "dispatch_nonce": item.dispatch_nonce,
             "lease_token": "lease-secret",
@@ -844,17 +844,17 @@ async def test_pi_distinct_leader_and_read_but_unacked_owner_wakes_are_exact(cli
         return SimpleNamespace(returncode=0, stderr="", stdout=f"{pane}|{1000 + int(pane[1:])}" if command[1] == "display-message" else "")
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
     monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
-    proposed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests", headers={"X-Deck-Session-Token": tokens[1]}, json=_continuation_request_body(item))
+    proposed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests", headers={"X-Synth-City-Session-Token": tokens[1]}, json=_continuation_request_body(item))
     assert proposed.status_code == 200
     approval_id = proposed.json()["approval"]["id"]
-    leader_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Deck-Session-Token": tokens[0]})
+    leader_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Synth-City-Session-Token": tokens[0]})
     assert leader_read.status_code == 200
     commands.clear()
     assert await agent_mail_service.auto_nudge_members(db, {members[0].id}, bypass_cooldown=True)
     assert [command[3] for command in commands if command[1] == "send-keys"] == ["%0", "%0"]
-    decided = await client.post("/api/v1/agent-mail/continuation-decisions", headers={"X-Deck-Session-Token": tokens[0]}, json={"approval_request_id": approval_id, "work_item_id": item.id, "dispatch_nonce": item.dispatch_nonce, "decision": "approved", "reason": "Bounded fixture"})
+    decided = await client.post("/api/v1/agent-mail/continuation-decisions", headers={"X-Synth-City-Session-Token": tokens[0]}, json={"approval_request_id": approval_id, "work_item_id": item.id, "dispatch_nonce": item.dispatch_nonce, "decision": "approved", "reason": "Bounded fixture"})
     assert decided.status_code == 200
-    owner_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Deck-Session-Token": tokens[1]})
+    owner_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Synth-City-Session-Token": tokens[1]})
     assert owner_read.status_code == 200
     assert await agent_mail_service.counts_for_member(db, members[1].id) == (0, 0)
     revision = await db.get(GithubAttemptScopeRevision, proposed.json()["revision"]["id"])
@@ -863,7 +863,7 @@ async def test_pi_distinct_leader_and_read_but_unacked_owner_wakes_are_exact(cli
     assert [command[3] for command in commands if command[1] == "send-keys"] == ["%1", "%1"]
     last = (await db.execute(select(MailWakeAttempt).order_by(MailWakeAttempt.id.desc()))).scalars().first()
     assert (last.result, last.target_pane_id, last.reason_code) == ("delivered", "%1", "continuation_owner_ack")
-    assert (await client.post("/api/v1/agent-mail/agent/close", headers={"X-Deck-Session-Token": tokens[1]})).status_code == 200
+    assert (await client.post("/api/v1/agent-mail/agent/close", headers={"X-Synth-City-Session-Token": tokens[1]})).status_code == 200
     commands.clear()
     assert await agent_mail_service.auto_nudge_members(db, {members[1].id}, bypass_cooldown=True) == []
     assert not any(command[1] == "send-keys" for command in commands)
@@ -893,7 +893,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     )
     prohibited = await client.post(
         proposal_path,
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=proposal,
     )
     assert prohibited.status_code == 409
@@ -902,7 +902,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     proposal["execution_target"] = "hosted_ci"
     proposed = await client.post(
         proposal_path,
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=proposal,
     )
     assert proposed.status_code == 200
@@ -931,7 +931,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     decision_path = "/api/v1/agent-mail/continuation-decisions"
     premature_decision = await client.post(
         decision_path,
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=decision,
     )
     assert premature_decision.status_code == 409
@@ -953,19 +953,19 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     assert (
         await client.post(
             release_path,
-            headers={"X-Deck-Operator-Token": tokens[1]},
+            headers={"X-Synth-City-Operator-Token": tokens[1]},
             json=release,
         )
     ).status_code == 401
     wrong_stage = await client.post(
         release_path,
-        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "checkpoint-operator-token"},
         json={**release, "stage": "ack"},
     )
     assert wrong_stage.status_code == 409
     opened_decision = await client.post(
         release_path,
-        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "checkpoint-operator-token"},
         json=release,
     )
     assert opened_decision.status_code == 200
@@ -974,7 +974,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
 
     decided = await client.post(
         decision_path,
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=decision,
     )
     assert decided.status_code == 200
@@ -994,7 +994,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     )
     decision_replay = await client.post(
         decision_path,
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=decision,
     )
     assert decision_replay.status_code == 200
@@ -1007,7 +1007,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     ack = {"dispatch_nonce": item.dispatch_nonce, "lease_token": "lease-secret"}
     premature_ack = await client.post(
         ack_path,
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=ack,
     )
     assert premature_ack.status_code == 409
@@ -1017,7 +1017,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
 
     opened_ack = await client.post(
         release_path,
-        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "checkpoint-operator-token"},
         json={**release, "stage": "ack"},
     )
     assert opened_ack.status_code == 200
@@ -1028,7 +1028,7 @@ async def test_recovery_checkpoint_requires_operator_release_before_decision_and
     )
     activated = await client.post(
         ack_path,
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=ack,
     )
     assert activated.status_code == 200
@@ -1054,7 +1054,7 @@ async def test_recovery_checkpoint_release_refuses_stale_authority(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     assert proposed.status_code == 200
@@ -1084,7 +1084,7 @@ async def test_recovery_checkpoint_release_refuses_stale_authority(
     refused = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/1/"
         "checkpoint-release",
-        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "checkpoint-operator-token"},
         json={
             "release": True,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1113,7 +1113,7 @@ async def test_recovery_checkpoint_release_rechecks_lease_at_conditional_write(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     assert proposed.status_code == 200
@@ -1143,7 +1143,7 @@ async def test_recovery_checkpoint_release_rechecks_lease_at_conditional_write(
     refused = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/1/"
         "checkpoint-release",
-        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        headers={"X-Synth-City-Operator-Token": "checkpoint-operator-token"},
         json={
             "release": True,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1178,7 +1178,7 @@ async def test_recovery_only_attempt_refuses_other_item_proposals(
     ))
     refused = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     assert refused.status_code == 409
@@ -1200,7 +1200,7 @@ async def test_continuation_decision_refuses_initial_plan_authority(
     item, _members, tokens = await _dispatch_approval_fixture(db)
     requested = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1210,7 +1210,7 @@ async def test_continuation_decision_refuses_initial_plan_authority(
 
     refused = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": requested.json()["id"],
             "work_item_id": item.id,
@@ -1237,7 +1237,7 @@ async def test_continuation_decision_cannot_approve_expired_revision(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval = await db.get(
@@ -1253,7 +1253,7 @@ async def test_continuation_decision_cannot_approve_expired_revision(
 
     refused = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": approval.id,
             "work_item_id": item.id,
@@ -1284,7 +1284,7 @@ async def test_continuation_requester_cancels_without_operator_impersonation(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval_id = proposed.json()["approval"]["id"]
@@ -1293,17 +1293,17 @@ async def test_continuation_requester_cancels_without_operator_impersonation(
     refused = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
         f"{approval_id}/cancel",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
     )
     cancelled = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
         f"{approval_id}/cancel",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
     )
     repeated = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
         f"{approval_id}/cancel",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
     )
 
     assert refused.status_code == 403
@@ -1329,7 +1329,7 @@ async def test_continuation_decision_guard_uses_database_current_escalation(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval_id = proposed.json()["approval"]["id"]
@@ -1345,7 +1345,7 @@ async def test_continuation_decision_guard_uses_database_current_escalation(
 
     refused = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": approval_id,
             "work_item_id": item.id,
@@ -1398,7 +1398,7 @@ async def test_continuation_decision_guard_uses_database_current_leader(
     await db.commit()
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval_id = proposed.json()["approval"]["id"]
@@ -1428,7 +1428,7 @@ async def test_continuation_decision_guard_uses_database_current_leader(
     )
     refused = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": approval_id,
             "work_item_id": item.id,
@@ -1459,14 +1459,14 @@ async def test_continuation_ack_rejects_wrong_acquisition_and_changed_head(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval_id = proposed.json()["approval"]["id"]
     revision_number = proposed.json()["revision"]["revision"]
     decided = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": approval_id,
             "work_item_id": item.id,
@@ -1480,7 +1480,7 @@ async def test_continuation_ack_rejects_wrong_acquisition_and_changed_head(
     wrong_token = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision_number}/ack",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={"dispatch_nonce": item.dispatch_nonce, "lease_token": "wrong"},
     )
 
@@ -1491,7 +1491,7 @@ async def test_continuation_ack_rejects_wrong_acquisition_and_changed_head(
     changed_head = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision_number}/ack",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "dispatch_nonce": item.dispatch_nonce,
             "lease_token": "lease-secret",
@@ -1530,14 +1530,14 @@ async def test_continuation_ack_rechecks_pr_head_after_snapshot(
     _stub_continuation_github(monkeypatch)
     proposed = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json=_continuation_request_body(item),
     )
     approval_id = proposed.json()["approval"]["id"]
     revision_number = proposed.json()["revision"]["revision"]
     decided = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "approval_request_id": approval_id,
             "work_item_id": item.id,
@@ -1559,7 +1559,7 @@ async def test_continuation_ack_rechecks_pr_head_after_snapshot(
     refused = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision_number}/ack",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "dispatch_nonce": item.dispatch_nonce,
             "lease_token": "lease-secret",
@@ -1743,7 +1743,7 @@ async def test_cancel_synchronizes_request_revision_and_mail_root(
     item, members, tokens = await _dispatch_approval_fixture(db)
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1817,7 +1817,7 @@ async def test_cancel_synchronizes_request_revision_and_mail_root(
 
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1864,7 +1864,7 @@ async def test_explicit_initial_approval_route_commits_authority_then_links_mail
     monkeypatch.setattr(agent_mail_service, "auto_nudge_members", observe_nudge)
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1900,7 +1900,7 @@ async def test_approval_request_route_returns_stable_delivery_integrity_error(
     monkeypatch.setattr(agent_mail_service, "send_message", fail_delivery)
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -1938,7 +1938,7 @@ async def test_cancel_between_request_delivery_and_link_supersedes_mail(
     monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2003,7 +2003,7 @@ async def test_explicit_initial_approval_route_repairs_durable_boundaries(
 
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2057,7 +2057,7 @@ async def test_migrated_keyless_approval_root_replays_without_redelivery(
     monkeypatch.setattr(agent_mail_service, "send_message", unexpected_delivery)
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2080,7 +2080,7 @@ async def test_generic_context_request_creates_no_approval_authority(
 
     response = await client.post(
         "/api/v1/agent-mail/messages",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "kind": "context_request",
             "sender_member_id": members[1].id,
@@ -2106,7 +2106,7 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
     leader, owner = members
     request = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2120,7 +2120,7 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
 
     bypass = await client.post(
         "/api/v1/agent-mail/messages",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "kind": "answer",
             "sender_member_id": leader.id,
@@ -2137,7 +2137,7 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
 
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2166,7 +2166,7 @@ async def test_terminal_approval_request_replay_cannot_replace_approved_evidence
     item, _members, tokens = await _dispatch_approval_fixture(db)
     original = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2175,7 +2175,7 @@ async def test_terminal_approval_request_replay_cannot_replace_approved_evidence
     )
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2188,7 +2188,7 @@ async def test_terminal_approval_request_replay_cannot_replace_approved_evidence
 
     identical = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2197,7 +2197,7 @@ async def test_terminal_approval_request_replay_cannot_replace_approved_evidence
     )
     conflicting = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2224,7 +2224,7 @@ async def test_decision_route_returns_stable_delivery_integrity_error(
     item, _members, tokens = await _dispatch_approval_fixture(db)
     approval = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2242,7 +2242,7 @@ async def test_decision_route_returns_stable_delivery_integrity_error(
     )
     response = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2264,7 +2264,7 @@ async def test_decision_update_refuses_database_current_escalation(
     item, members, tokens = await _dispatch_approval_fixture(db)
     approval_response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2309,7 +2309,7 @@ async def test_decision_integration_refuses_attempt_drift_after_authority_commit
     item, _members, tokens = await _dispatch_approval_fixture(db)
     approval_response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2335,7 +2335,7 @@ async def test_decision_integration_refuses_attempt_drift_after_authority_commit
     )
     response = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2363,7 +2363,7 @@ async def test_identical_rejection_replay_does_not_advance_twice(
     item, _members, tokens = await _dispatch_approval_fixture(db)
     approval_request = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2381,17 +2381,17 @@ async def test_identical_rejection_replay_does_not_advance_twice(
 
     first = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=payload,
     )
     repeated = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=payload,
     )
     opposite = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={**payload, "decision": "approved"},
     )
 
@@ -2417,7 +2417,7 @@ async def test_decision_route_recovers_committed_authority(
     item, members, tokens = await _dispatch_approval_fixture(db)
     approval_response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2460,7 +2460,7 @@ async def test_decision_route_recovers_committed_authority(
 
     recovered = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2491,7 +2491,7 @@ async def test_approved_decision_replay_reapplies_item_integration(
     item, members, tokens = await _dispatch_approval_fixture(db)
     approval_response = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2563,7 +2563,7 @@ async def test_approved_decision_replay_reapplies_item_integration(
 
     replay = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2604,7 +2604,7 @@ async def test_rejection_opens_next_round_and_clears_old_ack(
     await db.commit()
     approval_request = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2615,7 +2615,7 @@ async def test_rejection_opens_next_round_and_clears_old_ack(
 
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2667,7 +2667,7 @@ async def test_decision_route_requires_stable_approval_request_id(
 
     response = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2689,7 +2689,7 @@ async def test_stale_leader_token_cannot_record_a_decision(client, db, monkeypat
     leader, owner = members
     request = await client.post(
         "/api/v1/agent-mail/messages",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "kind": "context_request",
             "sender_member_id": owner.id,
@@ -2706,7 +2706,7 @@ async def test_stale_leader_token_cannot_record_a_decision(client, db, monkeypat
 
     response = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2728,7 +2728,7 @@ async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypa
     item, _members, tokens = await _dispatch_approval_fixture(db)
     approval_request = await client.post(
         "/api/v1/agent-mail/approval-requests",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2739,7 +2739,7 @@ async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypa
 
     response = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[1]},
+        headers={"X-Synth-City-Session-Token": tokens[1]},
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
@@ -2770,7 +2770,7 @@ async def test_decision_route_ignores_generic_context_roots(client, db, monkeypa
 
     missing = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=payload,
     )
     assert missing.status_code == 404
@@ -2780,7 +2780,7 @@ async def test_decision_route_ignores_generic_context_roots(client, db, monkeypa
     for index in range(2):
         request = await client.post(
             "/api/v1/agent-mail/messages",
-            headers={"X-Deck-Session-Token": tokens[1]},
+            headers={"X-Synth-City-Session-Token": tokens[1]},
             json={
                 "kind": "context_request",
                 "sender_member_id": owner.id,
@@ -2795,7 +2795,7 @@ async def test_decision_route_ignores_generic_context_roots(client, db, monkeypa
         assert request.status_code == 200
     still_missing = await client.post(
         "/api/v1/agent-mail/decisions",
-        headers={"X-Deck-Session-Token": tokens[0]},
+        headers={"X-Synth-City-Session-Token": tokens[0]},
         json=payload,
     )
 
@@ -2819,7 +2819,7 @@ async def test_spa_404_handler_preserves_api_error_details():
 
 @pytest.mark.asyncio
 async def test_team_empty(client):
-    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Deck-Operator-Token": "test-director-key"})
+    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Synth-City-Operator-Token": "test-director-key"})
     assert resp.status_code == 200
     assert resp.json() == {"members": []}
 
@@ -2829,7 +2829,7 @@ async def test_patch_member_sets_role_and_charter(client, db):
     member = await _member(db, "ra", "alpha")
     resp = await client.patch(
         f"/api/v1/agent-mail/members/{member.id}",
-        headers={"X-Deck-Operator-Token": "test-director-key"},
+        headers={"X-Synth-City-Operator-Token": "test-director-key"},
         json={
             "display_name": "Backend",
             "role": "backend expert",
@@ -2844,7 +2844,7 @@ async def test_patch_member_sets_role_and_charter(client, db):
 
 @pytest.mark.asyncio
 async def test_patch_unknown_member_404(client):
-    resp = await client.patch("/api/v1/agent-mail/members/999", headers={"X-Deck-Operator-Token": "test-director-key"}, json={"role": "x"})
+    resp = await client.patch("/api/v1/agent-mail/members/999", headers={"X-Synth-City-Operator-Token": "test-director-key"}, json={"role": "x"})
     assert resp.status_code == 404
 
 
@@ -2953,7 +2953,7 @@ async def test_explicit_opt_out_inbox_refreshes_stale_mcp_session(client, db, mo
 
     resp = await client.get(
         "/api/v1/agent-mail/agent/inbox",
-        headers={"X-Deck-Session-Token": "stale-token"},
+        headers={"X-Synth-City-Session-Token": "stale-token"},
     )
 
     assert resp.status_code == 200
@@ -2961,13 +2961,13 @@ async def test_explicit_opt_out_inbox_refreshes_stale_mcp_session(client, db, mo
     assert session.mailbox_status == "connected"
     assert session.last_seen_at > stale_seen_at
 
-    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Deck-Operator-Token": "test-director-key"})
+    resp = await client.get("/api/v1/agent-mail/team?sync=false", headers={"X-Synth-City-Operator-Token": "test-director-key"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["members"][0]["status"] == "connected"
 
 
-DIRECTOR_HEADERS = {"X-Deck-Operator-Token": "test-director-key"}
+DIRECTOR_HEADERS = {"X-Synth-City-Operator-Token": "test-director-key"}
 
 
 @pytest_asyncio.fixture
@@ -3001,7 +3001,7 @@ async def session_headers(db, owner, *, status="connected"):
                            mailbox_status=status, last_seen_at=datetime.utcnow(),
                            capability_token_hash=agent_mail_service.hash_capability_token(token)))
     await db.commit()
-    return {"X-Deck-Session-Token": token}
+    return {"X-Synth-City-Session-Token": token}
 
 
 async def request_thread(db):
@@ -3027,8 +3027,8 @@ def test_mail_authentication_defaults_to_strict():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["team?sync=false", "messages", "messages/1/thread"])
-@pytest.mark.parametrize("headers", [{}, {"X-Deck-Operator-Token": "wrong"},
-                                     {"X-Deck-Session-Token": "wrong"}])
+@pytest.mark.parametrize("headers", [{}, {"X-Synth-City-Operator-Token": "wrong"},
+                                     {"X-Synth-City-Session-Token": "wrong"}])
 async def test_mail_reads_refuse_missing_or_wrong_credentials(auth_client, endpoint, headers):
     response = await auth_client.get(f"/api/v1/agent-mail/{endpoint}", headers=headers)
     assert response.status_code == 401
@@ -3064,7 +3064,7 @@ async def test_session_reads_only_its_participant_threads(auth_client, db):
 async def test_stale_session_and_mixed_invalid_session_are_refused(auth_client, db):
     sender, _, _, root, _ = await request_thread(db)
     stale = await session_headers(db, sender, status="offline")
-    for headers in (stale, {**DIRECTOR_HEADERS, "X-Deck-Session-Token": "wrong"}):
+    for headers in (stale, {**DIRECTOR_HEADERS, "X-Synth-City-Session-Token": "wrong"}):
         response = await auth_client.get(f"/api/v1/agent-mail/messages/{root.id}/thread", headers=headers)
         assert response.status_code == 401
 
@@ -3099,7 +3099,7 @@ async def test_explicit_session_opt_out_keeps_legacy_reads(auth_client, monkeypa
 @pytest.mark.asyncio
 async def test_actor_creation_requires_director_key(auth_client, db):
     payload = {"actor_key": "test-actor", "display_name": "Test actor"}
-    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}):
+    for headers in ({}, {"X-Synth-City-Operator-Token": "wrong"}):
         response = await auth_client.post("/api/v1/external/agent-mail/actors", headers=headers, json=payload)
         assert response.status_code == 401
         assert await db.scalar(select(MailExternalActor.id)) is None
@@ -3173,8 +3173,8 @@ async def test_session_reads_work_without_a_configured_director_key(auth_client,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("headers", [{"X-Deck-Operator-Token": "wrong"}, {"X-Deck-Session-Token": "wrong"},
-                                     {"X-Deck-Operator-Token": ""}, {"X-Deck-Session-Token": ""}])
+@pytest.mark.parametrize("headers", [{"X-Synth-City-Operator-Token": "wrong"}, {"X-Synth-City-Session-Token": "wrong"},
+                                     {"X-Synth-City-Operator-Token": ""}, {"X-Synth-City-Session-Token": ""}])
 async def test_opt_out_still_refuses_supplied_invalid_credentials(auth_client, monkeypatch, headers):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     for endpoint in ("team?sync=false", "messages", "messages/1/thread"):
@@ -3207,7 +3207,7 @@ async def test_member_metadata_changes_require_the_director(auth_client, db, mon
     owner = await member(db, "metadata-owner")
     session = await session_headers(db, owner)
     endpoint = f"/api/v1/agent-mail/members/{owner.id}"
-    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}, session):
+    for headers in ({}, {"X-Synth-City-Operator-Token": "wrong"}, session):
         response = await auth_client.patch(endpoint, headers=headers, json={"display_name": "Updated owner"})
         assert response.status_code == 401
         await db.refresh(owner)
@@ -3225,19 +3225,19 @@ async def test_install_reads_use_the_director_key_in_strict_mode(auth_client, db
 
     status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
         claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
-        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+        curl_available=False, shim_path="test-shim", python_path="test-python", synth_city_url="http://test")
     monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=status))
     monkeypatch.setattr(install, "get_snippets", lambda: AgentMailSnippets(codex_config_toml="", codex_agents_md=""))
     owner = await member(db, "install-reader")
     session = await session_headers(db, owner)
     endpoint = f"/api/v1/agent-mail/install/{path}"
-    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}, session):
+    for headers in ({}, {"X-Synth-City-Operator-Token": "wrong"}, session):
         response = await auth_client.get(endpoint, headers=headers)
         assert response.status_code == 401
     assert (await auth_client.get(endpoint, headers=DIRECTOR_HEADERS)).status_code == 200
     monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     assert (await auth_client.get(endpoint)).status_code == 200
-    assert (await auth_client.get(endpoint, headers={"X-Deck-Operator-Token": "wrong"})).status_code == 401
+    assert (await auth_client.get(endpoint, headers={"X-Synth-City-Operator-Token": "wrong"})).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -3252,11 +3252,11 @@ async def test_content_hooks_use_the_authenticated_member_or_a_fixed_reminder(au
     monkeypatch.setattr(agent_mail_service, builder, build)
     endpoint = f"/api/v1/agent-mail/hooks/{path}"
     payload = {"session_id": "untrusted-session", "cwd": outsider.repo_path, "team_slot_id": outsider.id}
-    for headers in ({}, {"X-Deck-Session-Token": "wrong"}, DIRECTOR_HEADERS):
+    for headers in ({}, {"X-Synth-City-Session-Token": "wrong"}, DIRECTOR_HEADERS):
         response = await auth_client.post(endpoint, headers=headers, json=payload)
         assert response.status_code == 200
         assert response.json() == {"hookSpecificOutput": {
-            "hookEventName": event, "additionalContext": "Check your Deck inbox."}}
+            "hookEventName": event, "additionalContext": "Check your Albiex Synth City inbox."}}
         build.assert_not_awaited()
     response = await auth_client.post(endpoint, headers=own, json=payload)
     assert response.status_code == 200
@@ -3335,8 +3335,8 @@ async def test_mail_reads_validate_every_supplied_credential(auth_client, db, mo
     monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
     owner = await member(db, "combined-credentials")
     session = await session_headers(db, owner)
-    for headers in ({**session, "X-Deck-Operator-Token": "wrong"},
-                    {**DIRECTOR_HEADERS, "X-Deck-Session-Token": ""}):
+    for headers in ({**session, "X-Synth-City-Operator-Token": "wrong"},
+                    {**DIRECTOR_HEADERS, "X-Synth-City-Session-Token": ""}):
         response = await auth_client.get("/api/v1/agent-mail/messages", headers=headers)
         assert response.status_code == 401
 
@@ -3388,7 +3388,7 @@ async def test_install_writes_require_a_configured_director_key(auth_client, mon
     monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
     status = AgentMailInstallStatus(claude_code_hooks=[], claude_code_hooks_missing=[],
         claude_code_mcp_installed=False, codex_cli_available=False, codex_mcp_installed=False,
-        curl_available=False, shim_path="test-shim", python_path="test-python", deck_url="http://test")
+        curl_available=False, shim_path="test-shim", python_path="test-python", synth_city_url="http://test")
     mutation = AsyncMock(return_value=status)
     monkeypatch.setattr(install, service, mutation)
     endpoint = f"/api/v1/agent-mail/install/{harness}/{action}"
@@ -3399,7 +3399,7 @@ async def test_install_writes_require_a_configured_director_key(auth_client, mon
     assert mutation.await_count == 2
     mutation.reset_mock()
     monkeypatch.setattr(settings, "operator_token", "test-director-key")
-    for headers in ({}, {"X-Deck-Operator-Token": "wrong"}):
+    for headers in ({}, {"X-Synth-City-Operator-Token": "wrong"}):
         refused = await auth_client.post(endpoint, headers=headers, json={"confirmed": True})
         assert refused.status_code == 401
         mutation.assert_not_awaited()
@@ -3417,7 +3417,7 @@ async def test_unconfigured_director_mode_keeps_local_reads_and_edits_available(
     edited = await auth_client.patch(f"/api/v1/agent-mail/members/{owner.id}", json={"display_name": "Updated owner"})
     assert edited.status_code == 200
     assert edited.json()["display_name"] == "Updated owner"
-    invalid = await auth_client.get("/api/v1/agent-mail/messages", headers={"X-Deck-Session-Token": "wrong"})
+    invalid = await auth_client.get("/api/v1/agent-mail/messages", headers={"X-Synth-City-Session-Token": "wrong"})
     assert invalid.status_code == 401
     assert (await auth_client.get("/api/v1/agent-mail/agent/inbox")).status_code == 401
 
@@ -3426,8 +3426,8 @@ async def test_unconfigured_director_mode_keeps_local_reads_and_edits_available(
 async def test_public_authentication_status_is_one_live_boolean(auth_client, monkeypatch):
     for key in ("", "synthetic-mode-key", ""):
         monkeypatch.setattr(settings, "operator_token", key)
-        for headers in ({}, {"X-Deck-Operator-Token": "wrong"},
-                        {"X-Deck-Session-Token": "wrong"}, {"Authorization": "Bearer wrong"}):
+        for headers in ({}, {"X-Synth-City-Operator-Token": "wrong"},
+                        {"X-Synth-City-Session-Token": "wrong"}, {"Authorization": "Bearer wrong"}):
             response = await auth_client.get("/api/v1/agent-mail/authentication-status", headers=headers)
             assert response.status_code == 200
             assert response.json() == {"director_key_configured": bool(key)}

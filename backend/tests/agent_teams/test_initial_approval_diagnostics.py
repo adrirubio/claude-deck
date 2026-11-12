@@ -132,8 +132,8 @@ async def test_history_is_authenticated_bounded_and_reports_delivery(review_db):
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://review") as client:
             path = f"/api/v1/agent-teams/github-work-items/{f.item_id}/approval-requests"
-            operator = {"X-Deck-Operator-Token": "review-operator"}
-            member = {"X-Deck-Session-Token": f.tokens[1]}
+            operator = {"X-Synth-City-Operator-Token": "review-operator"}
+            member = {"X-Synth-City-Session-Token": f.tokens[1]}
             assert (await client.get(path)).status_code == 401
             history = await client.get(path, headers=member)
             assert history.status_code == 200, history.text

@@ -1,6 +1,6 @@
 # API Overview
 
-Claude Deck exposes a RESTful API under `/api/v1/`. The frontend communicates with the backend entirely through this API.
+Albiex Synth City exposes a RESTful API under `/api/v1/`. The frontend communicates with the backend entirely through this API.
 
 ## Base URL
 

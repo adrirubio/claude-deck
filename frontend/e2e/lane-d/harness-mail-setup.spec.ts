@@ -31,7 +31,7 @@ async function failWrites(page: Page, guard: Guard): Promise<string[]> {
 
 async function openHarness(page: Page, harness: string) {
   if (page.url() === 'about:blank'
-    || !await page.evaluate(() => sessionStorage.getItem('claude-deck.agent-teams.operator-token'))) {
+    || !await page.evaluate(() => sessionStorage.getItem('albiex-synth-city.agent-teams.operator-token'))) {
     await page.goto('/agent-mail')
     await enterDirectorKey(page)
   }

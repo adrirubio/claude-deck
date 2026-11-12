@@ -719,8 +719,8 @@ async def test_api_requires_current_authenticated_leader_and_uses_private_read_o
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
             assert (await client.post(path, json=body)).status_code == 401
-            assert (await client.post(path, json=body, headers={"X-Deck-Operator-Token":"fixture-operator"})).status_code == 401
-            accepted = await client.post(path, json=body, headers={"X-Deck-Session-Token":"fixture-session-token"})
+            assert (await client.post(path, json=body, headers={"X-Synth-City-Operator-Token":"fixture-operator"})).status_code == 401
+            accepted = await client.post(path, json=body, headers={"X-Synth-City-Session-Token":"fixture-session-token"})
             assert accepted.status_code == 200, accepted.text
             assert accepted.headers["cache-control"] == "no-store"
             assert "followup_token" not in accepted.text

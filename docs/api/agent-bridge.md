@@ -1,6 +1,6 @@
 # Agent Bridge API
 
-Provider-aware live terminal monitoring for Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI tmux sessions.
+Provider-aware live terminal monitoring for Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI tmux sessions in Albiex Synth City.
 
 ## Endpoints
 
@@ -65,7 +65,7 @@ Returns a captured pane preview.
 GET /api/v1/agent-bridge/token?target={target}&purpose=readonly
 ```
 
-Returns a 30-second, single-use token bound to one exact tmux target and purpose. `purpose=readonly` is available for terminal viewing; `purpose=attachment` is used for attachment routes. `purpose=interactive` requires `X-Deck-Operator-Token` and permits terminal input only for that target. Agent session tokens do not authorize interactive terminal grants. An attachment or read-only token cannot be upgraded by changing the WebSocket query or sending a mode control frame.
+Returns a 30-second, single-use token bound to one exact tmux target and purpose. `purpose=readonly` is available for terminal viewing; `purpose=attachment` is used for attachment routes. `purpose=interactive` requires `X-Synth-City-Operator-Token` and permits terminal input only for that target. Agent session tokens do not authorize interactive terminal grants. An attachment or read-only token cannot be upgraded by changing the WebSocket query or sending a mode control frame.
 
 ### Attach Terminal
 
@@ -77,14 +77,14 @@ Send the issued token as the single WebSocket subprotocol `deck-terminal.{token}
 
 ### Image Attachments
 
-Use image attachments to upload a screenshot or mockup to the Claude Deck host, then paste a file-path prompt into a live tmux session.
+Use image attachments to upload a screenshot or mockup to the Albiex Synth City host, then paste a file-path prompt into a live tmux session.
 
-All attachment endpoints require a fresh token from `GET /api/v1/agent-bridge/token?target={target}&purpose=attachment` in the `X-Claude-Deck-Terminal-Token` header. The paste endpoint also requires an operator token or a current authenticated Agent Mail MCP session bound to that exact live pane. An attachment token alone cannot send input.
+All attachment endpoints require a fresh token from `GET /api/v1/agent-bridge/token?target={target}&purpose=attachment` in the `X-Synth-City-Terminal-Token` header. The paste endpoint also requires an operator token or a current authenticated Agent Mail MCP session bound to that exact live pane. An attachment token alone cannot send input.
 
 ```http
 POST /api/v1/agent-bridge/sessions/{target}/attachments
 Content-Type: multipart/form-data
-X-Claude-Deck-Terminal-Token: {token}
+X-Synth-City-Terminal-Token: {token}
 ```
 
 Multipart fields:
@@ -100,14 +100,14 @@ Multipart fields:
   "provider": "codex-cli",
   "mime_type": "image/png",
   "size_bytes": 482103,
-  "agent_path": "/home/user/.claude-registry/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png",
-  "prompt_text": "Please inspect this image: /home/user/.claude-registry/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png"
+  "agent_path": "/home/user/.albiex-synth-city/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png",
+  "prompt_text": "Please inspect this image: /home/user/.albiex-synth-city/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png"
 }
 ```
 
 ```http
 POST /api/v1/agent-bridge/sessions/{target}/attachments/{attachment_id}/paste
-X-Claude-Deck-Terminal-Token: {token}
+X-Synth-City-Terminal-Token: {token}
 ```
 
 ```json
@@ -126,7 +126,7 @@ GET /api/v1/agent-bridge/sessions/{target}/attachments
 DELETE /api/v1/agent-bridge/sessions/{target}/attachments/{attachment_id}
 ```
 
-Attachments are stored by default under `~/.claude-registry/bridge-attachments`. In remote deployments, this path is on the Claude Deck host and must be readable by the tmux agent process.
+Attachments are stored by default under `~/.albiex-synth-city/bridge-attachments`. In remote deployments, this path is on the Synth City host and must be readable by the tmux agent process.
 
 Configuration:
 
@@ -138,9 +138,9 @@ Configuration:
 
 Agentic interfaces can use the MCP shim tools:
 
-- `deck_attach_image_to_bridge_session(target, file_path, submit, prompt)`
-- `deck_list_bridge_attachments(target)`
-- `deck_paste_bridge_attachment(target, attachment_id, submit)`
+- `synth_city_attach_image_to_bridge_session(target, file_path, submit, prompt)`
+- `synth_city_list_bridge_attachments(target)`
+- `synth_city_paste_bridge_attachment(target, attachment_id, submit)`
 
 MCP tools intentionally omit `require_interactive_relay`; MCP callers are trusted agentic callers and may paste into a live tmux target without an attached browser relay. `file_path` is resolved on the MCP host and may point to any image readable by that trusted MCP process; the backend validates the image and copies it into the attachment store before generating the agent-visible prompt.
 

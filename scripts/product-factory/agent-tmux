@@ -1,5 +1,143 @@
 #!/usr/bin/python3
-import os,sys,pwd
-u=pwd.getpwnam('deckproduct')
-env={'HOME':u.pw_dir,'USER':u.pw_name,'LOGNAME':u.pw_name,'PATH':'/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin','LANG':'C.UTF-8','TERM':os.environ.get('TERM','xterm-256color'),'CLAUDE_DECK_URL':'http://127.0.0.1:8011','CLAUDE_DECK_PROVIDER':'codex-cli'}
-os.execve('/usr/bin/tmux',['tmux','-S','/home/deckproduct/.local/state/claude-deck-product/tmux.sock',*sys.argv[1:]],env)
+"""tmux wrapper for agent panes.
+
+By default every call is pinned to the live agent server with a sanitized
+environment. A caller that names a non-live socket (-L/-S) keeps that socket
+and its own environment, so tests can run disposable servers; any call that
+reaches the live server, however the socket is spelled, gets the sanitized
+environment. kill-server aimed at the live server is refused: a test
+teardown once killed every agent session that way.
+"""
+import os
+import pwd
+import sys
+
+TMUX = "/usr/bin/tmux"
+LIVE_SOCKET = "/home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock"
+# Deny-only safety boundary for the factory that still runs during cutover.
+# This is never selected as a default or a compatibility launch target.
+_LEGACY_LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
+_ARG_OPTION_CHARS = frozenset("cfTLS")
+_SEPARATORS = (";", "\\;")
+
+
+def sanitized_env():
+    u = pwd.getpwnam("deckproduct")
+    return {
+        "HOME": u.pw_dir,
+        "USER": u.pw_name,
+        "LOGNAME": u.pw_name,
+        "PATH": "/opt/albiex-synth-city-product/agent-bin:/opt/albiex-synth-city-product/tools:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "TERM": os.environ.get("TERM", "xterm-256color"),
+        "SYNTH_CITY_URL": "http://127.0.0.1:8011",
+        "SYNTH_CITY_PROVIDER": "codex-cli",
+    }
+
+
+def _global_options_end(argv):
+    """Index of the first command token; also return the effective socket.
+
+    Global options follow tmux getopt rules: short options may be grouped
+    (``-vf``), an option that takes a value (``-c -f -T -L -S``) consumes
+    the rest of its token or the following token, and ``--`` ends option
+    parsing. The socket is ("-S", path) when any -S was supplied (the last
+    one; tmux keeps the path and the -L label separately and uses the path
+    whenever present), else ("-L", name) from the last -L, else None.
+    """
+    path = None
+    label = None
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            i += 1
+            break
+        if len(tok) < 2 or not tok.startswith("-") or tok == "-":
+            break
+        consumed_next = False
+        for pos, char in enumerate(tok[1:]):
+            if char not in _ARG_OPTION_CHARS:
+                continue
+            rest = tok[2 + pos:]
+            if rest:
+                value = rest
+            elif i + 1 < len(argv):
+                value = argv[i + 1]
+                consumed_next = True
+            else:
+                value = None
+            if char == "S":
+                path = value
+            elif char == "L":
+                label = value
+            break
+        i += 2 if consumed_next else 1
+    if path is not None:
+        socket = ("-S", path)
+    elif label is not None:
+        socket = ("-L", label)
+    else:
+        socket = None
+    return i, socket
+
+
+def caller_socket(argv):
+    return _global_options_end(argv)[1]
+
+
+def _ends_command(tok):
+    return tok.endswith(";") and not tok.endswith("\\;")
+
+
+def command_names(argv):
+    """First token of each ';'-separated command; arguments never count.
+
+    A standalone ';' or '\\;' token separates commands, and so does an
+    unescaped trailing ';' on a token (tmux strips it and ends the
+    command there), including on the first command.
+    """
+    start, _socket = _global_options_end(argv)
+    names = []
+    expect_command = True
+    for tok in argv[start:]:
+        if tok in _SEPARATORS:
+            expect_command = True
+        elif expect_command:
+            if _ends_command(tok):
+                if tok[:-1]:
+                    names.append(tok[:-1])
+                expect_command = True
+            else:
+                names.append(tok)
+                expect_command = False
+        elif _ends_command(tok):
+            expect_command = True
+    return names
+
+
+def targets_live(socket, *, deny_legacy=False):
+    if socket is None:
+        return True
+    kind, value = socket
+    targets = (LIVE_SOCKET, _LEGACY_LIVE_SOCKET) if deny_legacy else (LIVE_SOCKET,)
+    return kind == "-S" and any(os.path.realpath(value) == os.path.realpath(target) for target in targets)
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    socket = caller_socket(args)
+    if "kill-server" in command_names(args) and targets_live(socket, deny_legacy=True):
+        print("agent-tmux: refusing kill-server against the live agent server", file=sys.stderr)
+        return 1
+    if socket is not None and not targets_live(socket):
+        os.execve(TMUX, ["tmux", *args], dict(os.environ))
+    elif socket is not None:
+        os.execve(TMUX, ["tmux", *args], sanitized_env())
+    else:
+        os.execve(TMUX, ["tmux", "-S", LIVE_SOCKET, *args], sanitized_env())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

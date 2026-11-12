@@ -6,7 +6,7 @@ if [[ $# -ne 4 ]]; then
   exit 64
 fi
 
-deck_base_url=${1%/}
+synth_city_base_url=${1%/}
 preset_id=$2
 scope_id=$3
 work_item_id=$4
@@ -28,12 +28,12 @@ get_json() {
     --header 'Accept: application/json' "$1"
 }
 
-health=$(get_json "$deck_base_url/health")
-preset=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id")
-scopes=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id/github-scopes")
-items=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id/github-work-items?limit=200")
-team=$(get_json "$deck_base_url/api/v1/agent-mail/team?sync=false")
-bridge_sessions=$(get_json "$deck_base_url/api/v1/agent-bridge/sessions")
+health=$(get_json "$synth_city_base_url/health")
+preset=$(get_json "$synth_city_base_url/api/v1/agent-teams/presets/$preset_id")
+scopes=$(get_json "$synth_city_base_url/api/v1/agent-teams/presets/$preset_id/github-scopes")
+items=$(get_json "$synth_city_base_url/api/v1/agent-teams/presets/$preset_id/github-work-items?limit=200")
+team=$(get_json "$synth_city_base_url/api/v1/agent-mail/team?sync=false")
+bridge_sessions=$(get_json "$synth_city_base_url/api/v1/agent-bridge/sessions")
 
 scope=$(jq -ce --argjson id "$scope_id" '.scopes[] | select(.id == $id)' <<<"$scopes") || {
   echo "scope $scope_id is not attached to preset $preset_id" >&2
@@ -187,8 +187,8 @@ verify_bridge_wake_target "$owner_slot_id" "$owner_wake_target" owner
 verify_bridge_wake_target "$leader_slot_id" "$leader_wake_target" Leader
 
 jq -n \
-  --arg deck_status "$(jq -r '.status' <<<"$health")" \
-  --arg deck_version "$(jq -r '.version // "unknown"' <<<"$health")" \
+  --arg synth_city_status "$(jq -r '.status' <<<"$health")" \
+  --arg synth_city_version "$(jq -r '.version // "unknown"' <<<"$health")" \
   --argjson preset_id "$preset_id" \
   --argjson scope_id "$scope_id" \
   --argjson work_item_id "$work_item_id" \
@@ -214,7 +214,7 @@ jq -n \
   --argjson max_paths "$(jq '.max_scope_paths' <<<"$scope")" \
   --argjson max_commands "$(jq '.max_scope_commands' <<<"$scope")" \
   '{
-    deck: {status: $deck_status, version: $deck_version},
+    deck: {status: $synth_city_status, version: $synth_city_version},
     preset: {id: $preset_id, autonomy_enabled: false},
     scope: {
       id: $scope_id,

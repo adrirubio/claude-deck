@@ -97,7 +97,7 @@ fi
 
 # Update the backend package entry in backend/uv.lock
 if [ -f "$UV_LOCK" ]; then
-    sed -i.bak '/^name = "claude-code-registry-backend"$/{n;s/^version = "[^"]*"/version = "'"$VERSION"'"/;}' "$UV_LOCK" && rm -f "$UV_LOCK.bak"
+    sed -i.bak '/^name = "albiex-synth-city-backend"$/{n;s/^version = "[^"]*"/version = "'"$VERSION"'"/;}' "$UV_LOCK" && rm -f "$UV_LOCK.bak"
     log_info "Updated $UV_LOCK to version $VERSION"
 else
     log_warn "File not found: $UV_LOCK"
@@ -110,8 +110,6 @@ if [ -f "$APP_CONFIG" ]; then
 else
     log_warn "File not found: $APP_CONFIG"
 fi
-
-log_info "Version sync complete: v$VERSION"
 
 # Display current versions for verification
 echo ""
@@ -127,8 +125,30 @@ if [ -f "$PACKAGE_LOCK" ] && command -v jq &> /dev/null; then
     echo "  package-lock:    $(jq -r '.version' "$PACKAGE_LOCK")"
 fi
 if [ -f "$UV_LOCK" ]; then
-    echo "  uv.lock:         $(grep -A1 '^name = "claude-code-registry-backend"$' "$UV_LOCK" | sed -n 's/^version = "\(.*\)"/\1/p')"
+    # Verify independently of the writer. Missing/duplicate roots or a write
+    # that did not take effect must not be announced as a completed sync.
+    UV_LOCK_VERSION=$(awk '
+        $0 == "name = \"albiex-synth-city-backend\"" {
+            matches++
+            if (getline <= 0 || $0 !~ /^version = "[^"]*"$/) { invalid = 1; next }
+            value = $0
+            sub(/^version = "/, "", value)
+            sub(/"$/, "", value)
+        }
+        END {
+            if (matches != 1 || invalid) exit 1
+            print value
+        }
+    ' "$UV_LOCK") || { log_error "Expected one readable albiex-synth-city-backend version in $UV_LOCK"; exit 1; }
+    if [ "$UV_LOCK_VERSION" != "$VERSION" ]; then
+        log_error "$UV_LOCK has version $UV_LOCK_VERSION, expected $VERSION"
+        exit 1
+    fi
+    echo "  uv.lock:         $UV_LOCK_VERSION"
 fi
+
 if [ -f "$APP_CONFIG" ]; then
     echo "  config.py:       $(sed -n 's/^    app_version: str = "\(.*\)"/\1/p' "$APP_CONFIG")"
 fi
+
+log_info "Version sync complete: v$VERSION"

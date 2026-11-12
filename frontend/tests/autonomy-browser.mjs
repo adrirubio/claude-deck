@@ -177,7 +177,7 @@ try {
   for(const theme of ['light','dark'])for(const width of [1440,768,360]){
     await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
     firstRun=false;
-    await send('Page.addScriptToEvaluateOnNewDocument',{source:`localStorage.setItem('theme',${JSON.stringify(theme)});sessionStorage.setItem('claude-deck.agent-teams.operator-token','synthetic-browser-only');`});
+    await send('Page.addScriptToEvaluateOnNewDocument',{source:`localStorage.setItem('theme',${JSON.stringify(theme)});sessionStorage.setItem('albiex-synth-city.agent-teams.operator-token','synthetic-browser-only');`});
     await send('Page.navigate',{url:`http://127.0.0.1:${port}/teams/1?tab=autonomy`});
     await waitFor('Boolean(document.querySelector("table tbody tr"))');
     await capture('populated',width,theme);

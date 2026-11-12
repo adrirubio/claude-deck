@@ -4,7 +4,7 @@
 Use `/api/v1/agent-bridge/*` for new provider-aware clients. `/api/v1/cc-bridge/*` remains for compatibility with Claude Code-only integrations.
 :::
 
-Monitor and manage live Claude Code terminal sessions.
+Monitor and manage live Claude Code terminal sessions in Albiex Synth City.
 
 ## REST Endpoints
 
@@ -30,7 +30,7 @@ Returns a text snapshot of the terminal pane.
 GET /api/v1/cc-bridge/token?target={target}&purpose=readonly
 ```
 
-Returns a 30-second, single-use token for one exact tmux target and purpose. `purpose=interactive` requires `X-Deck-Operator-Token`; agent session tokens do not grant interactive access. Read-only tokens cannot be upgraded by a WebSocket query or mode frame. The modern Agent Bridge uses the same policy.
+Returns a 30-second, single-use token for one exact tmux target and purpose. `purpose=interactive` requires `X-Synth-City-Operator-Token`; agent session tokens do not grant interactive access. Read-only tokens cannot be upgraded by a WebSocket query or mode frame. The modern Agent Bridge uses the same policy.
 
 ### Spawn Session
 

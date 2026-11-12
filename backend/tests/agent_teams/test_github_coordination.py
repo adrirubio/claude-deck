@@ -411,7 +411,7 @@ async def test_api_requires_operator_for_policy_and_exact_leader_for_receipt(db,
         yield db
     app.dependency_overrides[get_db] = fixture_db
     path = f"/api/v1/agent-teams/github-scopes/{team.scope_id}/coordination"
-    leader_headers = {"X-Deck-Session-Token": "fixture-session-token"}
+    leader_headers = {"X-Synth-City-Session-Token": "fixture-session-token"}
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
             policy = {"expected_version": 1, "enabled": True, "issue_numbers": [7, 8]}
@@ -422,7 +422,7 @@ async def test_api_requires_operator_for_policy_and_exact_leader_for_receipt(db,
             payload = report(row).model_dump()
             assert (await client.post(path + "-assessments", json=payload)).status_code == 401
             assert (await client.post(path + "-assessments", json=payload,
-                headers={"X-Deck-Operator-Token": "fixture-operator-token"})).status_code == 401
+                headers={"X-Synth-City-Operator-Token": "fixture-operator-token"})).status_code == 401
             result = await client.post(path + "-assessments", json=payload, headers=leader_headers)
             assert result.status_code == 200, result.text
             assert result.json()["eligible_count"] == 1

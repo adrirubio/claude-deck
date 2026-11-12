@@ -66,7 +66,7 @@ _HUMAN_MERGE_NOTE_PREFIXES = (
     "Auto-merge retry budget exhausted",
 )
 _MERGE_TRANSIENT_STATUS_CODES = {405, 409, 422}
-# Escalations a late PR legitimately resolves: the agent said it was stuck, or Deck
+# Escalations a late PR legitimately resolves: the agent said it was stuck, or Albiex Synth City
 # inferred it from a timer. Anything not listed stays rejected by default.
 _PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset(
     {
@@ -568,7 +568,7 @@ class GithubVerificationService:
             f"Closes #{item.issue_number}\n\n"
             f"{item.issue_title}\n\n"
             "---\n"
-            "Claude Deck provenance\n"
+            "Albiex Synth City provenance\n"
             f"- Work item: {item.id}\n"
             f"- Owner slot: {item.owner_slot_id}\n"
             f"- Dispatch nonce: {item.dispatch_nonce}\n"
@@ -656,7 +656,7 @@ class GithubVerificationService:
         )
         verdict = self._classify_pull(pull)
         if verdict is None:
-            raise ValueError("GitHub returned a pull request state Deck cannot classify")
+            raise ValueError("GitHub returned a pull request state Albiex Synth City cannot classify")
         if verdict == "closed_unmerged":
             await github_dispatch_service.escalate_without_notification(
                 db,
@@ -1712,7 +1712,7 @@ class GithubVerificationService:
             return
         verdict = self._classify_pull(pull)
         if verdict is None:
-            note = f"PR #{item.pr_number} returned a state Deck cannot classify."
+            note = f"PR #{item.pr_number} returned a state Albiex Synth City cannot classify."
             await self._record_product_verification_failure(
                 db,
                 scope,
@@ -1880,7 +1880,7 @@ class GithubVerificationService:
             return
         verdict = self._classify_pull(pull)
         if verdict is None:
-            note = f"PR #{item.pr_number} returned a state Deck cannot classify."
+            note = f"PR #{item.pr_number} returned a state Albiex Synth City cannot classify."
             await self._record_failed_verification_attempt(
                 db,
                 scope,
@@ -2510,7 +2510,7 @@ class GithubVerificationService:
         item.continuation_nudged_at = None
         item.status_note = (
             "The PR head changed after continuation completion; submit the current "
-            "head again so Deck can revalidate the approved paths."
+            "head again so Albiex Synth City can revalidate the approved paths."
         )
         item.updated_at = now
         await github_dispatch_service.notify_owner(
@@ -2520,7 +2520,7 @@ class GithubVerificationService:
             body_markdown=(
                 f"PR #{item.pr_number} changed after scope revision "
                 f"{revision.revision} was submitted. Re-run the approved checks and "
-                "report continuation_completed for the current head; Deck will "
+                "report continuation_completed for the current head; Albiex Synth City will "
                 "revalidate the exact approved paths before verification resumes."
             ),
             payload={

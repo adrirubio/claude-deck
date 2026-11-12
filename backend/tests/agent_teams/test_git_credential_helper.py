@@ -39,7 +39,7 @@ def test_get_posts_git_fields_and_prints_only_credentials(monkeypatch, capsys):
     )
 
     result = git_credential_helper.main(
-        ["--deck-url", "http://127.0.0.1:9123", "--lease", "lease-secret", "get"]
+        ["--synth-city-url", "http://127.0.0.1:9123", "--lease", "lease-secret", "get"]
     )
 
     assert result == 0
@@ -66,7 +66,7 @@ def test_non_get_operation_is_a_noop(monkeypatch, capsys):
     monkeypatch.setattr(git_credential_helper.sys, "stdin", io.StringIO(""))
 
     assert git_credential_helper.main(
-        ["--deck-url", "http://127.0.0.1:8000", "--lease", "secret", "store"]
+        ["--synth-city-url", "http://127.0.0.1:8000", "--lease", "secret", "store"]
     ) == 0
     assert capsys.readouterr().out == ""
 
@@ -84,7 +84,7 @@ def test_refusal_prints_no_password_or_secret(monkeypatch, capsys):
 
     assert git_credential_helper.main(
         [
-            "--deck-url",
+            "--synth-city-url",
             "http://127.0.0.1:8000",
             "--lease",
             "do-not-print-this",
@@ -106,7 +106,7 @@ def test_malformed_json_refuses_without_response_echo(monkeypatch, capsys):
     monkeypatch.setattr(git_credential_helper.sys, "stdin", io.StringIO("path=x\n"))
 
     assert git_credential_helper.main(
-        ["--deck-url", "http://127.0.0.1:8000", "--lease", "secret", "get"]
+        ["--synth-city-url", "http://127.0.0.1:8000", "--lease", "secret", "get"]
     ) == 1
     assert capsys.readouterr().out == ""
 

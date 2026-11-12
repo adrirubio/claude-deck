@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Start one isolated Deck instance for the E2E journeys.
+# Start one isolated Albiex Synth City instance for the E2E journeys.
 #
 # The instance has its own temporary root: HOME, database, a private tmux
 # server and fake harness binaries. The seed, the backend and tmux run with an
 # allowlisted environment (env -i). The instance never reads the checkout's
-# .env, never starts a real agent CLI, never contacts GitHub or another Deck,
+# .env, never starts a real agent CLI, never contacts GitHub or another Albiex Synth City,
 # and never signals processes outside its own tmux server.
 #
 # It refuses to start (exit 2) when:
@@ -12,7 +12,7 @@
 #     script that forces a shared team socket);
 #   - the private tmux socket is not inside the instance root, or the server
 #     is not new, or the server does not use the instance HOME;
-#   - CLAUDE_DECK_URL, or a Deck Mail token variable, names another Deck;
+#   - SYNTH_CITY_URL, or an Albiex Synth City Mail token variable, names another Albiex Synth City;
 #   - the instance HOME holds an Agent Mail MCP configuration;
 #   - a harness name (claude, codex, copilot, opencode, pi, muse), gh or tmux does
 #     not resolve to the instance's fake binaries.
@@ -26,7 +26,7 @@
 #   E2E_SKIP_BUILD  Set to 1 to reuse an existing frontend/dist.
 #   E2E_KEEP_ROOT   Set to 1 to keep the temporary root after exit.
 #   E2E_TMUX        The tmux executable (default: the first tmux on PATH).
-#   E2E_NO_TMUX     Set to 1 to run without a tmux server. Deck then sees no
+#   E2E_NO_TMUX     Set to 1 to run without a tmux server. Albiex Synth City then sees no
 #                   live sessions; journeys that need them skip. CI never sets it.
 #   E2E_SEED_NOW    ISO UTC time the seed counts from (default: this hour).
 #   PYTHON          Python with the backend requirements (default: backend/venv).
@@ -45,14 +45,14 @@ refuse() {
 
 # --- Refusals that need no process -------------------------------------------
 
-# Another Deck (for example production Agent Mail) must not be reachable
+# Another Albiex Synth City (for example production Agent Mail) must not be reachable
 # through the caller's environment.
-if [[ -n "${CLAUDE_DECK_URL:-}" && "$CLAUDE_DECK_URL" != "$INSTANCE_URL" ]]; then
-  refuse "CLAUDE_DECK_URL names another Deck; unset it to run the E2E instance"
+if [[ -n "${SYNTH_CITY_URL:-}" && "$SYNTH_CITY_URL" != "$INSTANCE_URL" ]]; then
+  refuse "SYNTH_CITY_URL names another Albiex Synth City; unset it to run the E2E instance"
 fi
 for var in $(compgen -e); do
-  if [[ "$var" == CLAUDE_DECK_* && "$var" == *TOKEN* ]]; then
-    refuse "$var is set; a Deck Mail credential must not reach the E2E instance"
+  if [[ "$var" == SYNTH_CITY_* && "$var" == *TOKEN* ]]; then
+    refuse "$var is set; an Albiex Synth City Mail credential must not reach the E2E instance"
   fi
 done
 
@@ -126,8 +126,8 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-# An Agent Mail MCP configuration in HOME would connect fake agents to a Deck.
-if grep -rqsE 'claude-deck-mail|deck_check_inbox|/api/v1/agent-mail' "$E2E_HOME"; then
+# An Agent Mail MCP configuration in HOME would connect fake agents to an Albiex Synth City.
+if grep -rqsE 'claude-deck-mail|albiex-synth-city-mail|synth_city_check_inbox|/api/v1/agent-mail' "$E2E_HOME"; then
   refuse "the instance HOME holds an Agent Mail MCP configuration"
 fi
 
@@ -138,17 +138,17 @@ for name in claude codex copilot opencode pi muse; do
 done
 cat >"$FAKE_BIN/gh" <<'EOF'
 #!/bin/sh
-echo "gh is disabled on the Deck E2E instance" >&2
+echo "gh is disabled on the Albiex Synth City E2E instance" >&2
 exit 1
 EOF
 if [[ "$NO_TMUX" == 1 ]]; then
   cat >"$FAKE_BIN/tmux" <<'EOF'
 #!/bin/sh
-echo "tmux is disabled on this Deck E2E instance (E2E_NO_TMUX=1)" >&2
+echo "tmux is disabled on this Albiex Synth City E2E instance (E2E_NO_TMUX=1)" >&2
 exit 1
 EOF
 else
-  # Every tmux call (Deck and the seed) goes to the private socket.
+  # Every tmux call (Albiex Synth City and the seed) goes to the private socket.
   cat >"$FAKE_BIN/tmux" <<EOF
 #!/bin/sh
 exec "$TMUX_BIN" -S "$TMUX_SOCKET" "\$@"
@@ -166,7 +166,7 @@ CLEAN_ENV=(
   "TMPDIR=$ROOT" "TMUX_TMPDIR=$TMUX_DIR"
   "XDG_CONFIG_HOME=$E2E_HOME/.config" "XDG_DATA_HOME=$E2E_HOME/.local/share"
   "XDG_CACHE_HOME=$E2E_HOME/.cache" "XDG_STATE_HOME=$E2E_HOME/.local/state"
-  "CLAUDE_DECK_URL=$INSTANCE_URL"
+  "SYNTH_CITY_URL=$INSTANCE_URL"
   "E2E_NO_TMUX=$NO_TMUX"
 )
 if [[ -n "${E2E_SEED_NOW:-}" ]]; then
@@ -198,8 +198,8 @@ else
     || refuse "the tmux server has other sessions; it is not private"
   [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g HOME 2>/dev/null || true)" == "HOME=$E2E_HOME" ]] \
     || refuse "the tmux server HOME is outside the instance root"
-  [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g CLAUDE_DECK_URL 2>/dev/null || true)" == "CLAUDE_DECK_URL=$INSTANCE_URL" ]] \
-    || refuse "the tmux server names another Deck"
+  [[ "$(run_clean "$FAKE_BIN/tmux" show-environment -g SYNTH_CITY_URL 2>/dev/null || true)" == "SYNTH_CITY_URL=$INSTANCE_URL" ]] \
+    || refuse "the tmux server names another Albiex Synth City"
   run_clean "$FAKE_BIN/tmux" set-option -g exit-empty off \; kill-session -t '=deck-e2e-probe'
   CLEAN_ENV+=("E2E_TMUX_PROVEN_SOCKET=$TMUX_SOCKET")
 fi

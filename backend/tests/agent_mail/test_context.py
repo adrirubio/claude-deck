@@ -54,7 +54,7 @@ async def test_session_start_context_includes_identity_team_and_inbox(db, svc):
     assert "Owns the API" in ctx
     assert "frontend-agent" in ctx
     assert "1 pending request" in ctx
-    assert "deck_check_inbox" in ctx
+    assert "synth_city_check_inbox" in ctx
 
 
 @pytest.mark.asyncio
@@ -80,4 +80,4 @@ async def test_prompt_submit_context_mentions_pending(db, svc):
     ctx = await svc.build_prompt_submit_context(db, me.id)
     assert ctx is not None
     assert "1 pending request" in ctx
-    assert "deck_check_inbox" in ctx
+    assert "synth_city_check_inbox" in ctx

@@ -169,7 +169,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const current = Boolean(matches && !error && (clock < expiry || (loading && clock < expiry + REFRESH_GRACE_MS)))
   const publication = matches ? data?.publication : null
   const publicationCurrent = current && publication?.state === 'current'
-  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Deck', none: 'None' }
+  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Synth City', none: 'None' }
   const branchUrl = item.dispatch_head_ref ? `https://github.com/${encodeURIComponent(item.repo_owner)}/${encodeURIComponent(item.repo_name)}/tree/${item.dispatch_head_ref.split('/').map(encodeURIComponent).join('/')}` : null
   let summary = 'Publication status unavailable'
   if (publicationCurrent && publication?.relation === 'synchronized') summary = 'Local HEAD matches the published SHA'
@@ -214,7 +214,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
             ['Untracked files', publication?.untracked_files ?? 'Unavailable'],
             ['Source checked', date(publication?.observed_at)],
             ['Checkpoint first seen', date(publication?.publication_first_observed_at)],
-            ['Last check head recorded by Deck', data.last_check_head ?? 'Unavailable'],
+            ['Last check head recorded by Synth City', data.last_check_head ?? 'Unavailable'],
             ['Next expected controller poll', date(data.next_poll_expected_at)],
           ].map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-all">{value}</dd></div>)}
         </dl>

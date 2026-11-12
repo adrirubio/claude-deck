@@ -100,7 +100,7 @@ describe('RepositorySettings', () => {
     render(<RepositorySettings {...settingsProps()} />)
     await user.click(screen.getByRole('button', { name: EDIT }))
     expect(screen.getByText('Build instructions for the agent (optional)')).toBeInTheDocument()
-    expect(screen.getByText(/Deck does not run a build/)).toBeInTheDocument()
+    expect(screen.getByText(/Synth City does not run a build/)).toBeInTheDocument()
     expect(screen.getByText(/may include \{issue_number\}/)).toBeInTheDocument()
   })
 

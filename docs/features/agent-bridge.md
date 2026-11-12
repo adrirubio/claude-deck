@@ -83,7 +83,7 @@ Claude Code and Codex support a launch-time platform choice:
 - Claude Code: Anthropic or Amazon Bedrock
 - Codex CLI: OpenAI or Amazon Bedrock
 
-For Codex Bedrock sessions, Deck passes a per-session Codex config override for `model_provider = "amazon-bedrock"`. Optional AWS region and profile values are passed as process environment variables. Deck does not collect AWS secret keys or Bedrock bearer tokens; Codex resolves credentials from the existing shell environment or AWS SDK credential chain.
+For Codex Bedrock sessions, Albiex Synth City passes a per-session Codex config override for `model_provider = "amazon-bedrock"`. Optional AWS region and profile values are passed as process environment variables. Synth City does not collect AWS secret keys or Bedrock bearer tokens; Codex resolves credentials from the existing shell environment or AWS SDK credential chain.
 
 ## Compatibility
 

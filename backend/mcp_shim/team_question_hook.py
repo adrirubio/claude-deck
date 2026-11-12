@@ -1,11 +1,17 @@
-"""Refuse interactive questions in unattended Deck team sessions."""
+"""Refuse interactive questions in unattended Albiex Synth City team sessions."""
 import json
 import os
 import sys
 
+try:
+    from mcp_shim.environment_warning import warn_legacy_environment
+except ModuleNotFoundError:
+    from environment_warning import warn_legacy_environment
+
 
 def main() -> int:
-    marker = os.environ.get("CLAUDE_DECK_TEAM_SLOT_ID", "")
+    warn_legacy_environment()
+    marker = os.environ.get("SYNTH_CITY_TEAM_SLOT_ID", "")
     if not marker.isascii() or not marker.isdecimal() or int(marker) <= 0:
         return 0
     try:
@@ -18,7 +24,7 @@ def main() -> int:
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
         "permissionDecisionReason": (
-            "Deck team sessions cannot use interactive question prompts. "
+            "Albiex Synth City team sessions cannot use interactive question prompts. "
             "Use Agent Mail. Ask the Leader about assignments, plans, and sequencing. "
             "Ask the Supervisor about incidents, gates, harnesses, workspaces, and stalls. "
             "Use an operator action record for a retained operator decision. "

@@ -1,6 +1,9 @@
-const OPERATOR_TOKEN_KEY = 'claude-deck.agent-teams.operator-token'
+import { clearSessionStorageValue, migrateBrowserStorage, PRODUCT_STORAGE_KEYS } from '@/lib/browserStorageMigration'
+
+const OPERATOR_TOKEN_KEY = PRODUCT_STORAGE_KEYS.operator
 
 function storage(): Storage | null {
+  migrateBrowserStorage()
   try {
     return typeof window === 'undefined' ? null : window.sessionStorage
   } catch {
@@ -31,7 +34,7 @@ export function setOperatorToken(token: string): void {
 
 export function clearOperatorToken(): void {
   try {
-    storage()?.removeItem(OPERATOR_TOKEN_KEY)
+    clearSessionStorageValue('operator')
   } catch {
     return
   }

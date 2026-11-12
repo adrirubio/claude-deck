@@ -1,11 +1,34 @@
 # Changelog
 
-All notable changes to Claude Deck will be documented in this file.
+All notable changes to Albiex Synth City will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [4.0.0]
+
+# Albiex Synth City v4.0.0 — formerly Claude Deck
+
+**Albiex Synth City** is the new name of Claude Deck. Same project, same data, new name — now developed as `albiexai/synth-city` and documented at `albiex.org`. Old links redirect.
+
+**Upgrading from v3.1:** stop the old version completely first, back up while stopped, then get v4.0.0 the normal source-based way (update source + dependencies, see the installation guide) and start it. Your database (`claude_registry.db` → `synth_city.db`), backups and attachments (`~/.claude-registry` → `~/.albiex-synth-city`), teams, settings and Agent Mail history move automatically on first start — no migration command, no manual renaming for a standard install. Read the [migration guide](https://github.com/albiexai/synth-city/blob/v4.0.0/docs/guide/migration-v4.md) before upgrading if you customised paths, environment variables, agent connections, or scripts.
+
+**Breaking changes (complete list):**
+
+- Old runtime names stop working; there are no aliases and no grace period.
+- `CLAUDE_DECK_*` → `SYNTH_CITY_*` environment variables. Hand-set instance/supervisor variables must be renamed; startup warns (names only, never values) if old ones remain set.
+- Agent Mail tools `deck_*` → `synth_city_*`; MCP server `claude-deck-mail` → `albiex-synth-city-mail`. Mail-setup connections the app can positively recognise are rewritten automatically (temporary failures retry on later starts; persistent failures are reported as incomplete, never as done); unrecognised or hand-written ones are left untouched, reported as needing attention, and must be re-added.
+- API headers `X-Deck-*` / `X-Claude-Deck-Terminal-Token` → `X-Synth-City-*`; error codes `deck_unreachable` / `deck_http_error` → `synth_city_unreachable` / `synth_city_http_error`. Sessions must be relaunched and get fresh session credentials; the operator token is unchanged (re-enter it in the browser if the tab was closed) and authorisation checks are unchanged.
+- Default database and data-folder paths renamed (above). Genuinely custom locations stay put; explicitly configured shipped defaults migrate automatically; overlapping custom locations may cause a safe stop instead of a move (see the migration guide).
+- New queues/scopes default to labels `albiex-synth-city-ready` / `albiex-synth-city-design`; existing scopes keep working with their current labels.
+- Release-download file names changed: `claude-deck-frontend-v…` → `albiex-synth-city-frontend-v…`; scripts that download releases must use the new names.
+- Downgrade is restore-the-complete-pre-upgrade-set only (database set, data folder, provider configuration and browser state) — see the migration guide.
+
+**Not changed:** your data model and history, backup file contents, the operator token configured on the server, and the internal identifiers that existing databases depend on. (Agent *session* credentials are the deliberate exception above: relaunched sessions register fresh ones.)
+
+Full rename design and upgrade contract: [compatibility design](https://github.com/albiexai/synth-city/blob/v4.0.0/docs/plans/2026-11-06-rename-synth-city/compatibility.md). Report upgrade problems with your startup log — never post tokens or credentials.
 
 ## [3.1.0] - 2026-10-14
 

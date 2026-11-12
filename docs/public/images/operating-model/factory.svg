@@ -39,7 +39,7 @@
   <!-- Controller (system) -->
   <rect x="250" y="145" width="300" height="392" rx="12" fill="#f1f5f9" stroke="#334155" stroke-width="2.5"/>
   <use href="#i-system" x="262" y="155" width="24" height="24" fill="#334155" color="#334155"/>
-  <text x="294" y="173" font-size="16" font-weight="700" fill="#1e293b">Deck controller</text>
+  <text x="294" y="173" font-size="16" font-weight="700" fill="#1e293b">Albiex Synth City controller</text>
   <text x="264" y="194" font-size="10.5" font-weight="700" fill="#334155" letter-spacing=".5">NON-AGENT · NO AI REASONING INSIDE</text>
 
   <rect x="264" y="204" width="272" height="122" rx="8" fill="#fff" stroke="#94a3b8" stroke-width="1.5"/>

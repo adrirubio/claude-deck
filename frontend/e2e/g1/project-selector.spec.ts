@@ -53,9 +53,9 @@ test.describe('Project selector on a Harness page', () => {
     await expect(page.getByLabel('Project', { exact: true })).toHaveValue('')
   })
 
-  test('@active Folders Deck knows about explains what the folders do', async ({ page }) => {
+  test('@active Folders Synth City knows about explains what the folders do', async ({ page }) => {
     await page.goto('/harnesses/folders')
-    await expect(page.getByRole('heading', { name: 'Folders Deck knows about' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Folders Synth City knows about' })).toBeVisible()
     await expect(page.getByText(/scope project-level native settings/)).toBeVisible()
   })
 })

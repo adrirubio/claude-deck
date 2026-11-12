@@ -55,17 +55,17 @@ describe('accepted provider operations', () => {
   }
  })
  it('shows six compact harness cards without technical details', async () => {
-  localStorage.setItem('claude-deck:selected-provider','pi-cli')
+  localStorage.setItem('albiex-synth-city:selected-provider','pi-cli')
   const {requests}=fixtureFetch(answer)
   renderRoute(<ProviderProvider><HarnessesPage/></ProviderProvider>,'/harnesses','/harnesses'); await settle()
   expect(screen.getAllByRole('article')).toHaveLength(6)
   expect(screen.getAllByText('Ready')).toHaveLength(6)
-  expect(screen.getAllByText('No settings pages in Deck')).toHaveLength(4)
+  expect(screen.getAllByText('No settings pages in Synth City')).toHaveLength(4)
   expect(screen.queryByText(/Credentials|Operations and conditions|No team slot selected/)).toBeNull()
   expect(screen.queryByRole('button',{name:'Refresh observations'})).toBeNull()
   expect(requests.filter(r=>r.path.endsWith('/operations'))).toHaveLength(6)
   expect(requests.every(r=>r.method==='GET')).toBe(true)
-  expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
+  expect(localStorage.getItem('albiex-synth-city:selected-provider')).toBe('pi-cli')
  })
  it.each(ids)('shows the sourced operation set, credentials and generic session unknowns of %s on its harness page under Technical details', async id => {
   window.history.replaceState({},'',`/harnesses/${id}`)
@@ -95,14 +95,14 @@ describe('accepted provider operations', () => {
 
 describe('required catalog native guards', () => {
  it('waits for the catalog before mounting or fetching the editor, with canonical context independent of saved preference', async () => {
-  localStorage.setItem('claude-deck:selected-provider','pi-cli')
+  localStorage.setItem('albiex-synth-city:selected-provider','pi-cli')
   const pending=deferred<Response>();const {requests}=fixtureFetch(path=>path.endsWith('/operations')?pending.promise:answer(path))
   native();await settle()
   expect(screen.queryByText(/Mounted/)).toBeNull();expect(requests.map(r=>r.path)).toEqual(['providers','providers/codex-cli/operations'])
   await act(async()=>{pending.resolve(jsonResponse(catalogs['codex-cli']))});await settle()
   expect(screen.getByText('Mounted codex-cli editor')).toBeInTheDocument()
   expect(requests.map(r=>r.path)).toContain('codex-config');expect(requests.map(r=>r.path)).not.toContain('config')
-  expect(localStorage.getItem('claude-deck:selected-provider')).toBe('pi-cli')
+  expect(localStorage.getItem('albiex-synth-city:selected-provider')).toBe('pi-cli')
  })
  it.each(['http_error','missing','wrong_provider','wrong_schema','missing_operation','bound_generic_session'])('fails closed for %s before any native API fetch', async failure => {
   const broken=structuredClone(catalogs['codex-cli'])
@@ -116,7 +116,7 @@ describe('required catalog native guards', () => {
   expect(requests.map(r=>r.path)).toEqual(['providers','providers/codex-cli/operations'])
  })
  it.each(['/harnesses/codex-cli/config','/config'])('blocks adapter mismatch at canonical/legacy %s', async path => {
-  localStorage.setItem('claude-deck:selected-provider','codex-cli')
+  localStorage.setItem('albiex-synth-city:selected-provider','codex-cli')
   const {requests}=fixtureFetch(p=>p.endsWith('/operations')?jsonResponse(scenarios.adapter_mismatch):answer(p))
   native(path,path==='/config'?'/config':'/harnesses/:providerId/:surface',path==='/config'?<NativeRoute surface="config"/>:<NativeRoute/>);await settle()
   expect(screen.getByText('Native page unavailable')).toBeInTheDocument();expect(requests.every(r=>r.path==='providers'||r.path.endsWith('/operations'))).toBe(true)
@@ -136,7 +136,7 @@ describe('required catalog native guards', () => {
   expect(requests).toHaveLength(before)
  })
  it.each([['/harnesses/codex-cli/plans/example','/harnesses/:providerId/plans/:filename','plan'],['/sessions/project/id','/sessions/:projectFolder/:sessionId','session']])('guards detail route %s before mount', async(path,route,detail)=>{
-  localStorage.setItem('claude-deck:selected-provider','claude-code')
+  localStorage.setItem('albiex-synth-city:selected-provider','claude-code')
   const {requests}=fixtureFetch(p=>p.endsWith('/operations')?jsonResponse({},503):answer(p))
   native(path,route,<NativeRoute surface={detail==='plan'?'plans':'sessions'} detail={detail as 'plan'|'session'}/>);await settle()
   expect(screen.getByText('Native page unavailable')).toBeInTheDocument();expect(screen.queryByText(/Mounted/)).toBeNull()
@@ -160,14 +160,14 @@ describe('required catalog native guards', () => {
   expect(within(subnav).getByRole('link',{name:'Configuration'})).toHaveAttribute('aria-current','page')
   for(const [name,surface] of [['MCP servers','mcp'],['Plugins','plugins'],['Plans','plans']]) expect(within(subnav).getByRole('link',{name})).toHaveAttribute('href',`/harnesses/codex-cli/${surface}`)
   expect(within(subnav).getByRole('link',{name:'Codex CLI'})).toHaveAttribute('href','/harnesses/codex-cli')
-  expect(document.title).toBe('Configuration · Codex CLI · Claude Deck')
+  expect(document.title).toBe('Configuration · Codex CLI · Albiex Synth City')
  })
  it('shows View only on a read-only native page and restores the tab title on leaving',async()=>{
   const before=document.title
   fixtureFetch(path=>path.endsWith('/operations')?jsonResponse(scenarios.read_only_config):answer(path))
   const view=native('/harnesses/codex-cli/plans'); await settle()
   expect(screen.getByText('View only')).toBeInTheDocument()
-  expect(document.title).toBe('Plans · Codex CLI · Claude Deck')
+  expect(document.title).toBe('Plans · Codex CLI · Albiex Synth City')
   view.unmount()
   expect(document.title).toBe(before)
  })

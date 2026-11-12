@@ -1,7 +1,7 @@
 ---
 layout: home
 hero:
-  name: Claude Deck
+  name: Albiex Synth City
   text: Observe work. Review interventions.
   tagline: A self-hosted workspace for bounded coding-agent attempts on GitHub issues
   actions:
@@ -10,7 +10,7 @@ hero:
       link: /guide/quick-start
     - theme: alt
       text: View product source
-      link: https://github.com/adrirubio/claude-deck/tree/master
+      link: https://github.com/albiexai/synth-city/tree/master
 features:
   - title: Overview and Work
     details: Inspect mixed-team tracking, waiting reasons and PR context with explicit filters.

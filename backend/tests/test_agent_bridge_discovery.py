@@ -54,12 +54,12 @@ def test_discover_agent_sessions_includes_team_environment():
     tmux_output = "snazzyemail:0.0|snazzyemail|main|%1|/repo/a|111|codex"
     env_output = "\n".join(
         [
-            "CLAUDE_DECK_TEAM_PRESET_ID=10",
-            "CLAUDE_DECK_TEAM_PRESET_NAME=SnazzyEmail",
-            "CLAUDE_DECK_TEAM_SLOT_ID=20",
-            "CLAUDE_DECK_TEAM_SLOT_NAME=Lead Developer",
-            "CLAUDE_DECK_TEAM_SLOT_ROLE=lead developer",
-            "CLAUDE_DECK_TEAM_SLOT_COLOR=green",
+            "SYNTH_CITY_TEAM_PRESET_ID=10",
+            "SYNTH_CITY_TEAM_PRESET_NAME=SnazzyEmail",
+            "SYNTH_CITY_TEAM_SLOT_ID=20",
+            "SYNTH_CITY_TEAM_SLOT_NAME=Lead Developer",
+            "SYNTH_CITY_TEAM_SLOT_ROLE=lead developer",
+            "SYNTH_CITY_TEAM_SLOT_COLOR=green",
         ]
     )
 
@@ -92,3 +92,11 @@ def test_discover_agent_sessions_includes_team_environment():
             "team_slot_color": "green",
         }
     ]
+def test_team_environment_accepts_only_the_new_namespace():
+    from app.services.agent_bridge.discovery import _parse_tmux_environment
+
+    old = "CLAUDE_DECK_TEAM_PRESET_ID=81\nCLAUDE_DECK_TEAM_SLOT_ID=82\nCLAUDE_DECK_TEAM_SLOT_NAME=Old"
+    new = "SYNTH_CITY_TEAM_PRESET_ID=71\nSYNTH_CITY_TEAM_SLOT_ID=72\nSYNTH_CITY_TEAM_SLOT_NAME=New"
+    assert _parse_tmux_environment(old) == {}
+    assert _parse_tmux_environment(new + "\n" + old) == {
+        "team_preset_id": 71, "team_slot_id": 72, "team_slot_name": "New"}

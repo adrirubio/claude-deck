@@ -55,6 +55,18 @@ class Backup(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class UpgradeReferenceStamp(Base):
+    """A committed resource rewrite bound to an immutable v1 reference record."""
+
+    __tablename__ = "upgrade_reference_stamps"
+
+    reference_record_id: Mapped[str] = mapped_column(String, primary_key=True)
+    resource: Mapped[str] = mapped_column(String, primary_key=True)
+    move_journal_id: Mapped[str] = mapped_column(String, nullable=False)
+    record_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class Marketplace(Base):
     """Marketplace model for plugin marketplace configurations."""
 
@@ -243,8 +255,8 @@ class TeamGithubScope(Base):
     repo_owner: Mapped[str] = mapped_column(String, nullable=False)
     repo_name: Mapped[str] = mapped_column(String, nullable=False)
     repo_path: Mapped[str] = mapped_column(String, nullable=False)
-    dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
-    design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
+    dispatch_label: Mapped[str] = mapped_column(String, default="albiex-synth-city-ready", nullable=False)
+    design_label: Mapped[str] = mapped_column(String, default="albiex-synth-city-design", nullable=False)
     merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
     review_hold_label: Mapped[str | None] = mapped_column(String, nullable=True)
     delivery_policy: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
@@ -712,7 +724,7 @@ class MailMessage(Base):
     sender_actor_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
-    # New ORM notices come from Deck. The migration leaves historical rows null.
+    # New ORM notices come from Albiex Synth City. The migration leaves historical rows null.
     sender_type: Mapped[str | None] = mapped_column(String, default="system", nullable=True)
     approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)

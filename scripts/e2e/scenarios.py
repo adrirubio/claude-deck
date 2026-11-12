@@ -1,4 +1,4 @@
-"""Synthetic E2E scenarios for the Deck v3.1 design reference.
+"""Synthetic E2E scenarios for the Albiex Synth City v3.1 design reference.
 
 Each scenario names the design-reference state it serves. IDs are fixed, so a
 journey can open ``/work/2`` or ``/teams/1``. Journeys should still find rows
@@ -266,7 +266,7 @@ def seed_core(s: Seeder, root: Path) -> None:
 
     # One agent, one state (#540): slot 5 has a live fake pane (start_panes),
     # a live MCP session and an old observation. "Live" is relative to the
-    # real clock: SEED_NOW can be up to an hour old, and Deck treats an MCP
+    # real clock: SEED_NOW can be up to an hour old, and Albiex Synth City treats an MCP
     # heartbeat older than 3600 s as offline. Only this row uses the real clock.
     heartbeat = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=2)).isoformat(sep=" ")
     idle = next(slot for slot in RELEASE_SLOTS if slot["id"] == IDLE_AGENT_SLOT)
@@ -615,12 +615,12 @@ def start_panes(root: Path) -> None:
         name = f"deck-e2e-{slot['id']}"
         binary = "codex" if slot["provider"] == "codex-cli" else "claude"
         env = {
-            "CLAUDE_DECK_TEAM_PRESET_ID": str(RELEASE_TEAM),
-            "CLAUDE_DECK_TEAM_PRESET_NAME": "Release crew",
-            "CLAUDE_DECK_TEAM_SLOT_ID": str(slot["id"]),
-            "CLAUDE_DECK_TEAM_SLOT_NAME": slot["name"],
-            "CLAUDE_DECK_TEAM_SLOT_ROLE": slot["role"],
-            "CLAUDE_DECK_TEAM_SLOT_COLOR": slot["color"],
+            "SYNTH_CITY_TEAM_PRESET_ID": str(RELEASE_TEAM),
+            "SYNTH_CITY_TEAM_PRESET_NAME": "Release crew",
+            "SYNTH_CITY_TEAM_SLOT_ID": str(slot["id"]),
+            "SYNTH_CITY_TEAM_SLOT_NAME": slot["name"],
+            "SYNTH_CITY_TEAM_SLOT_ROLE": slot["role"],
+            "SYNTH_CITY_TEAM_SLOT_COLOR": slot["color"],
         }
         cmd = [str(shim), "new-session", "-d", "-s", name, "-c", str(repo), "-x", "120", "-y", "32"]
         for key, value in env.items():

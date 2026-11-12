@@ -14,7 +14,7 @@ const reasons: Record<string, string> = {
   provider_unsupported: 'This harness does not yet have a native activity adapter.',
   no_current_binding: 'No authenticated current session binding is available.',
   ambiguous_binding: 'More than one current session matches this slot.',
-  duplicate_native_identity: 'More than one Deck slot is configured to resume this native conversation. Per-agent activity cannot be distinguished.',
+  duplicate_native_identity: 'More than one Synth City slot is configured to resume this native conversation. Per-agent activity cannot be distinguished.',
   session_identity_unavailable: 'An explicit native session identity is required to observe activity.',
   session_mismatch: 'The running process and native session identity do not match.',
   binding_changed: 'The session binding changed during observation.',
@@ -22,7 +22,7 @@ const reasons: Record<string, string> = {
   no_native_event: 'No supported native turn event is available.',
   observation_incomplete: 'The latest native activity record is incomplete.',
   observation_invalid: 'The native activity observation could not be validated.',
-  restart_needed_for_observation: 'This session cannot be observed yet. Restart it in resume mode through Deck to see its activity. Unknown activity grants no authority.',
+  restart_needed_for_observation: 'This session cannot be observed yet. Restart it in resume mode through Synth City to see its activity. Unknown activity grants no authority.',
   observation_unavailable: 'The controller cannot read or validate this activity observation.',
 }
 

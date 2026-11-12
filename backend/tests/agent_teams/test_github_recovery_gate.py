@@ -515,15 +515,15 @@ async def test_recovery_gate_preflight_requires_operator_and_reports_paused_targ
             active_status = await client.get(f"{endpoint}/active")
             assert (await client.get(endpoint)).status_code == 401
             assert (
-                await client.get(endpoint, headers={"X-Deck-Operator-Token": "wrong"})
+                await client.get(endpoint, headers={"X-Synth-City-Operator-Token": "wrong"})
             ).status_code == 401
             response = await client.get(
-                endpoint, headers={"X-Deck-Operator-Token": "test-operator-token"}
+                endpoint, headers={"X-Synth-City-Operator-Token": "test-operator-token"}
             )
             monkeypatch.setattr(github_dispatch_scheduler, "recovery_only_attempt", None)
             inactive_status = await client.get(f"{endpoint}/active")
             inactive_response = await client.get(
-                endpoint, headers={"X-Deck-Operator-Token": "test-operator-token"}
+                endpoint, headers={"X-Synth-City-Operator-Token": "test-operator-token"}
             )
     finally:
         app.dependency_overrides.clear()

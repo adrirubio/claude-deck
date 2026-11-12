@@ -24,7 +24,7 @@ function alive(child: ChildProcess): boolean {
 function baseEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith('CLAUDE_DECK_')) env[key] = value
+    if (!key.startsWith('SYNTH_CITY_')) env[key] = value
   }
   return { ...env, E2E_PORT: String(port), E2E_SKIP_BUILD: '1', ...extra }
 }
@@ -138,15 +138,15 @@ test.describe('instance isolation', () => {
   })
 
   test('@active an instance refuses a Deck endpoint in its environment', () => {
-    const { status, stderr } = runRefused(baseEnv({ CLAUDE_DECK_URL: 'http://127.0.0.1:9' }))
+    const { status, stderr } = runRefused(baseEnv({ SYNTH_CITY_URL: 'http://127.0.0.1:9' }))
     expect(status).toBe(2)
-    expect(stderr).toContain('CLAUDE_DECK_URL names another Deck')
+    expect(stderr).toContain('SYNTH_CITY_URL names another Albiex Synth City')
   })
 
   test('@active an instance refuses a Deck Mail credential in its environment', () => {
-    const { status, stderr } = runRefused(baseEnv({ CLAUDE_DECK_MAIL_TOKEN: 'synthetic' }))
+    const { status, stderr } = runRefused(baseEnv({ SYNTH_CITY_MAIL_TOKEN: 'synthetic' }))
     expect(status).toBe(2)
-    expect(stderr).toContain('a Deck Mail credential must not reach the E2E instance')
+    expect(stderr).toContain('an Albiex Synth City Mail credential must not reach the E2E instance')
   })
 
   test('@active an instance refuses an Agent Mail MCP configuration in its HOME', () => {

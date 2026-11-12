@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+from app.upgrade_bootstrap import prepare_resource_locations
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,15 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
     pass
 
+
+# Settle the default file set before any engine can open or create a database.
+settings.database_url, settings.bridge_attachment_dir = prepare_resource_locations(
+    settings.database_url,
+    settings.bridge_attachment_dir,
+    database_explicit="database_url" in settings.model_fields_set,
+    attachment_explicit="bridge_attachment_dir" in settings.model_fields_set,
+    test_instance=settings.test_instance,
+)
 
 # Create async engine
 engine = create_async_engine(
@@ -389,6 +399,7 @@ _APPROVAL_RECONCILIATION_MIGRATION = "pr1_historical_approval_reconciliation"
 
 
 async def _sqlite_approval_reconciliation_pending(conn) -> bool:
+    # Frozen bookkeeping name: existing applied rows must still prevent replay.
     await conn.execute(
         text(
             "CREATE TABLE IF NOT EXISTS deck_compat_migrations ("
@@ -1157,9 +1168,12 @@ async def init_db() -> None:
     """Initialize database tables."""
     # Register the derived observation table for CLI and HTTP startup alike.
     from app.models import database, github_work_progress  # noqa: F401
+    from app.upgrade_references import reference_startup, complete_reference_upgrade
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    if settings.database_url.startswith("sqlite"):
-        async with engine.connect() as conn:
-            await _run_sqlite_compat_migrations(conn)
+    with reference_startup(settings.database_url, test_instance=settings.test_instance) as phase:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        if settings.database_url.startswith("sqlite"):
+            async with engine.connect() as conn:
+                await _run_sqlite_compat_migrations(conn)
+        complete_reference_upgrade(phase.database, phase.records, home=phase.home, ops=phase.ops)

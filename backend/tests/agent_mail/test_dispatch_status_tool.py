@@ -91,7 +91,7 @@ async def client_and_db():
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+        headers={"X-Synth-City-Session-Token": DEFAULT_TOKEN},
     ) as ac:
         yield ac, maker
     app.dependency_overrides.clear()
@@ -115,7 +115,7 @@ async def wal_client_and_db(tmp_path):
     async with httpx.AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+        headers={"X-Synth-City-Session-Token": DEFAULT_TOKEN},
     ) as ac:
         yield ac, maker
     app.dependency_overrides.clear()
@@ -346,7 +346,7 @@ async def _token_for_slot(maker, slot_id: int | None, *, key: str = "mcp:auth") 
 
 
 def _auth(token: str) -> dict[str, str]:
-    return {"X-Deck-Session-Token": token}
+    return {"X-Synth-City-Session-Token": token}
 
 
 def _statuses_the_route_accepts() -> set[str]:
@@ -456,7 +456,7 @@ async def test_revision_requested_requires_explicit_decision_tool(client_and_db)
         json={"work_item_id": item_id, "status": "revision_requested"},
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "use_deck_approve_work_item"
+    assert resp.json()["detail"] == "use_synth_city_approve_work_item"
     async with maker() as db:
         item = await db.get(GithubWorkItem, item_id)
         assert item.dispatch_status == "dispatched"
@@ -1199,9 +1199,9 @@ def test_shim_exposes_dispatch_status_tool():
     import importlib
 
     shim = importlib.import_module("mcp_shim.agent_mail_server")
-    assert hasattr(shim, "deck_report_dispatch_status")
-    assert hasattr(shim, "deck_retry_work_item")
-    assert hasattr(shim, "deck_request_work_item_approval")
+    assert hasattr(shim, "synth_city_report_dispatch_status")
+    assert hasattr(shim, "synth_city_retry_work_item")
+    assert hasattr(shim, "synth_city_request_work_item_approval")
     assert hasattr(shim, "_dispatch_request")
 
 
@@ -1223,7 +1223,7 @@ def test_shim_dispatch_status_omits_caller_slot_claim(monkeypatch):
 
     monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch_request)
 
-    result = shim.deck_report_dispatch_status(
+    result = shim.synth_city_report_dispatch_status(
         123,
         "pr_ready",
         head_ref="deck/slot-7/issue-123/attempt",
@@ -1271,8 +1271,8 @@ def test_shim_approval_requires_registration(monkeypatch):
 
     monkeypatch.setattr(shim, "_request", unexpected_request)
 
-    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe", 41) == refusal
-    assert shim.deck_request_work_item_approval(1, "nonce", "safe plan") == refusal
+    assert shim.synth_city_approve_work_item(1, "nonce", "approved", "safe", 41) == refusal
+    assert shim.synth_city_request_work_item_approval(1, "nonce", "safe plan") == refusal
 
 
 def test_shim_retry_work_item_posts_reason(monkeypatch):
@@ -1293,7 +1293,7 @@ def test_shim_retry_work_item_posts_reason(monkeypatch):
 
     monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch_request)
 
-    result = shim.deck_retry_work_item(
+    result = shim.synth_city_retry_work_item(
         123,
         reason="prerequisite #816 merged",
     )
@@ -1361,7 +1361,7 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
 
     monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch_request)
 
-    result = shim.deck_list_work_items(status="escalated", limit=25)
+    result = shim.synth_city_list_work_items(status="escalated", limit=25)
 
     assert result == {
         "ok": True,
@@ -1466,7 +1466,7 @@ async def test_revision_requested_is_actionable_for_every_authenticated_slot(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "use_deck_approve_work_item"
+    assert response.json()["detail"] == "use_synth_city_approve_work_item"
 
 
 @pytest.mark.asyncio

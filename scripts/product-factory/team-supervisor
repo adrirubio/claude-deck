@@ -131,7 +131,7 @@ class Supervisor:
 
     def api(self, method, path, body=None):
         cfg = dict(line.split('=', 1) for line in pathlib.Path(self.config['operator_env']).read_text().splitlines() if '=' in line)
-        request = urllib.request.Request(self.config['api'] + path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Content-Type': 'application/json', 'X-Deck-Operator-Token': cfg['OPERATOR_TOKEN']})
+        request = urllib.request.Request(self.config['api'] + path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Content-Type': 'application/json', 'X-Synth-City-Operator-Token': cfg['OPERATOR_TOKEN']})
         with urllib.request.urlopen(request, timeout=8) as response:
             return json.load(response)
 

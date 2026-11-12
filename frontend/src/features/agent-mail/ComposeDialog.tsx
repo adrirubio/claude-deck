@@ -83,12 +83,12 @@ function deliveryWarning(member: MailMemberResponse, kind: Exclude<MailMessageKi
   if (view.session.state === 'offline') {
     return expectsAction
       ? `${member.display_name} is offline. This ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but no live agent can be woken to respond until that participant checks in again.`
-      : `${member.display_name} is offline. This message will be stored for later; Claude Deck cannot wake a live session.`
+      : `${member.display_name} is offline. This message will be stored for later; Albiex Synth City cannot wake a live session.`
   }
   if (view.wake.state === 'cannot_wake') {
     return expectsAction
       ? `${member.display_name} cannot be woken. ${view.wake.reason} The ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but the agent may not see it until it checks Agent Mail or reaches a hook boundary.`
-      : `${member.display_name} cannot be woken. ${view.wake.reason} The message will be stored, but Claude Deck cannot nudge this session.`
+      : `${member.display_name} cannot be woken. ${view.wake.reason} The message will be stored, but Albiex Synth City cannot nudge this session.`
   }
   return null
 }

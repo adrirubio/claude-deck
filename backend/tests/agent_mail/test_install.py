@@ -50,7 +50,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
                                     "type": "command",
                                     "command": (
                                         "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                        "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                        "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                         "--provider codex-cli --event session-start"
                                     ),
                                 }
@@ -64,7 +64,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
                                     "type": "command",
                                     "command": (
                                         "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                        "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                        "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                         "--provider codex-cli --event user-prompt-submit"
                                     ),
                                 }
@@ -82,7 +82,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
 
 
 def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_path):
-    hooks_path = tmp_path / "claude-deck-mail.json"
+    hooks_path = tmp_path / "albiex-synth-city-mail.json"
     hooks_path.write_text(
         json.dumps(
             {
@@ -93,7 +93,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
                             "type": "command",
                             "command": (
                                 "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                 "--provider copilot-cli --event session-start"
                             ),
                             "timeoutSec": 2,
@@ -104,7 +104,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
                             "type": "command",
                             "command": (
                                 "/tmp/venv/bin/python /repo/backend/mcp_shim/"
-                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "agent_mail_hook.py --synth-city-url http://127.0.0.1:8000 "
                                 "--provider copilot-cli --event user-prompt-submit"
                             ),
                             "matcher": "agent_idle",
@@ -122,7 +122,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
 
 
 def test_installed_opencode_plugin_events_use_managed_plugin(monkeypatch, tmp_path):
-    plugin_path = tmp_path / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "albiex-synth-city-agent-mail.js"
     plugin_path.write_text(install._opencode_plugin_content(), encoding="utf-8")
     monkeypatch.setattr(install, "opencode_plugin_path", lambda: plugin_path)
 
@@ -288,9 +288,9 @@ async def test_codex_apply_uses_provider_executor(monkeypatch, db, tmp_path):
     assert calls[0][1][:5] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.deck_base_url()}",
+        f"SYNTH_CITY_URL={install.synth_city_base_url()}",
         "--env",
-        "CLAUDE_DECK_PROVIDER=codex-cli",
+        "SYNTH_CITY_PROVIDER=codex-cli",
     ]
     assert install.MCP_SERVER_NAME in calls[0][1]
 
@@ -324,7 +324,7 @@ async def test_codex_apply_writes_hooks_json(monkeypatch, db, tmp_path):
 
 @pytest.mark.asyncio
 async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkeypatch, db, tmp_path):
-    hooks_path = tmp_path / "claude-deck-mail.json"
+    hooks_path = tmp_path / "albiex-synth-city-mail.json"
     calls = []
 
     class FakeExecutor:
@@ -346,9 +346,9 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
     assert calls[0][1][:6] == [
         "add",
         "--env",
-        f"CLAUDE_DECK_URL={install.deck_base_url()}",
+        f"SYNTH_CITY_URL={install.synth_city_base_url()}",
         "--env",
-        "CLAUDE_DECK_PROVIDER=copilot-cli",
+        "SYNTH_CITY_PROVIDER=copilot-cli",
         "--json",
     ]
     doc = json.loads(hooks_path.read_text(encoding="utf-8"))
@@ -362,7 +362,7 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
 @pytest.mark.asyncio
 async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_path):
     config_path = tmp_path / "opencode.json"
-    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "plugins" / "albiex-synth-city-agent-mail.js"
     monkeypatch.setattr(install, "opencode_cli_available", lambda: True)
     monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
     monkeypatch.setattr(install, "opencode_config_path", lambda: config_path)
@@ -376,16 +376,16 @@ async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_
     entry = doc["mcp"][install.MCP_SERVER_NAME]
     assert entry["type"] == "local"
     assert entry["command"] == [install.sys.executable, install.shim_path()]
-    assert entry["environment"]["CLAUDE_DECK_PROVIDER"] == "opencode-cli"
+    assert entry["environment"]["SYNTH_CITY_PROVIDER"] == "opencode-cli"
     plugin = plugin_path.read_text(encoding="utf-8")
-    assert "Claude Deck Agent Mail OpenCode plugin" in plugin
+    assert "Albiex Synth City Agent Mail OpenCode plugin" in plugin
     assert "experimental.chat.system.transform" in plugin
 
 
 @pytest.mark.asyncio
 async def test_opencode_uninstall_removes_managed_mcp_and_plugin(monkeypatch, db, tmp_path):
     config_path = tmp_path / "opencode.json"
-    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "plugins" / "albiex-synth-city-agent-mail.js"
     plugin_path.parent.mkdir()
     config_path.write_text(
         json.dumps(
@@ -498,7 +498,7 @@ async def test_install_endpoints_require_confirmation(client, monkeypatch):
         curl_available=True,
         shim_path="/tmp/shim.py",
         python_path="/usr/bin/python",
-        deck_url="http://127.0.0.1:8000",
+        synth_city_url="http://127.0.0.1:8000",
         claude_settings_path="/home/test/.claude/settings.json",
         claude_mcp_config_path="/home/test/.claude.json",
     )
@@ -524,7 +524,7 @@ def test_question_hook_blocks_only_team_sessions(tmp_path, marker):
     script = Path(__file__).resolve().parents[2] / "mcp_shim" / "team_question_hook.py"
     environment = {"HOME": str(tmp_path), "PATH": os.defpath}
     if marker is not None:
-        environment["CLAUDE_DECK_TEAM_SLOT_ID"] = marker
+        environment["SYNTH_CITY_TEAM_SLOT_ID"] = marker
     result = subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps({"tool_name": "AskUserQuestion"}),

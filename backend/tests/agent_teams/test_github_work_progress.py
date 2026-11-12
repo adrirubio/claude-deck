@@ -617,8 +617,8 @@ async def test_remaining_context_requires_current_scoped_leader_and_rechecks_aft
     path = f"/github-work-items/{item.id}/remaining-work-context"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
         assert (await http.get(path)).status_code == 401
-        assert (await http.get(path, headers={"X-Deck-Session-Token": "other-token"})).status_code == 403
-        response = await http.get(path, headers={"X-Deck-Session-Token": "leader-token"})
+        assert (await http.get(path, headers={"X-Synth-City-Session-Token": "other-token"})).status_code == 403
+        response = await http.get(path, headers={"X-Synth-City-Session-Token": "leader-token"})
         assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
         assert response.json()["remaining_work_context"]["owner_slot_id"] == item.owner_slot_id
         await db.execute(update(GithubWorkProgressSnapshot).values(observed_at=datetime.utcnow() - timedelta(seconds=30)))
@@ -629,5 +629,5 @@ async def test_remaining_context_requires_current_scoped_leader_and_rechecks_aft
                 await db.commit()
                 return await super().read(context)
         monkeypatch.setattr(api, "github_work_progress_service", GithubWorkProgressService(ClosingObserver(), ReportClient(item)))
-        closed = await http.get(path, headers={"X-Deck-Session-Token": "leader-token"})
+        closed = await http.get(path, headers={"X-Synth-City-Session-Token": "leader-token"})
         assert closed.status_code == 409 and closed.json()["detail"] == "leader_unavailable"

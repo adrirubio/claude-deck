@@ -65,7 +65,7 @@ describe('buildConversations', () => {
     expect(rows[1].count).toBe(2)
   })
 
-  it('collapses Deck notices with the same subject and recipient and counts them', () => {
+  it('collapses Synth City notices with the same subject and recipient and counts them', () => {
     const notice = (id: number, overrides: Partial<MailMessageResponse> = {}) =>
       message(id, { sender_type: 'system', sender_member_id: null, subject: 'Release needed: issue #5', ...overrides })
     const rows = buildConversations([
@@ -140,7 +140,7 @@ describe('chips and filters', () => {
     expect(scope({ team: 'beta' })).toEqual(['Subject 5'])
     expect(scope({ recipientMemberId: 2 })).toEqual(['Subject 3', 'Subject 2', 'Subject 1'])
     expect(scope({ search: 'body 4' })).toEqual(['Subject 4'])
-    expect(scope({ search: 'deck' })).toEqual(['Subject 3'])
+    expect(scope({ search: 'synth' })).toEqual(['Subject 3'])
   })
 
   it('lists the teams and keeps the members of one team', () => {
@@ -242,7 +242,7 @@ describe('ConversationsTab', () => {
     const notice = within(rows[1])
     expect(notice.getByText('Deck reminder')).toBeInTheDocument()
     expect(notice.getByLabelText('2 notices')).toHaveTextContent('×2')
-    expect(rows[1].textContent).toContain('Deck→B2 Backend')
+    expect(rows[1].textContent).toContain('Albiex Synth City→B2 Backend')
     expect(rows[0].textContent).toContain('A1 Reviewer→You')
     expect(within(rows[0]).getByText('Answered')).toBeInTheDocument()
     expect(within(rows[2]).getByText('Open')).toBeInTheDocument()
@@ -255,7 +255,7 @@ describe('ConversationsTab', () => {
     expect(screen.getByRole('button', { name: 'To you (1)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Requests (1)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Handoffs (0)' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Deck notices (1)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Synth City notices (1)' }))
     expect(props.onChipChange).toHaveBeenCalledWith('notices')
   })
 
@@ -287,7 +287,7 @@ describe('ConversationsTab', () => {
     renderTab({ search: 'zzz' })
     expect(screen.getByText('No conversations match the current filters.')).toBeInTheDocument()
     renderTab({ messageCount: 100 })
-    expect(screen.getByText(/Deck loads the newest 100 threads/)).toBeInTheDocument()
+    expect(screen.getByText(/Synth City loads the newest 100 threads/)).toBeInTheDocument()
   })
 
   it('has no compose buttons and no status select in the list', () => {

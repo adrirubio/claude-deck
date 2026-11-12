@@ -44,7 +44,7 @@ export function KillSessionDialog({
     if (!session) return
     const operatorToken = getOperatorToken() ?? operatorTokenInput.trim()
     if (!operatorToken) {
-      setError('Enter the Deck operator token to terminate a session.')
+      setError('Enter the Albiex Synth City operator token to terminate a session.')
       return
     }
     setSubmitting(true)
@@ -62,7 +62,7 @@ export function KillSessionDialog({
       if (err instanceof ApiHttpError && err.status === 401) {
         clearOperatorToken()
         setOperatorTokenInput('')
-        setError('The Deck operator token was rejected. Enter a valid token and retry.')
+        setError('The Albiex Synth City operator token was rejected. Enter a valid token and retry.')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to kill session')
       }

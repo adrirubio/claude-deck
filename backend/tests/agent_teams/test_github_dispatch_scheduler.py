@@ -53,6 +53,9 @@ async def _scope(db, *, repo_owner="o", repo_name="r", autonomy=True, enabled=Tr
         repo_owner=repo_owner,
         repo_name=repo_name,
         repo_path=f"/tmp/{repo_name}",
+        # Existing operator-owned labels remain valid after defaults change.
+        dispatch_label="claude-deck-ready",
+        design_label="claude-deck-design",
         base_ref="origin/master",
         enabled=enabled,
     )

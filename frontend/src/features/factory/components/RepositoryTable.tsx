@@ -15,7 +15,7 @@ export function RepositoryTable({ rows }: { rows: RepositoryProjection[] }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
       <table className="w-full min-w-[720px] table-fixed text-left text-sm">
-        <caption className="sr-only">Repositories that Deck watches</caption>
+        <caption className="sr-only">Repositories that Synth City watches</caption>
         <thead className="bg-muted">
           <tr>
             {[

@@ -998,12 +998,12 @@ class AgentTeamService:
                 slot.provider,
                 options,
                 extra_env={
-                    "CLAUDE_DECK_TEAM_PRESET_ID": str(preset.id),
-                    "CLAUDE_DECK_TEAM_PRESET_NAME": preset.name,
-                    "CLAUDE_DECK_TEAM_SLOT_ID": str(slot.id),
-                    "CLAUDE_DECK_TEAM_SLOT_NAME": slot.display_name,
-                    **({"CLAUDE_DECK_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
-                    **({"CLAUDE_DECK_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
+                    "SYNTH_CITY_TEAM_PRESET_ID": str(preset.id),
+                    "SYNTH_CITY_TEAM_PRESET_NAME": preset.name,
+                    "SYNTH_CITY_TEAM_SLOT_ID": str(slot.id),
+                    "SYNTH_CITY_TEAM_SLOT_NAME": slot.display_name,
+                    **({"SYNTH_CITY_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
+                    **({"SYNTH_CITY_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
             if slot.provider == "claude-code" and options.session_id:
@@ -1018,7 +1018,7 @@ class AgentTeamService:
             if slot.provider == "codex-cli" and options.mode != "resume":
                 observation_message = (
                     ". Codex: restart needed for observation. "
-                    "Resume the saved rollout ID through Deck after capture"
+                    "Resume the saved rollout ID through Albiex Synth City after capture"
                 )
             result = AgentTeamLaunchResultItem(
                 slot_id=slot.id,
@@ -1693,9 +1693,9 @@ class AgentTeamService:
             base = slot.bootstrap_prompt
         else:
             parts = [
-                f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
+                f'You are being started by Albiex Synth City as part of Agent Team "{preset.name}".',
                 f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
-                "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
+                "Call `synth_city_whoami` when the session starts, then check your inbox with `synth_city_check_inbox(unread_only=False)`.",
             ]
             if slot.role:
                 parts.append(f"Role: {slot.role}")

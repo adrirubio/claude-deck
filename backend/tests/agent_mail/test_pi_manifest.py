@@ -21,22 +21,22 @@ def test_manifest_matches_real_mcp_tools_without_registration(sync_module, monke
         raise AssertionError("Schema inspection must not make an HTTP request")
 
     monkeypatch.setattr(httpx, "request", reject_http)
-    monkeypatch.setenv("CLAUDE_DECK_PROVIDER", "pi-cli")
+    monkeypatch.setenv("SYNTH_CITY_PROVIDER", "pi-cli")
     expected = sync_module.render_manifest()
     path = Path(sync_module.__file__).with_name("manifest.ts")
     assert path.read_text() == expected
     for name in (
-        "deck_get_backlog_coordination", "deck_report_backlog_assessment",
-        "deck_report_owner_followup",
-        "deck_get_operator_action_contexts", "deck_prepare_operator_action_contexts",
-        "deck_prepare_work_remaining_summary", "deck_render_github_summary",
-        "deck_get_team_summary", "deck_update_team_parent_issue",
-        "deck_supervisor_checkin",
+        "synth_city_get_backlog_coordination", "synth_city_report_backlog_assessment",
+        "synth_city_report_owner_followup",
+        "synth_city_get_operator_action_contexts", "synth_city_prepare_operator_action_contexts",
+        "synth_city_prepare_work_remaining_summary", "synth_city_render_github_summary",
+        "synth_city_get_team_summary", "synth_city_update_team_parent_issue",
+        "synth_city_supervisor_checkin",
     ):
         assert f'"name": "{name}"' in expected
     public, private = expected.split("export const privateTools = ")
-    assert "__deck_mail_close_generation" not in public
-    assert '"name": "__deck_mail_close_generation"' in private
+    assert "__synth_city_mail_close_generation" not in public
+    assert '"name": "__synth_city_mail_close_generation"' in private
 
 
 def test_check_reports_drift_without_writing(sync_module, monkeypatch, tmp_path, capsys):

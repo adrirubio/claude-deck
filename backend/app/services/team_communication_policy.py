@@ -10,16 +10,16 @@ Use at most six sentences in a paragraph. Use lists for steps and conditions.
 Keep code, commands, paths, identifiers, quotations, and precise evidence unchanged.
 Keep each safety condition, exception, approval rule, decision gate, and evidence limit.
 Do not remove facts to shorten the text. Do not claim certified ASD-STE100 compliance.
-These instructions guide your output. Deck does not check the full controlled dictionary."""
+These instructions guide your output. Albiex Synth City does not check the full controlled dictionary."""
 
 OWN_WRITING_STYLE_GUIDANCE = """Communication: member writing style
-The operator disabled Deck's ASD-STE100 guidance for this member. Use your own writing style.
-This choice replaces only Deck's earlier controlled-language instruction for this member.
+The operator disabled Albiex Synth City's ASD-STE100 guidance for this member. Use your own writing style.
+This choice replaces only Albiex Synth City's earlier controlled-language instruction for this member.
 Keep the human summary requirement. Keep all other instructions, safety conditions, authority rules, and decision gates."""
 
 OPERATOR_ACTION_CONTEXT_GUIDANCE = """Current operator action instructions
-Before requesting human input, call deck_prepare_operator_action_contexts for the intended requests.
-For automatic review or recovery requests, call deck_get_operator_action_contexts.
+Before requesting human input, call synth_city_prepare_operator_action_contexts for the intended requests.
+For automatic review or recovery requests, call synth_city_get_operator_action_contexts.
 Publish the completed records near the start of the main GitHub issue body.
 Use the returned markers and heading. Replace each WRITE_ placeholder.
 State the reason, responsible person, exact action, evidence, and completion condition.
@@ -38,7 +38,7 @@ State the remaining tasks and gates. Name the next actor and action.
 An estimate is a scoped range of active effort with confidence. Exclude unestimated waiting time.
 Use Unknown when no responsible agent can give a reliable range.
 Do not infer a percentage or completion time from commits, elapsed time or passing tests.
-The Leader calls deck_prepare_work_remaining_summary after each safe published checkpoint and at review handoffs.
+The Leader calls synth_city_prepare_work_remaining_summary after each safe published checkpoint and at review handoffs.
 The owner supplies the estimate. Put completed work and assumptions in the tool's optional details fields.
 Publish its marked block near the start of the main GitHub issue and PR with existing authorized access.
 Replace only that block. Preserve other facts and all operator-action records.
@@ -54,9 +54,9 @@ State the goal in one or two sentences. List the main changes.
 State the completed checks and material limits. Distinguish source review, CI, and human trials.
 State the requested human action. Link the PR. State its target branch and any separate decision gate.
 Keep the summary brief. Link detailed evidence below it.
-Use deck_render_github_summary for a compact current summary when the team's process selects that format.
+Use synth_city_render_github_summary for a compact current summary when the team's process selects that format.
 Keep one responsible issue and PR body publisher. Replace owned sections instead of appending current status paragraphs.
-Keep superseded estimates and source states in history. Preserve human requirements and other Deck sections.
+Keep superseded estimates and source states in history. Preserve human requirements and other Albiex Synth City sections.
 Preserve the original issue facts and existing PR metadata. Update a clearly marked summary section.
 Update the summary when the PR head, results, or requested action changes.
 Do not use a comment as the only summary. Do not claim completion without evidence.

@@ -5,7 +5,7 @@ import { manifest } from './manifest.ts'
 import { registerNativeActivity } from './activity.ts'
 
 export default function deckMail(pi: ExtensionAPI) {
-  if (process.env.CLAUDE_DECK_MAIL_OPT_IN !== '1') return
+  if (process.env.SYNTH_CITY_MAIL_OPT_IN !== '1') return
   const activity = registerNativeActivity(pi)
   let generation: MailGeneration | undefined
   let startup: Promise<void> | undefined
@@ -27,7 +27,7 @@ export default function deckMail(pi: ExtensionAPI) {
       await startup
       if (generation === selected) activity.start(ctx, pane, () => generation === selected && selected.ownsActivity())
     } catch {
-      ctx.ui.notify('Deck Agent Mail is unavailable or fenced. Tools remain disabled; operator recovery may be required.', 'error')
+      ctx.ui.notify('Albiex Synth City Agent Mail is unavailable or fenced. Tools remain disabled; operator recovery may be required.', 'error')
     }
   })
   pi.on('session_shutdown', stop)

@@ -48,12 +48,12 @@ test('@active the header counts move focus to the items they count', async ({ pa
   }
 })
 
-test('@active Deck notices with one subject and recipient collapse into one row', async ({ page }) => {
+test('@active Synth City notices with one subject and recipient collapse into one row', async ({ page }) => {
   await openAgentMail(page, 'Conversations')
   const notices = page.getByTestId('conversation-row').filter({ hasText: 'Release needed: issue #104' })
   await expect(notices).toHaveCount(1)
   await expect(notices.getByLabel('4 notices')).toBeVisible()
-  await expect(notices).toContainText(/Deck\s*→\s*B1 Backend/)
+  await expect(notices).toContainText(/Synth City\s*→\s*B1 Backend/)
 })
 
 for (const theme of ['light', 'dark'] as Theme[]) {

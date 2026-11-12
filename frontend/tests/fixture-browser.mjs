@@ -410,7 +410,7 @@ try {
         "Review selected slot launch",
       ],
     ]) {
-      if (name === "legacy-mismatch") await evaluate('localStorage.setItem("claude-deck:selected-provider", "codex-cli")');
+      if (name === "legacy-mismatch") await evaluate('localStorage.setItem("albiex-synth-city:selected-provider", "codex-cli")');
       await send("Page.navigate", { url: `http://127.0.0.1:${port}${route}` });
       for (let i = 0; i < 100; i++) {
         if (
@@ -440,7 +440,7 @@ try {
       }
       if (name === "retry-confirmation") {
         // Synthetic cached credential; confirmation/cancellation must remain GET-only.
-        await evaluate(`sessionStorage.setItem("claude-deck.agent-teams.operator-token", "fixture-only");
+        await evaluate(`sessionStorage.setItem("albiex-synth-city.agent-teams.operator-token", "fixture-only");
           [...document.querySelectorAll("button")].find(b=>b.textContent==="Retry issue").click()`);
         for (let i = 0; i < 20; i++) {
           if (await evaluate('Boolean(document.querySelector("[role=alertdialog]"))')) break;
@@ -543,7 +543,7 @@ try {
         assert(!(await evaluate('Boolean(document.querySelector("[role=alertdialog]"))')), "Retry cancellation left confirmation open");
         assert.equal(requests.filter((r) => r.method !== "GET").length, 0);
         retryConfirmations.push({ theme, width, cached_credential: true, cancelled: true, mutations: 0 });
-        await evaluate('sessionStorage.removeItem("claude-deck.agent-teams.operator-token")');
+        await evaluate('sessionStorage.removeItem("albiex-synth-city.agent-teams.operator-token")');
       }
       if (name === "work") {
         await evaluate(

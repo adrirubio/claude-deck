@@ -66,6 +66,8 @@ IMPLEMENTATION_COMPLETION_ACTIONS = frozenset(
     {"push_pr_head", "request_verification"}
 )
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
+# Frozen v1 hash domain: persisted lease hashes depend on these exact bytes.
+# Matching a hash does not renew a lease or bypass its HOLD/approval checks.
 _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
 _HOSTED_ONLY_LOCAL_BUILD = re.compile(
     r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:env\s+(?:[^\s=]+=[^\s]+\s+)*)?"
@@ -881,10 +883,10 @@ class GithubApprovalService:
         revision: GithubAttemptScopeRevision,
     ) -> str:
         return (
-            "Claude Deck approved continuation: call "
-            "`deck_check_inbox(unread_only=False)` now, find delivery message "
+            "Albiex Synth City approved continuation: call "
+            "`synth_city_check_inbox(unread_only=False)` now, find delivery message "
             f"{revision.delivery_message_id} for work item {revision.work_item_id} "
-            f"revision {revision.revision}, and call `deck_ack_continuation` now "
+            f"revision {revision.revision}, and call `synth_city_ack_continuation` now "
             "using the dispatch nonce from that delivery and the current workspace "
             "lease token held by this owner session. Do not execute any approved "
             "action until acknowledgement succeeds. After acknowledgement, continue "
@@ -897,11 +899,11 @@ class GithubApprovalService:
         revision: GithubAttemptScopeRevision,
     ) -> str:
         return (
-            "Claude Deck continuation approval: call "
-            "`deck_check_inbox(unread_only=False)` now, find request message "
+            "Albiex Synth City continuation approval: call "
+            "`synth_city_check_inbox(unread_only=False)` now, find request message "
             f"{request.request_message_id} for work item {request.work_item_id} "
             f"revision {revision.revision}, and review its persisted phase and "
-            "allowed actions before calling `deck_decide_continuation`. Evidence "
+            "allowed actions before calling `synth_city_decide_continuation`. Evidence "
             "collection, temporary hosted instrumentation, hosted log collection, "
             "or restoration work must use phase `diagnostic` and include "
             "`revert_diagnostic_changes`. Phase `implementation` is only for a "

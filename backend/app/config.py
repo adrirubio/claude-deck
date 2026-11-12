@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     )
 
     # Application settings
-    app_name: str = "Claude Deck"
-    app_version: str = "3.1.0"
+    app_name: str = "Albiex Synth City"
+    app_version: str = "4.0.0"
     debug: bool = False
 
     # API settings
@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     cors_headers: list[str] = ["*"]
 
     # Database settings
-    database_url: str = Field(default="sqlite+aiosqlite:///./claude_registry.db", repr=False)
+    database_url: str = Field(default="sqlite+aiosqlite:///./synth_city.db", repr=False)
 
     # Agent Bridge attachment settings
-    bridge_attachment_dir: str = "~/.claude-registry/bridge-attachments"
+    bridge_attachment_dir: str = "~/.albiex-synth-city/bridge-attachments"
     bridge_attachment_agent_root: str | None = None
     bridge_attachment_max_bytes: int = 10 * 1024 * 1024
     bridge_attachment_retention_days: int = 7

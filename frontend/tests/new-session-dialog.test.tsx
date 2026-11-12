@@ -3,9 +3,10 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewSessionDialog } from '../src/features/cc-bridge/NewSessionDialog'
+import { KillSessionDialog } from '../src/features/cc-bridge/KillSessionDialog'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '../src/lib/api'
-import { spawnSession } from '../src/features/cc-bridge/api'
+import { killSession, spawnSession } from '../src/features/cc-bridge/api'
 
 // The Radix select needs pointer events that jsdom lacks. A native select keeps the same values and options.
 vi.mock('../src/components/ui/select', () => ({
@@ -17,7 +18,7 @@ vi.mock('../src/components/ui/select', () => ({
   SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => <option value={value}>{children}</option>,
 }))
-vi.mock('../src/features/cc-bridge/api', () => ({ spawnSession: vi.fn() }))
+vi.mock('../src/features/cc-bridge/api', () => ({ spawnSession: vi.fn(), killSession: vi.fn() }))
 vi.mock('../src/hooks/useSessionsApi', () => ({ useSessionsApi: () => ({ listSessions: vi.fn().mockResolvedValue({ sessions: [] }) }) }))
 vi.mock('../src/hooks/useProviders', () => ({
   fetchProviderLaunchOptions: vi.fn().mockResolvedValue({ provider: 'claude-code', bedrock_supported: false, fields: [] }),
@@ -48,6 +49,16 @@ beforeEach(() => {
   vi.mocked(spawnSession).mockResolvedValue({ tmux_target: 'deck:1.0' } as never)
 })
 afterEach(() => { cleanup(); clearOperatorToken() })
+
+describe('KillSessionDialog', () => {
+  it('names the full product name first when the operator token is rejected', async () => {
+    setOperatorToken('token-123')
+    vi.mocked(killSession).mockRejectedValue(new ApiHttpError('unauthorized', 401))
+    render(<MemoryRouter><KillSessionDialog open onOpenChange={() => {}} session={{ session_name: 'deck:1.0' } as never} onKilled={() => {}} /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: 'Kill' }))
+    expect(await screen.findByText('The Albiex Synth City operator token was rejected. Enter a valid token and retry.')).toBeInTheDocument()
+  })
+})
 
 describe('NewSessionDialog', () => {
   it('has no token field and says that the session is not part of a team', () => {
@@ -121,7 +132,7 @@ describe('NewSessionDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start session' }))
     const dialog = await screen.findByRole('dialog', { name: 'Director key' })
-    expect(within(dialog).getByText(/Deck needs the key to start a session\./)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Synth City needs the key to start a session\./)).toBeInTheDocument()
     expect(spawnSession).not.toHaveBeenCalled()
 
     await user.type(within(dialog).getByLabelText(/Director key/), 'new-key{Enter}')

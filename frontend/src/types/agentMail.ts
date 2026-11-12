@@ -109,6 +109,7 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  provider_upgrades?: Record<string, { state: 'verified' | 'incomplete' | 'needs_attention'; stage: string }>
   mail_capability_tokens_required: boolean
   pi_cli_available?: boolean
   pi_mail_ready?: boolean
@@ -137,7 +138,7 @@ export interface AgentMailInstallStatus {
   curl_available: boolean
   shim_path: string
   python_path: string
-  deck_url: string
+  synth_city_url: string
   claude_settings_path?: string | null
   claude_mcp_config_path?: string | null
   codex_hooks_path?: string | null

@@ -2,7 +2,7 @@ import { expect, test } from '../support/guard'
 
 // #509: a default installation never shows a red identity, and the tab title
 // is "Claude Deck" unless a name is configured. The E2E instance sets no
-// instance name (no CLAUDE_DECK_INSTANCE_NAME), so it is a default installation.
+// instance name (no SYNTH_CITY_INSTANCE_NAME), so it is a default installation.
 // @active since #509 merged into release/v3.1 (PR #579).
 
 /** True when a CSS colour is red-dominant (an alarm colour). */
@@ -29,8 +29,8 @@ for (const route of ['/', '/work', '/teams']) {
   })
 }
 
-test('@active the tab title is "Claude Deck" on a default installation', async ({ page }) => {
+test('@active the tab title is "Albiex Synth City" on a default installation', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
-  await expect(page).toHaveTitle('Claude Deck')
+  await expect(page).toHaveTitle('Albiex Synth City')
 })

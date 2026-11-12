@@ -171,6 +171,6 @@ describe('Plan launch', () => {
     open('/teams/1?tab=roster')
     await user.click(await screen.findByRole('button', { name: /Plan launch/ }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('Deck needs the key to plan a launch.')).toBeInTheDocument()
+    expect(within(dialog).getByText('Synth City needs the key to plan a launch.')).toBeInTheDocument()
   })
 })

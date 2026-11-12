@@ -299,7 +299,7 @@ async def test_maintenance_routes_require_operator_for_reads_and_writes(db, monk
     async def database():
         yield db
     app.dependency_overrides[get_db] = database
-    headers = {"X-Deck-Operator-Token": header} if header else {}
+    headers = {"X-Synth-City-Operator-Token": header} if header else {}
     root = f"/api/v1/agent-teams/presets/{scope.preset_id}"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         report = await client.get(root + "/terminal-revisions", headers=headers)

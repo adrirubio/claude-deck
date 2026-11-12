@@ -1,6 +1,7 @@
-"""Claude Deck Agent Mail MCP server over stdio."""
+"""Albiex Synth City Agent Mail MCP server over stdio."""
 import asyncio
 import os
+import sys
 import threading
 import time
 import uuid
@@ -10,8 +11,8 @@ from urllib.parse import quote
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-DECK_URL = os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000").rstrip("/")
-PROVIDER = os.environ.get("CLAUDE_DECK_PROVIDER", "unknown")
+DECK_URL = os.environ.get("SYNTH_CITY_URL", "http://127.0.0.1:8000").rstrip("/")
+PROVIDER = os.environ.get("SYNTH_CITY_PROVIDER", "unknown")
 DECK_API = f"{DECK_URL}/api/v1"
 API = f"{DECK_API}/agent-mail"
 DECK_HTTP_TIMEOUT = httpx.Timeout(connect=0.5, read=15.0, write=5.0, pool=0.5)
@@ -19,7 +20,19 @@ OFFLINE_BACKOFF_SECONDS = 2.0
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
 
-mcp = FastMCP("claude-deck-mail")
+_UPGRADE_PROBE = "--synth-city-upgrade-tools-list-probe" in sys.argv[1:]
+
+
+class _UpgradeSafeFastMCP(FastMCP):
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        # The upgrade process needs initialize and tools/list only. Refuse all
+        # tools/call dispatch centrally, including tools without registration.
+        if _UPGRADE_PROBE:
+            return {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+        return await super().call_tool(name, arguments)
+
+
+mcp = _UpgradeSafeFastMCP("albiex-synth-city-mail")
 _register_lock = threading.Lock()
 _heartbeat_stop = threading.Event()
 _heartbeat_thread: threading.Thread | None = None
@@ -49,8 +62,8 @@ def _env_int(name: str) -> int | None:
 def _unreachable_result(message: str) -> dict:
     return {
         "ok": False,
-        "error": {"code": "deck_unreachable", "message": message},
-        "suggestion": "Continue without mailbox coordination, or ask the user to start Claude Deck.",
+        "error": {"code": "synth_city_unreachable", "message": message},
+        "suggestion": "Continue without mailbox coordination, or ask the user to start Albiex Synth City.",
     }
 
 
@@ -75,7 +88,7 @@ def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
     except ValueError:
         pass
     error = {
-        "code": detail_code or "deck_http_error",
+        "code": detail_code or "synth_city_http_error",
         "status_code": response.status_code,
         "message": message,
     }
@@ -105,24 +118,24 @@ def _run_bounded_http_request(method: str, url: str, budget: float, timeout, kwa
     worker.start()
     worker.join(timeout=budget)
     if worker.is_alive():
-        raise TimeoutError("Deck request total deadline expired")
+        raise TimeoutError("Synth City request total deadline expired")
     if failures:
         raise failures[0]
     return results[0]
 
 
-def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
+def _synth_city_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
     if _state.get("closing") and path != "/agent/close":
         return {"ok": False, "error": {"code": "mail_generation_closing"}}
     now = time.monotonic()
     if now < _state.get("offline_until", 0.0):
-        return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
+        return _unreachable_result(_state.get("last_error") or "Albiex Synth City is unavailable.")
     normalized_path = path if path.startswith("/") else f"/{path}"
     url = f"{DECK_API}/{api_prefix.strip('/')}{normalized_path}"
     session_token = _state.get("capability_token")
     if session_token:
         headers = dict(kwargs.pop("headers", {}) or {})
-        headers["X-Deck-Session-Token"] = session_token
+        headers["X-Synth-City-Session-Token"] = session_token
         kwargs["headers"] = headers
     budget = kwargs.pop("total_timeout", None)
     deadline = getattr(_request_budget, "deadline", None)
@@ -156,11 +169,11 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
 
 
 def _request(method: str, path: str, **kwargs) -> dict:
-    return _deck_request(method, "agent-mail", path, **kwargs)
+    return _synth_city_request(method, "agent-mail", path, **kwargs)
 
 
 def _team_request(method: str, path: str, **kwargs) -> dict:
-    return _deck_request(method, "agent-teams", path, **kwargs)
+    return _synth_city_request(method, "agent-teams", path, **kwargs)
 
 
 def _redact_actor_credential(value: Any, credential: str) -> Any:
@@ -175,11 +188,11 @@ def _redact_actor_credential(value: Any, credential: str) -> Any:
 
 
 @mcp.tool()
-def deck_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[str] = None) -> dict:
+def synth_city_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[str] = None) -> dict:
     """Promise the next supervisor check with an ISO 8601 UTC time.
     Only the bound external actor can call this tool. The promise grants no authority.
     The controller derives health. The next check must be within 24 hours."""
-    credential = os.environ.get("CLAUDE_DECK_EXTERNAL_ACTOR_TOKEN")
+    credential = os.environ.get("SYNTH_CITY_EXTERNAL_ACTOR_TOKEN")
     if not credential:
         return {"ok": False, "error": {"code": "supervisor_actor_credential_missing"}}
     try:
@@ -202,11 +215,11 @@ def deck_supervisor_checkin(preset_id: int, next_check_at: str, note: Optional[s
 
 
 def _bridge_request(method: str, path: str, **kwargs) -> dict:
-    return _deck_request(method, "agent-bridge", path, **kwargs)
+    return _synth_city_request(method, "agent-bridge", path, **kwargs)
 
 
 def _dispatch_request(method: str, path: str, **kwargs) -> dict:
-    return _deck_request(method, "agent-teams", path, **kwargs)
+    return _synth_city_request(method, "agent-teams", path, **kwargs)
 
 
 def _bridge_request_with_token(method: str, path: str, *, target: str, **kwargs) -> dict:
@@ -221,11 +234,11 @@ def _bridge_request_with_token(method: str, path: str, *, target: str, **kwargs)
             "ok": False,
             "error": {
                 "code": "missing_terminal_token",
-                "message": "Claude Deck did not return an Agent Bridge terminal token.",
+                "message": "Albiex Synth City did not return an Agent Bridge terminal token.",
             },
         }
     headers = dict(kwargs.pop("headers", {}) or {})
-    headers["X-Claude-Deck-Terminal-Token"] = token
+    headers["X-Synth-City-Terminal-Token"] = token
     return _bridge_request(method, path, headers=headers, **kwargs)
 
 
@@ -234,6 +247,10 @@ def _bridge_session_path(target: str) -> str:
 
 
 def _ensure_registered() -> dict:
+    # Schema verification is registration-free and read-only. Member tools
+    # cannot turn this startup probe into a synthetic authenticated session.
+    if _UPGRADE_PROBE:
+        return {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     with _register_lock:
         if _state.get("closing"):
             return {"ok": False, "error": {"code": "mail_generation_closing"}}
@@ -244,8 +261,8 @@ def _ensure_registered() -> dict:
             "session_key": _state["session_key"],
             "pid": os.getppid(),
         }
-        team_preset_id = _env_int("CLAUDE_DECK_TEAM_PRESET_ID")
-        team_slot_id = _env_int("CLAUDE_DECK_TEAM_SLOT_ID")
+        team_preset_id = _env_int("SYNTH_CITY_TEAM_PRESET_ID")
+        team_slot_id = _env_int("SYNTH_CITY_TEAM_SLOT_ID")
         if team_preset_id is not None:
             payload["team_preset_id"] = team_preset_id
         if team_slot_id is not None:
@@ -300,7 +317,7 @@ def _start_heartbeat_thread() -> threading.Thread:
     global _heartbeat_thread
     thread = threading.Thread(
         target=_heartbeat_loop,
-        name="claude-deck-agent-mail-heartbeat",
+        name="albiex-synth-city-agent-mail-heartbeat",
         daemon=True,
     )
     thread.start()
@@ -308,7 +325,7 @@ def _start_heartbeat_thread() -> threading.Thread:
     return thread
 
 
-def __deck_mail_close_generation() -> dict:
+def __synth_city_mail_close_generation() -> dict:
     """Private lifecycle control; not a model tool."""
     if _state.get("closed"):
         return {"ok": True, "closed": True}
@@ -329,8 +346,8 @@ def __deck_mail_close_generation() -> dict:
 
 
 if PROVIDER == "pi-cli":
-    mcp.tool()(__deck_mail_close_generation)
-    mcp._tool_manager.get_tool("__deck_mail_close_generation").parameters["additionalProperties"] = False
+    mcp.tool()(__synth_city_mail_close_generation)
+    mcp._tool_manager.get_tool("__synth_city_mail_close_generation").parameters["additionalProperties"] = False
 
 
 def _counts() -> dict:
@@ -354,8 +371,8 @@ def _guard() -> Optional[dict]:
 
 
 @mcp.tool()
-def deck_whoami() -> dict:
-    """Register with Claude Deck Agent Mail and return your participant identity, role,
+def synth_city_whoami() -> dict:
+    """Register with Albiex Synth City Agent Mail and return your participant identity, role,
     charter, repo, live status, and unread/pending inbox counts. Call this once when
     starting coordinated work."""
     if PROVIDER != "pi-cli":
@@ -382,8 +399,8 @@ def _whoami() -> dict:
 
 
 @mcp.tool()
-def deck_list_team() -> dict:
-    """List all local Agent Mail participants Claude Deck knows about, including member
+def synth_city_list_team() -> dict:
+    """List all local Agent Mail participants Albiex Synth City knows about, including member
     ids, display names, roles, repos, team slots, charters, and live statuses."""
     err = _guard()
     if err:
@@ -413,7 +430,7 @@ def deck_list_team() -> dict:
 
 
 @mcp.tool()
-def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
+def synth_city_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
     """Read your Agent Mail inbox, including messages, context requests, handoffs, and
     answers. Returned messages are marked read. Check before major work and after
     finishing a task."""
@@ -431,11 +448,11 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-def deck_send_message(to_member_id: Optional[int] = None, body: str = "", subject: str = "",
+def synth_city_send_message(to_member_id: Optional[int] = None, body: str = "", subject: str = "",
                       to_supervisor_actor_id: Optional[int] = None) -> dict:
     """Send a plain message to a team member or the current bound Supervisor.
-    Set exactly one target. For context requests use deck_request_context.
-    For handoffs use deck_create_handoff. Supervisor messages grant no authority."""
+    Set exactly one target. For context requests use synth_city_request_context.
+    For handoffs use synth_city_create_handoff. Supervisor messages grant no authority."""
     if (to_member_id is None) == (to_supervisor_actor_id is None):
         return {"ok": False, "error": {"code": "mail_target_required"}}
     err = _guard()
@@ -464,7 +481,7 @@ def deck_send_message(to_member_id: Optional[int] = None, body: str = "", subjec
 
 
 @mcp.tool()
-def deck_reply(thread_root_id: int, body: str) -> dict:
+def synth_city_reply(thread_root_id: int, body: str) -> dict:
     """Reply in an existing thread. If the root is a pending context request addressed
     to you, your reply is recorded as the answer and resolves it."""
     err = _guard()
@@ -500,7 +517,7 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
-def deck_request_work_item_approval(
+def synth_city_request_work_item_approval(
     work_item_id: int,
     dispatch_nonce: str,
     summary: str,
@@ -509,7 +526,7 @@ def deck_request_work_item_approval(
     """Submit the current work item's initial plan to its designated Leader.
 
     This creates normalized approval authority and returns its stable request id.
-    Do not use deck_request_context for initial-plan approval; ordinary context
+    Do not use synth_city_request_context for initial-plan approval; ordinary context
     questions are non-authoritative.
     """
     err = _guard()
@@ -539,7 +556,7 @@ def deck_request_work_item_approval(
 
 
 @mcp.tool()
-def deck_approve_work_item(
+def synth_city_approve_work_item(
     work_item_id: int,
     dispatch_nonce: str,
     decision: str,
@@ -548,7 +565,7 @@ def deck_approve_work_item(
 ) -> dict:
     """Approve or reject a normalized initial-plan request as its designated Leader.
 
-    Pass approval_request_id from deck_request_work_item_approval. A rejection opens
+    Pass approval_request_id from synth_city_request_work_item_approval. A rejection opens
     the next round automatically when one remains.
     """
     if decision not in {"approved", "rejected"}:
@@ -584,7 +601,7 @@ def deck_approve_work_item(
 
 
 @mcp.tool()
-def deck_request_continuation(
+def synth_city_request_continuation(
     work_item_id: int,
     dispatch_nonce: str,
     phase: str,
@@ -625,7 +642,7 @@ def deck_request_continuation(
 
 
 @mcp.tool()
-def deck_decide_continuation(
+def synth_city_decide_continuation(
     approval_request_id: int,
     work_item_id: int,
     dispatch_nonce: str,
@@ -666,7 +683,7 @@ def deck_decide_continuation(
 
 
 @mcp.tool()
-def deck_ack_continuation(
+def synth_city_ack_continuation(
     work_item_id: int,
     revision: int,
     dispatch_nonce: str,
@@ -690,7 +707,7 @@ def deck_ack_continuation(
 
 
 @mcp.tool()
-def deck_list_scope_revisions(work_item_id: int) -> dict:
+def synth_city_list_scope_revisions(work_item_id: int) -> dict:
     """List safe continuation authority history for one work item."""
     err = _guard()
     if err:
@@ -705,7 +722,7 @@ def deck_list_scope_revisions(work_item_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_ack_message(message_id: int) -> dict:
+def synth_city_ack_message(message_id: int) -> dict:
     """Acknowledge a message. Acking an answer to your context request closes it; acking
     a handoff addressed to you accepts and closes the handoff."""
     err = _guard()
@@ -722,7 +739,7 @@ def deck_ack_message(message_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_request_context(
+def synth_city_request_context(
     to_member_id: int,
     topic: str,
     why_needed: str = "",
@@ -733,7 +750,7 @@ def deck_request_context(
     """Ask another Agent Mail participant a non-authoritative structured question.
 
     Creates a pending context request they will be nudged to answer. For initial-plan
-    approval, use deck_request_work_item_approval instead; a context answer cannot
+    approval, use synth_city_request_work_item_approval instead; a context answer cannot
     authorize implementation.
     """
     err = _guard()
@@ -766,7 +783,7 @@ def deck_request_context(
 
 
 @mcp.tool()
-def deck_create_handoff(
+def synth_city_create_handoff(
     to_member_id: int,
     summary: str,
     files: Optional[list[str]] = None,
@@ -804,7 +821,7 @@ def deck_create_handoff(
 
 
 @mcp.tool()
-def deck_attach_image_to_bridge_session(
+def synth_city_attach_image_to_bridge_session(
     target: str,
     file_path: str,
     submit: bool = False,
@@ -851,7 +868,7 @@ def deck_attach_image_to_bridge_session(
 
 
 @mcp.tool()
-def deck_list_bridge_attachments(target: str) -> dict:
+def synth_city_list_bridge_attachments(target: str) -> dict:
     """List recent image attachments for an Agent Bridge tmux target."""
     result = _bridge_request_with_token(
         "GET", f"{_bridge_session_path(target)}/attachments", target=target
@@ -862,7 +879,7 @@ def deck_list_bridge_attachments(target: str) -> dict:
 
 
 @mcp.tool()
-def deck_paste_bridge_attachment(
+def synth_city_paste_bridge_attachment(
     target: str,
     attachment_id: int,
     submit: bool = False,
@@ -881,8 +898,8 @@ def deck_paste_bridge_attachment(
 
 
 @mcp.tool()
-def deck_list_teams() -> dict:
-    """List saved Claude Deck Agent Team presets. Returns preset ids, names,
+def synth_city_list_teams() -> dict:
+    """List saved Albiex Synth City Agent Team presets. Returns preset ids, names,
     descriptions, and slots with launch options and validation warnings."""
     result = _team_request("GET", "/presets")
     if not result["ok"]:
@@ -891,7 +908,7 @@ def deck_list_teams() -> dict:
 
 
 @mcp.tool()
-def deck_create_team(
+def synth_city_create_team(
     name: str,
     description: str = "",
     slots: Optional[list[dict[str, Any]]] = None,
@@ -922,7 +939,7 @@ def deck_create_team(
     - opencode-cli: modes plain/resume; launch_options model, agent,
       use_last, session_id, platform, aws_region, aws_profile, prompt.
       OpenCode TUI launch does not support reasoning_effort.
-    Use deck_plan_team_launch before launch.
+    Use synth_city_plan_team_launch before launch.
     """
     payload = {
         "name": name,
@@ -938,7 +955,7 @@ def deck_create_team(
 
 
 @mcp.tool()
-def deck_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str]) -> dict:
+def synth_city_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str]) -> dict:
     """Set a team's GitHub parent issue link. Use null to clear the link.
 
     This operation changes only the parent link. It grants no execution authority.
@@ -950,7 +967,7 @@ def deck_update_team_parent_issue(preset_id: int, parent_issue_url: Optional[str
 
 
 @mcp.tool()
-def deck_update_team_campaign(
+def synth_city_update_team_campaign(
     preset_id: int,
     backlog_milestone: Optional[str],
     planned_decisions: Optional[list[dict[str, Any]]],
@@ -967,13 +984,13 @@ def deck_update_team_campaign(
     if not director_key:
         return {"ok": False, "error": {"code": "operator_token_required"}}
     result = _team_request("PATCH", f"/presets/{preset_id}",
-        headers={"X-Deck-Operator-Token": director_key},
+        headers={"X-Synth-City-Operator-Token": director_key},
         json={"backlog_milestone": backlog_milestone, "planned_decisions": planned_decisions})
     if not result["ok"]:
         # Keep credential-bearing request details out of the returned error.
         error = result.get("error")
         allowed = {"operator_token_required", "operator_token_invalid", "operator_token_unconfigured",
-                   "deck_http_error", "deck_unreachable", "mail_generation_closing", "mail_startup_expired"}
+                   "synth_city_http_error", "synth_city_unreachable", "mail_generation_closing", "mail_startup_expired"}
         code = error.get("code") if isinstance(error, dict) else None
         failure = {"ok": False, "error": {"code": code if code in allowed else "campaign_update_failed"}}
         if result.get("outcome") == "unknown":
@@ -986,7 +1003,7 @@ def deck_update_team_campaign(
 
 
 @mcp.tool()
-def deck_get_team_summary(preset_id: int) -> dict:
+def synth_city_get_team_summary(preset_id: int) -> dict:
     """Read a team's outcome, parent link, existing attention signals, effort total and next actors.
 
     Unknown or incomplete observations keep the total Unknown. This read grants no execution authority.
@@ -998,14 +1015,14 @@ def deck_get_team_summary(preset_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_plan_team_launch(
+def synth_city_plan_team_launch(
     preset_id: int,
     reuse_existing: bool = True,
     slot_ids: Optional[list[int]] = None,
     include_disabled: bool = False,
 ) -> dict:
     """Plan an Agent Team launch and return the plan_hash required by
-    deck_launch_team. Agent sessions cannot include disabled slots or force
+    synth_city_launch_team. Agent sessions cannot include disabled slots or force
     replacement of a running session; those options require an operator."""
     if not reuse_existing or include_disabled:
         return {
@@ -1027,7 +1044,7 @@ def deck_plan_team_launch(
 
 
 @mcp.tool()
-def deck_launch_team(
+def synth_city_launch_team(
     preset_id: int,
     confirm_plan_hash: str = "",
     reuse_existing: bool = True,
@@ -1036,10 +1053,10 @@ def deck_launch_team(
 ) -> dict:
     """Launch an Agent Team preset.
 
-    Call deck_plan_team_launch first and pass its plan_hash as
+    Call synth_city_plan_team_launch first and pass its plan_hash as
     confirm_plan_hash. Forced respawn and force_without_plan require an
     operator and are not available through this agent tool. Launch behavior
-    uses the per-provider launch_options accepted by deck_create_team;
+    uses the per-provider launch_options accepted by synth_city_create_team;
     validation errors include machine-readable
     block_code values when available.
     """
@@ -1056,7 +1073,7 @@ def deck_launch_team(
             "ok": False,
             "error": {
                 "code": "plan_hash_required",
-                "message": "Call deck_plan_team_launch first and pass confirm_plan_hash.",
+                "message": "Call synth_city_plan_team_launch first and pass confirm_plan_hash.",
             },
         }
     payload = {
@@ -1073,7 +1090,7 @@ def deck_launch_team(
 
 
 @mcp.tool()
-def deck_render_github_summary(
+def synth_city_render_github_summary(
     current_body: str,
     summary: dict[str, Any],
     expected_body_sha256: Optional[str] = None,
@@ -1111,7 +1128,7 @@ def deck_render_github_summary(
 
 
 @mcp.tool()
-def deck_prepare_work_remaining_summary(
+def synth_city_prepare_work_remaining_summary(
     work_item_id: int,
     remaining: str,
     next_action: str,
@@ -1165,7 +1182,7 @@ def deck_prepare_work_remaining_summary(
 
 
 @mcp.tool()
-def deck_report_dispatch_status(
+def synth_city_report_dispatch_status(
     work_item_id: int,
     status: str,
     pr_number: Optional[int] = None,
@@ -1179,7 +1196,7 @@ def deck_report_dispatch_status(
     summary: Optional[str] = None,
     evidence: Optional[dict[str, Any]] = None,
 ) -> dict:
-    """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
+    """Report progress on a GitHub issue dispatched by Albiex Synth City.
 
     status is one of: triaging, ack_received, in_progress, pr_ready (with
     head_ref), pr_opened (with pr_number), handoff_initiated (with
@@ -1189,7 +1206,7 @@ def deck_report_dispatch_status(
     diagnostic_completed is accepted only after the PR tree is restored exactly to
     the approved diagnostic baseline. Never send both head_ref and pr_number. Report
     ack_received only after the designated
-    leader records an explicit approved decision with deck_approve_work_item;
+    leader records an explicit approved decision with synth_city_approve_work_item;
     prose replies are not approval. Called by the owner slot the brain dispatched
     the issue to. Include work_item_id and lease_token from your bootstrap prompt.
     """
@@ -1214,7 +1231,7 @@ def deck_report_dispatch_status(
 
 
 @mcp.tool()
-def deck_get_work_item_context(work_item_id: int) -> dict:
+def synth_city_get_work_item_context(work_item_id: int) -> dict:
     """Claim the current owner's continuation context, including the persisted
     branch, approval round, workspace, and lease capability after a handoff or
     session restart."""
@@ -1231,11 +1248,11 @@ def deck_get_work_item_context(work_item_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
+def synth_city_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
     """Leader-only: list this team's GitHub dispatch work items with their
     work_item_id and issue_number. Defaults to escalated items (pass status=""
     for all). Use at team start to resolve which escalated dependents are now
-    unblocked (per your dependency map) so you can call deck_retry_work_item
+    unblocked (per your dependency map) so you can call synth_city_retry_work_item
     with the correct work_item_id.
     """
     registered = _ensure_registered()
@@ -1302,7 +1319,7 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
 
 
 @mcp.tool()
-def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
+def synth_city_retry_work_item(work_item_id: int, reason: str = "") -> dict:
     """Leader-only: request re-dispatch of an ESCALATED GitHub work item whose
     blockers are now resolved. Pass the work_item_id (from the blocker-merged
     notification's escalated_items) and a short reason, e.g.
@@ -1317,7 +1334,7 @@ def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
 
 
 @mcp.tool()
-def deck_get_backlog_coordination(scope_id: int) -> dict:
+def synth_city_get_backlog_coordination(scope_id: int) -> dict:
     """Current Leader: read the assigned backlog, observations and request version.
 
     Reconcile reviewed dependency/milestone gates and already-landed fixes even for
@@ -1333,13 +1350,13 @@ def deck_get_backlog_coordination(scope_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_report_owner_followup(
+def synth_city_report_owner_followup(
     scope_id: int, work_item_id: int, action: str, reason: str,
     expected_sequence: int, followup_token: str,
 ) -> dict:
     """Current Leader: persist or resolve a bounded owner settlement watch.
 
-    Read deck_get_backlog_coordination immediately before this call. Select the
+    Read synth_city_get_backlog_coordination immediately before this call. Select the
     current owner_followups entry. Keep its followup_token private and use its
     event_sequence as expected_sequence. Use action watch and reason
     unfinished_authorized_work before ending a turn with unfinished initial
@@ -1364,7 +1381,7 @@ def deck_report_owner_followup(
 
 
 @mcp.tool()
-def deck_get_operator_action_contexts(preset_id: int) -> dict:
+def synth_city_get_operator_action_contexts(preset_id: int) -> dict:
     """Read current requests and issue instruction templates. This grants no authority.
 
     The Leader must publish completed templates near the start of each main
@@ -1374,7 +1391,7 @@ def deck_get_operator_action_contexts(preset_id: int) -> dict:
     Use existing authorized GitHub access. Never copy tokens, leases, nonces,
     private paths, prompts or raw logs into GitHub. The read does not write to
     GitHub, retry work, release a lease, approve a plan or merge a PR.
-    Missing or stale instructions appear as Action details pending in Deck.
+    Missing or stale instructions appear as Action details pending in Synth City.
     """
     registered = _ensure_registered()
     if not registered["ok"]:
@@ -1383,7 +1400,7 @@ def deck_get_operator_action_contexts(preset_id: int) -> dict:
 
 
 @mcp.tool()
-def deck_prepare_operator_action_contexts(scope_id: int, entries: list[dict]) -> dict:
+def synth_city_prepare_operator_action_contexts(scope_id: int, entries: list[dict]) -> dict:
     """Prepare issue records for the current Leader's intended human requests.
 
     Entries use the backlog assessment schema. Supply only the assigned issues
@@ -1407,7 +1424,7 @@ def deck_prepare_operator_action_contexts(scope_id: int, entries: list[dict]) ->
 
 
 @mcp.tool()
-def deck_report_backlog_assessment(
+def synth_city_report_backlog_assessment(
     scope_id: int, generation: int, request_sequence: int, entries: list[dict],
     snapshot_token: str | None = None,
 ) -> dict:
@@ -1433,11 +1450,11 @@ def deck_report_backlog_assessment(
     These requests appear above the Roster and Autonomy tabs and grant no authority.
     Human actions require required_actor operator. Before reporting requested,
     prepare and publish current issue instructions with
-    deck_prepare_operator_action_contexts. Missing, stale or changed records are
+    synth_city_prepare_operator_action_contexts. Missing, stale or changed records are
     refused. Clear or supersede replaced records in the issue body first.
-    Automatic dispatch requests use deck_get_operator_action_contexts templates.
+    Automatic dispatch requests use synth_city_get_operator_action_contexts templates.
 
-    Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish
+    Pass snapshot_token from a fresh synth_city_get_backlog_coordination read to publish
     while already working, even when notification quota is exhausted or no request
     has been sent (request_sequence may be zero). This spends no notification quota.
     A changed or expired read requires a fresh read; never reuse it for a correction.
@@ -1457,6 +1474,11 @@ def deck_report_backlog_assessment(
 
 
 if __name__ == "__main__":
-    if PROVIDER != "pi-cli":
+    try:
+        from mcp_shim.environment_warning import warn_legacy_environment
+    except ModuleNotFoundError:
+        from environment_warning import warn_legacy_environment
+    warn_legacy_environment()
+    if PROVIDER != "pi-cli" and not _UPGRADE_PROBE:
         _start_heartbeat_thread()
     mcp.run()

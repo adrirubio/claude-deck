@@ -316,10 +316,10 @@ async def get_terminal_token(
     response: Response,
     target: str = Query(min_length=1),
     purpose: TerminalPurpose = "readonly",
-    x_deck_operator_token: str | None = Header(default=None),
+    x_synth_city_operator_token: str | None = Header(default=None),
 ):
     if purpose == "interactive":
-        await require_operator(x_deck_operator_token)
+        await require_operator(x_synth_city_operator_token)
     response.headers["Cache-Control"] = "no-store"
     return {"token": _terminal_tokens.issue(target, purpose)}
 
@@ -381,7 +381,7 @@ async def upload_session_attachment(
     template: str | None = Form(default=None),
     prompt: str | None = Form(default=None),
     created_by: str | None = Form(default="deck-ui"),
-    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    token: str = Header(default="", alias="X-Synth-City-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     _require_attachment_access(request, token, target)
@@ -404,7 +404,7 @@ async def upload_session_attachment(
 async def list_session_attachments(
     target: str,
     request: Request,
-    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    token: str = Header(default="", alias="X-Synth-City-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     _require_attachment_access(request, token, target)
@@ -421,7 +421,7 @@ async def paste_session_attachment(
     attachment_id: int,
     paste_request: BridgeAttachmentPasteRequest,
     request: Request,
-    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    token: str = Header(default="", alias="X-Synth-City-Terminal-Token"),
     principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
@@ -468,7 +468,7 @@ async def delete_session_attachment(
     target: str,
     attachment_id: int,
     request: Request,
-    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    token: str = Header(default="", alias="X-Synth-City-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     _require_attachment_access(request, token, target)
