@@ -2,10 +2,10 @@ name: Backend regression tests
 
 on:
   pull_request:
-    branches: [master, feature/software-delivery-product-reposition, release/v3.1, release/v4.0]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1, release/v4.0, release/v4.1]
     types: [opened, synchronize, reopened]
   push:
-    branches: [master, feature/software-delivery-product-reposition, release/v3.1, release/v4.0]
+    branches: [master, feature/software-delivery-product-reposition, release/v3.1, release/v4.0, release/v4.1]
 
 permissions:
   contents: read
