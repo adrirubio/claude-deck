@@ -31,8 +31,22 @@ describe("Header", () => {
     expect(screen.queryAllByText("Albiex Synth City")).toHaveLength(0);
   });
 
-  it("keeps the subtitle", () => {
+  it("keeps the subtitle, and hides it below the sm breakpoint so the narrow header fits one row", () => {
     renderHeader();
-    expect(screen.getByText("Your local agent command centre")).toBeInTheDocument();
+    const subtitle = screen.getByText("Your local agent command centre");
+    expect(subtitle).toBeInTheDocument();
+    expect(subtitle).toHaveClass("hidden", "sm:block");
+  });
+
+  it("keeps the header on one row and lets the toggle stay beside the logo", () => {
+    const { container } = renderHeader();
+    const row = container.querySelector("header > div");
+    expect(row).not.toHaveClass("flex-wrap");
+    for (const group of Array.from(row?.children ?? [])) {
+      expect(group).not.toHaveClass("flex-wrap");
+    }
+    expect(row?.lastElementChild).toHaveClass("min-w-0", "gap-1", "sm:gap-2");
+    expect(screen.getByAltText("Albiex Synth City")).toHaveClass("shrink-0");
+    expect(screen.getByRole("button", { name: "Toggle theme" }).parentElement).toHaveClass("shrink-0");
   });
 });

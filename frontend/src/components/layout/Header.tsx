@@ -36,16 +36,16 @@ export function Header() {
 
   return (
     <header className={cn("border-b border-t-4 bg-background", instance ? accentClasses.headerBorder : "border-t-transparent")}>
-      <div className="flex min-h-16 flex-wrap items-center justify-between gap-2 px-3 py-2 md:px-6">
-        <div className="flex items-center gap-3">
+      <div className="flex min-h-16 items-center justify-between gap-2 px-3 py-2 md:px-6">
+        <div className="flex shrink-0 items-center gap-3">
           <img
             src={theme === "light" ? "/albiex-logo-compact.svg" : "/albiex-logo-compact-dark.svg"}
             alt="Albiex Synth City"
-            className="h-10 w-auto"
+            className="h-10 w-auto shrink-0"
           />
-          <p className="text-xs text-muted-foreground">Your local agent command centre</p>
+          <p className="hidden text-xs text-muted-foreground sm:block">Your local agent command centre</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-2">
           {!status && (
             // Reserve the badge space so the header does not shift when the status loads.
             <span aria-hidden="true" className="inline-block h-5.5 w-32" />
@@ -55,7 +55,7 @@ export function Header() {
               {instance && (
                 <Badge
                   variant="outline"
-                  className={cn("gap-1 text-xs max-w-48 truncate", accentClasses.badge)}
+                  className={cn("min-w-0 gap-1 text-xs max-w-48 truncate", accentClasses.badge)}
                   title={instanceTitle}
                 >
                   <Server className="h-3 w-3 shrink-0" />
@@ -82,7 +82,7 @@ export function Header() {
               {status.environment?.agent_cli_warning && (
                 <Badge
                   variant="outline"
-                  className="gap-1 text-xs border-destructive/40 text-destructive max-w-88"
+                  className="min-w-0 gap-1 text-xs border-destructive/40 text-destructive max-w-88"
                   title={status.environment.agent_cli_warning}
                 >
                   <AlertCircle className="h-3 w-3 shrink-0" />
@@ -91,7 +91,9 @@ export function Header() {
               )}
             </>
           )}
-          <ThemeToggle />
+          <div className="shrink-0">
+            <ThemeToggle />
+          </div>
         </div>
       </div>
     </header>
