@@ -2,16 +2,16 @@
   "schema_version": 1,
   "source_base_sha": "667841e7e71ea4c1007a4124273bb7c3a6b04869",
   "exact_review_head": "Recorded in external authenticated freeze receipt; no self-referential commit hash",
-  "catalog_sha256": "d001249b54cde32d21eb829d2d108c1ae338be1a0ce568bf1390001ae7e96065",
+  "catalog_sha256": "9cba036bd82f008b4ad49d5058c1cd0fcbcb736b7ef0969878e530002f2bf577",
   "source_sha256": {
     "backend/app/models/provider_operations_schemas.py": "53e6e0a3aac830a381e7c06e7157ac3987d60a178e0263859c6792675f101fac",
     "backend/app/services/provider_readiness_service.py": "cad7cc4ad28b56957c5fc26a53387ee2387b297fb5ba75cb288d8defaf9ac432",
-    "backend/app/services/provider_operations_service.py": "05b7194a4cee07f4b6837a209e84ab5b4152c804ae743b984f476de1813c0387",
+    "backend/app/services/provider_operations_service.py": "d36ddf686f3eff3ad38f7c53b3bd8cf9e92b59aa3bd1ec65b9ebb36193357211",
     "backend/app/api/v1/providers.py": "1568537ef086cd1188e9b641460a6a50d851a53d3aba7e6eeb6370de6933e2fd",
-    "backend/app/services/agent_team_service.py": "9e3ba04750248bb4fb02e73a5c4fe6c580ad9b695acaa5cac9da90c06c880f9a",
+    "backend/app/services/agent_team_service.py": "dd95ac9322df5e16a948663a9dbfb755152bb73bf0c614a9d33c835fefb4e139",
     "frontend/tests/fixtures/factory/native-adapters.json": "40e931b0c9d855877595e86539fde51d7506a60169ac2582edd0120e167706fd",
     "backend/tests/test_provider_operations.py": "ebe6960bea779891fcf96e4a598389197812c08280133c2ed7046cca51f8fa5e",
-    "backend/tests/test_provider_readiness.py": "64db62f3122050ae3e00959d4cc26d823cea5b6bad827dca434ffb0036e89e5e"
+    "backend/tests/test_provider_readiness.py": "b847ea811c6c5ab62aa447b09fbd28411be2dd9c9d35f7770bcc565e36dfc43c"
   },
   "providers": [
     "claude-code",

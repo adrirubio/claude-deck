@@ -88,7 +88,7 @@ test('@active native content hooks keep a fixed reminder without Mail credential
       input: JSON.stringify({ session_id: 'e2e-native-hook', cwd: '/synthetic' }), encoding: 'utf8',
     })
     expect(JSON.parse(output)).toEqual({ hookSpecificOutput: {
-      hookEventName: event, additionalContext: 'Check your Deck inbox.',
+      hookEventName: event, additionalContext: 'Check your Albiex Synth City inbox.',
     } })
   }
   const context = await request.post('/api/v1/agent-mail/hooks/session-start', {

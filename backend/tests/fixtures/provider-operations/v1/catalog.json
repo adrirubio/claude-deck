@@ -9,7 +9,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -23,7 +23,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -499,7 +499,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -513,7 +513,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -941,7 +941,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -955,7 +955,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -1111,7 +1111,7 @@
         "fork": {
           "state": "unsupported",
           "label": "Fork Sessions",
-          "reason": "Copilot CLI does not expose a Deck-compatible fork workflow."
+          "reason": "Copilot CLI does not expose an Albiex Synth City-compatible fork workflow."
         },
         "mcp": {
           "state": "write_capable",
@@ -1126,7 +1126,7 @@
         "permissions": {
           "state": "unsupported",
           "label": "Permissions",
-          "reason": "Copilot CLI permissions are launch flags and hooks, not a Deck-managed page yet."
+          "reason": "Copilot CLI permissions are launch flags and hooks, not an Albiex Synth City-managed page yet."
         },
         "commands": {
           "state": "unsupported",
@@ -1363,7 +1363,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -1377,7 +1377,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -1533,7 +1533,7 @@
         "fork": {
           "state": "unsupported",
           "label": "Fork Sessions",
-          "reason": "OpenCode fork mode is not exposed through Deck yet."
+          "reason": "OpenCode fork mode is not exposed through Albiex Synth City yet."
         },
         "mcp": {
           "state": "write_capable",
@@ -1548,7 +1548,7 @@
         "permissions": {
           "state": "unsupported",
           "label": "Permissions",
-          "reason": "OpenCode permissions are launch flags and provider config, not a Deck-managed page yet."
+          "reason": "OpenCode permissions are launch flags and provider config, not an Albiex Synth City-managed page yet."
         },
         "commands": {
           "state": "unsupported",
@@ -1785,7 +1785,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -1802,7 +1802,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -1922,7 +1922,7 @@
         },
         "execution_controls": {
           "state": "unsupported",
-          "reason": "Deck does not provide a Pi sandbox or native permission-enforcement controls.",
+          "reason": "Albiex Synth City does not provide a Pi sandbox or native permission-enforcement controls.",
           "conditions": [
             "Pi integration must not imply added isolation"
           ],
@@ -1936,7 +1936,7 @@
         "spawn": {
           "state": "write_capable",
           "label": "Spawn Sessions",
-          "reason": "Deck can launch Pi with its opt-in mail extension."
+          "reason": "Albiex Synth City can launch Pi with its opt-in mail extension."
         },
         "resume": {
           "state": "write_capable",
@@ -2208,7 +2208,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -2222,7 +2222,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -2358,7 +2358,7 @@
         "spawn": {
           "state": "write_capable",
           "label": "Spawn Sessions",
-          "reason": "Deck can launch Muse Code on a Muse subscription or API key."
+          "reason": "Albiex Synth City can launch Muse Code on a Muse subscription or API key."
         },
         "resume": {
           "state": "write_capable",
@@ -2632,7 +2632,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -2646,7 +2646,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -3074,7 +3074,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -3088,7 +3088,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -3516,7 +3516,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -3530,7 +3530,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -3958,7 +3958,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -3972,7 +3972,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -4400,7 +4400,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -4414,7 +4414,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -4842,7 +4842,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -4856,7 +4856,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",
@@ -5284,7 +5284,7 @@
       "operations": {
         "launch": {
           "state": "conditional",
-          "reason": "Deck has a validated native launch contract.",
+          "reason": "Albiex Synth City has a validated native launch contract.",
           "conditions": [
             "Binary and Mail prerequisites",
             "Validated provider launch options",
@@ -5298,7 +5298,7 @@
         },
         "observe_session": {
           "state": "conditional",
-          "reason": "Deck can associate native sessions under identity checks.",
+          "reason": "Albiex Synth City can associate native sessions under identity checks.",
           "conditions": [
             "Provider-specific discovery",
             "Exact team/slot/member and pane identity",

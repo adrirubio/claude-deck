@@ -140,13 +140,13 @@ test.describe('instance isolation', () => {
   test('@active an instance refuses a Deck endpoint in its environment', () => {
     const { status, stderr } = runRefused(baseEnv({ SYNTH_CITY_URL: 'http://127.0.0.1:9' }))
     expect(status).toBe(2)
-    expect(stderr).toContain('SYNTH_CITY_URL names another Deck')
+    expect(stderr).toContain('SYNTH_CITY_URL names another Albiex Synth City')
   })
 
   test('@active an instance refuses a Deck Mail credential in its environment', () => {
     const { status, stderr } = runRefused(baseEnv({ SYNTH_CITY_MAIL_TOKEN: 'synthetic' }))
     expect(status).toBe(2)
-    expect(stderr).toContain('a Deck Mail credential must not reach the E2E instance')
+    expect(stderr).toContain('an Albiex Synth City Mail credential must not reach the E2E instance')
   })
 
   test('@active an instance refuses an Agent Mail MCP configuration in its HOME', () => {
