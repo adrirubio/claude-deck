@@ -1,4 +1,4 @@
-# Claude Deck
+# Albiex Synth City
 
 Web app for managing Claude Code configurations, MCP servers, commands, plugins, hooks, and permissions.
 
@@ -65,7 +65,7 @@ All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hoo
 
 - **Backend**: FastAPI + async SQLAlchemy + aiosqlite + SQLite
 - **Frontend**: React 19 + Vite 8 + TypeScript + Tailwind CSS 4 + shadcn/ui
-- **Database**: SQLite at `backend/claude_registry.db` (auto-created via `create_all`, no migrations)
+- **Database**: SQLite defaults to `./synth_city.db` relative to the backend working directory
 - **API**: RESTful `/api/v1/`, Vite proxies `/api` → `http://localhost:8000`
 - **CORS**: `localhost:5173`
 
@@ -86,13 +86,13 @@ GitHub Actions workflows in `.github/workflows/`:
 - `claude.yml` — Claude Code integration (triggers on @claude mentions)
 - `codeql.yml` — CodeQL security analysis
 - `release.yml` — Manual release (builds frontend, creates GitHub release)
-- Docs-only pull requests (every changed file under `docs/` or root Markdown) skip the expensive steps of the backend, frontend and e2e jobs. The jobs still finish `success`, because Deck's delivery policy requires that conclusion. Detection: `scripts/ci/docs_only.py`; any doubt runs the suites. Pushes to `master` always run everything.
+- Docs-only pull requests (every changed file under `docs/` or root Markdown) skip the expensive steps of the backend, frontend and e2e jobs. The jobs still finish `success`, because Synth City's delivery policy requires that conclusion. Detection: `scripts/ci/docs_only.py`; any doubt runs the suites. Pushes to `master` always run everything.
 
 ## Gotchas
 
 - No `.env` file needed — all config has defaults in `backend/app/config.py`
-- Database lives at `backend/claude_registry.db`, created automatically on first run
-- No database migration system — schema changes require deleting the db
+- The default database is `./synth_city.db` relative to the backend working directory.
+- First-start upgrade handles the previous database location; retain existing data during upgrades.
 - Run `npm ci` in `frontend/` before `npm test`. This installs the locked test dependencies.
 - Backend dependencies are locked in `backend/uv.lock` and exported to `backend/requirements.txt`.
-- Backups stored in `~/.claude-registry/backups/`
+- Backups stored in `~/.albiex-synth-city/backups/`

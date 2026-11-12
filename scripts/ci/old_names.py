@@ -12,7 +12,23 @@ import sys
 
 ROOTS = ('backend/', 'frontend/', 'integrations/', 'scripts/', '.github/')
 ROOT_FILES = {'VERSION', 'package.json', 'package-lock.json', 'pyproject.toml',
-              'docker-compose.yml', 'Dockerfile', '.env.example'}
+              'docker-compose.yml', 'Dockerfile', '.env.example', '.gitignore'}
+SOURCE_CONFIG_EXTENSIONS = {
+    '.py', '.pyi', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
+    '.json', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd', '.sql',
+    '.css', '.scss', '.sass', '.less', '.html', '.htm', '.svg', '.xml',
+    '.vue', '.svelte', '.astro', '.go', '.rs', '.c', '.h', '.cpp', '.hpp',
+    '.java', '.rb', '.php', '.lock', '.env',
+}
+CONFIG_BASENAMES = {
+    'Dockerfile', 'Containerfile', 'Makefile', 'GNUmakefile', 'Justfile',
+    '.gitignore', '.gitattributes', '.editorconfig', '.npmrc', '.nvmrc',
+    '.prettierrc', '.eslintrc', '.babelrc', '.stylelintrc', '.browserslistrc',
+    '.npmignore', '.dockerignore', '.tool-versions', '.env', 'CLAUDE.md', 'AGENTS.md', 'SKILL.md',
+}
+CONFIG_PREFIXES = ('.env.', '.prettierrc.', '.eslintrc.', '.babelrc.',
+                   '.stylelintrc.', 'Dockerfile.', 'Containerfile.')
 # The inventory's six-term primary search, plus short-name/protocol surfaces.
 PRIMARY = re.compile(r'Claude Deck|claude-deck|claude_deck|CLAUDE_DECK|claude_registry|\.claude-registry', re.I)
 SUPPLEMENTAL = re.compile(r'\bDeck\b|\bdeck_[a-z0-9_]+|deck-agent-mail-(?:actor-key|actor-token)|--deck-url')
@@ -54,10 +70,17 @@ def scan(root, policy):
         return errors
     named = {(rule['path'], rule['line']): rule for rule in rules}
     counts = Counter()
-    raw = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z'])
-    for relative in sorted(raw.decode().split('\0')):
-        if not relative or not (relative.startswith(ROOTS) or relative in ROOT_FILES):
-            continue
+    raw = subprocess.check_output(['git', '-C', str(root), 'ls-files', '--stage', '-z'])
+    entries = []
+    for record in raw.decode().split('\0'):
+        if record:
+            metadata, relative = record.split('\t', 1)
+            mode, _, stage = metadata.split()
+            if stage != '0':
+                errors.append(relative + ': unresolved index entry')
+                continue
+            entries.append((relative, mode))
+    for relative, mode in sorted(entries):
         if any(fnmatchcase(relative, entry['path']) for entry in exclusions):
             continue
         path = root / relative
@@ -67,6 +90,11 @@ def scan(root, policy):
             continue  # Inventory primary search is text-only (-I).
         except OSError:
             errors.append(relative + ': tracked source is unreadable')
+            continue
+        if not (relative.startswith(ROOTS) or relative in ROOT_FILES
+                or path.name in CONFIG_BASENAMES or path.name.startswith(CONFIG_PREFIXES)
+                or path.suffix.lower() in SOURCE_CONFIG_EXTENSIONS
+                or mode == '100755' or content.startswith('#!')):
             continue
         for number, line in enumerate(content.splitlines(), 1):
             identity = (relative, line.strip())

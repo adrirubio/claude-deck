@@ -1,4 +1,4 @@
 interface:
-  display_name: "Deck Factory Supervisor"
-  short_description: "Run Deck backlog teams with explicit operator delegation"
-  default_prompt: "Use $deck-factory-supervisor to prepare or resume my Deck campaign within its recorded permissions."
+  display_name: "Albiex Synth City Factory Supervisor"
+  short_description: "Run Synth City backlog teams with explicit operator delegation"
+  default_prompt: "Use $deck-factory-supervisor to prepare or resume my Synth City campaign within its recorded permissions."
