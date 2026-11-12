@@ -119,7 +119,7 @@ describe('mailSetupState', () => {
       title: 'Install Agent Mail for Claude Code',
       description: 'A backup is attempted before these user-scope config changes are made.',
     })
-    expect(mailConfirm('codex-cli', 'remove', status()).mutations[0]).toBe('Codex CLI: run `codex mcp remove claude-deck-mail`')
+    expect(mailConfirm('codex-cli', 'remove', status()).mutations[0]).toBe('Codex CLI: run `codex mcp remove albiex-synth-city-mail`')
     expect(mailConfirm('opencode-cli', 'remove', status()).title).toBe('Remove Agent Mail from OpenCode CLI')
   })
 
@@ -173,6 +173,16 @@ describe('HarnessMailSetup', () => {
     render(<HarnessMailSetup providerId="copilot-cli" harnessInstalled={false} setup={setup(status())} />)
     expect(screen.getByText(/Install the harness first\./)).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it.each(['incomplete', 'needs_attention'] as const)('shows an upgrade %s before harness availability and offers no mutation', (state) => {
+    render(<HarnessMailSetup providerId="codex-cli" harnessInstalled={false} setup={setup(status({
+      provider_upgrades: { 'codex-cli': { state, stage: 'old_removed' } },
+    }))} />)
+    expect(screen.getByText(state === 'incomplete' ? /Upgrade incomplete/ : /Upgrade needs attention/)).toBeInTheDocument()
+    expect(screen.queryByText(/Connected/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Set up' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
   })
 
   it('shows Pi as ready with no button', () => {

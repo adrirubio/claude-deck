@@ -27,7 +27,7 @@ async def test_install_keeps_existing_servers_and_hooks(settings_file):
     doc = json.loads(settings_file.read_text())
     assert doc["schema_version"] == 1 and doc["tui"] == {"theme": "dark"}
     assert doc["mcpServers"]["mine"] == {"transport": "stdio", "command": "x"}
-    assert doc["mcpServers"]["claude-deck-mail"]["transport"] == "stdio"
+    assert doc["mcpServers"]["albiex-synth-city-mail"]["transport"] == "stdio"
     assert other_hook in doc["hooks"]["SessionStart"]
     assert svc.muse_mcp_installed() and sorted(svc.installed_muse_hooks()) == ["SessionStart", "UserPromptSubmit"]
     await svc.apply_muse_install(None)  # idempotent: no duplicate groups
@@ -35,7 +35,7 @@ async def test_install_keeps_existing_servers_and_hooks(settings_file):
     assert len(doc["hooks"]["SessionStart"]) == 2
     await svc.uninstall_muse(None)
     doc = json.loads(settings_file.read_text())
-    assert "claude-deck-mail" not in doc["mcpServers"] and doc["hooks"]["SessionStart"] == [other_hook]
+    assert "albiex-synth-city-mail" not in doc["mcpServers"] and doc["hooks"]["SessionStart"] == [other_hook]
     assert "UserPromptSubmit" not in doc["hooks"]
 
 

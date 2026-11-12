@@ -82,7 +82,7 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
 
 
 def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_path):
-    hooks_path = tmp_path / "claude-deck-mail.json"
+    hooks_path = tmp_path / "albiex-synth-city-mail.json"
     hooks_path.write_text(
         json.dumps(
             {
@@ -122,7 +122,7 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
 
 
 def test_installed_opencode_plugin_events_use_managed_plugin(monkeypatch, tmp_path):
-    plugin_path = tmp_path / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "albiex-synth-city-agent-mail.js"
     plugin_path.write_text(install._opencode_plugin_content(), encoding="utf-8")
     monkeypatch.setattr(install, "opencode_plugin_path", lambda: plugin_path)
 
@@ -324,7 +324,7 @@ async def test_codex_apply_writes_hooks_json(monkeypatch, db, tmp_path):
 
 @pytest.mark.asyncio
 async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkeypatch, db, tmp_path):
-    hooks_path = tmp_path / "claude-deck-mail.json"
+    hooks_path = tmp_path / "albiex-synth-city-mail.json"
     calls = []
 
     class FakeExecutor:
@@ -362,7 +362,7 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
 @pytest.mark.asyncio
 async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_path):
     config_path = tmp_path / "opencode.json"
-    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "plugins" / "albiex-synth-city-agent-mail.js"
     monkeypatch.setattr(install, "opencode_cli_available", lambda: True)
     monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
     monkeypatch.setattr(install, "opencode_config_path", lambda: config_path)
@@ -378,14 +378,14 @@ async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_
     assert entry["command"] == [install.sys.executable, install.shim_path()]
     assert entry["environment"]["SYNTH_CITY_PROVIDER"] == "opencode-cli"
     plugin = plugin_path.read_text(encoding="utf-8")
-    assert "Claude Deck Agent Mail OpenCode plugin" in plugin
+    assert "Albiex Synth City Agent Mail OpenCode plugin" in plugin
     assert "experimental.chat.system.transform" in plugin
 
 
 @pytest.mark.asyncio
 async def test_opencode_uninstall_removes_managed_mcp_and_plugin(monkeypatch, db, tmp_path):
     config_path = tmp_path / "opencode.json"
-    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    plugin_path = tmp_path / "plugins" / "albiex-synth-city-agent-mail.js"
     plugin_path.parent.mkdir()
     config_path.write_text(
         json.dumps(

@@ -2229,6 +2229,7 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    provider_upgrades: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     mail_capability_tokens_required: bool = Field(default_factory=lambda: settings.mail_capability_tokens_required)
     pi_cli_available: bool = False
     pi_mail_ready: bool = False

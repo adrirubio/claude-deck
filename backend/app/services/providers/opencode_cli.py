@@ -36,7 +36,7 @@ class OpenCodeCliProvider(AgentProvider):
             "root": str(home),
             "user_config": str(home / "opencode.json"),
             "plugins": str(home / "plugins"),
-            "agent_mail_plugin": str(home / "plugins" / "claude-deck-agent-mail.js"),
+            "agent_mail_plugin": str(home / "plugins" / "albiex-synth-city-agent-mail.js"),
             "session_store": str(Path.home() / ".local" / "share" / "opencode" / "opencode.db"),
             "logs": str(Path.home() / ".local" / "share" / "opencode" / "log"),
         }

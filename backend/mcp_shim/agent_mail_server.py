@@ -1,6 +1,7 @@
 """Albiex Synth City Agent Mail MCP server over stdio."""
 import asyncio
 import os
+import sys
 import threading
 import time
 import uuid
@@ -19,7 +20,19 @@ OFFLINE_BACKOFF_SECONDS = 2.0
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
 
-mcp = FastMCP("claude-deck-mail")
+_UPGRADE_PROBE = "--synth-city-upgrade-tools-list-probe" in sys.argv[1:]
+
+
+class _UpgradeSafeFastMCP(FastMCP):
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        # The upgrade process needs initialize and tools/list only. Refuse all
+        # tools/call dispatch centrally, including tools without registration.
+        if _UPGRADE_PROBE:
+            return {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+        return await super().call_tool(name, arguments)
+
+
+mcp = _UpgradeSafeFastMCP("albiex-synth-city-mail")
 _register_lock = threading.Lock()
 _heartbeat_stop = threading.Event()
 _heartbeat_thread: threading.Thread | None = None
@@ -234,6 +247,10 @@ def _bridge_session_path(target: str) -> str:
 
 
 def _ensure_registered() -> dict:
+    # Schema verification is registration-free and read-only. Member tools
+    # cannot turn this startup probe into a synthetic authenticated session.
+    if _UPGRADE_PROBE:
+        return {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     with _register_lock:
         if _state.get("closing"):
             return {"ok": False, "error": {"code": "mail_generation_closing"}}
@@ -300,7 +317,7 @@ def _start_heartbeat_thread() -> threading.Thread:
     global _heartbeat_thread
     thread = threading.Thread(
         target=_heartbeat_loop,
-        name="claude-deck-agent-mail-heartbeat",
+        name="albiex-synth-city-agent-mail-heartbeat",
         daemon=True,
     )
     thread.start()
@@ -1462,6 +1479,6 @@ if __name__ == "__main__":
     except ModuleNotFoundError:
         from environment_warning import warn_legacy_environment
     warn_legacy_environment()
-    if PROVIDER != "pi-cli":
+    if PROVIDER != "pi-cli" and not _UPGRADE_PROBE:
         _start_heartbeat_thread()
     mcp.run()

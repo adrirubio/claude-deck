@@ -597,7 +597,7 @@ class MCPService:
                     "params": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "clientInfo": {"name": "claude-deck-test", "version": "1.0.0"},
+                        "clientInfo": {"name": "albiex-synth-city-test", "version": "1.0.0"},
                     },
                 }
                 request_str = json.dumps(init_request)
@@ -862,7 +862,7 @@ class MCPService:
                         "params": {
                             "protocolVersion": "2024-11-05",
                             "capabilities": {},
-                            "clientInfo": {"name": "claude-deck-test", "version": "1.0.0"},
+                            "clientInfo": {"name": "albiex-synth-city-test", "version": "1.0.0"},
                         },
                     }
                     response = await client.post(
