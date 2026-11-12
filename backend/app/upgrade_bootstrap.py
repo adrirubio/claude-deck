@@ -577,7 +577,7 @@ def _database_choice(configured_url: str, cwd: Path | None):
 
 
 @contextmanager
-def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps):
+def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps, *, reference_phase=False):
     """One order for both entries: HOME first, then sorted unique DB anchors.
 
     The HOME anchor is the parent of both product directories. The same anchor
@@ -585,9 +585,17 @@ def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps
     """
     _mkdir_synced(home, ops)
     with _migration_lock(home):
+        if reference_phase and _home_journals(home):
+            raise RuntimeError('Upgrade reference set is incomplete: file phase in progress')
         binding = home / NEW_HOME / BINDING_NAME
         bindings = _bindings(binding)
         parents = {cwd} if configured is not None else set()
+        # Only the database-open phase adds a custom DB parent. In the file
+        # phase that directory may itself be inside a planned HOME move, or
+        # intentionally missing; creating its lock would contaminate the plan
+        # before containment preflight can reject it.
+        if reference_phase and configured is not None:
+            parents.add(configured.parent)
         entry = bindings['resources'].get('database')
         if entry and configured == Path(entry['old_path']):
             parents.add(Path(entry['old_path']).parent)
@@ -768,6 +776,37 @@ def read_reference_journals(*, home: Path | None = None) -> list[dict]:
         # Commit that observed absence before C6 can treat the set as ready.
         FileOps().sync_dir(home)
         return _read_reference_records(home)
+
+
+@contextmanager
+def reference_phase_lock(configured_url: str, *, home: Path | None = None,
+                         cwd: Path | None = None, ops: FileOps | None = None):
+    """Hold the existing HOME/DB lock family across the database-open phase.
+
+    Unlike the public handoff reader this entry already owns the HOME lock;
+    use the same strict internal reader without attempting a recursive flock.
+    No post-open file digest is consulted here.
+    """
+    home, cwd = (home or Path.home()).resolve(), (cwd or Path.cwd()).resolve()
+    ops = ops or FileOps()
+    _, configured = _database_choice(configured_url, cwd)
+    with _resource_locks(home, cwd, configured, ops, reference_phase=True):
+        if _home_journals(home) or any(_journals(parent) for parent in
+                ({cwd, configured.parent} if configured is not None else set())):
+            raise RuntimeError('Upgrade reference set is incomplete: file phase in progress')
+        ops.sync_dir(home)
+        yield home, configured, _read_reference_records(home)
+
+
+def retire_reference_record(home: Path, record: dict, ops: FileOps):
+    """Retire one immutable v1 record after C6 proves every resource durable."""
+    path = _home_record(home, record['id'], references=True)
+    current = _read_json(path)
+    _validate_reference(path, current, home)
+    if current != record:
+        raise RuntimeError('Upgrade reference record changed before retirement')
+    ops.unlink(path)
+    return path
 
 
 def _check_directories(path: Path):

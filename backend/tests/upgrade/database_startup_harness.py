@@ -22,7 +22,7 @@ def executable(path, text):
 
 
 def run_entrypoint(install, mode, configured=None, dotenv=False, *,
-                   configured_attachment=None, home_audit=False):
+                   configured_attachment=None, home_audit=False, reference_audit=False):
     # This is code replacement inside a fresh fixture's throwaway installation,
     # not a worktree, installed factory, or modification of the shared baseline.
     for package in ('app', 'mcp_shim'):
@@ -41,6 +41,45 @@ def run_entrypoint(install, mode, configured=None, dotenv=False, *,
     old = str(install.database)
     new = str(install.app_dir / 'synth_city.db')
     home_checks = ''
+    reference_checks = ''
+    reference_trace = install.root / 'reference-before-services.json'
+    if reference_audit:
+        reference_checks = f'''
+# Install a lazy observation at the real app import. Eagerly importing the
+# application from sitecustomize would also start bootstrap in the dev
+# script's Python curl helpers/reloader and manufacture lock races.
+import importlib.abc, importlib.machinery
+class ReferenceAuditLoader:
+    def __init__(self, original):
+        self.original = original
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+    def create_module(self, spec):
+        return self.original.create_module(spec)
+    def exec_module(self, module):
+        self.original.exec_module(module)
+        service = module.agent_bridge_attachment_service
+        original_cleanup = service.cleanup_expired
+        async def checked_cleanup(db, **kwargs):
+            from app.upgrade_bootstrap import read_reference_journals
+            from sqlalchemy import text
+            assert read_reference_journals() == [], 'ordinary cleanup reached an open reference phase'
+            stamps = (await db.execute(text('SELECT count(*) FROM upgrade_reference_stamps'))).scalar_one()
+            assert stamps >= 2, 'ordinary services reached unstamped references'
+            for table, field in [('backups','file_path'),('bridge_session_attachments','storage_path')]:
+                values = (await db.execute(text('SELECT '+field+' FROM '+table))).scalars().all()
+                assert values and all('/.claude-registry/' not in value for value in values)
+            pathlib.Path({str(reference_trace)!r}).write_text(json.dumps({{'stamps':stamps,'journals':0}}))
+            return await original_cleanup(db, **kwargs)
+        service.cleanup_expired = checked_cleanup
+class ReferenceAuditFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'app.main':
+            spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+            spec.loader = ReferenceAuditLoader(spec.loader)
+            return spec
+sys.meta_path.insert(0, ReferenceAuditFinder())
+'''
     if home_audit:
         home_checks = f'''
             assert not pathlib.Path({str(install.home / '.claude-registry')!r}).exists(), 'HOME move incomplete before first connection'
@@ -73,6 +112,7 @@ def guard(event, args):
     elif event == 'os.killpg':
         assert args[0] == os.getpgrp(), 'signal outside fixture group refused'
 sys.addaudithook(guard)
+{reference_checks}
 ''')
     for name in ('tmux', 'gh', 'pgrep', 'lsof'):
         executable(bin_dir / name, '#!/bin/sh\nexit 1\n')
@@ -164,4 +204,7 @@ except Exception:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
     assert (env_file.read_bytes() if env_file.exists() else None) == operator_bytes
+    if reference_audit:
+        assert reference_trace.is_file(), 'ordinary-service reference ordering was not observed'
+        assert json.loads(reference_trace.read_text())['stamps'] >= 2
     return result
