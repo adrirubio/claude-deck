@@ -1,7 +1,7 @@
 [project]
-name = "claude-code-registry-backend"
+name = "albiex-synth-city-backend"
 version = "3.1.0"
-description = "Backend API for Claude Deck"
+description = "Backend API for Albiex Synth City"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",

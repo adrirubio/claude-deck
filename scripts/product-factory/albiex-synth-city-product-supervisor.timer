@@ -4,6 +4,6 @@ Description=Check Lane B supervision every ten seconds
 OnBootSec=10
 OnUnitActiveSec=10
 AccuracySec=1
-Unit=claude-deck-product-supervisor.service
+Unit=albiex-synth-city-product-supervisor.service
 [Install]
 WantedBy=timers.target

@@ -7,8 +7,8 @@ Group=deckproduct
 SupplementaryGroups=deckproduct-work
 WorkingDirectory=/home/deckproduct
 Environment=HOME=/home/deckproduct
-Environment=PATH=/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin
-ExecStart=/usr/bin/tmux -D -S /home/deckproduct/.local/state/claude-deck-product/tmux.sock
+Environment=PATH=/opt/albiex-synth-city-product/agent-bin:/opt/albiex-synth-city-product/tools:/usr/bin:/bin
+ExecStart=/usr/bin/tmux -D -S /home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock
 Restart=on-failure
 RestartSec=3
 [Install]

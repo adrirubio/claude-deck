@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "product-factory" / "agent-tmux"
-LIVE_SOCKET = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
+LIVE_SOCKET = "/home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock"
 CALLER_ENV = {"PATH": "/caller/bin", "HOME": "/caller-home", "MARKER": "caller"}
 
 
@@ -118,7 +118,7 @@ def test_mixed_socket_options_private_path_keeps_caller_call(monkeypatch, argv):
 @pytest.mark.parametrize("argv", [
     ["-S", LIVE_SOCKET, "list-sessions"],
     ["-S" + LIVE_SOCKET, "-Lprivate-name", "list-sessions"],
-    ["-S", LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product//tmux.sock"), "list-sessions"],
+    ["-S", LIVE_SOCKET.replace("albiex-synth-city-product/tmux.sock", "albiex-synth-city-product//tmux.sock"), "list-sessions"],
 ])
 def test_explicit_live_socket_keeps_argv_but_uses_sanitized_environment(monkeypatch, argv):
     _module, calls, code = _run(monkeypatch, argv)
@@ -127,8 +127,8 @@ def test_explicit_live_socket_keeps_argv_but_uses_sanitized_environment(monkeypa
 
 
 @pytest.mark.parametrize("socket_path", [
-    LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product//tmux.sock"),
-    LIVE_SOCKET.replace("claude-deck-product/tmux.sock", "claude-deck-product/./tmux.sock"),
+    LIVE_SOCKET.replace("albiex-synth-city-product/tmux.sock", "albiex-synth-city-product//tmux.sock"),
+    LIVE_SOCKET.replace("albiex-synth-city-product/tmux.sock", "albiex-synth-city-product/./tmux.sock"),
 ])
 def test_kill_server_via_live_socket_spelling_is_refused(monkeypatch, socket_path):
     _module, calls, code = _run(monkeypatch, ["-S", socket_path, "kill-server"])
@@ -190,9 +190,33 @@ def test_sanitized_environment_is_unchanged(monkeypatch):
         "HOME": "/home/deckproduct",
         "USER": "deckproduct",
         "LOGNAME": "deckproduct",
-        "PATH": "/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin",
+        "PATH": "/opt/albiex-synth-city-product/agent-bin:/opt/albiex-synth-city-product/tools:/usr/bin:/bin",
         "LANG": "C.UTF-8",
         "TERM": "screen-test",
         "SYNTH_CITY_URL": "http://127.0.0.1:8011",
         "SYNTH_CITY_PROVIDER": "codex-cli",
     }
+
+
+@pytest.mark.parametrize("target", [
+    "/home/deckproduct/.local/state/claude-deck-product/tmux.sock",
+    "/home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock",
+])
+def test_both_factory_socket_generations_refuse_kill_server(monkeypatch, tmp_path, target):
+    for value in (target, target.replace("/tmux.sock", "/./tmux.sock")):
+        _module, calls, code = _run(monkeypatch, ["-S", value, "-L", "private-name", "kill-server"])
+        assert code == 1 and calls == []
+    link = tmp_path / "factory-link.sock"
+    link.symlink_to(target)
+    _module, calls, code = _run(monkeypatch, ["-S", str(link), "kill-server"])
+    assert code == 1 and calls == []
+
+
+def test_new_default_is_used_and_the_old_socket_is_only_a_deny_guard(monkeypatch):
+    renamed = "/home/deckproduct/.local/state/albiex-synth-city-product/tmux.sock"
+    module, calls, code = _run(monkeypatch, ["list-sessions"])
+    assert code == 0 and module.LIVE_SOCKET == renamed
+    assert calls[0][1] == ["tmux", "-S", renamed, "list-sessions"]
+    old = "/home/deckproduct/.local/state/claude-deck-product/tmux.sock"
+    _module, calls, code = _run(monkeypatch, ["-S", old, "list-sessions"])
+    assert code == 0 and calls == [("/usr/bin/tmux", ["tmux", "-S", old, "list-sessions"], CALLER_ENV)]

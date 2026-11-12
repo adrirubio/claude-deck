@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/sudo -n -u deckproduct /opt/claude-deck-product/libexec/agent-tmux "$@"
+exec /usr/bin/sudo -n -u deckproduct /opt/albiex-synth-city-product/libexec/agent-tmux "$@"
