@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 hook_service = HookService()
 mcp_service = MCPService()
 
-MCP_SERVER_NAME = "claude-deck-mail"
+MCP_SERVER_NAME = "albiex-synth-city-mail"
 POST_TOOL_USE_MATCHER = "Edit|Write|MultiEdit|NotebookEdit"
 
 MAIL_HOOK_EVENTS = {
@@ -62,7 +62,7 @@ OPENCODE_MAIL_PLUGIN_EVENTS = {
 
 _HOOK_URL_MARKER = "/api/v1/agent-mail/hooks/"
 _CODEX_HOOK_MARKER = "agent_mail_hook.py"
-_OPENCODE_PLUGIN_MARKER = "Claude Deck Agent Mail OpenCode plugin"
+_OPENCODE_PLUGIN_MARKER = "Albiex Synth City Agent Mail OpenCode plugin"
 _QUESTION_HOOK_MARKER = "team_question_hook.py"
 
 
@@ -108,7 +108,7 @@ def opencode_config_paths() -> list[Path]:
 
 
 def opencode_plugin_path() -> Path:
-    return get_opencode_home() / "plugins" / "claude-deck-agent-mail.js"
+    return get_opencode_home() / "plugins" / "albiex-synth-city-agent-mail.js"
 
 
 def provider_hook_command(provider: str, slug: str) -> str:
@@ -154,9 +154,12 @@ def _managed_question_command(command: str) -> bool:
 
 
 def _hook_is_current(hook, event: str, slug: str) -> bool:
+    from app.services.provider_upgrade_artifacts import _hooks
+    found, _ = _hooks(json.dumps({"hooks": {event: [{"hooks": [{"command": hook.command}]}]}}),
+                      "claude-code", shim_path())
     return (
         hook.event == event
-        and hook.command == hook_command(slug)
+        and found
         and hook.matcher == _claude_matcher(event)
     )
 
@@ -550,17 +553,17 @@ def _opencode_mcp_entry() -> dict:
 
 
 def _opencode_mcp_entry_is_current(entry: object) -> bool:
+    from app.services.provider_upgrade_artifacts import is_owned_entry
     if not isinstance(entry, dict):
         return False
-    expected = _opencode_mcp_entry()
-    command = entry.get("command")
     environment = entry.get("environment")
     return (
         entry.get("type") == "local"
         and entry.get("enabled", True) is not False
-        and command == expected["command"]
+        and is_owned_entry(entry, shim_path())
         and isinstance(environment, dict)
-        and environment.get("SYNTH_CITY_URL") == expected["environment"]["SYNTH_CITY_URL"]
+        and isinstance(environment.get("SYNTH_CITY_URL"), str)
+        and bool(environment.get("SYNTH_CITY_URL"))
         and environment.get("SYNTH_CITY_PROVIDER") == "opencode-cli"
     )
 
@@ -579,7 +582,7 @@ def opencode_mcp_installed() -> bool:
 
 
 def _opencode_plugin_content() -> str:
-    template = r"""// Claude Deck Agent Mail OpenCode plugin.
+    template = r"""// Albiex Synth City Agent Mail OpenCode plugin.
 const DECK_URL = (__SYNTH_CITY_URL__ || process.env.SYNTH_CITY_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 const PROVIDER = process.env.SYNTH_CITY_PROVIDER || "opencode-cli";
 
@@ -596,7 +599,7 @@ function timeoutSignal(ms) {
   return controller.signal;
 }
 
-export const ClaudeDeckAgentMailPlugin = async (ctx) => {
+export const AlbiexSynthCityAgentMailPlugin = async (ctx) => {
   const cwd = () => ctx.worktree || ctx.directory || process.cwd();
 
   const payload = (sessionID, extra = {}) => {
@@ -856,7 +859,9 @@ async def get_install_status() -> AgentMailInstallStatus:
         event for event in OPENCODE_MAIL_PLUGIN_EVENTS if event not in opencode_plugin_events
     ]
     server = await mcp_service.get_server(MCP_SERVER_NAME, "user")
+    from app.services.provider_upgrade import read_status
     return AgentMailInstallStatus(
+        provider_upgrades=read_status(),
         pi_cli_available=shutil.which("pi") is not None,
         pi_mail_ready=pi_ready,
         pi_mail_reason=pi_reason,
@@ -894,7 +899,15 @@ async def get_install_status() -> AgentMailInstallStatus:
     )
 
 
+def _require_upgrade_complete(provider: str) -> None:
+    from app.services.provider_upgrade import read_status
+    state = read_status().get(provider, {}).get("state")
+    if state in {"incomplete", "needs_attention"}:
+        raise ValueError("Provider upgrade must be resolved before changing this setup")
+
+
 async def apply_claude_code_install(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("claude-code")
     await _backup_before_mutation(db, "user")
     installed_hooks = _installed_mail_hooks()
     for event, slug in MAIL_HOOK_EVENTS.items():
@@ -930,6 +943,7 @@ async def apply_claude_code_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def uninstall_claude_code(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("claude-code")
     await _backup_before_mutation(db, "user")
     for hook in _installed_mail_hooks():
         hook_service.remove_hook(hook.id, hook.scope)
@@ -939,6 +953,7 @@ async def uninstall_claude_code(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def apply_codex_install(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("codex-cli")
     executor = _codex_executor()
     if executor is None:
         raise ValueError("Codex CLI is not available on this machine")
@@ -971,6 +986,7 @@ async def apply_codex_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def uninstall_codex(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("codex-cli")
     executor = _codex_executor()
     should_backup = (executor is not None and codex_mcp_installed()) or bool(installed_codex_hooks())
     if should_backup:
@@ -984,6 +1000,7 @@ async def uninstall_codex(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def apply_copilot_install(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("copilot-cli")
     executor = _copilot_executor()
     if executor is None:
         raise ValueError("GitHub Copilot CLI is not available on this machine")
@@ -1013,6 +1030,7 @@ async def apply_copilot_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def uninstall_copilot(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("copilot-cli")
     executor = _copilot_executor()
     should_backup = (
         (executor is not None and copilot_mcp_installed())
@@ -1031,6 +1049,7 @@ async def uninstall_copilot(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def apply_opencode_install(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("opencode-cli")
     if not opencode_cli_available():
         raise ValueError("OpenCode CLI is not available on this machine")
     await _backup_before_mutation(db, "opencode")
@@ -1048,6 +1067,7 @@ async def apply_opencode_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("opencode-cli")
     should_backup = opencode_mcp_installed() or bool(installed_opencode_plugin_events())
     if should_backup:
         await _backup_before_mutation(db, "opencode")
@@ -1132,6 +1152,7 @@ def get_snippets() -> AgentMailSnippets:
 
 
 async def apply_muse_install(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("muse-cli")
     if not muse_cli_available():
         raise ValueError("Muse Code is not available on this machine")
     doc = _load_muse_settings()
@@ -1150,6 +1171,7 @@ async def apply_muse_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 
 async def uninstall_muse(db: AsyncSession) -> AgentMailInstallStatus:
+    _require_upgrade_complete("muse-cli")
     if not muse_settings_path().exists():
         return await get_install_status()
     doc = _load_muse_settings()

@@ -25,6 +25,10 @@ async def lifespan(app: FastAPI):
     warn_legacy_environment()
     # Startup: Initialize database
     await init_db()
+    # Provider recovery needs the migrated database and retargeted backup index.
+    # It must finish its attempt before cleanup or autonomous services start.
+    from app.services.provider_upgrade import upgrade_providers
+    await upgrade_providers()
     try:
         async with AsyncSessionLocal() as db:
             await agent_bridge_attachment_service.cleanup_expired(db)

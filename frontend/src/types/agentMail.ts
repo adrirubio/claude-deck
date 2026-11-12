@@ -109,6 +109,7 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  provider_upgrades?: Record<string, { state: 'verified' | 'incomplete' | 'needs_attention'; stage: string }>
   mail_capability_tokens_required: boolean
   pi_cli_available?: boolean
   pi_mail_ready?: boolean

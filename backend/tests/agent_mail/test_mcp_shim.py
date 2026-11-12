@@ -150,7 +150,7 @@ def test_start_heartbeat_thread_uses_daemon_thread(monkeypatch):
 
     assert started == [thread]
     assert thread.target == shim._heartbeat_loop
-    assert thread.name == "claude-deck-agent-mail-heartbeat"
+    assert thread.name == "albiex-synth-city-agent-mail-heartbeat"
     assert thread.daemon is True
 
 
@@ -1174,3 +1174,19 @@ def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
 
     assert hook.main() == 0
     assert capsys.readouterr().out == ""
+def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_tools(monkeypatch):
+    import asyncio
+    import importlib.util
+    import sys
+    from pathlib import Path
+    monkeypatch.setattr(sys, "argv", ["agent_mail_server.py", "--synth-city-upgrade-tools-list-probe"])
+    path = Path(__file__).resolve().parents[2] / "mcp_shim/agent_mail_server.py"
+    spec = importlib.util.spec_from_file_location("upgrade_probe_shim", path)
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    calls = []
+    monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert len(asyncio.run(shim.mcp.list_tools())) == 36
+    assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
+    assert shim._state["member_id"] is None and shim._state["capability_token"] is None
+    assert calls == []
