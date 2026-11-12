@@ -21,7 +21,7 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 - **Versions.** **v2.2.7** (current, 2026-11-10) got the full spike. **v2.2.0**, the earliest published v2 release, was the comparison version. Both binaries are `opencode-linux-x64.tar.gz` from the official `anomalyco/opencode` GitHub releases, and both matched the release's `SHA256SUMS`. v2 is not on npm: the `opencode-ai` package ends at 1.19.5. **2.0.29**, the version in the issue, has a git tag but no published release or checksums, so it was **not reproduced**. The issue's 2.0.29 notes are kept below as reported.
 - **Isolation.** OpenCode ran only in a throwaway runtime: its own `HOME` and `XDG_*` dirs and `TMPDIR`, a private tmux socket, and no credentials. Agent Mail identity variables and credential variables were removed from its environment, and Mail traffic went to a local recorder, never to a live Deck. No factory config, agent user, `/opt` path or port 8011 was touched.
 - **Model.** Model turns came from a local scripted OpenAI-compatible stub provider (`stub/m1`, `stub/m2`). It returns fixed text or forced tool calls. Observations marked **[stub]** show harness mechanics: flags, ids, processes, events, hooks, DB rows, tool lists and the tool results the agent receives. **They do not show how a real model behaves**, for example whether a real model tries to ask questions or copes with Code Mode. That is still unproven.
-- **Incident.** One 2.2.7 test session silently ran on OpenCode's hosted free model, `opencode/iceman-free`, instead of the stub, and got a 429 free-limit error (see finding F5). It was reported to the Leader and contained with `enabled_providers`. No other session used a hosted model. After the incident, model-turn probes stopped until a loopback-only network namespace was in place (see Isolation limits).
+- **Incident.** One 2.2.7 test session silently ran on OpenCode's hosted free model, `opencode/iceman-free`, instead of the stub, and got a 429 free-limit error (see finding F5). It was reported to the Leader and contained with `enabled_providers`. No other session used a hosted model. **What that request contained is not retained**, so this spike cannot prove what was sent, or that no credential was sent (see F5). After the incident, model-turn probes stopped until a loopback-only network namespace was in place (see Isolation limits).
 
 ### Version coverage and evidence retention
 
@@ -42,7 +42,8 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 | `agents.build.model` does not change a resumed session | NR | not run |
 | Plugin `switchModel` changes a resumed session | R (DB row); same-turn use NR | R (recorder and stub log, P4) |
 | `--standalone` process tree, `pane_current_command`, plugin and shim process | NR | NR |
-| Shim sends a registration payload | NR | R (recorder, P4) |
+| Shim sends a registration payload (keys `cwd`, `pid`, `provider`, `session_key`, `source`) | NR | R (recorder, P4) |
+| The member's `team_slot_id` reaches the registration payload | NR | NR (P4 set no slot, so its payloads have none) |
 | Shared service ignores the second member's config | R (DB) | **gap** (not run, by decision) |
 | Shared service reports the first member's slot for the second member | NR | **gap** (not run, by decision) |
 | v1 plugin refused | R (log) | R (log) |
@@ -61,11 +62,20 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 | Deny rules still apply under `--auto` and its aliases | R (DB) | R (DB) |
 | MCP Code Mode by default ("36 tools, 11 shown") | NR | NR |
 | `codemode:false` makes Agent Mail tools direct calls | R (DB) | R (DB) |
-| `session_v2` activity columns | R (DB) | R (DB) |
-| A row stays busy after its TUI is killed | R (DB) | **gap** |
+| `session_v2` has `time_busy` | R (DB) | **absent** in the 2.2.0 schema, R (DB) |
+| `session_v2` has `time_idle`, `idle_outcome`, `time_suspended`, `resume_attempts` | R (DB) | R (DB) |
+| A killed session's row is left looking active | R (DB): `time_busy > time_idle`, `time_suspended` set | R (DB): `time_idle` null, `time_suspended` set |
 | Relaunch without a prompt leaves a stale row unchanged for 40 s | NR (that session was later deleted) | **gap** |
 | Silent hosted-model fallback (F5) | R (DB, log) | not seen |
 | Cold-start race (F6) | not seen | R (log) |
+
+### Acceptance questions without retained evidence
+
+These parts of #729 rest only on NR observations, so **#729 is not yet answered with evidence on these points and is not complete.** Settling them needs new, separately approved evidence probes. Until then, the design below treats these points as unverified and gives no guarantee:
+
+- **Q3:** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. Process listings and tmux output were not saved. Only the service-mode config effect is R.
+- **Q5, second half:** which event shows an open question (`form.created`) and what a row looks like while the question is open. Only rows of sessions killed during a question are R.
+- **Q6:** a reliable activity source after a crash or a relaunch. The plugin events are R only for 2.2.0 (P4), and no retained evidence shows what clears a stale `session_v2` row.
 
 ### Evidence retention
 
@@ -123,7 +133,7 @@ tmux pane: opencode --standalone --session ses_…      pane_current_command = "
 ```
 
 - The MCP shim and the plugins run in the private `serve --stdio` process. The probe plugin's `process.pid` matched that process.
-- The Agent Mail shim's registration payload (sent to the recorder) carries `pid = os.getppid()`, which is the private server's pid: a direct child of the pane's process, not the pane's process itself. The slot environment (`SYNTH_CITY_TEAM_SLOT_ID`) reaches both the shim and the plugin (NR).
+- The Agent Mail shim's registration payload, sent to the recorder (not accepted by any Synth City), carries `pid = os.getppid()`, which is the private server's pid: a direct child of the pane's process, not the pane's process itself (NR). The slot environment (`SYNTH_CITY_TEAM_SLOT_ID`) reached both the shim's payload and the plugin (NR on both versions). The retained P4 payloads have no `team_slot_id`, because P4 set no slot. **Q3 has no retained evidence for the process tree, the pid relation or `pane_current_command`. These are open #729 gaps (see "Acceptance questions without retained evidence").**
 - The private server also listens on a random `127.0.0.1` port and requires authentication (`/api/event` returns 401). Its password is in the server's environment (`OPENCODE_PASSWORD`) and is not published anywhere. Deck should not use this endpoint (see 6).
 - When the TUI is killed, the private server shuts down a few seconds later (`location.shutdown`, 2.2.7; NR).
 
@@ -173,7 +183,7 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 | Source | Working | Idle | Waiting for input | Verdict |
 |---|---|---|---|---|
 | Plugin events (in the member's own `--standalone` server) | `session.execution.started` | `session.execution.succeeded` (or `.failed` with `error.type`) | `form.created` (question), `permission.asked` (approval); cleared by `form.replied` / `form.cancelled` / `permission.replied` | **Primary.** Exact, immediate, and tied to the slot because the plugin runs with the member's environment. |
-| `session_v2` row | `time_busy > time_idle` (or `time_idle` null) | `time_idle ≥ time_busy`, `idle_outcome` `succeeded` / `failed` | Not visible: looks like working | **Secondary**, for recovery after a Deck restart. It goes stale when a TUI dies: two 2.2.7 sessions whose TUIs were killed while waiting for input still show `time_busy > time_idle` with `time_suspended` set (R). A third session, killed mid-turn, was not cleared by a relaunch without a prompt within 40 s (NR). Use it only with process liveness. A running `question` part in `session_part` marks waiting. |
+| `session_v2` row | 2.2.7: `time_busy > time_idle`. 2.2.0 has no `time_busy`; `time_idle` null or older than the last prompt is the only hint | `time_idle` set, `idle_outcome` `succeeded` / `failed` | Not visible: looks like working | **Secondary**, and only a hint. It goes stale when a TUI dies, and process liveness alone does not detect that. Retained killed sessions still look active: two on 2.2.7 (`time_busy > time_idle`, `time_suspended` set) and one on 2.2.0 (`time_idle` null, `time_suspended` set). A session killed mid-turn was not cleared by a relaunch without a prompt within 40 s (NR), so even a live relaunched process can leave a stale row. No retained evidence shows what clears `time_suspended`. |
 | Service `/event` stream | — | — | — | **Not usable.** Members use `--standalone`, whose server is private and password-protected, and the shared service mixes up members (3). |
 
 `session_message` also stores an `idle` row with `outcome` after each turn. The `event` table stayed empty in every run.
@@ -189,9 +199,9 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 
 - **F1. Config keys renamed.** The v2 schema (`https://opencode.ai/config.json`) deprecates `agent`, `permission`, `plugin`, `provider` and the flat `mcp.<name>` map. Their replacements are `agents`, `permissions` (an ordered rule list `{action, resource, effect}`), `plugins`, `providers` and `mcp.servers.<name>`. The deprecated forms still work in 2.2.x. New Deck writes should use the v2 forms.
 - **F2. MCP tools are in "Code Mode" by default.** The Agent Mail tools are not direct tool calls. The system prompt says they "only work as JavaScript inside the `execute` tool" and lists only 11 of the 36 tools (`albiex-synth-city-mail (36 tools, 11 shown)`, NR). The model must use `search(...)` to find the rest. Setting `"codemode": false` on the server entry (`mcp.servers.<name>` or the flat form) makes them direct tools named `albiex-synth-city-mail_<tool>`, all 36 of them (NR). `execute` is still offered for other code (NR). **[stub]** A direct `albiex-synth-city-mail_synth_city_check_inbox` call was executed by the shim on both versions (R). The recorder's fake reply produced the tool error, and the slot in the registration payload is NR.
-- **F3. The DB schema changed.** The 2.2.x tables are `session_v2`, `session_message`, `session_part`, `session_inbox` and `event`, among others. The 2.0.29 tables `session`, `message` and `part` are gone. New `session_v2` columns include `time_busy`, `time_idle`, `idle_outcome`, `time_suspended` and `resume_attempts`. 2.2.7 stores message parts in a `session_part` table. 2.2.0 has no `session_part` table, and its part storage was not examined. In 2.2.7 the assistant message's `content` is also inside `session_message.data`, so a reader should not depend on `session_part` alone.
+- **F3. The DB schema changed.** The 2.2.x tables are `session_v2`, `session_message`, `session_part`, `session_inbox` and `event`, among others. The 2.0.29 tables `session`, `message` and `part` are gone. The schema also differs between 2.2.x versions. `session_v2` has `time_idle`, `idle_outcome`, `time_suspended` and `resume_attempts` in both, but **`time_busy` only in 2.2.7**. 2.2.7 has a `session_part` table and 2.2.0 does not. In both versions the assistant message's `content`, including tool parts with their status and errors, is inside `session_message.data` (R). Readers must check the schema per version and must not depend on `time_busy` or `session_part`.
 - **F4. Config hot-reload.** Running TUIs reload `opencode.json` and the plugin files when they change. Writing the MCP entry made running members start the shim straight away. An Agent Mail install therefore affects live members.
-- **F5. Silent fallback to a hosted model.** One 2.2.7 session whose default was the custom `stub/m1` ran on `opencode/iceman-free` (OpenCode's hosted free models; the turn ended in a 429 `provider.free-limit` error). The cause was not reproduced. It happened about 20 s after a models.dev catalog refresh, and the custom provider was probably not resolved yet. Without an allowlist, `opencode models` lists 12 hosted `opencode/*-free` models with no credentials needed. `"enabled_providers":[…]`, or `"disabled_providers":["opencode"]`, removes them.
+- **F5. Silent fallback to a hosted model.** One 2.2.7 session whose default was the custom `stub/m1` ran on `opencode/iceman-free` (OpenCode's hosted free models; the turn ended in a 429 `provider.free-limit` error). The cause was not reproduced. It happened about 20 s after a models.dev catalog refresh, and the custom provider was probably not resolved yet. Without an allowlist, `opencode models` lists 12 hosted `opencode/*-free` models with no credentials needed. `"enabled_providers":[…]`, or `"disabled_providers":["opencode"]`, removes them. **The request sent to the hosted model is not retained**, so this spike cannot show what it contained, or that it carried no credential. The retained facts are only these: OpenCode's `credential`, `account`, `account_state` and `control_account` tables are empty; the runtime has no auth file; and its config holds no API key except the stub's placeholder. Removing credential variables from the environment before that turn is NR.
 - **F6. Cold-start race.** Five `--standalone` launches started at once against a fresh 2.2.0 data dir. The retained 2.2.0 log shows two `Standalone server exited before reporting readiness` failures, one `SQLiteError: database is locked`, and one failed `CREATE TABLE` migration query (R). Serial launches always worked.
 - **F7. The first launch shows a "what's new" overlay** (2.2.7) over the session view. Keys typed during startup could be lost.
 - **F8. Prompt delivery.** `--prompt` on the TUI submits immediately (both versions). `send-keys -l <text>` followed by one `Enter` submitted a prompt in an idle TUI (both versions; the 2.2.0 probes used this).
@@ -204,7 +214,7 @@ Observed on 2.2.7 [stub]. On 2.2.0, the execution events and `form.created` were
 ### #730: Require OpenCode 2
 
 - Parse `opencode --version`, which prints `opencode v<semver>` on 2.x. Refuse members when the major version is below 2, with the reason `opencode_v1_unsupported`.
-- **Recommended floor: 2.2.0**, the oldest version this spike observed. 2.0.x and 2.1.x have no published releases or checksums. The floor is a recommendation for the #730 scope review. It does not change #730's acceptance.
+- **Recommended floor: 2.2.7**, the version with the most evidence. 2.2.0 differs in ways that matter to #733: it has no `session_v2.time_busy`, and the `experimental.idle` hook never fired. It also has open gaps in the coverage table. Lowering the floor to 2.2.0 is possible only after #733's live check covers it. 2.0.x and 2.1.x have no published releases or checksums. The floor is a recommendation for the #730 scope review. It does not change #730's acceptance.
 - Record the version on each observation, as for Muse, because `opencode upgrade` can change it during a campaign.
 
 ### #731: Launch contract
@@ -231,8 +241,8 @@ opencode <directory> --standalone --session <ses_id> [--auto] [--prompt <text>]
 
 ### #733: Observation, guard and live check
 
-- **Activity:** use the plugin events as the primary source (answer 6). Add a `session_v2` reader for recovery, read-only and bound by session id and directory, that reports `unknown` when the row says busy and no live `serve --stdio` child is under the pane.
-- **Waiting for input:** `form.created` (question) and `permission.asked` raise the existing waiting-input notice. The matching replied or cancelled events clear it.
+- **Activity:** use the plugin events as the primary source (answer 6). A `session_v2` reader for recovery, read-only, bound by session id and directory and schema-aware per version (F3), may only report `idle` or `unknown`. Proposed rule, **unverified** (an open #729 gap, Q6): report `working` only after the plugin has seen `session.execution.started` from the current server process. Report `unknown` for a row with `time_suspended` set, a busy-looking row with no such event, and any row while no live `serve --stdio` child is under the pane. Process liveness alone is not enough (answer 6). This spike does not guarantee the rule.
+- **Waiting for input:** `form.created` (question) and `permission.asked` raise the existing waiting-input notice, and the matching replied or cancelled events clear it. These signals are NR (an open #729 gap, Q5), so Deck must not rely on them until they are evidenced.
 - **Guard:** the team supervisor's OpenCode branch reads the bound session's assistant `content` text from `session_message` instead of a transcript file. It uses `session_part` only where that table exists (F3). Tool results and user prompts never create a hold, as for the other harnesses.
 - **Live check:** run one `--standalone` member on a real provider through Deck. It registers once with its own slot, Deck stores its `ses_` id, it resumes the same session after a restart, working and idle show correctly, and a forced question is denied. **The real-model behaviour this spike could not prove is checked here.**
 
