@@ -58,7 +58,7 @@ htmlcov/
 *.backup
 
 # Synth City data
-~/.albiex-synth-city/
+.albiex-synth-city/
 ~/.claude-registry/
 .claude/commands/
 

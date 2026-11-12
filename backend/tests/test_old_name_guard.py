@@ -80,6 +80,16 @@ def test_t_g1_old_home_deny_line_is_exact_and_counted(tmp_path, content, expecte
     assert result.returncode == expected, result.stdout + result.stderr
 
 
+def test_t_g1_gitignore_excludes_new_home_data_not_other_paths(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text((ROOT / ".gitignore").read_text())
+    def check(path):
+        return subprocess.run(["git", "-C", str(tmp_path), "check-ignore", "--no-index", "-q", path])
+
+    assert check("ordinary-project/readme.txt").returncode == 1
+    assert check(".albiex-synth-city/backups/example").returncode == 0
+
+
 @pytest.mark.parametrize("old", ["Claude Deck", "CLAUDE_DECK_URL", "claude_registry.db",
                                   ".claude-registry", "claude-deck-mail", "Check your Deck inbox.",
                                   "deck_check_inbox", "X-Deck-Operator-Token"])
