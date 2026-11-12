@@ -1,3 +1,5 @@
+> **Albiex Synth City** — formerly Claude Deck. This repository moved here from `adrirubio/claude-deck`; old links redirect. Upgrading from v3.1? Read the [migration guide](docs/guide/migration-v4.md) first.
+
 # Albiex Synth City
 
 **Website**: [albiex.org](https://albiex.org)
