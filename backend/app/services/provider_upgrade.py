@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -180,6 +181,9 @@ def _write(file, target):
     actual = _current(file)
     if actual == desired:
         return
+    if actual == a.decoded(file["before"]) and file["identity"] is not None:
+        if a._identity(Path(file["path"])) != file["identity"]:
+            raise a.Attention("capture_identity_changed")
     allowed = [a.decoded(file.get(key)) for key in ("before", "removed", "after") if key in file]
     if actual not in allowed:
         raise a.Attention("configuration_changed")
@@ -330,6 +334,9 @@ def _cli_operation(record, operation):
 async def _protocol(entry):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    from app.services import agent_mail_install_service as install
+    if not a.is_owned_entry(entry, install.shim_path()):
+        raise a.Attention("probe_identity_changed")
     command, args = entry["command"], entry.get("args", [])
     if isinstance(command, list):
         command, *args = command
@@ -339,8 +346,10 @@ async def _protocol(entry):
         if key.startswith(("SYNTH_CITY_", "CLAUDE_DECK_")):
             del env[key]
     env.update(entry.get("environment", entry.get("env", {})))
-    params = StdioServerParameters(command=command,
-        args=[*args, "--synth-city-upgrade-tools-list-probe"], env=env)
+    # Use the installation's fixed executable and shim after checking captured
+    # launch identity; do not execute an arbitrary binary named 'python'.
+    params = StdioServerParameters(command=sys.executable,
+        args=[install.shim_path(), *args[1:], "--synth-city-upgrade-tools-list-probe"], env=env)
     with open(os.devnull, "w") as errors:
         async with asyncio.timeout(15):
             async with stdio_client(params, errlog=errors) as (read, write):

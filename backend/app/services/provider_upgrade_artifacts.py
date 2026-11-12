@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import sys
 
 import tomlkit
 
@@ -51,7 +52,8 @@ def is_owned_entry(entry, shim):
     if not executable or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(executable).name):
         return False
     try:
-        return Path(args[0]).expanduser().resolve() == Path(shim).resolve() and Path(shim).is_file()
+        return (Path(executable).resolve() == Path(sys.executable).resolve()
+                and Path(args[0]).expanduser().resolve() == Path(shim).resolve() and Path(shim).is_file())
     except (OSError, ValueError):
         return False
 
@@ -170,6 +172,27 @@ def read_json(text):
     return _json_tree(text).value
 
 
+def _trailing_comma(tail):
+    """Read trailing JSONC trivia once, without nested regex backtracking."""
+    position, comma = 0, False
+    while position < len(tail):
+        if tail[position].isspace():
+            position += 1
+        elif tail.startswith("//", position):
+            end = tail.find("\n", position + 2)
+            position = len(tail) if end < 0 else end + 1
+        elif tail.startswith("/*", position):
+            end = tail.find("*/", position + 2)
+            if end < 0:
+                raise Attention("configuration_parse")
+            position = end + 2
+        elif tail[position] == "," and not comma:
+            comma, position = True, position + 1
+        else:
+            raise Attention("configuration_parse")
+    return comma
+
+
 def edit_json(text, path, value, *, rename=None, remove=False):
     root = _json_tree(text)
     node = root
@@ -204,7 +227,7 @@ def edit_json(text, path, value, *, rename=None, remove=False):
         return text
     if not isinstance(node.value, dict):
         raise Attention("configuration_shape")
-    prefix = "," if node.children and not re.search(r",\s*(?:(?://[^\n]*\n|/\*[\s\S]*?\*/)\s*)*$", text[list(node.children.values())[-1][2].end:node.end - 1]) else ""
+    prefix = "," if node.children and not _trailing_comma(text[list(node.children.values())[-1][2].end:node.end - 1]) else ""
     insertion = prefix + json.dumps(key) + ":" + json.dumps(value, ensure_ascii=True)
     return text[:node.end - 1] + insertion + text[node.end - 1:]
 
@@ -409,8 +432,25 @@ def discover(provider):
                 updated = re.sub(r"(?m)^export const ClaudeDeckAgentMailPlugin\b", "export const AlbiexSynthCityAgentMailPlugin", updated)
                 # Rename generated environment reads, never the captured URL
                 # literal (which may itself contain an old spelling).
-                updated = re.sub(r"\bprocess\.env\.CLAUDE_DECK_([A-Z_]+)", r"process.env.SYNTH_CITY_\1", updated)
-                updated = re.sub(r'\benvInt\("CLAUDE_DECK_([A-Z_]+)"\)', r'envInt("SYNTH_CITY_\1")', updated)
+                prefix = "const DECK_URL = ("
+                start = updated.find(prefix)
+                if start < 0:
+                    raise Attention("plugin_url_capture")
+                start += len(prefix)
+                try:
+                    url, size = json.JSONDecoder().raw_decode(updated[start:])
+                except ValueError:
+                    raise Attention("plugin_url_capture") from None
+                if not isinstance(url, str):
+                    raise Attention("plugin_url_capture")
+                tail = updated[start + size:]
+                tail = re.sub(r"^( \|\| process\.env\.)CLAUDE_DECK_URL\b", r"\1SYNTH_CITY_URL", tail, count=1)
+                tail = re.sub(r"(?m)^(const PROVIDER = process\.env\.)CLAUDE_DECK_PROVIDER\b", r"\1SYNTH_CITY_PROVIDER", tail)
+                tail = re.sub(r'(?m)^(    const teamPresetID = envInt\(")CLAUDE_DECK_TEAM_PRESET_ID("\);)$',
+                              r'\1SYNTH_CITY_TEAM_PRESET_ID\2', tail)
+                tail = re.sub(r'(?m)^(    const teamSlotID = envInt\(")CLAUDE_DECK_TEAM_SLOT_ID("\);)$',
+                              r'\1SYNTH_CITY_TEAM_SLOT_ID\2', tail)
+                updated = updated[:start] + updated[start:start + size] + tail
                 if "export const AlbiexSynthCityAgentMailPlugin" not in updated:
                     raise Attention("plugin_capture")
                 destination = snapshot(oldpath.with_name(NEW_PLUGIN))

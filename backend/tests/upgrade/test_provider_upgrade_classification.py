@@ -2,6 +2,9 @@
 import copy
 import asyncio
 import json
+import sys
+import subprocess
+import os
 
 import pytest
 
@@ -11,12 +14,16 @@ def test_t_i2_server_name_and_hook_substrings_are_not_installation_identity(tmp_
     shim = tmp_path / "ours/mcp_shim/agent_mail_server.py"
     shim.parent.mkdir(parents=True)
     shim.write_text("# actual installation")
-    own = {"command": "/usr/bin/python3", "args": [str(shim)], "env": {"CLAUDE_DECK_URL": "http://custom.invalid"}}
+    own = {"command": sys.executable, "args": [str(shim)], "env": {"CLAUDE_DECK_URL": "http://custom.invalid"}}
     assert is_owned_entry(own, shim)
     for args in ([str(tmp_path / "other/agent_mail_server.py")], ["-c", str(shim)],
                  [str(shim) + ".other"], ["claude-deck-mail"]):
         assert not is_owned_entry(own | {"args": args}, shim)
     assert not is_owned_entry({"command": "echo", "args": [str(shim)]}, shim)
+    impostor = tmp_path / "unrelated/python"
+    impostor.parent.mkdir()
+    impostor.write_text("# not the installation interpreter")
+    assert not is_owned_entry(own | {"command": str(impostor)}, shim)
 
 
 @pytest.mark.parametrize("provider,payload", [
@@ -72,3 +79,32 @@ def test_setup_actions_cannot_regenerate_over_an_active_upgrade(monkeypatch, pro
         with pytest.raises(ValueError, match="upgrade"):
             asyncio.run(getattr(install, name)(None))
     backup.assert_not_called()
+
+
+def test_t_i2_capture_identity_is_rechecked_at_the_file_mutation_boundary(tmp_path):
+    from app.services import provider_upgrade as u, provider_upgrade_artifacts as a
+    path = tmp_path / "config.json"
+    path.write_bytes(b"captured")
+    file = a.snapshot(path)
+    file["after"] = a.encoded(b"rewritten")
+    replacement = tmp_path / "external-replacement"
+    replacement.write_bytes(b"captured")
+    os.replace(replacement, path)
+    with pytest.raises(a.Attention, match="identity"):
+        u._write(file, file["after"])
+    assert path.read_bytes() == b"captured"
+
+
+def test_jsonc_backtracking_input_shape_is_rejected_in_a_bounded_child():
+    # A fixed deadline contains the old catastrophic-backtracking regression;
+    # this is a termination guard, not a throughput benchmark.
+    result = subprocess.run([sys.executable, "-c", '''
+from app.services.provider_upgrade_artifacts import _trailing_comma, Attention
+try:
+    _trailing_comma(',/*' + '*//*' * 40 + 'x')
+except Attention:
+    pass
+else:
+    raise AssertionError('malformed trailing trivia was accepted')
+'''], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr

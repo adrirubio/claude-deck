@@ -117,7 +117,7 @@ def test_t_i2_t_i4_opencode_artifacts_have_independent_ownership(tmp_path, owned
         doc["mcp"][OLD]["command"] = ["python", "/unrelated/agent_mail_server.py"]
         config.write_text(json.dumps(doc, indent=3) + "\n")
     if not owned_plugin:
-        old_plugin.write_text("// user plugin; keep exactly\nexport const Custom = () => {};\n")
+        old_plugin.write_text(old_plugin.read_text().replace("Claude Deck Agent Mail OpenCode plugin", "User-managed plugin", 1))
     before_config, before_plugin = config.read_bytes(), old_plugin.read_bytes()
     result = run_startup(install)
     assert result.returncode == 0, result.stderr[-4000:]
@@ -278,3 +278,17 @@ def test_t_i1_protocol_failure_is_incomplete_until_the_actual_shipped_shim_verif
     assert second.returncode == 0, second.stderr[-4000:]
     status = json.loads((install.home / ".albiex-synth-city/provider-upgrade-status.json").read_text())
     assert status["providers"]["codex-cli"]["state"] == "verified"
+
+
+def test_t_i2_plugin_url_literal_is_preserved_when_it_contains_a_generated_identifier(tmp_path):
+    install = provision(tmp_path / "install")
+    old = install.home / ".config/opencode/plugins/claude-deck-agent-mail.js"
+    url = "http://127.0.0.1:43220/process.env.CLAUDE_DECK_URL"
+    historical = 'const historical = "process.env.CLAUDE_DECK_PROVIDER";\n'
+    old.write_text(old.read_text().replace('"http://127.0.0.1:8000"', json.dumps(url), 1) + historical)
+    result = run_startup(install)
+    assert result.returncode == 0, result.stderr[-4000:]
+    new = old.with_name("albiex-synth-city-agent-mail.js")
+    assert json.dumps(url) in new.read_text()
+    assert historical in new.read_text()
+    assert ' || process.env.SYNTH_CITY_URL || ' in new.read_text()
