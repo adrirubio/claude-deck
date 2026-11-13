@@ -427,7 +427,7 @@ KIT_MODEL = "stub"
 KIT_ADAPTER = "@ai-sdk/openai-compatible"
 KIT_BACKEND_URL = "http://127.0.0.1:18780"
 MAIL_SERVER = "albiex-synth-city-mail"
-MAIL_SHIM = "/mcp_shim/agent_mail_server.py"
+PYTHON_NAME = re.compile(r"python(3(\.[0-9]+)?)?")
 DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
 
 def _opencode_path(root):
@@ -484,16 +484,52 @@ def _mail_entry_ok(doc):
     command = entry.get("command")
     environment = entry.get("environment")
     return (entry.get("type") == "local" and entry.get("enabled", True) is True and entry.get("codemode") is False
-            and isinstance(command, list) and len(command) >= 2 and all(isinstance(item, str) for item in command)
-            and os.path.isabs(command[-1]) and command[-1].endswith(MAIL_SHIM)
+            and _mail_command_ok(command)
             and isinstance(environment, dict) and environment.get("SYNTH_CITY_URL") == KIT_BACKEND_URL
             and environment.get("SYNTH_CITY_PROVIDER") == "opencode-cli")
+
+def _mail_command_ok(command):
+    # Exactly [a Python interpreter, the Mail shim installed from this checkout], as the install writes it.
+    repo = os.environ.get("RUNTIME_KIT_REPO_ROOT", "")
+    shim = os.path.join(repo, "backend", "mcp_shim", "agent_mail_server.py")
+    if not (repo and os.path.isabs(repo) and os.path.isfile(shim)):
+        return False
+    if not (isinstance(command, list) and len(command) == 2 and all(isinstance(item, str) and item for item in command)):
+        return False
+    interpreter, script = command
+    return (os.path.isabs(interpreter) and PYTHON_NAME.fullmatch(os.path.basename(interpreter)) is not None
+            and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK)
+            and os.path.isabs(script) and os.path.realpath(script) == os.path.realpath(shim))
 
 def _denied(doc):
     return isinstance(doc.get("permissions"), list) and DENY_RULE in doc["permissions"]
 
 def _digest_path(root):
-    return os.path.join(os.path.realpath(root), "state", "opencode-config.sha256")
+    # The proof lives in this root s own state directory, a plain directory, never a link.
+    state = os.path.join(os.path.realpath(root), "state")
+    try:
+        info = os.lstat(state)
+    except OSError:
+        die(2, "refused: the kit has no state directory")
+    if not stat.S_ISDIR(info.st_mode):
+        die(2, "refused: the kit state directory is not a plain directory")
+    path = os.path.join(state, "opencode-config.sha256")
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return path
+    except OSError:
+        die(2, "refused: the OpenCode config proof cannot be read")
+    if not stat.S_ISREG(info.st_mode):
+        die(2, "refused: the OpenCode config proof is not a plain file")
+    return path
+
+def _stage(directory, text):
+    temp = os.path.join(directory, ".opencode-" + os.urandom(8).hex())
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(text)
+    return temp
 
 def opencode_config(root, stub_url):
     hostport = _stub_hostport(stub_url)
@@ -512,19 +548,39 @@ def opencode_config(root, stub_url):
     doc["autoupdate"] = False
     doc["share"] = "disabled"
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
-    temp = os.path.join(os.path.dirname(path), ".opencode-" + os.urandom(8).hex())
+    # Stage both files completely, then commit the proof and the config by atomic renames.
+    # A failure before the config rename leaves the config and any earlier proof as they were.
+    digest = _digest_path(root)
+    with open(path, "rb") as handle:
+        before = handle.read()
+    earlier = None
+    if os.path.lexists(digest):
+        with open(digest) as handle:
+            earlier = handle.read()
+    temps = []
     try:
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        os.replace(temp, path)
-        fd = os.open(_digest_path(root), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            handle.write(hashlib.sha256(text.encode()).hexdigest() + "\n")
+        temps.append(_stage(os.path.dirname(path), text))
+        temps.append(_stage(os.path.dirname(digest), hashlib.sha256(text.encode()).hexdigest() + "\n"))
+        _replace(temps[1], digest)
+        temps.pop()
+        try:
+            _replace(temps[0], path)
+            temps.pop()
+        except OSError:
+            # The config is unchanged: put the earlier proof back, or remove the new one.
+            if earlier is None:
+                os.unlink(digest)
+            else:
+                _replace(_stage(os.path.dirname(digest), earlier), digest)
+            raise
     except OSError:
-        if os.path.lexists(temp):
-            os.unlink(temp)
-        die(2, "refused: the OpenCode config could not be written")
+        for temp in temps:
+            if os.path.lexists(temp):
+                os.unlink(temp)
+        with open(path, "rb") as handle:
+            if handle.read() != before:
+                die(1, "incomplete: the OpenCode config changed but its proof could not be written")
+        die(2, "refused: the OpenCode config could not be written; it is unchanged")
     return opencode_check(root, stub_url)
 
 def _opencode_summary(root, stub_url):
@@ -638,7 +694,7 @@ def main():
 if __name__ == "__main__":
     main()
 '
-kitpy() { python3 -I -c "$KITPY" "$@"; }
+kitpy() { RUNTIME_KIT_REPO_ROOT="$REPO_ROOT" python3 -I -c "$KITPY" "$@"; }
 
 verify() { # name -> pid of this instance's live process for that role; refuses otherwise
   local out code=0

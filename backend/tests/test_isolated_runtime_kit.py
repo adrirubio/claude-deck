@@ -680,8 +680,12 @@ MAIL_SERVER = "albiex-synth-city-mail"
 DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
 
 
+SHIM = REPO / "backend" / "mcp_shim" / "agent_mail_server.py"
+os.environ.setdefault("RUNTIME_KIT_REPO_ROOT", str(REPO))  # where the kit helper finds the installed shim
+
+
 def _mail_entry():  # what the Agent Mail install writes for OpenCode 2 in the kit
-    return {"type": "local", "command": ["/usr/bin/python3", str(REPO / "backend" / "mcp_shim" / "agent_mail_server.py")],
+    return {"type": "local", "command": [os.path.realpath(shutil.which("python3")), str(SHIM)],
             "enabled": True, "codemode": False,
             "environment": {"SYNTH_CITY_URL": "http://127.0.0.1:18780", "SYNTH_CITY_PROVIDER": "opencode-cli"}}
 
@@ -729,7 +733,9 @@ def test_opencode_config_is_stub_only_and_keeps_the_install(tmp_path, capsys):
 
 @pytest.mark.parametrize("case", ["no_config", "jsonc", "no_mail_entry", "no_deny_rule", "foreign_provider",
                                   "not_an_object", "remote_stub", "unwritable", "mail_empty", "mail_disabled",
-                                  "mail_remote", "mail_no_command", "mail_codemode", "mail_other_backend"])
+                                  "mail_remote", "mail_no_command", "mail_codemode", "mail_other_backend",
+                                  "mail_empty_executable", "mail_false_executable", "mail_foreign_shim",
+                                  "mail_other_script"])
 def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
     doc = None
     if case == "no_config":
@@ -752,6 +758,14 @@ def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
             entry["codemode"] = True
         elif case == "mail_other_backend":
             entry["environment"]["SYNTH_CITY_URL"] = "http://127.0.0.1:8011"
+        elif case == "mail_empty_executable":  # V1 review 5899105931 finding 3
+            entry["command"][0] = ""
+        elif case == "mail_false_executable":
+            entry["command"][0] = "/bin/false"
+        elif case == "mail_foreign_shim":
+            entry["command"][1] = "/nonexistent/elsewhere/mcp_shim/agent_mail_server.py"
+        elif case == "mail_other_script":
+            entry["command"] = [entry["command"][0], str(REPO / "scripts" / "ci" / "old_names.py"), str(SHIM)]
         doc = {"mcp": {"servers": {MAIL_SERVER: entry}}, "permissions": [dict(DENY_RULE)]}
     elif case == "foreign_provider":
         doc = {"mcp": {"servers": {MAIL_SERVER: _mail_entry()}}, "permissions": [dict(DENY_RULE)],
@@ -1015,5 +1029,92 @@ def test_opencode_correction_controls_are_caught(tmp_path, monkeypatch, capsys, 
         run = lambda: test_opencode_final_check_refuses_a_config_changed_during_capture(tmp_path / "t", capsys)
     (tmp_path / "t").mkdir()
     (tmp_path / "u").mkdir()
+    with pytest.raises(AssertionError):
+        run()
+
+
+# V1 review 5899105931 findings 1 and 2: the proof file is confined and replaced safely, and a
+# refusal before launch leaves both the config and the proof exactly as they were.
+@pytest.mark.parametrize("case", ["state_symlink", "digest_hardlink", "digest_symlink", "digest_directory",
+                                  "digest_replace_fails"])
+def test_opencode_proof_file_is_confined_and_a_refusal_changes_nothing(tmp_path, case):
+    root, path = _opencode_home(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    canary = outside / "canary"
+    canary.write_text("outside canary\n")
+    digest = root / "state" / "opencode-config.sha256"
+    module = _helper_module()
+    if case == "state_symlink":
+        (root / "state").rmdir()
+        (root / "state").symlink_to(outside)
+    elif case == "digest_hardlink":
+        os.link(canary, digest)
+    elif case == "digest_symlink":
+        digest.symlink_to(canary)
+    elif case == "digest_directory":
+        digest.mkdir()
+    else:
+        real = module["_replace"]
+        def failing(src, dst):
+            if str(dst).endswith("opencode-config.sha256"):
+                raise OSError("injected")
+            return real(src, dst)
+        module["_replace"] = failing
+    config_before = path.read_bytes()
+    code = _opencode(module, "opencode_config", root)
+    assert canary.read_text() == "outside canary\n"
+    assert sorted(p.name for p in outside.iterdir()) == ["canary"]
+    if case == "digest_hardlink":  # replaced as a new file: the outside link target is untouched
+        assert code == 0 and os.stat(digest).st_ino != os.stat(canary).st_ino
+    else:
+        assert code == 2
+        assert path.read_bytes() == config_before
+        assert not [p for p in path.parent.iterdir() if p.name.startswith(".opencode")]
+        if case == "digest_directory":
+            assert digest.is_dir() and not any(digest.iterdir())
+        if case == "digest_replace_fails":
+            assert not digest.exists()
+
+
+def test_opencode_config_rename_failure_restores_the_earlier_proof(tmp_path):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    digest = root / "state" / "opencode-config.sha256"
+    proof_before = digest.read_bytes()
+    doc = json.loads(path.read_text())  # a later setup run would write different bytes
+    doc["instructions"] = ["kept as it is"]
+    path.write_text(json.dumps(doc))
+    config_before = path.read_bytes()
+    real = module["_replace"]
+    def failing(src, dst):
+        if str(dst).endswith("opencode.json"):
+            raise OSError("injected")
+        return real(src, dst)
+    module["_replace"] = failing
+    assert _opencode(module, "opencode_config", root) == 2
+    assert path.read_bytes() == config_before and digest.read_bytes() == proof_before
+    assert not [p for p in path.parent.iterdir() if p.name.startswith(".opencode")]
+    assert not [p for p in digest.parent.iterdir() if p.name.startswith(".opencode")]
+    assert _opencode(module, "opencode_check", root) == 2  # the earlier proof doesn't prove these bytes
+
+
+# In-memory removal controls for the V1 5899105931 batch.
+@pytest.mark.parametrize("control", ["state_unchecked", "command_unchecked", "no_proof_restore"])
+def test_opencode_proof_controls_are_caught(tmp_path, monkeypatch, control):
+    if control == "state_unchecked":
+        _opencode_control(tmp_path, monkeypatch, "    if not stat.S_ISDIR(info.st_mode):\n        die(2, \"refused: the kit state directory",
+                          "    if False:\n        die(2, \"refused: the kit state directory")
+        run = lambda: test_opencode_proof_file_is_confined_and_a_refusal_changes_nothing(tmp_path / "t", "state_symlink")
+    elif control == "command_unchecked":
+        _opencode_control(tmp_path, monkeypatch, "def _mail_command_ok(command):\n",
+                          "def _mail_command_ok(command):\n    return True\n")
+        run = lambda: test_opencode_config_refuses_unsafe_merges(tmp_path / "t", "mail_false_executable")
+    else:
+        _opencode_control(tmp_path, monkeypatch, "                _replace(_stage(os.path.dirname(digest), earlier), digest)\n",
+                          "                pass\n")
+        run = lambda: test_opencode_config_rename_failure_restores_the_earlier_proof(tmp_path / "t")
+    (tmp_path / "t").mkdir()
     with pytest.raises(AssertionError):
         run()

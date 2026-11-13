@@ -93,11 +93,11 @@ For `--provider opencode-cli`, `up` pins the member to the kit's stub model befo
   - the only provider is `kitstub`, with the adapter `@ai-sdk/openai-compatible` and its `baseURL` on `127.0.0.1`;
   - `enabled_providers` is exactly `["kitstub"]` and the model is `kitstub/stub`;
   - autoupdate is off and sharing is disabled;
-  - the install's Mail entry is usable: local, enabled, `codemode` off, its command ending in the Mail shim, provider `opencode-cli` and the kit's own backend URL;
+  - the install's Mail entry is usable: local, enabled, `codemode` off, provider `opencode-cli` and the kit's own backend URL. Its command must be exactly two items: an existing, executable Python interpreter (`python`, `python3` or `python3.N`, by absolute path), then this checkout's `backend/mcp_shim/agent_mail_server.py`;
   - the deny rule is present.
 
   It also refuses an `opencode.jsonc` (comments can't be merged safely), a missing or non-object config, a config that already names another provider, and any symlinked or non-directory component of `home/.config/opencode`. A refusal changes nothing, inside or outside the kit.
-- **Any later change is refused.** `up` records the SHA-256 of the config it wrote in `state/`. A config with any other bytes no longer counts as proved.
+- **Any later change is refused.** `up` records the SHA-256 of the config it wrote in `state/opencode-config.sha256`. A config with any other bytes no longer counts as proved. `state/` must be a plain directory of the root and the proof a plain file. `up` stages the new config and proof completely and commits each by an atomic rename, proof first, so a hard-linked proof is replaced, never written through. If the config can't be committed, the earlier proof is restored and the config is left unchanged.
 - **The provider is proved from records.** `status` uses the OpenCode proof when the provider recorded by `up`, the launched slot's provider and the registered session's provider all agree. If the marker is missing or any of them disagree, `status` refuses before writing anything.
 - **Evidence.** `status` proves the config again and publishes `opencode-config.json` in the manifest. It holds the provider ids, `enabled_providers`, the model, the stub's host and port, and whether the Mail entry is usable and the deny rule present; nothing else. At the end of capture, `status` proves the provider and the config once more. A change during capture fails `status`, and the published evidence stays unchanged.
 
