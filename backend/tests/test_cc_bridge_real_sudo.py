@@ -23,7 +23,7 @@ from tests.real_sudo_support import (
     require_original_sudo,
     wait_for_terminal_bytes,
 )
-from tests.test_cc_bridge_pty_relay import FIXED_ATTACH_ERROR, FrameWebSocket
+from tests.test_cc_bridge_pty_relay import PTY_HINT_ERROR, FrameWebSocket
 
 
 @pytest.fixture
@@ -69,15 +69,17 @@ async def test_real_sudo_under_production_capabilities_needs_use_pty_off_for_the
         await asyncio.wait_for(relay.run(websocket), timeout=60)
     logged = "\n".join(r.getMessage() for r in caplog.records if r.name == pty_relay.logger.name)
 
-    # The browser frame is fixed and generic, so it proves nothing about the cause. The cause is
-    # proven only by the backend log, which keeps sudo's own text out of the client payload.
+    # The browser gets one fixed frame that names the setup rule (the relay's PTY_HINT_ERROR, #749) and no
+    # raw sudo text. The cause is proven by the backend log, which keeps sudo's own text out of the client payload.
     assert "unable to allocate pty" in logged, f"the attach did not fail for the intended cause. Log: {logged!r}"
     for marker in WRONG_SETUP_MARKERS:
         assert marker not in logged, f"the attach failed for the wrong reason ({marker!r}). Log: {logged!r}"
     assert b"ready" not in websocket.sent, "the attach started although use_pty is on and CAP_CHOWN is missing"
-    assert websocket.frames == [{"type": "error", "message": FIXED_ATTACH_ERROR}]
+    assert websocket.frames == [{"type": "error", "message": PTY_HINT_ERROR}]
+    assert "unable to allocate" not in PTY_HINT_ERROR and "Operation not permitted" not in PTY_HINT_ERROR
     assert websocket.close_code == 4000
-    assert b"sudo" not in websocket.sent and b"allocate" not in websocket.sent
+    # FrameWebSocket joins every emitted byte chunk into one bytes value. A failed attach sends none.
+    assert websocket.sent == b"", f"terminal bytes reached the client although the attach failed: {websocket.sent!r}"
 
     # Phase 2, the supported setup. Same user, programs, launcher, bounding set and session.
     # Only the command-scoped use_pty line of the rules changes.
@@ -97,4 +99,3 @@ async def test_real_sudo_under_production_capabilities_needs_use_pty_off_for_the
     finally:
         websocket.finish()
         await asyncio.wait_for(task, timeout=60)
-
