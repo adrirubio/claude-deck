@@ -544,7 +544,10 @@ def spawn_session_endpoint(
         )
         return spawn_session(request.provider, options)
     except ValueError as exc:
-        if request.provider == "pi-cli" and isinstance(exc, ProviderLaunchError):
+        if isinstance(exc, ProviderLaunchError) and (
+            request.provider == "pi-cli"
+            or (request.provider == "opencode-cli" and exc.block_code == "opencode_version_unsupported")
+        ):
             raise HTTPException(status_code=400, detail={"message": str(exc), "block_code": exc.block_code}) from exc
         raise HTTPException(status_code=400, detail=str(exc))
 

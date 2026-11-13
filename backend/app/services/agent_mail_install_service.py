@@ -834,9 +834,11 @@ def _muse_hook_entry(slug: str) -> dict:
 
 
 async def get_install_status() -> AgentMailInstallStatus:
+    from app.services.opencode_version import REASON_REQUIRED, opencode_version_gate
     from app.services.pi_mail_readiness import pi_mail_readiness
 
     pi_ready, pi_reason = pi_mail_readiness()
+    opencode_gate = opencode_version_gate()
     installed_hooks = _installed_mail_hooks()
     installed_events = sorted(
         {
@@ -886,6 +888,10 @@ async def get_install_status() -> AgentMailInstallStatus:
         opencode_mcp_installed=opencode_mcp_installed(),
         opencode_plugin_events=opencode_plugin_events,
         opencode_plugin_events_missing=opencode_missing,
+        opencode_version=opencode_gate.version,
+        opencode_version_ready=opencode_gate.ready,
+        # Readiness shows one public reason for v1 and for an unknown version.
+        opencode_version_reason=None if opencode_gate.ready else REASON_REQUIRED,
         curl_available=shutil.which("curl") is not None,
         shim_path=shim_path(),
         python_path=sys.executable,

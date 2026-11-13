@@ -3431,3 +3431,58 @@ async def test_public_authentication_status_is_one_live_boolean(auth_client, mon
             response = await auth_client.get("/api/v1/agent-mail/authentication-status", headers=headers)
             assert response.status_code == 200
             assert response.json() == {"director_key_configured": bool(key)}
+
+
+def _register_body(provider="opencode-cli"):
+    return {"provider": provider, "cwd": "/tmp/opencode-version-fixture", "session_key": f"{provider}:version-fixture", "pid": 4242, "source": "mcp"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+async def test_register_refuses_opencode_below_2_or_unknown(client, monkeypatch, state):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    resolution = SimpleNamespace(pane=None, walked_pids=(31, 30))
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", lambda _request: resolution)
+    seen = []
+
+    def gate(pane, walked):
+        seen.append((pane, tuple(walked)))
+        return opencode_version.VersionGate(state, None, "fixture")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", gate)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 409
+    assert response.json()["detail"] == opencode_version.BLOCK_CODE
+    # The gate saw the kernel-derived chain, not the claimed pid in the body.
+    assert seen == [(None, (31, 30))]
+
+
+@pytest.mark.asyncio
+async def test_register_accepts_opencode_running_the_trusted_v2_binary(client, monkeypatch):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", lambda _request: SimpleNamespace(pane=None, walked_pids=(31,)))
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", lambda pane, walked: opencode_version.VersionGate("ok", "2.0.29", None))
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 200, response.text
+    assert response.json()["session"]["provider"] == "opencode-cli"
+
+
+@pytest.mark.asyncio
+async def test_register_gate_applies_only_to_opencode(client, monkeypatch):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("the OpenCode gate ran for another provider")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", forbidden)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body("codex-cli"))
+    assert response.status_code == 200, response.text

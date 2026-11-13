@@ -21,6 +21,7 @@ from app.api.v1.deps import (
     require_mail_session,
     require_operator,
     resolve_request_pane,
+    resolve_request_pane_detailed,
 )
 from app.config import settings
 from app.database import get_db
@@ -54,7 +55,7 @@ from app.models.schemas import (
     MailThreadResponse,
     TeamListResponse,
 )
-from app.services import agent_mail_install_service
+from app.services import agent_mail_install_service, opencode_version
 from app.services import factory_audit_service
 from app.services.agent_mail_service import (
     MailAuthorityError,
@@ -1078,6 +1079,13 @@ async def register_agent(
         and request.team_slot_id != derived_slot_id
     ):
         raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+
+    if request.provider == "opencode-cli":
+        # OpenCode 2 or later only. Identity comes from the kernel-owned peer of
+        # this socket and its ancestors, never from the claimed pid.
+        resolution = resolve_request_pane_detailed(http_request)
+        if not opencode_version.member_gate_for_peer(resolution.pane, resolution.walked_pids).ready:
+            raise HTTPException(status_code=409, detail=opencode_version.BLOCK_CODE)
 
     request = request.model_copy(
         update={
