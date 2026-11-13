@@ -517,6 +517,24 @@ def synth_city_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def synth_city_watch_required_checks(work_item_id: int, dispatch_nonce: str, scope_revision: int,
+                                    head_sha: str, reviewer_member_id: Optional[int]) -> dict:
+    """Register or clear the current head's independent reviewer for scheduled CI notices.
+
+    Only the current designated Leader may bind a current enabled team reviewer.
+    Use a full PR head SHA and current attempt revision. Repeat for each new head.
+    Pass null to clear the reviewer. Completion wakes are durable and deduplicated.
+    A watch grants no approval, acceptance, retry, lease or merge authority.
+    """
+    err = _guard()
+    if err:
+        return err
+    return _request("POST", "/required-check-watch", json={"work_item_id": work_item_id,
+        "dispatch_nonce": dispatch_nonce, "scope_revision": scope_revision,
+        "head_sha": head_sha, "reviewer_member_id": reviewer_member_id})
+
+
+@mcp.tool()
 def synth_city_request_work_item_approval(
     work_item_id: int,
     dispatch_nonce: str,

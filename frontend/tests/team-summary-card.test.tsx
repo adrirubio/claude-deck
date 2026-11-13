@@ -68,6 +68,12 @@ const hold = summary({
 
 const cases = [
   {
+    name: 'a team with no semantic progress',
+    data: summary({ attention: [{ code: 'team_idle', work_item_id: 9, scope_id: 1, issue_number: 839,
+      last_actor: 'Reviewer Ada', last_progress_at: stamp }], next_actors: ['leader'] }),
+    expects: ['Team idle on', 'Last recorded actor: Reviewer Ada', '#839'],
+  },
+  {
     name: 'a team with no work', data: noWork,
     expects: ['None open.', 'Nothing is left.'],
   },

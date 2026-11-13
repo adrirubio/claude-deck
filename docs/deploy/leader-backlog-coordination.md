@@ -326,3 +326,17 @@ For #436, refresh the Leader connection again so its assessment tool exposes the
 optional `snapshot_token` argument. The compatibility migration adds policy and
 assessment revisions plus an accepted-token digest. It preserves existing Mail
 linkage, counters, assessments and all dispatch authority.
+
+### Scheduled required-check handoff
+
+When assigning independent review, register the reviewer through
+`synth_city_watch_required_checks` with the current work item, dispatch nonce,
+revision, full PR head and reviewer member ID. Repeat on a changed head. Clear the
+binding with a null reviewer when the assignment ends. Albiex Synth City schedules one durable
+completion notice per attempt revision/head and recipient; the Leader does not
+need to promise a manual CI watch. Success routes to the Leader and reviewer;
+failure routes to the owner and Leader. Preserve the current approval and merge
+policy. If wake confirmation is missing, reconcile the next actor using current
+head evidence. A same-head rerun updates the check view without another completion
+event. Advisory `team_idle` in the summary/check-in means the Leader should inspect
+the named work and last recorded actor; it authorizes no retry or recovery action.

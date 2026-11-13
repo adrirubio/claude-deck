@@ -22,6 +22,27 @@ beforeEach(() => { vi.mocked(apiClient).mockReset(); vi.mocked(apiClient).mockRe
 afterEach(() => vi.useRealTimers())
 
 describe('Work publication observations', () => {
+  it.each(['waiting', 'no_next_actor', 'finished'])('shows required-check state %s with head and bounded counts', async (state) => {
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: {
+      head_sha: 'a'.repeat(40), completed: state === 'waiting' ? 1 : 2, total: 2,
+      state, result: state === 'waiting' ? 'pending' : 'success',
+      observed_at: new Date().toISOString(), changed_at: new Date().toISOString(),
+    } }))
+    render(<WorkPublicationPanel item={item} />)
+    expect(await screen.findByText(state === 'waiting' ? 'Waiting for required checks (1 of 2 done).'
+      : state === 'no_next_actor' ? 'Checks finished, no next actor has a confirmed wake.'
+        : 'Required checks finished; the next actor wake is confirmed.')).toBeTruthy()
+    expect(screen.getByText(/Check head: aaaaaaaa/)).toBeTruthy()
+  })
+  it('rejects invalid check counts instead of presenting a false completion', async () => {
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: {
+      head_sha: 'a'.repeat(40), completed: 3, total: 2, state: 'finished', result: 'success',
+      observed_at: new Date().toISOString(), changed_at: new Date().toISOString(),
+    } }))
+    render(<WorkPublicationPanel item={item} />)
+    expect(await screen.findByText(/Unable to refresh progress/)).toBeTruthy()
+    expect(screen.queryByText(/Required checks finished;/)).toBeNull()
+  })
   it('shows a compact exact commit gap, source time and truthful unavailable file counts', async () => {
     render(<WorkPublicationPanel item={item} ownerName="B2" />)
     expect(await screen.findByText('2 unpublished commits')).toBeTruthy()

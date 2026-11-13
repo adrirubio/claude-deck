@@ -110,3 +110,40 @@ Planning or launching a team requires an authenticated agent session or the oper
 Plan launch reuses only a live pane already bound to its slot. A discovered pane with no verified slot binding blocks the default plan; it is **not** silently promoted to Leader. An operator can request a new plan that explicitly marks such a pane for adoption and names its tmux target and PID. Review the pane and its startup instructions before selecting **Adopt and launch**, or choose a forced fresh spawn instead. Agent sessions cannot request adoption. Agent Bridge's raw spawn route accepts a minimal same-repository plain spawn from an authenticated agent session, but requires the operator token for prompts and other overrides; the legacy CC Bridge spawn and kill routes are operator-only. This does not isolate same-UID agent panes from the backend's operator token or direct tmux access.
 
 If the card says the polling token is not set, check `github_token` in `backend/.env` and restart the backend. A card that says the dispatch mode is not selected can remain that way after successful polls if no issue is eligible for dispatch. If Activity reports an auth error, verify the host token's repository access or the GitHub App installation and settings before retrying.
+
+### Required-check completion and stopped teams
+
+The Leader registers the assigned independent reviewer with
+`synth_city_watch_required_checks(work_item_id, dispatch_nonce, scope_revision,
+head_sha, reviewer_member_id)`. Use the full current PR SHA and repeat registration
+for every new head. Pass `null` to clear the reviewer. The current designated Leader
+and a current enabled reviewer from the same team are required; the owner cannot
+be their own reviewer. A watch does not approve a plan, accept a review, change a
+retry budget, or authorize a merge.
+
+The existing verification monitor records each configured required check by exact
+name, app slug and head. Missing or ambiguous evidence stays unknown. A legacy
+policy without named required checks does not produce a required-check completion
+notice. On the first completion for an attempt revision/head, success notifies the
+Leader and registered reviewer; any required failure notifies the owner and Leader
+with the failed check named. Repeated polls and backend restarts reuse durable
+recipient records. A reviewer registered after completion can receive that same
+completion once. Same-head reruns update the visible results without creating a
+second completion event; a changed head needs its own watch and fresh evidence.
+
+Mail and wake claims are durable before external delivery. Each recipient gets at
+most one wake attempt per completion. A crash during a wake cannot prove delivery;
+that claim remains unconfirmed, and the view says **checks finished, no next actor**.
+The Leader reconciles the current owner/reviewer instead of relying on a manual CI
+watch. No automatic check reruns occur. Independent acceptance, required hosted
+checks and the configured merge policy remain separate gates.
+
+The progress panel shows required-check counts and wake confirmation. The team
+summary and Supervisor check-in expose advisory `team_idle` items after no semantic
+mail/check/item-state progress for `GITHUB_TEAM_IDLE_TIMEOUT_SECONDS` (default 1800,
+valid 30–86400). Polling, summary reads, heartbeats, system notices and Supervisor
+check-ins do not renew this clock. Its first trusted observation starts a baseline;
+no pre-upgrade idle duration is guessed. Human, native-input and external-check
+waits, OFF/HOLD and incomplete bounded observations suppress this signal. Actual
+progress clears it. Last actor names come from authenticated recorded evidence;
+otherwise the view says Unknown. Idle attention grants no execution authority.

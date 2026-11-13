@@ -24,6 +24,7 @@ const ACTORS = {
   leader: 'The Leader',
   operator: 'You',
   controller: 'Synth City',
+  reviewer: 'The reviewer',
 } as const
 
 const UNKNOWN_REASON: Record<TeamRemainingWork['reason'], string> = {
@@ -136,6 +137,8 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                       {item.work_item_id && item.issue_number ? (
                         <>{ATTENTION_TEXT[item.code]} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link></>
                       ) : ATTENTION_TEXT[item.code]}
+                      {item.code === 'team_idle' && <span> · Last recorded actor: {item.last_actor ?? 'Unknown'}
+                        {item.last_progress_at && <> · no progress since {formatServerTime(item.last_progress_at)}</>}</span>}
                       {item.resume_deadline && <> · resume by {formatServerTime(item.resume_deadline)}</>}
                     </li>
                   ))}

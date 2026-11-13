@@ -81,7 +81,7 @@ export interface AgentTeamPreset {
 
 export type TeamSummaryAttentionCode =
   | 'attempt_stopped' | 'recovery_decision' | 'human_review' | 'owner_stalled'
-  | 'observation_pause' | 'hold' | 'recovery_only' | 'hold_unavailable'
+  | 'observation_pause' | 'hold' | 'recovery_only' | 'hold_unavailable' | 'team_idle'
 
 export interface TeamSummaryAttention {
   code: TeamSummaryAttentionCode
@@ -91,6 +91,8 @@ export interface TeamSummaryAttention {
   pause_id?: number | null
   observed_at?: string | null
   resume_deadline?: string | null
+  last_actor?: string | null
+  last_progress_at?: string | null
 }
 
 export interface TeamSummaryHumanAction {
@@ -161,6 +163,7 @@ export interface SupervisorObservation {
   grace_seconds: number
   note: string | null
   attention: 'Supervisor check-in overdue' | null
+  team_idle?: { work_item_id: number; scope_id: number; issue_number: number; last_actor: string; last_progress_at: string }[]
 }
 
 // A member waits at an interactive screen. Only the fixed reason is on the wire.
@@ -206,7 +209,7 @@ export interface AgentTeamSummary {
   required_ci_unreadable?: TeamRequiredCIUnreadable[]
   human_actions: TeamSummaryHumanAction[]
   remaining_work: TeamRemainingWork
-  next_actors: ('owner' | 'leader' | 'operator' | 'controller')[]
+  next_actors: ('owner' | 'leader' | 'operator' | 'controller' | 'reviewer')[]
   next_actor_coverage_complete: boolean
   campaign?: TeamCampaignSummary
 }

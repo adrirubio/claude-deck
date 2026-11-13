@@ -177,7 +177,14 @@ async def supervisor_checkin(db, actor, preset_id: int, next_check_at: datetime,
     else:
         await db.commit()
     team = await _team(db, preset_id)
-    return supervisor_observation(team, now=current, actor=actor)
+    result = supervisor_observation(team, now=current, actor=actor)
+    from app.services.github_team_idle_service import github_team_idle_service
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    # The check-in is already committed. Isolate observation rollback/expiry from
+    # the authenticated caller; do not re-observe or advance the Supervisor clock.
+    async with async_sessionmaker(db.bind, expire_on_commit=False)() as observation_db:
+        result["team_idle"] = await github_team_idle_service.projection(observation_db, preset_id, now=current)
+    return result
 
 
 async def send_supervisor_message(db, session, request):
