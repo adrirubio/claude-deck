@@ -9,7 +9,9 @@ import pathlib
 import re
 import signal
 import sqlite3
+import stat
 import tempfile
+import time
 import urllib.request
 
 def now():
@@ -121,6 +123,72 @@ def _match(text):
 # Supervisor.record returns this for a line it skips. No JSON value can equal it.
 SKIP = object()
 
+# OpenCode 2 (#733). The agent's replies live in SQLite, not a transcript file.
+# Shape from pinned anomalyco/opencode fedc6f208aa2bd54c1019227214568083f6380ad (v2.2.7):
+# schema.gen.ts tables; session/history.ts L91-122 (parts by ordinal, then inline
+# data.content); schema/session-message.ts L185 ({type: "text", text}); the DB file is
+# <data root>/opencode.db, or opencode-<channel>.db (packages/cli/src/database-path.ts).
+# Matching columns validate the required shape only; they do not prove a binary version.
+# Every tick rescans all assistant text, so a reopened or replaced message stays covered.
+# Each limit below refuses (ValueError, which fails closed); nothing is ever skipped.
+OC_SESSION_ID = re.compile(r'ses[0-9A-Za-z_-]{1,96}')
+OC_HEADER = b'SQLite format 3\x00'
+OC_REQUIRED = {
+    'session_v2': {'id', 'directory'},
+    'session_message': {'id', 'session_id', 'type', 'seq', 'data'},
+    'session_part': {'message_id', 'ordinal', 'type', 'data'},
+}
+OC_MAX_ROOT_PATH = 4096
+OC_MAX_ENTRIES = 256          # directory entries examined per data root
+OC_MAX_CANDIDATES = 16
+OC_CELL_MAX = 1 << 20         # bytes per data cell, checked in SQL before the cell is fetched
+OC_FETCH_MAX = 8 << 20        # data bytes fetched per session per tick, before decoding
+OC_TEXT_MAX = 8 << 20         # UTF-8 bytes of extracted reply text per session per tick
+OC_MAX_MESSAGES = 2000
+OC_MAX_PARTS = 20000
+OC_VM_INTERVAL = 1000         # SQLite progress-handler interval, in VM operations
+OC_VM_MAX = 2000000           # total VM operations per tick
+OC_BUSY_MS = 250
+OC_DEADLINE = 3.0             # seconds per tick: discovery, connections, SQL, fetch and decoding
+
+
+class OpenCodeBudget:
+    """One tick's deadline and VM budget, shared by every OpenCode session it scans."""
+
+    def __init__(self):
+        self.deadline = time.monotonic() + OC_DEADLINE
+        self.operations = 0
+        self.exceeded = None
+
+    def check(self):
+        if time.monotonic() > self.deadline:
+            raise ValueError('opencode_guard_deadline')
+
+    def progress(self):
+        self.operations += OC_VM_INTERVAL
+        if self.operations > OC_VM_MAX:
+            self.exceeded = 'opencode_guard_budget'
+        elif time.monotonic() > self.deadline:
+            self.exceeded = 'opencode_guard_deadline'
+        return 1 if self.exceeded else 0
+
+
+def _oc_json(raw):
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError('opencode_record_malformed')
+    if not isinstance(value, dict):
+        raise ValueError('opencode_record_malformed')
+    return value
+
+
+def _oc_text(item):
+    text = item.get('text')
+    if not isinstance(text, str):
+        raise ValueError('opencode_record_malformed')
+    return text
+
 
 class Supervisor:
     def __init__(self, config):
@@ -200,12 +268,25 @@ class Supervisor:
 
     def scan(self, bindings):
         paths = set()
+        opencode = []
         for binding in bindings:
             options = json.loads(binding['launch_options'] or '{}')
             native_id = options.get('session_id')
+            if binding.get('provider') == 'opencode-cli':
+                if not isinstance(native_id, str) or not OC_SESSION_ID.fullmatch(native_id):
+                    raise ValueError('opencode_session_id_invalid')
+                opencode.append((native_id, binding['repo_path']))
+                continue
             if not native_id or not re.fullmatch(r'[0-9a-f-]{36}', native_id):
                 raise ValueError('native_session_identity_missing')
             paths.add(self.transcript(binding.get('provider') or 'claude-code', binding['repo_path'], native_id))
+        if opencode:
+            budget = OpenCodeBudget()
+            for native_id, repo_path in opencode:
+                found = self.opencode_notice(native_id, repo_path, budget)
+                if found:
+                    self.stop('security_notice', security=True, rule=found)
+                    return False
         for path in paths:
             key = str(path)
             offset = int(self.state['offsets'].get(key, 0))
@@ -263,6 +344,168 @@ class Supervisor:
         if not isinstance(parsed, dict):
             raise ValueError('native_record_not_object')
         return parsed
+
+    def opencode_candidates(self, budget):
+        """The safe OpenCode database files under the configured data roots."""
+        roots = self.config.get('opencode_data_roots') or []
+        candidates = []
+        for root in roots:
+            budget.check()
+            if not isinstance(root, str) or not root.startswith('/') or len(root.encode()) > OC_MAX_ROOT_PATH:
+                raise ValueError('opencode_db_unsafe_file')
+            try:
+                with os.scandir(root) as entries:
+                    names = []
+                    for index, entry in enumerate(entries):
+                        if index >= OC_MAX_ENTRIES:
+                            raise ValueError('opencode_guard_budget')
+                        names.append(entry.name)
+            except FileNotFoundError:
+                continue
+            except PermissionError:
+                raise ValueError('opencode_db_unreadable')
+            channel = sorted(n for n in names if n.startswith('opencode-') and n.endswith('.db') and len(n) <= 255)
+            if 'opencode.db' in names:
+                chosen = ['opencode.db']
+            elif len(channel) == 1:
+                chosen = channel
+            elif channel:
+                raise ValueError('opencode_db_ambiguous')
+            else:
+                chosen = []
+            candidates.extend(os.path.join(root, name) for name in chosen)
+            if len(candidates) > OC_MAX_CANDIDATES:
+                raise ValueError('opencode_db_ambiguous')
+        if not candidates:
+            raise ValueError('opencode_db_missing')
+        return candidates
+
+    def opencode_identity(self, path):
+        """A regular file the agent owns, not writable by others, with a SQLite header."""
+        try:
+            info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.config['agent_uid'] or info.st_mode & 0o022:
+                raise ValueError('opencode_db_unsafe_file')
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(descriptor)
+                header = os.read(descriptor, len(OC_HEADER))
+            finally:
+                os.close(descriptor)
+        except PermissionError:
+            raise ValueError('opencode_db_unreadable')
+        except OSError:
+            raise ValueError('opencode_db_unsafe_file')
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or header != OC_HEADER:
+            raise ValueError('opencode_db_unsafe_file')
+        return [info.st_dev, info.st_ino, info.st_uid]
+
+    def opencode_connect(self, path, budget):
+        db = sqlite3.connect('file:' + path + '?mode=ro', uri=True, timeout=OC_BUSY_MS / 1000)
+        db.execute('PRAGMA query_only = ON')
+        db.set_progress_handler(budget.progress, OC_VM_INTERVAL)
+        return db
+
+    @staticmethod
+    def opencode_query(db, budget, sql, args=()):
+        budget.check()
+        try:
+            return db.execute(sql, args).fetchall()
+        except sqlite3.OperationalError as exc:
+            if budget.exceeded:
+                raise ValueError(budget.exceeded)
+            raise ValueError('opencode_db_unreadable') from exc
+        except sqlite3.DatabaseError as exc:
+            raise ValueError('opencode_db_unsafe_file') from exc
+
+    def opencode_notice(self, native_id, repo_path, budget):
+        """Check every assistant reply of one bound OpenCode session, or fail closed."""
+        matches = []
+        for path in self.opencode_candidates(budget):
+            identity = self.opencode_identity(path)
+            budget.check()
+            db = self.opencode_connect(path, budget)
+            try:
+                for table, required in OC_REQUIRED.items():
+                    columns = {row[1] for row in self.opencode_query(db, budget, 'PRAGMA table_info(' + table + ')')}
+                    if not required <= columns:
+                        raise ValueError('opencode_schema_unsupported')
+                rows = self.opencode_query(db, budget, 'SELECT id FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
+                                           (native_id, repo_path))
+            finally:
+                db.close()
+            if len(rows) > 1:
+                raise ValueError('opencode_session_ambiguous')
+            if rows:
+                matches.append((path, identity))
+        if not matches:
+            raise ValueError('opencode_session_missing')
+        if len(matches) != 1:
+            raise ValueError('opencode_session_ambiguous')
+        path, identity = matches[0]
+        # The first observation records the file; a later change means the database was replaced.
+        # Clearing a recorded identity is a separate operator action, never automatic.
+        known = self.state.setdefault('opencode_db_identity', {})
+        if known.get(native_id, identity) != identity:
+            raise ValueError('opencode_db_replaced')
+        known[native_id] = identity
+        return self.opencode_scan_session(path, identity, native_id, budget)
+
+    def opencode_scan_session(self, path, identity, native_id, budget):
+        fetched = 0
+        emitted = 0
+        db = self.opencode_connect(path, budget)
+        try:
+            db.execute('BEGIN')  # one read snapshot for the messages and their parts
+            if self.opencode_identity(path) != identity:
+                raise ValueError('opencode_db_replaced')
+            messages = self.opencode_query(
+                db, budget,
+                'SELECT id, length(CAST(data AS BLOB)), CASE WHEN length(CAST(data AS BLOB)) <= ? THEN data END '
+                'FROM session_message WHERE session_id=? AND type=? ORDER BY seq LIMIT ?',
+                (OC_CELL_MAX, native_id, 'assistant', OC_MAX_MESSAGES + 1))
+            if len(messages) > OC_MAX_MESSAGES:
+                raise ValueError('opencode_guard_budget')
+            parts_seen = 0
+            for message_id, size, raw in messages:
+                if raw is None:
+                    raise ValueError('opencode_record_too_large')
+                fetched += size
+                if fetched > OC_FETCH_MAX:
+                    raise ValueError('opencode_guard_budget')
+                parts = self.opencode_query(
+                    db, budget,
+                    'SELECT type, length(CAST(data AS BLOB)), CASE WHEN type=? AND length(CAST(data AS BLOB)) <= ? THEN data END '
+                    'FROM session_part WHERE message_id=? ORDER BY ordinal LIMIT ?',
+                    ('text', OC_CELL_MAX, message_id, OC_MAX_PARTS - parts_seen + 1))
+                parts_seen += len(parts)
+                if parts_seen > OC_MAX_PARTS:
+                    raise ValueError('opencode_guard_budget')
+                texts = []
+                for part_type, part_size, part_raw in parts:
+                    if part_type != 'text':
+                        continue
+                    if part_raw is None:
+                        raise ValueError('opencode_record_too_large')
+                    fetched += part_size
+                    if fetched > OC_FETCH_MAX:
+                        raise ValueError('opencode_guard_budget')
+                    texts.append(_oc_text(_oc_json(part_raw)))
+                budget.check()
+                content = _oc_json(raw).get('content')
+                if isinstance(content, list):
+                    texts.extend(_oc_text(item) for item in content if isinstance(item, dict) and item.get('type') == 'text')
+                for text in texts:
+                    emitted += len(text.encode('utf-8', 'surrogatepass'))
+                    if emitted > OC_TEXT_MAX:
+                        raise ValueError('opencode_guard_budget')
+                    found = _match(text)
+                    if found:
+                        return found
+            budget.check()
+        finally:
+            db.close()
+        return None
 
     def transcript(self, provider, repo_path, native_id):
         """Return the native transcript of one bound session, or fail closed."""
