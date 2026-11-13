@@ -133,16 +133,10 @@ async def test_v17_routing_fails_closed_without_valid_leader():
             successor = await _slots(session, 2)
             invalid = await _slots(session, 3)
             disabled_only = await _slots(session, 4)
-            # Reordered explicit authority is the routed fallback.
-            assert await github_dispatch_service.route_item(
-                session, item, tied, [], leader_slot_id=11) == (11, "leader_fallback")
-            # Disabled, invalid, and absent assignments fail closed.
-            assert await github_dispatch_service.route_item(
-                session, item, successor, [], leader_slot_id=20) == (None, "leader_unavailable")
-            assert await github_dispatch_service.route_item(
-                session, item, invalid, [], leader_slot_id=999999) == (None, "leader_unavailable")
-            assert await github_dispatch_service.route_item(
-                session, item, disabled_only, [], leader_slot_id=None) == (None, "leader_fallback")
+            # The Leader is never an owner, so no case routes anything without a label.
+            for slots, leader in ((tied, 11), (successor, 20), (invalid, 999999), (disabled_only, None)):
+                assert await github_dispatch_service.route_item(
+                    session, item, slots, [], leader_slot_id=leader) == (None, "no_eligible_owner")
     finally:
         await engine.dispose()
 
@@ -404,6 +398,9 @@ async def test_v17_dispatch_brief_names_reordered_designated_leader(monkeypatch)
             scope = await session.get(TeamGithubScope, 1)
             item = await session.get(GithubWorkItem, 1)
             slots = await _slots(session, 1)
+            # The Leader never owns an item, so the issue names the non-leader slot's area.
+            next(slot for slot in slots if slot.id != 11).area_labels = ["area:v17"]
+            await session.commit()
             launched = {}
 
             class _Result:
@@ -446,7 +443,7 @@ async def test_v17_dispatch_brief_names_reordered_designated_leader(monkeypatch)
             await github_dispatch_service.dispatch_pending(
                 session, scope, slots,
                 launcher=fake_launcher,
-                issue_labels_by_number={1: [scope.dispatch_label]},
+                issue_labels_by_number={1: [scope.dispatch_label, "area:v17"]},
                 issue_details_by_number={1: {"body": "migrated brief"}},
             )
             request = launched.get("request")

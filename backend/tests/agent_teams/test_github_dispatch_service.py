@@ -1709,7 +1709,7 @@ async def test_route_classification_fallback(db):
 
 
 @pytest.mark.asyncio
-async def test_route_leader_fallback_when_no_expertise(db):
+async def test_route_never_falls_back_to_the_leader(db):
     preset, slots, scope = await _team(db)
     for slot in slots:
         slot.expertise = None
@@ -1726,9 +1726,7 @@ async def test_route_leader_fallback_when_no_expertise(db):
     owner_id, method = await github_dispatch_service.route_item(
         db, item, slots, ["nothing"], leader_slot_id=preset.leader_slot_id
     )
-    architect = next(slot for slot in slots if slot.display_name == "Architect")
-    assert owner_id == architect.id
-    assert method == "leader_fallback"
+    assert (owner_id, method) == (None, "no_eligible_owner")
 
 
 @pytest.mark.asyncio
@@ -2301,9 +2299,9 @@ async def test_dispatch_pending_reuses_and_still_passes_the_repo_override(db):
         db,
         scope,
         slots,
-        client=_LabelsClient([]),
+        client=_LabelsClient(["area:backend"]),
         launcher=fake_launcher,
-        issue_labels_by_number={23: []},
+        issue_labels_by_number={23: ["area:backend"]},
     )
 
     assert launched["reuse_existing"] is True
@@ -2389,13 +2387,14 @@ async def test_dispatch_pending_commits_success_before_later_plan_block(db):
             raise ValueError("plan is blocked")
         return _Result()
 
+    docs = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
     await github_dispatch_service.dispatch_pending(
         db,
         scope,
-        slots,
-        client=_LabelsClient(["area:backend"]),
+        [*slots, docs],
+        client=_LabelsClient(["area:backend", "area:docs"]),
         launcher=fake_launcher,
-        issue_labels_by_number={26: [], 27: ["area:backend"]},
+        issue_labels_by_number={26: ["area:docs"], 27: ["area:backend"]},
     )
     await db.refresh(first)
     await db.refresh(second)
@@ -2569,9 +2568,9 @@ async def test_dispatch_pending_marks_failed_launch_result_failed(db):
         db,
         scope,
         slots,
-        client=_LabelsClient([]),
+        client=_LabelsClient(["area:backend"]),
         launcher=fake_launcher,
-        issue_labels_by_number={28: []},
+        issue_labels_by_number={28: ["area:backend"]},
     )
     await db.refresh(item)
     assert item.dispatch_status == "failed"
@@ -7716,11 +7715,12 @@ async def test_dispatch_rechecks_authority_after_brief(db, monkeypatch, tmp_path
 async def test_stale_queue_refusal_cannot_change_the_winning_owner(wal_dispatch_sessions, monkeypatch):
     maker = wal_dispatch_sessions
     async with maker() as db:
-        _, slots, scope = await _team(db)
+        preset, slots, scope = await _team(db)
+        winner = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
         item = GithubWorkItem(scope_id=scope.id, issue_number=9060, issue_title="One winner", issue_url="u",
             github_updated_at=datetime.utcnow(), dispatch_status="pending")
         db.add(item); await db.commit()
-        scope_id, preset_id, winner_owner = scope.id, scope.preset_id, slots[0].id
+        scope_id, preset_id, winner_owner = scope.id, scope.preset_id, winner.id
     reached, resume = asyncio.Event(), asyncio.Event()
 
     async def ambiguity(db, _slot):
@@ -7740,7 +7740,7 @@ async def test_stale_queue_refusal_cannot_change_the_winning_owner(wal_dispatch_
             scope = await db.get(TeamGithubScope, scope_id)
             slots = list((await db.scalars(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == preset_id))).all())
             await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
-                issue_labels_by_number={9060: ["area:backend"] if stalled else []})
+                issue_labels_by_number={9060: ["area:backend"] if stalled else ["area:docs"]})
 
     stale = asyncio.create_task(dispatch(True))
     await asyncio.wait_for(reached.wait(), timeout=10)
@@ -8107,3 +8107,221 @@ async def test_priority_selects_owner_before_repository_capacity_is_consumed(db)
     assert launches == [slots[1].id]
     assert items[0].dispatch_status == "dispatched"
     assert items[1].dispatch_status == "pending" and items[1].pending_reason == "queued_repo_cap"
+
+
+async def _slot(db, preset, position, name, **values):
+    slot = AgentTeamSlot(
+        preset_id=preset.id, position=position, display_name=name, provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", launch_mode="plain", launch_options={},
+        enabled=True, **values,
+    )
+    db.add(slot)
+    await db.commit()
+    return slot
+
+
+async def _pending_item(db, scope, number):
+    item = GithubWorkItem(
+        scope_id=scope.id, issue_number=number, issue_title="x", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    return item
+
+
+class _Launched:
+    launch_id = 7
+
+
+async def _never_launch(db_, preset_id, request):
+    raise AssertionError("an item without an eligible owner must not launch")
+
+
+async def _launch_ok(db_, preset_id, request):
+    return _Launched()
+
+
+@pytest.mark.asyncio
+async def test_route_skips_a_leader_that_carries_the_matching_area_label(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    architect.area_labels = ["area:ops"]
+    await db.commit()
+    item = await _pending_item(db, scope, 40)
+    leader_id = preset.leader_slot_id
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:ops"], leader_slot_id=leader_id) == (None, "no_eligible_owner")
+    backend.area_labels = ["area:backend", "area:ops"]
+    await db.commit()
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:ops"], leader_slot_id=leader_id) == (backend.id, "label")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["coordinator", "Coordinator"])
+async def test_route_never_chooses_a_coordinator_role_slot(db, role):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    coordinator = await _slot(db, preset, 2, "Second coordinator", role=role, area_labels=["area:x"],
+                              expertise="coordination")
+    item = await _pending_item(db, scope, 41)
+    slots = [architect, backend, coordinator]
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:x"], leader_slot_id=preset.leader_slot_id) == (None, "no_eligible_owner")
+    builder = await _slot(db, preset, 3, "Builder", area_labels=["area:x"])
+    assert await github_dispatch_service.route_item(
+        db, item, [*slots, builder], ["area:x"], leader_slot_id=preset.leader_slot_id) == (builder.id, "label")
+
+
+@pytest.mark.asyncio
+async def test_route_without_a_named_leader_still_never_chooses_a_coordinator(db):
+    preset, slots, scope = await _team(db)
+    coordinator = await _slot(db, preset, 2, "Coordinator", role="coordinator", area_labels=["area:x"])
+    item = await _pending_item(db, scope, 42)
+    assert await github_dispatch_service.route_item(
+        db, item, [coordinator], ["area:x"], leader_slot_id=None) == (None, "no_eligible_owner")
+
+
+@pytest.mark.asyncio
+async def test_classifier_is_offered_no_leader_or_coordinator(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    coordinator = await _slot(db, preset, 2, "Coordinator", role="coordinator", expertise="coordination")
+    item = await _pending_item(db, scope, 43)
+    offered = []
+
+    async def classify(it, candidates):
+        offered.extend(slot.id for slot in candidates)
+        return backend.id
+
+    owner_id, method = await github_dispatch_service.route_item(
+        db, item, [architect, backend, coordinator], ["no-area"], classify=classify,
+        leader_slot_id=preset.leader_slot_id)
+    assert offered == [backend.id]
+    assert (owner_id, method) == (backend.id, "classified")
+    only_leader = []
+
+    async def classify_leader_only(it, candidates):
+        only_leader.append(candidates)
+        return None
+
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, coordinator], ["no-area"], classify=classify_leader_only,
+        leader_slot_id=preset.leader_slot_id) == (None, "no_eligible_owner")
+    assert only_leader == []
+
+
+@pytest.mark.asyncio
+async def test_route_keeps_label_order_and_ignores_disabled_slots(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    second = await _slot(db, preset, 2, "Second backend", area_labels=["area:backend"])
+    item = await _pending_item(db, scope, 44)
+    leader_id = preset.leader_slot_id
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, backend, second], ["area:backend"], leader_slot_id=leader_id) == (backend.id, "label")
+    backend.enabled = False
+    await db.commit()
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, backend, second], ["area:backend"], leader_slot_id=leader_id) == (second.id, "label")
+
+
+@pytest.mark.asyncio
+async def test_item_without_an_area_label_stays_pending_and_never_goes_to_the_leader(db):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 45)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient([]), launcher=_never_launch, issue_labels_by_number={45: []})
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "no_eligible_owner"
+    assert item.owner_slot_id is None and item.escalation_reason is None
+    assert item.status_note and "owner" in item.status_note.lower()
+    leased = (await db.execute(
+        select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))).first()
+    assert leased is None
+    assert item.owner_slot_id != preset.leader_slot_id
+
+
+@pytest.mark.asyncio
+async def test_pending_item_becomes_dispatchable_when_an_eligible_slot_appears(db):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 46)
+    labels = {46: ["area:docs"]}
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient(["area:docs"]), launcher=_never_launch, issue_labels_by_number=labels)
+    await db.refresh(item)
+    assert (item.dispatch_status, item.pending_reason) == ("pending", "no_eligible_owner")
+    docs = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
+    await github_dispatch_service.dispatch_pending(
+        db, scope, [*slots, docs], client=_LabelsClient(["area:docs"]), launcher=_launch_ok,
+        issue_labels_by_number=labels)
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched" and item.owner_slot_id == docs.id
+    assert item.routing_method == "label" and item.pending_reason is None
+    assert item.owner_slot_id != preset.leader_slot_id
+
+
+@pytest.mark.asyncio
+async def test_a_team_with_only_a_leader_keeps_every_item_pending(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    backend.enabled = False
+    architect.area_labels = ["area:backend"]
+    await db.commit()
+    item = await _pending_item(db, scope, 47)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient(["area:backend"]), launcher=_never_launch,
+        issue_labels_by_number={47: ["area:backend"]})
+    await db.refresh(item)
+    assert (item.dispatch_status, item.pending_reason, item.owner_slot_id) == ("pending", "no_eligible_owner", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["leader", "coordinator"])
+async def test_claim_boundary_refuses_a_leader_or_coordinator_owner(db, who):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    owner = architect if who == "leader" else await _slot(db, preset, 2, "Coordinator", role="coordinator")
+    item = await _pending_item(db, scope, 48)
+    claimed = await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=owner.id, routing_method="label", require_autonomy=False)
+    await db.refresh(item)
+    assert claimed is False
+    assert (item.dispatch_status, item.pending_reason) == ("pending", "no_eligible_owner")
+    assert item.owner_slot_id is None and item.dispatched_at is None and item.status_note
+    leased = (await db.execute(
+        select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))).first()
+    assert leased is None
+
+
+@pytest.mark.asyncio
+async def test_claim_boundary_still_accepts_an_eligible_owner(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    item = await _pending_item(db, scope, 49)
+    claimed = await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=backend.id, routing_method="label", require_autonomy=False)
+    await db.refresh(item)
+    assert claimed is True and item.dispatch_status == "dispatched" and item.owner_slot_id == backend.id
+
+
+def test_no_eligible_owner_is_a_declared_pending_reason():
+    from app.services.github_dispatch_service import PENDING_REASONS
+    assert "no_eligible_owner" in PENDING_REASONS
+
+
+@pytest.mark.asyncio
+async def test_no_eligible_owner_reason_and_note_reach_the_queue_projection(db):
+    from app.services.github_work_item_projection import _work_item_response
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 50)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient([]), launcher=_never_launch, issue_labels_by_number={50: []})
+    await db.refresh(item)
+    projected = _work_item_response(item, scope)
+    assert projected.dispatch_status == "pending"
+    assert projected.pending_reason == "no_eligible_owner"
+    assert projected.owner_slot_id is None
+    assert projected.status_note and "No eligible owner" in projected.status_note

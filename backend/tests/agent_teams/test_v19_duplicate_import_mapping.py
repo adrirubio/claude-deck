@@ -200,4 +200,4 @@ async def test_v19_reordered_authority_consumers_follow_explicit_assignment(db, 
     db.add(item)
     await db.commit()
     routed = await github_dispatch_service.route_item(db, item, slots, [], leader_slot_id=leader_id)
-    assert routed == (leader_id, "leader_fallback")
+    assert routed == (None, "no_eligible_owner")
