@@ -89,6 +89,21 @@ describe('mailSetupState', () => {
     expect(mailSetupState('pi-cli', status({ pi_mail_ready: false }))).toBe('automatic_unavailable')
   })
 
+  it('shows an OpenCode 1 setup as needing an update that Set up replaces (#732)', () => {
+    const v1 = status({ opencode_mcp_installed: false, opencode_plugin_events: [], opencode_plugin_events_missing: ['session.created'], opencode_plugin_needs_update: true })
+    expect(mailSetupState('opencode-cli', v1)).toBe('needs_update')
+    expect(mailSetupLine('needs_update')).toBe('Needs update · Set up replaces the older OpenCode setup')
+    expect(mailSetupActions('needs_update')).toEqual({ setUp: true, remove: true })
+    expect(mailSetupState('opencode-cli', status({ opencode_mcp_installed: true, opencode_plugin_needs_update: false }))).toBe('connected')
+    const lines = mailTechnicalLines('opencode-cli', status({ opencode_question_denied: true }))
+    expect(lines).toContainEqual({ label: 'Question tool', value: 'denied' })
+    expect(mailTechnicalLines('opencode-cli', status({ opencode_question_denied: false }))).toContainEqual({ label: 'Question tool', value: 'not denied' })
+    const setup = mailConfirm('opencode-cli', 'setup', status())
+    expect(setup.mutations.join('\n')).toContain('mcp.servers.albiex-synth-city-mail')
+    expect(setup.mutations.join('\n')).toContain('deny the question tool')
+    expect(mailConfirm('opencode-cli', 'remove', status()).mutations.join('\n')).toContain('only if this setup added it')
+  })
+
   it('writes one line and offers Set up and Remove by state', () => {
     expect(mailSetupLine('connected')).toBe('✓ Connected · Restart sessions to apply changes')
     expect(mailSetupLine('not_set_up')).toBe('Not set up')

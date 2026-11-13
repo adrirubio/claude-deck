@@ -22,6 +22,7 @@ OpenCode members launch as `opencode <directory> --standalone --session <id> [--
 - **Exact session:** on a slot's first launch, Synth City chooses the session id (`ses_` and 26 letters and digits), saves it on the slot and resumes with `--session <saved id>`. `--continue` is not offered; a slot still stored with "use last" is blocked with `opencode_continue_unsupported`.
 - **Permissions:** the slot's skip-permissions option maps to `--auto`, which approves prompts that no rule denies. Deny rules still apply.
 - **Bedrock:** use an `amazon-bedrock/…` model.
+- **Questions:** each member's launch config and the Agent Mail install deny OpenCode's question tool; an open question or permission prompt is escalated to the Supervisor as waiting for input (see [Agent Mail](/features/agent-mail)).
 - **Ownership:** an OpenCode member can own GitHub work items. Activation readiness and the owner-observation pause accept it only when its process is the exact `--standalone --session <saved id>` member on OpenCode 2, and its Agent Mail registration comes from that pane or its own private server.
 
 Codex has no native Backup/Usage/Context/transcript adapter here; export and diagnostics API support is separate from browser-page access. See restore/usage limits in [Multi-Provider and Codex CLI](/guide/multi-provider-codex-v2). See [Teams](/features/agent-teams) for reviewed launch/reuse and [Live sessions](/features/agent-bridge) for standalone work. Existing Pi opt-in/runtime/exact-resume requirements remain; this index changes neither integration nor sandboxing.

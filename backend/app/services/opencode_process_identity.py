@@ -62,6 +62,8 @@ def config_content(*, model: Optional[str], agent: Optional[str]) -> str:
     else:
         # No model chosen: stop a silent fallback to OpenCode's hosted free models (#729 F5).
         config["disabled_providers"] = ["opencode"]
+    # Unattended members must never stall on the question tool (#729 answer 5, #732).
+    config["permissions"] = [{"action": "question", "resource": "*", "effect": "deny"}]
     return json.dumps(config, separators=(",", ":"))
 
 

@@ -52,13 +52,23 @@ COPILOT_MAIL_HOOK_EVENTS = {
     "postToolUse": "post-tool-use",
     "notification": "user-prompt-submit",
 }
+# OpenCode 2 plugin events and hooks (#729 spec, answer 4) and the route each reports to.
 OPENCODE_MAIL_PLUGIN_EVENTS = {
     "session.created": "session-start",
-    "session.idle": "user-prompt-submit",
-    "session.deleted": "session-end",
+    "session.execution.succeeded": "user-prompt-submit",
+    "session.execution.failed": "user-prompt-submit",
     "tool.execute.after": "post-tool-use",
-    "experimental.chat.system.transform": "user-prompt-submit",
+    "session.context": "user-prompt-submit",
+    "permission.evaluate": "question-deny",
+    "form.created": "input-wait",
+    "form.replied": "input-wait",
+    "form.cancelled": "input-wait",
+    "permission.asked": "input-wait",
+    "permission.replied": "input-wait",
 }
+# The deny rule that stops unattended members from stalling on the question tool (#729 answer 5).
+OPENCODE_QUESTION_DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
+_OPENCODE_PLUGIN_API_MARKER = "synth-city-opencode-plugin-api: 2"
 
 _HOOK_URL_MARKER = "/api/v1/agent-mail/hooks/"
 _CODEX_HOOK_MARKER = "agent_mail_hook.py"
@@ -109,6 +119,19 @@ def opencode_config_paths() -> list[Path]:
 
 def opencode_plugin_path() -> Path:
     return get_opencode_home() / "plugins" / "albiex-synth-city-agent-mail.js"
+
+
+def opencode_question_deny_ledger_path() -> Path:
+    """Synth City's own record of which config files this install inserted the deny rule into."""
+    return Path.home() / ".albiex-synth-city" / "agent-mail" / "opencode-question-deny.json"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temp file and os.replace: running OpenCode members hot-reload these files (#729 F4)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temp.write_text(text, encoding="utf-8")
+    os.replace(temp, path)
 
 
 def provider_hook_command(provider: str, slug: str) -> str:
@@ -324,7 +347,7 @@ def _strip_json_comments_and_trailing_commas(text: str) -> str:
 def _load_opencode_config_doc(path: Path | None = None) -> dict:
     path = path or opencode_config_path()
     if not path.exists():
-        return {}
+        return {"mcp": {}}
     try:
         text = path.read_text(encoding="utf-8")
         doc = json.loads(_strip_json_comments_and_trailing_commas(text))
@@ -335,13 +358,16 @@ def _load_opencode_config_doc(path: Path | None = None) -> dict:
     mcp = doc.setdefault("mcp", {})
     if not isinstance(mcp, dict):
         raise ValueError("OpenCode config file field 'mcp' must be a JSON object")
+    if "servers" in mcp and not isinstance(mcp["servers"], dict):
+        raise ValueError("OpenCode config file field 'mcp.servers' must be a JSON object")
+    if "permissions" in doc and not isinstance(doc["permissions"], list):
+        raise ValueError("OpenCode config file field 'permissions' must be a JSON array")
     return doc
 
 
 def _write_opencode_config_doc(doc: dict, path: Path | None = None) -> None:
     path = path or opencode_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _atomic_write_text(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
 def _codex_hook_command_is_managed(hook: object) -> bool:
@@ -540,7 +566,8 @@ def copilot_mcp_installed() -> bool:
         return False
 
 
-def _opencode_mcp_entry() -> dict:
+def _opencode_flat_v1_entry() -> dict:
+    """The v1 entry Synth City wrote at ``mcp.<name>`` before OpenCode 2."""
     return {
         "type": "local",
         "command": [sys.executable, shim_path()],
@@ -552,15 +579,26 @@ def _opencode_mcp_entry() -> dict:
     }
 
 
-def _opencode_mcp_entry_is_current(entry: object) -> bool:
+def _opencode_mcp_entry() -> dict:
+    """``mcp.servers.<name>`` for OpenCode 2. ``codemode: false`` makes the Mail tools direct
+    tool calls instead of JavaScript inside the ``execute`` tool (#729 F2)."""
+    return {**_opencode_flat_v1_entry(), "codemode": False}
+
+
+def _opencode_entry_is_ours(entry: object) -> bool:
     from app.services.provider_upgrade_artifacts import is_owned_entry
+    return isinstance(entry, dict) and is_owned_entry(entry, shim_path(), provider="opencode-cli")
+
+
+def _opencode_mcp_entry_is_current(entry: object) -> bool:
     if not isinstance(entry, dict):
         return False
     environment = entry.get("environment")
     return (
         entry.get("type") == "local"
         and entry.get("enabled", True) is not False
-        and is_owned_entry(entry, shim_path(), provider="opencode-cli")
+        and entry.get("codemode") is False
+        and _opencode_entry_is_ours(entry)
         and isinstance(environment, dict)
         and isinstance(environment.get("SYNTH_CITY_URL"), str)
         and bool(environment.get("SYNTH_CITY_URL"))
@@ -569,22 +607,41 @@ def _opencode_mcp_entry_is_current(entry: object) -> bool:
 
 
 def opencode_mcp_installed() -> bool:
+    """The effective ``mcp.servers`` entry is ours and current. A flat v1 entry needs an update."""
     effective_entry = None
     for path in opencode_config_paths():
         try:
             doc = _load_opencode_config_doc(path)
         except ValueError:
             return False
-        mcp = doc.get("mcp")
-        if isinstance(mcp, dict) and MCP_SERVER_NAME in mcp:
-            effective_entry = mcp[MCP_SERVER_NAME]
+        servers = doc.get("mcp", {}).get("servers")
+        if isinstance(servers, dict) and MCP_SERVER_NAME in servers:
+            effective_entry = servers[MCP_SERVER_NAME]
     return _opencode_mcp_entry_is_current(effective_entry)
 
 
+def opencode_question_denied() -> bool:
+    """The effective config denies the question tool (whoever added the rule)."""
+    try:
+        doc = _load_opencode_config_doc(opencode_config_path())
+    except ValueError:
+        return False
+    return OPENCODE_QUESTION_DENY_RULE in doc.get("permissions", [])
+
+
 def _opencode_plugin_content() -> str:
+    """The OpenCode 2 plugin: a default export with an id and setup(ctx), no imports (#729 answer 4).
+
+    Each hook it registers carries a ``/*synth-city-event:<name>*/`` tag so that install
+    status can tell an OpenCode 2 plugin from a v1 file, which OpenCode 2 never loads.
+    """
     template = r"""// Albiex Synth City Agent Mail OpenCode plugin.
+// synth-city-opencode-plugin-api: 2
 const DECK_URL = (__SYNTH_CITY_URL__ || process.env.SYNTH_CITY_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 const PROVIDER = process.env.SYNTH_CITY_PROVIDER || "opencode-cli";
+const QUESTION_DENIED =
+  "Questions to the user are disabled for Albiex Synth City team members. " +
+  "Write your question to your Leader through Agent Mail instead, then continue with other work.";
 
 function envInt(name) {
   const raw = process.env[name];
@@ -599,98 +656,177 @@ function timeoutSignal(ms) {
   return controller.signal;
 }
 
-export const AlbiexSynthCityAgentMailPlugin = async (ctx) => {
-  const cwd = () => ctx.worktree || ctx.directory || process.cwd();
+function sessionOf(event) {
+  return event?.data?.sessionID || event?.durable?.aggregateID;
+}
 
-  const payload = (sessionID, extra = {}) => {
-    const body = {
-      provider: PROVIDER,
-      cwd: extra.cwd || cwd(),
-      session_id: sessionID || extra.session_id || String(process.pid),
-      pid: process.pid,
-      ...extra,
+function directoryOf(event) {
+  return event?.location?.directory || event?.data?.location?.directory || process.cwd();
+}
+
+export default {
+  id: "albiex-synth-city-agent-mail",
+  setup(ctx) {
+    const payload = (sessionID, extra = {}) => {
+      const body = { provider: PROVIDER, cwd: extra.cwd || process.cwd(), session_id: sessionID || String(process.pid), pid: process.pid, ...extra };
+      const teamPresetID = envInt("SYNTH_CITY_TEAM_PRESET_ID");
+      const teamSlotID = envInt("SYNTH_CITY_TEAM_SLOT_ID");
+      if (teamPresetID !== undefined) body.team_preset_id = teamPresetID;
+      if (teamSlotID !== undefined) body.team_slot_id = teamSlotID;
+      return body;
     };
-    const teamPresetID = envInt("SYNTH_CITY_TEAM_PRESET_ID");
-    const teamSlotID = envInt("SYNTH_CITY_TEAM_SLOT_ID");
-    if (teamPresetID !== undefined) body.team_preset_id = teamPresetID;
-    if (teamSlotID !== undefined) body.team_slot_id = teamSlotID;
-    return body;
-  };
 
-  const post = async (slug, body) => {
-    try {
-      const response = await fetch(`${DECK_URL}/api/v1/agent-mail/hooks/${slug}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: timeoutSignal(1000),
-      });
-      if (!response.ok) return {};
-      return await response.json();
-    } catch {
-      return {};
-    }
-  };
-
-  const send = (slug, sessionID, extra = {}) => post(slug, payload(sessionID, extra));
-
-  return {
-    event: async ({ event }) => {
-      if (event.type === "session.created") {
-        const info = event.properties?.info || {};
-        await send("session-start", info.id, {
-          cwd: info.directory,
-          source: "opencode-session-created",
+    const post = async (slug, body) => {
+      try {
+        const response = await fetch(`${DECK_URL}/api/v1/agent-mail/hooks/${slug}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: timeoutSignal(1000),
         });
+        if (!response.ok) return {};
+        return await response.json();
+      } catch {
+        return {};
       }
-      if (event.type === "session.idle") {
-        await send("user-prompt-submit", event.properties?.sessionID, {
-          source: "opencode-session-idle",
-        });
-      }
-      if (event.type === "session.deleted") {
-        const info = event.properties?.info || {};
-        await send("session-end", info.id, {
-          cwd: info.directory,
-          source: "opencode-session-deleted",
-        });
-      }
-    },
+    };
 
-    "tool.execute.after": async (input) => {
-      await send("post-tool-use", input.sessionID, {
-        tool_name: input.tool,
-        tool_input: input.args || {},
-        source: "opencode-tool-execute-after",
-      });
-    },
+    // One wait per member: open on the first open question or permission, clear only when the
+    // last one closes. Both carry the same generation, so the backend can ignore stale clears.
+    const openWaits = new Map();
+    let generation = null;
+    let lastGeneration = 0;
+    let waitKind = null;
+    // Uncertain once an id is dropped or an unknown id closes: no clear is sent for that
+    // generation, so the backend keeps the wait rather than clearing it on a guess.
+    let uncertain = false;
+    const inputWait = async (event, state, kind, waitID) => {
+      if (!waitID) { if (openWaits.size) uncertain = true; return; }
+      const id = String(waitID);
+      if (state === "open") {
+        if (openWaits.has(id)) return;
+        if (openWaits.size >= 64) { uncertain = true; return; }
+        openWaits.set(id, kind);
+        if (openWaits.size !== 1) return;
+        uncertain = false;
+        // Strictly increasing within this process, so its clears can never match an older wait.
+        generation = Math.max(Math.trunc(Number(event?.created)) || Date.now(), lastGeneration + 1);
+        lastGeneration = generation;
+        waitKind = kind;
+      } else {
+        if (!openWaits.delete(id)) { if (openWaits.size) uncertain = true; return; }
+        if (openWaits.size !== 0 || generation === null) return;
+        if (uncertain) { generation = null; waitKind = null; uncertain = false; return; }
+      }
+      const body = payload(sessionOf(event), { cwd: directoryOf(event), state, kind: waitKind, generation, source: `opencode-${event.type}` });
+      if (state === "clear") { generation = null; waitKind = null; }
+      await post("input-wait", body);
+    };
 
-    "experimental.chat.system.transform": async (input, output) => {
-      const body = await send("user-prompt-submit", input.sessionID, {
-        source: "opencode-chat-system-transform",
-      });
+    ctx.event.subscribe(async (event) => {
+      switch (event?.type) {
+        case "session.created": /*synth-city-event:session.created*/
+          await post("session-start", payload(sessionOf(event), { cwd: directoryOf(event), source: "opencode-session-created" }));
+          break;
+        case "session.execution.succeeded": /*synth-city-event:session.execution.succeeded*/
+        case "session.execution.failed": /*synth-city-event:session.execution.failed*/
+          await post("user-prompt-submit", payload(sessionOf(event), { cwd: directoryOf(event), source: `opencode-${event.type}` }));
+          break;
+        case "form.created": /*synth-city-event:form.created*/
+          if (event?.data?.form?.metadata?.kind === "question") await inputWait(event, "open", "question", event.data.form.id);
+          break;
+        case "form.replied": /*synth-city-event:form.replied*/
+        case "form.cancelled": /*synth-city-event:form.cancelled*/
+          await inputWait(event, "clear", "question", event?.data?.form?.id);
+          break;
+        case "permission.asked": /*synth-city-event:permission.asked*/
+          await inputWait(event, "open", "permission", event?.data?.permission?.id || event?.data?.id);
+          break;
+        case "permission.replied": /*synth-city-event:permission.replied*/
+          await inputWait(event, "clear", "permission", event?.data?.permission?.id || event?.data?.id);
+          break;
+      }
+    });
+
+    ctx.tool.hook("execute.after", async (input) => { /*synth-city-event:tool.execute.after*/
+      const raw = input?.input || {};
+      const toolInput = { ...raw };
+      if (toolInput.file_path === undefined && typeof raw.filePath === "string") toolInput.file_path = raw.filePath;
+      await post("post-tool-use", payload(input?.sessionID, { tool_name: input?.tool, tool_input: toolInput, source: "opencode-tool-execute-after" }));
+    });
+
+    ctx.session.hook("context", async (input) => { /*synth-city-event:session.context*/
+      const body = await post("user-prompt-submit", payload(input?.sessionID, { source: "opencode-session-context" }));
       const context = body?.hookSpecificOutput?.additionalContext;
-      if (context) output.system.push(context);
-    },
-  };
+      if (context && Array.isArray(input?.system)) input.system.push({ type: "text", text: context });
+    });
+
+    ctx.permission.hook("evaluate", async (input) => { /*synth-city-event:permission.evaluate*/
+      // Team members run unattended: a question would stall them, so it is denied (#729 answer 5).
+      if (input?.action === "question" && (envInt("SYNTH_CITY_TEAM_SLOT_ID") || 0) > 0) {
+        input.effect = "deny";
+        input.message = QUESTION_DENIED;
+      }
+    });
+  },
 };
 """
     return template.replace("__SYNTH_CITY_URL__", json.dumps(synth_city_base_url()))
 
 
-def installed_opencode_plugin_events() -> list[str]:
-    path = opencode_plugin_path()
+def _read_opencode_plugin() -> str:
     try:
-        content = path.read_text(encoding="utf-8")
+        return opencode_plugin_path().read_text(encoding="utf-8")
     except OSError:
+        return ""
+
+
+def _is_v2_opencode_plugin(content: str) -> bool:
+    return (
+        _OPENCODE_PLUGIN_MARKER in content
+        and _OPENCODE_PLUGIN_API_MARKER in content
+        and "export default" in content
+        and "setup(ctx)" in content
+    )
+
+
+def installed_opencode_plugin_events() -> list[str]:
+    """Events of an installed OpenCode 2 plugin. A v1 plugin never loads on OpenCode 2, so it has none."""
+    content = _read_opencode_plugin()
+    if not _is_v2_opencode_plugin(content):
         return []
-    if _OPENCODE_PLUGIN_MARKER not in content:
-        return []
-    installed = []
-    for event, slug in OPENCODE_MAIL_PLUGIN_EVENTS.items():
-        if event in content and slug in content:
-            installed.append(event)
-    return sorted(installed)
+    return sorted(
+        event for event in OPENCODE_MAIL_PLUGIN_EVENTS
+        if f"/*synth-city-event:{event}*/" in content
+    )
+
+
+def opencode_plugin_needs_update() -> bool:
+    """Our plugin file is present but is not the current OpenCode 2 plugin; Set up replaces it."""
+    content = _read_opencode_plugin()
+    return _OPENCODE_PLUGIN_MARKER in content and content != _opencode_plugin_content()
+
+
+def _read_question_deny_ledger() -> dict | None:
+    """The ledger, or None when it is unreadable: unknown ownership never authorizes a removal."""
+    path = opencode_question_deny_ledger_path()
+    if not path.exists():
+        return {"version": 1, "entries": {}}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("entries"), dict):
+        return None
+    return doc
+
+
+def _write_question_deny_ledger(doc: dict) -> None:
+    _atomic_write_text(opencode_question_deny_ledger_path(), json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def _ledger_key(path: Path) -> str:
+    return str(path.resolve())
 
 
 async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
@@ -888,6 +1024,8 @@ async def get_install_status() -> AgentMailInstallStatus:
         opencode_mcp_installed=opencode_mcp_installed(),
         opencode_plugin_events=opencode_plugin_events,
         opencode_plugin_events_missing=opencode_missing,
+        opencode_plugin_needs_update=opencode_plugin_needs_update(),
+        opencode_question_denied=opencode_question_denied(),
         opencode_version=opencode_gate.version,
         opencode_version_ready=opencode_gate.ready,
         # Readiness shows one public reason for v1 and for an unknown version.
@@ -1054,46 +1192,129 @@ async def uninstall_copilot(db: AsyncSession) -> AgentMailInstallStatus:
     return await get_install_status()
 
 
+def _preflight_opencode_docs() -> dict[Path, dict]:
+    """Read and validate every effective OpenCode config file before any backup or write."""
+    return {path: _load_opencode_config_doc(path) for path in opencode_config_paths()}
+
+
+def _check_no_foreign_entry(docs: dict[Path, dict]) -> None:
+    for path, doc in docs.items():
+        mcp = doc.get("mcp", {})
+        for entry in (mcp.get(MCP_SERVER_NAME, None), mcp.get("servers", {}).get(MCP_SERVER_NAME, None)):
+            if entry is not None and not _opencode_entry_is_ours(entry):
+                raise ValueError(
+                    f"OpenCode config {path} has an '{MCP_SERVER_NAME}' MCP entry that is not managed by "
+                    "Albiex Synth City; remove or rename it before Set up"
+                )
+
+
 async def apply_opencode_install(db: AsyncSession) -> AgentMailInstallStatus:
+    """Install or update the OpenCode 2 Agent Mail plugin, MCP server and question deny.
+
+    Everything is read and validated first; nothing is backed up or written when a file is
+    malformed, an entry under our name is foreign, or the ownership ledger is unreadable.
+    Writes go plugin, then config, then ledger, so an interrupted run never leaves a ledger
+    that claims an insertion the config does not show.
+    """
     _require_upgrade_complete("opencode-cli")
     if not opencode_cli_available():
         raise ValueError("OpenCode CLI is not available on this machine")
+    docs = _preflight_opencode_docs()
+    _check_no_foreign_entry(docs)
+    ledger = _read_question_deny_ledger()
+    if ledger is None:
+        raise ValueError(
+            f"The Agent Mail ownership record {opencode_question_deny_ledger_path()} is unreadable; "
+            "fix or remove it before Set up"
+        )
+    target = opencode_config_path()
     await _backup_before_mutation(db, "opencode")
-    config_path = opencode_config_path()
-    doc = _load_opencode_config_doc(config_path)
-    mcp = doc.setdefault("mcp", {})
-    if not isinstance(mcp, dict):
-        raise ValueError("OpenCode config file field 'mcp' must be a JSON object")
-    mcp[MCP_SERVER_NAME] = _opencode_mcp_entry()
-    _write_opencode_config_doc(doc, config_path)
-    path = opencode_plugin_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_opencode_plugin_content(), encoding="utf-8")
+
+    _atomic_write_text(opencode_plugin_path(), _opencode_plugin_content())
+
+    inserted = False
+    for path, doc in docs.items():
+        mcp = doc["mcp"]
+        changed = MCP_SERVER_NAME in mcp
+        mcp.pop(MCP_SERVER_NAME, None)  # an owned v1 flat entry moves to mcp.servers
+        if path == target:
+            mcp.setdefault("servers", {})[MCP_SERVER_NAME] = _opencode_mcp_entry()
+            permissions = doc.setdefault("permissions", [])
+            if OPENCODE_QUESTION_DENY_RULE not in permissions:
+                permissions.append(dict(OPENCODE_QUESTION_DENY_RULE))
+                inserted = True
+            changed = True
+        if changed:
+            _write_opencode_config_doc(doc, path)
+
+    key = _ledger_key(target)
+    if key not in ledger["entries"]:
+        ledger["entries"][key] = {
+            "state": "inserted" if inserted else "preexisting",
+            "rule": dict(OPENCODE_QUESTION_DENY_RULE),
+            "recorded_at": datetime.utcnow().isoformat() + "Z",
+        }
+        _write_question_deny_ledger(ledger)
     return await get_install_status()
 
 
 async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
+    """Remove only Synth City's entries. The deny rule is removed only when the ledger proves this
+    install inserted it into that same file and exactly one identical rule is there."""
     _require_upgrade_complete("opencode-cli")
-    should_backup = opencode_mcp_installed() or bool(installed_opencode_plugin_events())
-    if should_backup:
+    docs = _preflight_opencode_docs()
+    ledger = _read_question_deny_ledger()
+    entries = ledger["entries"] if ledger is not None else {}
+
+    removals: dict[Path, bool] = {}
+    for path, doc in docs.items():
+        mcp = doc["mcp"]
+        servers = mcp.get("servers", {})
+        record = entries.get(_ledger_key(path))
+        remove_rule = (
+            isinstance(record, dict)
+            and record.get("state") == "inserted"
+            and record.get("rule") == OPENCODE_QUESTION_DENY_RULE
+            and doc.get("permissions", []).count(OPENCODE_QUESTION_DENY_RULE) == 1
+        )
+        removals[path] = (
+            _opencode_entry_is_ours(mcp.get(MCP_SERVER_NAME))
+            or _opencode_entry_is_ours(servers.get(MCP_SERVER_NAME))
+            or remove_rule
+        )
+        doc["_synth_city_remove_rule"] = remove_rule
+    plugin_ours = _OPENCODE_PLUGIN_MARKER in _read_opencode_plugin()
+    if any(removals.values()) or plugin_ours:
         await _backup_before_mutation(db, "opencode")
-    for config_path in opencode_config_paths():
-        try:
-            doc = _load_opencode_config_doc(config_path)
-        except ValueError:
+
+    ledger_changed = False
+    for path, doc in docs.items():
+        remove_rule = doc.pop("_synth_city_remove_rule")
+        if not removals[path]:
             continue
-        mcp = doc.get("mcp")
-        if isinstance(mcp, dict) and MCP_SERVER_NAME in mcp:
-            mcp.pop(MCP_SERVER_NAME, None)
-            _write_opencode_config_doc(doc, config_path)
-    path = opencode_plugin_path()
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError:
-        content = ""
-    if _OPENCODE_PLUGIN_MARKER in content:
+        mcp = doc["mcp"]
+        if _opencode_entry_is_ours(mcp.get(MCP_SERVER_NAME)):
+            mcp.pop(MCP_SERVER_NAME)
+        servers = mcp.get("servers")
+        if isinstance(servers, dict) and _opencode_entry_is_ours(servers.get(MCP_SERVER_NAME)):
+            servers.pop(MCP_SERVER_NAME)
+        if remove_rule:
+            doc["permissions"].remove(OPENCODE_QUESTION_DENY_RULE)
+        _write_opencode_config_doc(doc, path)
+        if remove_rule:
+            entries.pop(_ledger_key(path), None)
+            ledger_changed = True
+    for path in docs:
+        record = entries.get(_ledger_key(path))
+        if isinstance(record, dict) and record.get("state") == "preexisting":
+            entries.pop(_ledger_key(path))
+            ledger_changed = True
+    if ledger is not None and ledger_changed:
+        _write_question_deny_ledger(ledger)
+
+    if plugin_ours:
         try:
-            path.unlink()
+            opencode_plugin_path().unlink()
         except FileNotFoundError:
             pass
     return await get_install_status()
@@ -1143,7 +1364,10 @@ def get_snippets() -> AgentMailSnippets:
         sort_keys=True,
     )
     opencode_config_json = json.dumps(
-        {"mcp": {MCP_SERVER_NAME: _opencode_mcp_entry()}},
+        {
+            "mcp": {"servers": {MCP_SERVER_NAME: _opencode_mcp_entry()}},
+            "permissions": [OPENCODE_QUESTION_DENY_RULE],
+        },
         indent=2,
         sort_keys=True,
     )
