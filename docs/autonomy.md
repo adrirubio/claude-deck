@@ -202,3 +202,16 @@ The names are display names only. A subject, a body or a payload is never shown.
   (more than 16 unanswered requests; the count of those not listed is shown). A truncated or
   unproven view is never shown as complete.
 - The signal grants no authority and does not change `team_idle` or the next actor.
+
+### Thread view limits
+
+A thread read returns at most 500 replies. It reads the thread breadth first, by depth and then by
+id, with indexed page reads, so the work depends on the replies kept and not on how many
+descendants exist. The depth bound is 33. A thread with at most 500 replies and a depth below 33
+is returned whole, in the usual order (creation time, then id).
+
+When a thread is **truncated**, the reply list says so with `replies_complete: false` and the
+reason `reply_limit` (more than 500 replies) or `depth_limit` (a reply at depth 33). A truncated
+view holds the 500 replies with the smallest ids by depth and then id. It does **not** hold the
+500 earliest replies by time, and it must not be read that way. The kept replies are still shown
+ordered by creation time and id.

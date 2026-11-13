@@ -1174,6 +1174,113 @@ async def test_get_thread_reply_limit_sentinel(db, svc, count, complete, reason)
     assert thread.replies_incomplete_reason == reason
 
 
+# --- bounded thread traversal (#752): work does not grow with the number of descendants -------------
+
+async def _bulk_replies(db, parent, sender, count, *, base=None, invert=False):
+    """``count`` replies stored directly under ``parent``; ids ascend, created_at ascends (or descends)."""
+    base = base or datetime(2026, 1, 1)
+    rows = [{"kind": "message", "sender_member_id": sender.id, "thread_root_id": parent, "body_markdown": "r",
+             "audience_type": "member", "audience_id": str(sender.id),
+             "created_at": base + timedelta(seconds=(-index if invert else index))} for index in range(count)]
+    await db.execute(MailMessage.__table__.insert(), rows)
+    await db.commit()
+
+
+async def _vm_operations(db, read):
+    """SQLite virtual-machine operations (sampled every 10) used by one awaited read."""
+    connection = await (await db.connection()).get_raw_connection()
+    driver = connection.driver_connection
+    ticks = [0]
+
+    def tick():
+        ticks[0] += 1
+        return 0
+
+    await driver.set_progress_handler(tick, 10)
+    try:
+        await read()
+    finally:
+        await driver.set_progress_handler(None, 0)
+    return ticks[0] * 10
+
+
+@pytest.mark.asyncio
+async def test_thread_read_work_does_not_grow_with_direct_children(db, svc):
+    first, second, small = await _pair(db, svc, "work-small")
+    _f, _s, large = await _pair(db, svc, "work-large")
+    await _bulk_replies(db, small.id, second, 600)
+    await _bulk_replies(db, large.id, second, 6000)
+    small_ops = await _vm_operations(db, lambda: svc.get_thread(db, small.id))
+    large_ops = await _vm_operations(db, lambda: svc.get_thread(db, large.id))
+    for root in (small, large):
+        thread = await svc.get_thread(db, root.id)
+        assert len(thread.replies) == 500 and thread.replies_incomplete_reason == "reply_limit"
+    assert large_ops <= small_ops * 1.25, (small_ops, large_ops)
+
+
+@pytest.mark.asyncio
+async def test_thread_read_work_does_not_grow_with_a_wide_legacy_parent(db, svc):
+    first, second, small = await _pair(db, svc, "wide-small")
+    _f, _s, large = await _pair(db, svc, "wide-large")
+    small_parent = await _raw_row(db, second, None, small.id, holders=(first, second))
+    large_parent = await _raw_row(db, second, None, large.id, holders=(first, second))
+    await db.commit()
+    await _bulk_replies(db, small_parent.id, second, 600)
+    await _bulk_replies(db, large_parent.id, second, 6000)
+    small_ops = await _vm_operations(db, lambda: svc.get_thread(db, small.id))
+    large_ops = await _vm_operations(db, lambda: svc.get_thread(db, large.id))
+    thread = await svc.get_thread(db, large.id)
+    assert len(thread.replies) == 500 and thread.replies_incomplete_reason == "reply_limit"
+    assert large_ops <= small_ops * 1.25, (small_ops, large_ops)
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_thread_holds_the_smallest_ids_by_depth_and_id_and_displays_by_time(db, svc):
+    first, second, root = await _pair(db, svc, "oracle")
+    parents = [await _raw_row(db, second, None, root.id, holders=(first, second)) for _ in range(3)]
+    await db.commit()
+    # Children spread over the three depth-1 parents with interleaved ids; later ids are EARLIER in time.
+    base = datetime(2026, 1, 1)
+    rows = [{"kind": "message", "sender_member_id": second.id, "thread_root_id": parents[index % 3].id,
+             "body_markdown": "r", "audience_type": "member", "audience_id": str(second.id),
+             "created_at": base - timedelta(seconds=index)} for index in range(700)]
+    await db.execute(MailMessage.__table__.insert(), rows)
+    await db.commit()
+    everything = (await db.execute(select(MailMessage.id, MailMessage.thread_root_id, MailMessage.created_at)
+                                   .where(MailMessage.id > root.id))).all()
+    depth = {parent.id: 1 for parent in parents}
+    ordered = sorted(((depth.get(row.thread_root_id, 0) + (0 if row.thread_root_id == root.id else 1)
+                       if row.id not in depth else 1, row.id) for row in everything))
+    oracle = [row_id for _depth, row_id in ordered][:500]
+    created = {row.id: row.created_at for row in everything}
+    thread = await svc.get_thread(db, root.id)
+    assert thread.replies_complete is False and thread.replies_incomplete_reason == "reply_limit"
+    assert {reply.id for reply in thread.replies} == set(oracle)
+    assert [reply.id for reply in thread.replies] == sorted(oracle, key=lambda row_id: (created[row_id], row_id))
+
+
+@pytest.mark.asyncio
+async def test_the_thread_probe_uses_the_thread_root_index_without_sorting(db, svc):
+    first, second, root = await _pair(db, svc, "plan")
+    await _bulk_replies(db, root.id, second, 40)
+    query = AgentMailService._thread_child_page(root.id, 0)
+    sql = str(query.compile(compile_kwargs={"literal_binds": True}))
+    detail = " ".join(row[3] for row in (await db.execute(text("EXPLAIN QUERY PLAN " + sql))).all())
+    assert "SEARCH" in detail and "ix_mail_messages_thread_root_id" in detail
+    assert "TEMP B-TREE" not in detail and "SCAN" not in detail
+
+
+@pytest.mark.asyncio
+async def test_a_chain_deeper_than_the_limit_stops_at_depth_thirty_three(db, svc):
+    first, second, root = await _pair(db, svc, "chain40")
+    parent = root.id
+    for _ in range(40):
+        parent = (await _raw_row(db, second, None, parent, holders=(first, second))).id
+    await db.commit()
+    thread = await svc.get_thread(db, root.id)
+    assert len(thread.replies) == 33 and thread.replies_incomplete_reason == "depth_limit"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("depth,complete,reason", [(32, True, None), (33, False, "depth_limit")])
 async def test_get_thread_depth_limit_sentinel(db, svc, depth, complete, reason):

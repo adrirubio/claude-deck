@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import heapq
 import hmac
 import json
 import logging
@@ -14,8 +15,7 @@ from uuid import uuid4
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, List, Optional
 
-from sqlalchemy import func, literal, or_, select, update
-from sqlalchemy.orm import aliased
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -107,6 +107,9 @@ class MailAuthorityError(ValueError):
 MAX_THREAD_ANCESTRY_HOPS = 32
 THREAD_REPLY_LIMIT = 500
 THREAD_DEPTH_LIMIT = 33
+# Child ids are read in pages of this size, so the work of a thread read never depends on how many
+# children one parent has.
+THREAD_CHILD_PAGE = 16
 # Service metadata on an answer: the exact nested request it resolved (never caller supplied).
 RESOLVES_REQUEST_KEY = "resolves_request_id"
 
@@ -2684,6 +2687,58 @@ class AgentMailService:
         if permitted is None:
             raise PermissionError("thread_not_authorized")
 
+    @staticmethod
+    def _thread_child_page(parent_id: int, after_id: int):
+        """One page of a parent's child ids in id order: a single probe of the thread_root_id index."""
+        return (select(MailMessage.id)
+                .where(MailMessage.thread_root_id == parent_id, MailMessage.id > after_id)
+                .order_by(MailMessage.id).limit(THREAD_CHILD_PAGE))
+
+    async def _select_thread_replies(self, db: AsyncSession, root_id: int) -> tuple[list[int], str | None]:
+        """Descendant ids of a thread in (depth, id) order, and why the list is incomplete (or None).
+
+        Breadth-first. At each depth the children of every parent are merged by id (a heap over one page
+        per parent), so the selection at a depth is exactly its smallest ids across ALL parents. The walk
+        stops as soon as THREAD_REPLY_LIMIT + 1 rows are selected, so its work depends on the rows kept
+        and the parents examined, not on how many descendants exist. A row selected at the depth bound is
+        not expanded. A truncated selection holds the smallest ids by (depth, id), not the earliest
+        timestamps.
+        """
+        limit = THREAD_REPLY_LIMIT + 1
+        selected: list[int] = []
+        frontier = [root_id]
+        reached_depth_limit = False
+        for depth in range(1, THREAD_DEPTH_LIMIT + 1):
+            pages: dict[int, tuple[list[int], int]] = {}
+            heap: list[tuple[int, int]] = []
+            for parent in frontier:
+                ids = list((await db.scalars(self._thread_child_page(parent, 0))).all())
+                if ids:
+                    pages[parent] = (ids, 0)
+                    heapq.heappush(heap, (ids[0], parent))
+            level: list[int] = []
+            while heap and len(selected) + len(level) < limit:
+                child_id, parent = heapq.heappop(heap)
+                level.append(child_id)
+                ids, position = pages[parent]
+                if position + 1 < len(ids):
+                    pages[parent] = (ids, position + 1)
+                    heapq.heappush(heap, (ids[position + 1], parent))
+                elif len(ids) == THREAD_CHILD_PAGE:
+                    more = list((await db.scalars(self._thread_child_page(parent, ids[-1]))).all())
+                    if more:
+                        pages[parent] = (more, 0)
+                        heapq.heappush(heap, (more[0], parent))
+            selected.extend(level)
+            if len(selected) >= limit:
+                return selected, "reply_limit"
+            if depth == THREAD_DEPTH_LIMIT and level:
+                reached_depth_limit = True
+            frontier = level
+            if not frontier:
+                break
+        return selected, "depth_limit" if reached_depth_limit else None
+
     async def get_thread(
         self, db: AsyncSession, root_id: int, for_member_id: Optional[int] = None
     ) -> MailThreadResponse:
@@ -2698,25 +2753,14 @@ class AgentMailService:
                 MailMessage.id == root.id, self._member_root_access(for_member_id)))
             if permitted is None:
                 raise PermissionError("thread_not_authorized")
-        # One bounded query over every descendant of the canonical root (legacy replies stored under
-        # another reply included). A sentinel row past the limit, or a row at the depth bound, is
+        # The first 501 descendants of the canonical root by (depth, id), found breadth-first with paged
+        # index probes (see _select_thread_replies). A 501st row, or a row at the depth bound, is
         # reported instead of returning a complete-looking truncated thread.
-        tree = select(MailMessage.id.label("id"), literal(1).label("depth")).where(
-            MailMessage.thread_root_id == root.id).cte("thread_tree", recursive=True)
-        child = aliased(MailMessage)
-        tree = tree.union_all(select(child.id, tree.c.depth + 1).where(
-            child.thread_root_id == tree.c.id, tree.c.depth < THREAD_DEPTH_LIMIT))
-        rows = (await db.execute(
-            select(MailMessage, tree.c.depth).join(tree, tree.c.id == MailMessage.id)
-            .order_by(MailMessage.created_at.asc(), MailMessage.id.asc())
-            .limit(THREAD_REPLY_LIMIT + 1)
-        )).all()
-        incomplete_reason = None
-        if len(rows) > THREAD_REPLY_LIMIT:
-            incomplete_reason = "reply_limit"
-        elif any(depth >= THREAD_DEPTH_LIMIT for _reply, depth in rows):
-            incomplete_reason = "depth_limit"
-        replies = [reply for reply, _depth in rows[:THREAD_REPLY_LIMIT]]
+        selected, incomplete_reason = await self._select_thread_replies(db, root.id)
+        by_id = {reply.id: reply for reply in (await db.scalars(
+            select(MailMessage).where(MailMessage.id.in_(selected)))).all()} if selected else {}
+        replies = sorted((by_id[row_id] for row_id in selected[:THREAD_REPLY_LIMIT]),
+                         key=lambda reply: (reply.created_at, reply.id))
         return MailThreadResponse(
             root=await self._message_response(db, root, for_member_id),
             replies=[await self._message_response(db, reply, for_member_id) for reply in replies],
