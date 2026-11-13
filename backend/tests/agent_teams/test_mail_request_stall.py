@@ -301,6 +301,56 @@ async def test_a_reply_that_is_not_part_of_the_requests_thread_neither_clears_no
     assert ids(view) == [request.id] and view.complete is True and view.reason is None
 
 
+# --- exact-target answers never clear another request (#752, V1 finding 1) ---------------------
+
+@pytest.mark.asyncio
+async def test_an_answer_to_a_nested_request_does_not_clear_the_root_request(db):
+    team, people = await make_team(db)
+    root = await add_request(db, people[0], people[1])
+    nested = await add_request(db, people[2], people[1], thread=root.id)
+    await db.commit()
+    # The real service stores the answer under the canonical root and records the exact target.
+    answer = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=people[1].id, thread_root_id=nested.id, body_markdown="Done."),
+        auto_nudge=False)
+    stored = await db.get(MailMessage, answer.id)
+    assert stored.thread_root_id == root.id and stored.payload == {"resolves_request_id": nested.id}
+    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
+    assert (await db.get(MailMessage, root.id)).request_status == "pending"
+    view = await observe(db, team, states(people))
+    assert ids(view) == [root.id] and view.complete is True and view.reason is None
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_row_that_resolves_another_request_does_not_clear_but_the_same_row_without_it_does(db):
+    team, people = await make_team(db)
+    keyed, plain = (await add_request(db, people[0], people[1]), await add_request(db, people[0], people[1]))
+    await db.flush()
+    for root, payload in ((keyed, {"resolves_request_id": 999}), (plain, None)):
+        # A requester's reply under the request, then the recipient's answer stored under that reply.
+        intermediate = await add_reply(db, people[0], root.id)
+        db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=intermediate.id,
+                           payload=payload, body_markdown="reply", audience_type="member",
+                           audience_id=str(people[1].id)))
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert ids(view) == [keyed.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_plain_and_unkeyed_canonical_replies_still_clear_and_a_keyed_one_does_not(db):
+    team, people = await make_team(db)
+    plain, unkeyed, keyed = [await add_request(db, people[0], people[1]) for _ in range(3)]
+    await db.flush()
+    await add_reply(db, people[1], plain.id)
+    await add_reply(db, people[1], unkeyed.id, kind="answer")
+    db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=keyed.id,
+                       payload={"resolves_request_id": 999}, body_markdown="reply", audience_type="member",
+                       audience_id=str(people[1].id)))
+    await db.commit()
+    assert ids(await observe(db, team, states(people))) == [keyed.id]
+
+
 # --- legacy nested requests -------------------------------------------------------------------
 
 @pytest.mark.asyncio
