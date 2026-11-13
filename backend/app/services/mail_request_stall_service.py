@@ -17,9 +17,10 @@ cleared by a plain reply, so they are never entries; they make the view ambiguou
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime, timezone
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import aliased
 
@@ -35,12 +36,20 @@ REPLY_ROW_BUDGET = 256        # total reply rows read in one observation
 ANCESTRY_READ_BUDGET = 512    # total ancestry reads in one observation
 MAX_ANCESTRY_HOPS = 32
 NATIVE_INPUT_ROWS = 256      # the native input read bound the fence is checked with
+SNAPSHOT_ATTEMPTS = 3        # coherent-snapshot attempts before the read fails closed
 REASON_PRIORITY = ("candidate_limit", "native_unknown", "ambiguous_legacy_request", "reply_scan_limit",
                    "entry_limit")
 
 
 class _BudgetExhausted(Exception):
     pass
+
+
+class _IncoherentRead(ValueError):
+    """A native observation that could not be shown to come from one unchanged database state."""
+
+
+_UNSET = object()    # an omitted baseline; None means the early capture FAILED and is untrusted
 
 
 def _naive_utc(value: datetime) -> datetime:
@@ -69,9 +78,21 @@ class MailRequestStallService:
     async def projection(self, db, preset_id, *, now: datetime | None = None) -> UnansweredRequestView:
         """The view for a caller that holds no observation of its own (the Supervisor check-in)."""
         # One absolute deadline, taken before the native phase, covers the native and the mail phase.
-        deadline = asyncio.get_running_loop().time() + self.deadline_seconds
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.deadline_seconds
+        # The baseline is taken BEFORE the native phase. A failed capture is None (untrusted); it is
+        # never replaced by a later one.
         try:
-            remaining = deadline - asyncio.get_running_loop().time()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            baseline = await asyncio.wait_for(self._coherent_snapshot(db, preset_id), timeout=remaining)
+        except (TimeoutError, OSError, ValueError, OperationalError):
+            if db.in_transaction():
+                await db.rollback()
+            baseline = None
+        try:
+            remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError
             states, ok, fence = await asyncio.wait_for(self._native_states(db, preset_id), timeout=remaining)
@@ -80,17 +101,20 @@ class MailRequestStallService:
                 await db.rollback()
             states, ok, fence = {}, False, None
         return await self.observe(db, preset_id, now=now or datetime.now(timezone.utc),
-                                  native_states=states, native_ok=ok, deadline=deadline, native_fence=fence)
+                                  native_states=states, native_ok=ok, deadline=deadline, native_fence=fence,
+                                  native_baseline=baseline)
 
     # -- the view ----------------------------------------------------------------------------------
 
     async def observe(self, db, preset_id, *, now: datetime, native_states: dict[int, str],
                       native_ok: bool, deadline: float | None = None,
-                      native_fence: dict | None = None) -> UnansweredRequestView:
+                      native_fence: dict | None = None, native_baseline=_UNSET) -> UnansweredRequestView:
         """``deadline`` is an absolute monotonic loop time; omitted, the view gets its own full budget.
 
         ``native_fence`` is the native input fence the states were observed against. When given, it is
         compared with the current inputs after all mail reads; a difference is not a stable observation.
+        ``native_baseline`` is a coherent snapshot taken before the native phase: omitted, one is taken at
+        the start of the view; None means the caller's early capture failed, which is never replaced.
         """
         loop = asyncio.get_running_loop()
         limit = loop.time() + self.deadline_seconds if deadline is None else deadline
@@ -99,7 +123,8 @@ class MailRequestStallService:
             if remaining <= 0:
                 raise TimeoutError
             return await asyncio.wait_for(
-                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok, native_fence),
+                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok, native_fence,
+                                native_baseline),
                 timeout=remaining)
         except (TimeoutError, OSError, ValueError, OperationalError):
             if db.in_transaction():
@@ -217,48 +242,64 @@ class MailRequestStallService:
         cleaned = sanitize_text(value or "", limit=80).strip()
         return (cleaned or fallback)[:80]
 
-    async def _current_members(self, db, preset_id) -> dict:
-        """slot id -> the slot's current member: the newest member row by updated_at, then id.
+    async def _pinned_driver(self, db):
+        """The physical (driver) connection the session is using."""
+        connection = await db.connection()
+        return (await connection.get_raw_connection()).driver_connection
 
-        The same rule the native inputs use, so a slot's native state describes exactly this member.
-        """
-        rows = (await db.execute(
-            select(MailTeamMember.id, MailTeamMember.team_slot_id)
-            .where(MailTeamMember.team_preset_id == preset_id)
-            .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc())
-            .limit(NATIVE_INPUT_ROWS + 1))).all()
-        if len(rows) > NATIVE_INPUT_ROWS:
-            raise ValueError("activity_context_limit")
-        current: dict = {}
-        for row in rows:
-            current.setdefault(row.team_slot_id, row.id)
-        return current
+    async def _coherent_snapshot(self, db, preset_id):
+        """(native inputs by slot, identity by slot) proven to come from one unchanged database state.
 
-    async def _revalidate(self, db, preset_id, rows, native_fence):
-        """Entries that are still proven after ALL mail reads, and the reasons for dropping the rest.
-
-        The addressee must still be the current member of its slot, and the native inputs must still
-        equal the fence the states were observed against. Anything else is native_unknown.
+        An attempt runs on one pinned physical connection that holds no open transaction (an open
+        transaction can pin an old snapshot, whatever the data version says), and is accepted only if
+        PRAGMA data_version is the same before and after the builder: that value changes if and only if
+        another connection committed in between. Three attempts, then it fails closed.
         """
         from app.services.agent_activity_service import _team_inputs
 
+        parameters = inspect.signature(_team_inputs).parameters
+        if "identity" not in parameters and not any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+            # A builder that cannot report identity cannot prove it: fail closed.
+            raise _IncoherentRead("the native input builder does not report identity")
+        for _attempt in range(SNAPSHOT_ATTEMPTS):
+            driver = await self._pinned_driver(db)
+            if driver.in_transaction:
+                raise _IncoherentRead("an open transaction can pin an old snapshot")
+            before = await db.scalar(text("PRAGMA data_version"))
+            identity: dict = {}
+            entries = await _team_inputs(db, preset_id, NATIVE_INPUT_ROWS, identity=identity)
+            closing = await self._pinned_driver(db)
+            after = await db.scalar(text("PRAGMA data_version"))
+            if closing is not driver or closing.in_transaction:
+                raise _IncoherentRead("the observation was not pinned to one connection")
+            if before is not None and before == after:
+                return {entry[0]: entry for entry in entries}, identity
+        raise _IncoherentRead("the native inputs kept changing")
+
+    async def _revalidate(self, db, preset_id, rows, native_fence, baseline):
+        """Entries still proven by ONE fresh coherent snapshot, and the reasons for dropping the rest.
+
+        The snapshot is the last read of the view. Each entry needs: its addressee is the snapshot's
+        current member of the slot, the slot's identity (member and sessions) equals the baseline's,
+        and, when a fence was passed, the snapshot's native inputs equal it.
+        """
+        inputs, identity = await self._coherent_snapshot(db, preset_id)
         reasons: set[str] = set()
-        current = await self._current_members(db, preset_id)
         kept = []
         for row in rows:
-            if current.get(row.slot_id) != row.recipient_member_id:
+            now_id, base_id = identity.get(row.slot_id), baseline[1].get(row.slot_id)
+            if now_id is None or now_id != base_id or now_id[0] != row.recipient_member_id:
                 reasons.add("native_unknown")
                 continue
             kept.append(row)
-        if native_fence is not None:
-            inputs = {entry[0]: entry for entry in await _team_inputs(db, preset_id, NATIVE_INPUT_ROWS)}
-            if inputs != native_fence:
-                reasons.add("native_unknown")
-                kept = []
+        if native_fence is not None and inputs != native_fence:
+            reasons.add("native_unknown")
+            kept = []
         return kept, reasons
 
     async def _observe(self, db, preset_id, now, native_states, native_ok,
-                       native_fence=None) -> UnansweredRequestView:
+                       native_fence=None, native_baseline=_UNSET) -> UnansweredRequestView:
         threshold = int(settings.mail_request_unanswered_seconds)
         candidates, over_limit = await self._candidates(db, preset_id)
         reasons: set[str] = set()
@@ -267,14 +308,15 @@ class MailRequestStallService:
         if await self._nested_ambiguous(db, preset_id, now, threshold):
             reasons.add("ambiguous_legacy_request")
         before = await self._signatures(db, {row.recipient_member_id for row in candidates})
-        current_members = await self._current_members(db, preset_id)
+        # None is a failed early capture: untrusted, and never replaced by a baseline taken now.
+        baseline = (await self._coherent_snapshot(db, preset_id)) if native_baseline is _UNSET else native_baseline
 
         qualified = []
         for row in candidates:
             if (now - row.created_at).total_seconds() < threshold:
                 continue
-            if current_members.get(row.slot_id) != row.recipient_member_id:
-                # The slot's native state describes its current member, not this addressee.
+            if baseline is None or baseline[1].get(row.slot_id, (None,))[0] != row.recipient_member_id:
+                # No trusted baseline, or the slot's native state describes another member.
                 reasons.add("native_unknown")
                 continue
             state = native_states.get(row.slot_id) if native_ok and row.slot_id is not None else None
@@ -307,7 +349,10 @@ class MailRequestStallService:
 
         # Names are read first; the revalidation is the last read before the entries are built.
         members, actors = await self._names(db, stable)
-        stable, dropped = await self._revalidate(db, preset_id, stable, native_fence)
+        if baseline is None:
+            stable, dropped = [], {"native_unknown"}
+        else:
+            stable, dropped = await self._revalidate(db, preset_id, stable, native_fence, baseline)
         reasons |= dropped
         omitted = max(0, len(stable) - ENTRY_LIMIT)
         if omitted:

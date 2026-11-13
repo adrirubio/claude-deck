@@ -499,7 +499,7 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         return result("unknown", "observation_unavailable")
 
 
-async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = None):
+async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = None, identity: dict | None = None):
     async def rows(query):
         if max_rows is not None:
             query = query.limit(max_rows + 1)
@@ -530,11 +530,16 @@ async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = 
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
             MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))
-    return _inputs_from_rows(slots, options, members, bound_rows)
+    return _inputs_from_rows(slots, options, members, bound_rows, identity)
 
 
-def _inputs_from_rows(slots, options, members, bound_rows):
-    """Build the same native inputs from an existing read snapshot."""
+def _inputs_from_rows(slots, options, members, bound_rows, identity: dict | None = None):
+    """Build the same native inputs from an existing read snapshot.
+
+    A caller may pass a dict as ``identity``; it is filled, from the rows this function already holds,
+    with {slot id: (current member id, sorted ids of the authenticated sessions that contribute a
+    binding for that member)}. The returned inputs are the same with or without it.
+    """
     # A rollout identifies a conversation, not its writer PID. Conservatively
     # reject UUID reuse anywhere in Albiex Synth City, including other presets/disabled slots,
     # so another harness cannot supply a false Working event for this owner.
@@ -547,14 +552,19 @@ def _inputs_from_rows(slots, options, members, bound_rows):
     for member in sorted(members, key=lambda m: (m.updated_at, m.id), reverse=True):
         current_member.setdefault(member.team_slot_id, member.id)
     bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
+    contributing: dict[int, list[int]] = {}
     for binding, session in bound_rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
+            contributing.setdefault(binding.slot_id, []).append(session.id)
             bindings.setdefault(binding.slot_id, set()).add((session.provider, ActivityBinding(
                 binding.pane_pid, binding.pane_proc_start, session.cwd,
                 session.pid if session.provider == "pi-cli" else None,
                 session.created_at if session.provider == "pi-cli" else None,
                 getattr(binding, "tmux_target", None) or getattr(session, "pane_id", None),
                 getattr(binding, "id", None))))
+    if identity is not None:
+        for slot in slots:
+            identity[slot.id] = (current_member.get(slot.id), tuple(sorted(contributing.get(slot.id, ()))))
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
                sorted((binding for provider, binding in bindings.get(slot.id, set())
                        if provider == slot.provider), key=lambda x: (

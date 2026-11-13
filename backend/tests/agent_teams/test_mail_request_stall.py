@@ -6,12 +6,16 @@ Native activity is faked in every test; none reads /proc or depends on a host PI
 """
 import asyncio
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
 import pytest
 import pytest_asyncio
+import sqlite3
+
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -709,6 +713,298 @@ async def test_a_replacement_that_appears_during_the_mail_reads_is_caught_by_the
     assert request.id not in ids(view) and view.complete is False and view.reason == "native_unknown"
 
 
+# --- one coherent, fresh and identity-bound native observation (F2, revision C2a) --------------------
+# Concurrent changes come from a SECOND connection: only another connection moves SQLite's data version.
+
+def second_session(db):
+    return async_sessionmaker(db.bind, expire_on_commit=False)()
+
+
+def raw_update_launch_options(db, slot_id, value):
+    """A change committed by a separate raw sqlite connection (synchronous, usable inside a sync builder)."""
+    connection = sqlite3.connect(db.bind.url.database)
+    try:
+        connection.execute(f"UPDATE {AgentTeamSlot.__tablename__} SET launch_options = ? WHERE id = ?",
+                           (json.dumps({"session_id": value}), slot_id))
+        connection.commit()
+    finally:
+        connection.close()
+
+
+async def commit_new_current_member(db, team, person, *, pid, cwd):
+    """A newer member row plus a NEW authenticated session for the same provider, pane, start and cwd."""
+    async with second_session(db) as other:
+        member = MailTeamMember(identity_key=f"slot:final-{pid}", repo_id="r", repo_path="/r", repo_name="r",
+                                display_name="final", participant_kind="team_slot", team_preset_id=team.id,
+                                team_slot_id=person.slot.id,
+                                updated_at=person.member.updated_at + timedelta(seconds=30))
+        other.add(member)
+        await other.flush()
+        other.add(MailAgentSession(member_id=member.id, provider="codex-cli", source="mcp",
+                                   session_key=f"session-final-{pid}", cwd=cwd, team_preset_id=team.id,
+                                   team_slot_id=person.slot.id, capability_token_hash="synthetic-hash",
+                                   bound_pane_pid=pid, bound_pane_proc_start="fixture-start"))
+        await other.commit()
+
+
+async def commit_new_session_same_member(db, team, person, *, pid, cwd):
+    """The old session is closed and a new authenticated session of the SAME member takes the binding."""
+    async with second_session(db) as other:
+        await other.execute(update(MailAgentSession).where(MailAgentSession.member_id == person.member.id)
+                            .values(closed_at=datetime.utcnow()))
+        other.add(MailAgentSession(member_id=person.member.id, provider="codex-cli", source="mcp",
+                                   session_key=f"session-new-{pid}", cwd=cwd, team_preset_id=team.id,
+                                   team_slot_id=person.slot.id, capability_token_hash="synthetic-hash",
+                                   bound_pane_pid=pid, bound_pane_proc_start="fixture-start"))
+        await other.commit()
+
+
+class Gate:
+    def __init__(self):
+        self.armed = False
+        self.fired = 0
+
+
+def arm_after_names(monkeypatch, service, gate):
+    original = service._names
+
+    async def wrapped(*args):
+        result = await original(*args)
+        gate.armed = True
+        return result
+
+    monkeypatch.setattr(service, "_names", wrapped)
+
+
+def act_before_first_input_read(monkeypatch, gate, action):
+    """Run ``action`` once, just before the first native input read after the names were read."""
+    from app.services import agent_activity_service as activity
+
+    original = activity._team_inputs
+
+    async def wrapped(*args, **kwargs):
+        if gate.armed and not gate.fired:
+            gate.fired = 1
+            await action()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(activity, "_team_inputs", wrapped)
+
+
+async def inputs_of(db, team):
+    from app.services import agent_activity_service as activity
+
+    return await activity._team_inputs(db, team.id, 256)
+
+
+async def bound_fixture(db, monkeypatch, *, pid):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    await bind_session(db, team, people[1], pid=pid, cwd="/same-workspace")
+    idle_when_bound(monkeypatch)
+    return team, people
+
+
+@pytest.mark.asyncio
+async def test_a_newer_member_with_a_new_matching_session_after_the_names_read_is_not_old_evidence(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19501)
+    service = MailRequestStallService()
+    gate, before = Gate(), await inputs_of(db, team)
+
+    async def act():
+        await commit_new_current_member(db, team, people[1], pid=19501, cwd="/same-workspace")
+        assert await inputs_of(db, team) == before     # the native input tuple cannot see the change
+
+    arm_after_names(monkeypatch, service, gate)
+    act_before_first_input_read(monkeypatch, gate, act)
+    view = await service.projection(db, team.id)
+    assert gate.fired == 1
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_of_the_same_member_after_the_names_read_is_not_old_evidence(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19502)
+    service = MailRequestStallService()
+    gate, before = Gate(), await inputs_of(db, team)
+
+    async def act():
+        await commit_new_session_same_member(db, team, people[1], pid=19502, cwd="/same-workspace")
+        assert await inputs_of(db, team) == before
+
+    arm_after_names(monkeypatch, service, gate)
+    act_before_first_input_read(monkeypatch, gate, act)
+    view = await service.projection(db, team.id)
+    assert gate.fired == 1
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_an_input_change_committed_by_another_connection_before_the_final_read_is_native_unknown(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19503)
+    service = MailRequestStallService()
+    gate = Gate()
+    arm_after_names(monkeypatch, service, gate)
+    act_before_first_input_read(monkeypatch, gate,
+                                lambda: asyncio.sleep(0, raw_update_launch_options(db, people[1].slot.id, "changed-1")))
+    view = await service.projection(db, team.id)
+    assert gate.fired == 1
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_a_change_between_the_builders_component_reads_discards_the_attempt(db, monkeypatch):
+    from app.services import agent_activity_service as activity
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19504)
+    service = MailRequestStallService()
+    gate, calls = Gate(), []
+    arm_after_names(monkeypatch, service, gate)
+    original = activity._inputs_from_rows
+
+    def mid_read(*args, **kwargs):
+        if gate.armed:
+            calls.append(1)
+            if len(calls) == 1:     # the rows were read; another connection commits before they are used
+                raw_update_launch_options(db, people[1].slot.id, "changed-between-reads")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(activity, "_inputs_from_rows", mid_read)
+    view = await service.projection(db, team.id)
+    assert len(calls) >= 2                      # the first attempt was discarded and read again
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_three_incoherent_attempts_fail_closed(db, monkeypatch):
+    from app.services import agent_activity_service as activity
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19505)
+    service = MailRequestStallService()
+    gate, calls = Gate(), []
+    arm_after_names(monkeypatch, service, gate)
+    original = activity._inputs_from_rows
+
+    def always_changing(*args, **kwargs):
+        if gate.armed:
+            calls.append(1)
+            raw_update_launch_options(db, people[1].slot.id, f"changed-{len(calls)}")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(activity, "_inputs_from_rows", always_changing)
+    view = await service.projection(db, team.id)
+    assert len(calls) == 3
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [ValueError("activity_context_limit"), OSError("read failed"), "timeout"])
+async def test_a_failed_early_projection_capture_is_untrusted_and_never_replaced(db, monkeypatch, failure):
+    team, people = await bound_fixture(db, monkeypatch, pid=19506)
+    service = MailRequestStallService()
+    service.deadline_seconds = 0.5
+    original, calls = service._coherent_snapshot, []
+
+    async def failing(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            if failure == "timeout":
+                await asyncio.sleep(2)
+            raise failure
+        return await original(*args)
+
+    monkeypatch.setattr(service, "_coherent_snapshot", failing)
+    view = await service.projection(db, team.id)
+    assert len(calls) == 1                       # no replacement baseline was ever taken
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_the_identity_argument_does_not_change_the_native_inputs(db, monkeypatch):
+    from app.services import agent_activity_service as activity
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19507)
+    identity = {}
+    with_identity = await activity._team_inputs(db, team.id, 256, identity=identity)
+    assert with_identity == await activity._team_inputs(db, team.id, 256)
+    session_ids = (await db.execute(select_session_ids(people[1]))).scalars().all()
+    assert identity[people[1].slot.id] == (people[1].member.id, tuple(sorted(session_ids)))
+    assert identity[people[0].slot.id] == (people[0].member.id, ())
+
+
+def select_session_ids(person):
+    from sqlalchemy import select
+
+    return select(MailAgentSession.id).where(MailAgentSession.member_id == person.member.id)
+
+
+@pytest.mark.asyncio
+async def test_a_commit_by_the_same_connection_does_not_discard_a_snapshot(db, monkeypatch):
+    from app.services import agent_activity_service as activity
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19508)
+    service = MailRequestStallService()
+    original, calls = activity._team_inputs, []
+
+    async def own_commit(*args, **kwargs):
+        calls.append(1)
+        result = await original(*args, **kwargs)
+        await db.execute(update(AgentTeamSlot).where(AgentTeamSlot.id == people[0].slot.id)
+                         .values(display_name="renamed by this connection"))
+        await db.commit()
+        return result
+
+    monkeypatch.setattr(activity, "_team_inputs", own_commit)
+    inputs, identity = await service._coherent_snapshot(db, team.id)
+    assert len(calls) == 1 and identity[people[1].slot.id][0] == people[1].member.id
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_attempt_is_pinned_to_one_physical_connection(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19509)
+    service = MailRequestStallService()
+    seen = []
+    original = service._pinned_driver
+
+    async def spy(session):
+        driver = await original(session)
+        seen.append(driver)
+        return driver
+
+    monkeypatch.setattr(service, "_pinned_driver", spy)
+    await service._coherent_snapshot(db, team.id)
+    assert len(seen) >= 2 and all(driver is seen[0] for driver in seen)
+
+    # A different physical connection at the end of an attempt is never accepted.
+    calls = []
+
+    async def swapping(session):
+        driver = await original(session)
+        calls.append(1)
+        return driver if len(calls) % 2 == 1 else object()
+
+    monkeypatch.setattr(service, "_pinned_driver", swapping)
+    with pytest.raises(ValueError):
+        await service._coherent_snapshot(db, team.id)
+
+
+@pytest.mark.asyncio
+async def test_an_open_transaction_pinning_an_old_snapshot_is_never_certified(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19510)
+    team_id, slot_id = team.id, people[1].slot.id
+    await db.execute(text("PRAGMA journal_mode=WAL"))
+    service = MailRequestStallService()
+    await db.execute(text("BEGIN"))
+    await db.execute(text("SELECT count(*) FROM mail_messages"))       # the read transaction pins a snapshot
+    raw_update_launch_options(db, slot_id, "committed-by-another-connection")
+    with pytest.raises(ValueError):
+        await service._coherent_snapshot(db, team_id)
+    await db.rollback()
+    inputs, identity = await service._coherent_snapshot(db, team_id)    # fresh again after the rollback
+    assert slot_id in identity
+
+
 # --- privacy, order, repetition ---------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -746,6 +1042,7 @@ async def test_order_is_deterministic_and_repeated_observations_are_identical(db
 
 def fake_native(monkeypatch, people, by_index=None, boom=False, delay=0.0):
     by_index = by_index or {}
+    owners = [(person.slot.id, person.id) for person in people]     # plain ids: ORM rows expire later
 
     async def observe_team(db, preset_id, **kwargs):
         await asyncio.sleep(delay)
@@ -756,7 +1053,10 @@ def fake_native(monkeypatch, people, by_index=None, boom=False, delay=0.0):
                    for index, person in enumerate(people)],
             valid_until=datetime.now(timezone.utc) + timedelta(seconds=60))
 
-    async def team_inputs(db, preset_id, max_rows=None):
+    async def team_inputs(db, preset_id, max_rows=None, identity=None):
+        if identity is not None:
+            for slot_id, member_id in owners:
+                identity[slot_id] = (member_id, ())
         return []
 
     monkeypatch.setattr("app.services.agent_activity_service.observe_team", observe_team)
