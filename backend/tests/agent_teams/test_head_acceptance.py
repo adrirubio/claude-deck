@@ -1,16 +1,21 @@
 """#904: auto-merge only a head that the team's reviewer accepted (explicit, authenticated, exact-head facts)."""
 from __future__ import annotations
 
+import uuid
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
+import pytest_asyncio
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
+from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubHeadReview,
+    GithubWorkItem,
     GithubRequiredCheckWatch,
     MailTeamMember,
 )
@@ -352,3 +357,115 @@ async def test_the_acceptance_gate_runs_before_the_wait_for_checks(db, monkeypat
     assert case.client.merge_calls == 0
     assert "Waiting for reviewer acceptance at aaaaaaa" in case.item.status_note
     assert case.item.merge_wait_started_at is None  # the check wait never started: the gate came first
+
+
+# --- Review 5899212047: authority must be read fresh, at recording and at every merge boundary ------------------
+
+
+@pytest_asyncio.fixture
+async def twin(tmp_path):
+    """A file-backed database with two real connections: the case session and a second one that commits changes."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'twin.sqlite'}", connect_args={"timeout": 10})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as first:
+        yield first, maker
+    await engine.dispose()
+
+
+async def elsewhere(maker, case, kind):
+    """Commit one authority change through a second connection."""
+    verifier_slot = case.verifier.team_slot_id
+    async with maker() as other:
+        if kind == "role":
+            await other.execute(update(AgentTeamSlot).where(AgentTeamSlot.id == verifier_slot).values(role="implementer"))
+        elif kind == "disabled":
+            await other.execute(update(AgentTeamSlot).where(AgentTeamSlot.id == verifier_slot).values(enabled=False))
+        elif kind == "replaced":
+            other.add(MailTeamMember(identity_key=f"slot:replacement:{uuid.uuid4().hex}", repo_id="r", repo_path="/tmp/r", repo_name="r",
+                display_name="V2", participant_kind="team_slot", team_preset_id=case.scope.preset_id,
+                team_slot_id=verifier_slot))
+        elif kind == "owner":
+            await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == case.item.id).values(owner_slot_id=verifier_slot))
+        elif kind == "leader":
+            await other.execute(update(AgentTeamPreset).where(AgentTeamPreset.id == case.scope.preset_id).values(leader_slot_id=verifier_slot))
+        elif kind == "nonce":
+            await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == case.item.id).values(dispatch_nonce="nonce-2"))
+        elif kind == "superseded":
+            await other.execute(update(GithubHeadReview).values(status="superseded"))
+        await other.commit()
+
+
+AUTHORITY_CHANGES = ["role", "disabled", "replaced", "owner", "leader", "superseded"]
+
+
+async def hold_loaded_authority(db, case):
+    """A long-lived session keeps these objects in its identity map; hold strong references to them as it would."""
+    return [await db.get(AgentTeamSlot, case.verifier.team_slot_id), await db.get(MailTeamMember, case.verifier.id),
+            await db.get(AgentTeamPreset, case.scope.preset_id), await db.get(GithubWorkItem, case.item.id),
+            *(await db.execute(select(GithubHeadReview))).scalars().all()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", AUTHORITY_CHANGES)
+async def test_a_second_connection_revoking_the_authority_is_seen_by_the_merge_gate(twin, monkeypatch, kind):
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    await case.record(HEAD_A)
+    held = await hold_loaded_authority(db, case)  # noqa: F841 - strong references keep the loaded rows cached
+    await elsewhere(maker, case, kind)
+    await case.tick()
+    assert case.client.merge_calls == 0 and case.item.dispatch_status != "merged"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", AUTHORITY_CHANGES)
+async def test_a_revocation_that_lands_during_the_check_read_stops_the_merge_boundary(twin, monkeypatch, kind):
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    await case.record(HEAD_A)
+    held = await hold_loaded_authority(db, case)  # noqa: F841
+    original = case.client.list_check_runs_for_ref
+
+    async def racing(owner, repo, ref):
+        if not racing.done:
+            racing.done = True
+            await elsewhere(maker, case, kind)  # a second connection commits while the checks are read
+        return await original(owner, repo, ref)
+
+    racing.done = False
+
+    case.client.list_check_runs_for_ref = racing
+    await case.tick()
+    assert case.client.merge_calls == 0 and case.item.dispatch_status != "merged"
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_authority_still_merges_across_two_connections(twin, monkeypatch):
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    await case.record(HEAD_A)
+    await case.tick()
+    assert case.item.dispatch_status == "merged"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,code", [("role", "current_independent_reviewer_required"),
+                                       ("disabled", "current_independent_reviewer_required"),
+                                       ("replaced", "current_independent_reviewer_required"),
+                                       ("owner", "current_independent_reviewer_required"),
+                                       ("nonce", "stale_revision_review")])
+async def test_authority_that_changes_during_the_github_read_is_refused_before_a_fact_is_recorded(twin, monkeypatch, kind, code):
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    held = await hold_loaded_authority(db, case)  # noqa: F841
+
+    async def racing_pull(*args, **kwargs):
+        await elsewhere(maker, case, kind)  # the change lands while get_pull is outstanding
+        return case.client.pull
+
+    monkeypatch.setattr(github_client, "get_pull", racing_pull)
+    with pytest.raises(GithubApprovalError, match=code):
+        await case.record(HEAD_A)
+    assert (await db.execute(select(GithubHeadReview))).scalars().all() == []
