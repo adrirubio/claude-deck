@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProviderLaunchOptionsFields } from '../src/features/providers/ProviderLaunchOptionsFields'
 import type { ProviderLaunchOptionsResponse } from '../src/types/providers'
@@ -226,5 +227,140 @@ describe('Claude Code model and effort (#869)', () => {
     expect(screen.getByText('Custom profile')).toBeInTheDocument()
     fireEvent.change(selectWithOption('Amazon Bedrock'), { target: { value: 'bedrock' } })
     expect(onChange).toHaveBeenLastCalledWith({ model: 'gpt-5.5', platform: 'bedrock' })
+  })
+})
+
+// V1 finding on #889: Custom model must open an editable state. These tests drive a real stateful parent.
+function Stateful({ provider = 'claude-code', initial = {}, descriptor = CLAUDE }: { provider?: string; initial?: Record<string, unknown>; descriptor?: ProviderLaunchOptionsResponse }) {
+  const [value, setValue] = useState<Record<string, unknown>>(initial)
+  return (
+    <>
+      <ProviderLaunchOptionsFields provider={provider} value={value} onChange={next => setValue(next)} descriptor={descriptor} />
+      <output data-testid="options">{JSON.stringify(value)}</output>
+    </>
+  )
+}
+const stored = () => JSON.parse(screen.getByTestId('options').textContent ?? '{}')
+const customInput = () => screen.queryByPlaceholderText('model name')
+const modelSelect = () => selectWithOption('Custom model')
+
+describe('Claude custom model entry', () => {
+  it('opens an empty editable input when Custom model is chosen from Default, and stores what is typed', () => {
+    render(<Stateful />)
+    expect(customInput()).not.toBeInTheDocument()
+
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    expect(modelSelect()).toHaveValue('__custom__')
+    expect(customInput()).toHaveValue('')
+    expect(stored()).toEqual({})
+
+    fireEvent.change(customInput()!, { target: { value: 'claude-haiku-4-5-20251001' } })
+    expect(stored()).toEqual({ model: 'claude-haiku-4-5-20251001' })
+    expect(modelSelect()).toHaveValue('__custom__')
+  })
+
+  it('opens the input from a listed model, keeping that value to edit, and stores the replacement', () => {
+    render(<Stateful initial={{ model: OPUS }} />)
+    expect(modelSelect()).toHaveValue(OPUS)
+
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    expect(modelSelect()).toHaveValue('__custom__')
+    expect(customInput()).toHaveValue(OPUS)
+
+    fireEvent.change(customInput()!, { target: { value: 'claude-fable-5-1' } })
+    expect(stored()).toEqual({ model: 'claude-fable-5-1' })
+  })
+
+  it('keeps the input while it is cleared and typed again', () => {
+    render(<Stateful />)
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    fireEvent.change(customInput()!, { target: { value: 'claude-fable-5-1' } })
+
+    fireEvent.change(customInput()!, { target: { value: '' } })
+    expect(customInput()).toBeInTheDocument()
+    expect(modelSelect()).toHaveValue('__custom__')
+    expect(stored()).toEqual({})
+
+    fireEvent.change(customInput()!, { target: { value: 'claude-sonnet-5-5' } })
+    expect(stored()).toEqual({ model: 'claude-sonnet-5-5' })
+  })
+
+  it('keeps the input open while a stored custom model is cleared, then retyped', () => {
+    render(<Stateful initial={{ model: 'claude-haiku-4-5-20251001' }} />)
+    expect(modelSelect()).toHaveValue('__custom__')
+
+    fireEvent.change(customInput()!, { target: { value: '' } })
+    expect(customInput()).toBeInTheDocument()
+    expect(stored()).toEqual({})
+    fireEvent.change(customInput()!, { target: { value: 'claude-opus-5-5' } })
+    expect(stored()).toEqual({ model: OPUS })
+  })
+
+  it('closes the input and clears the model when Default is chosen again', () => {
+    render(<Stateful />)
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    fireEvent.change(customInput()!, { target: { value: 'claude-fable-5-1' } })
+
+    fireEvent.change(modelSelect(), { target: { value: '__default__' } })
+    expect(customInput()).not.toBeInTheDocument()
+    expect(modelSelect()).toHaveValue('__default__')
+    expect(stored()).toEqual({})
+  })
+
+  it('closes the input and stores the listed model when one is chosen after Custom', () => {
+    render(<Stateful />)
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    fireEvent.change(customInput()!, { target: { value: 'claude-fable-5-1' } })
+
+    fireEvent.change(modelSelect(), { target: { value: SONNET } })
+    expect(customInput()).not.toBeInTheDocument()
+    expect(modelSelect()).toHaveValue(SONNET)
+    expect(stored()).toEqual({ model: SONNET })
+  })
+
+  it('does not reopen the custom input when a typed id equals a listed model and Default is chosen', () => {
+    render(<Stateful />)
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    fireEvent.change(customInput()!, { target: { value: OPUS } })
+    expect(customInput()).toBeInTheDocument()
+
+    fireEvent.change(modelSelect(), { target: { value: '__default__' } })
+    expect(customInput()).not.toBeInTheDocument()
+    expect(stored()).toEqual({})
+  })
+
+  it('resets the custom entry across platform switches and keeps the Bedrock rules', () => {
+    render(<Stateful initial={{ reasoning_effort: 'high' }} />)
+    fireEvent.change(modelSelect(), { target: { value: '__custom__' } })
+    fireEvent.change(customInput()!, { target: { value: 'claude-fable-5-1' } })
+
+    fireEvent.change(selectWithOption('Amazon Bedrock'), { target: { value: 'bedrock' } })
+    expect(stored()).toEqual({ reasoning_effort: 'high', platform: 'bedrock' })
+    expect(screen.getByLabelText('Bedrock model ID')).toHaveValue('')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    fireEvent.change(selectWithOption('Amazon Bedrock'), { target: { value: 'anthropic' } })
+    expect(customInput()).not.toBeInTheDocument()
+    expect(modelSelect()).toHaveValue('__default__')
+    expect(stored()).toEqual({ reasoning_effort: 'high' })
+  })
+
+  // Characterization, not a wish: Codex is not changed by this PR. Its Custom model choice from Default does not open the
+  // input (a defect that predates #869, to be handled on its own), and the Claude correction must not leak into it.
+  it('leaves the Codex Custom model choice as it was before this change', () => {
+    render(<Stateful provider="codex-cli" descriptor={CODEX} />)
+
+    fireEvent.change(selectWithOption('Custom model'), { target: { value: '__custom__' } })
+    expect(customInput()).not.toBeInTheDocument()
+    expect(selectWithOption('Custom model')).toHaveValue('__default__')
+    expect(stored()).toEqual({})
+  })
+
+  it('leaves a Codex stored custom model unchanged', () => {
+    render(<Stateful provider="codex-cli" initial={{ model: 'gpt-6-preview' }} descriptor={CODEX} />)
+    expect(selectWithOption('Custom model')).toHaveValue('__custom__')
+    expect(customInput()).toHaveValue('gpt-6-preview')
+    fireEvent.change(customInput()!, { target: { value: 'gpt-6' } })
+    expect(stored()).toEqual({ model: 'gpt-6' })
   })
 })

@@ -1,4 +1,5 @@
 import { ChevronDown } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -56,6 +57,8 @@ export function ProviderLaunchOptionsFields({
   descriptor,
   disabled = false,
 }: ProviderLaunchOptionsFieldsProps) {
+  // Claude Code only: the provider whose Custom model entry the user has opened. A cleared custom id keeps its input.
+  const [customEntryFor, setCustomEntryFor] = useState<string | null>(null)
   const setOption = (key: keyof SlotLaunchOptions, next: unknown) => {
     const updated = { ...value }
     if (next === '' || next === null || next === undefined || next === false) {
@@ -77,7 +80,8 @@ export function ProviderLaunchOptionsFields({
   const profileOptions = descriptor?.profile_options ?? []
   const knownModels = optionValues(modelOptions)
   const knownProfiles = new Set(profileOptions.map((option) => option.value))
-  const modelSelectValue = model && !knownModels.has(model) ? CUSTOM_SELECT_VALUE : model || DEFAULT_SELECT_VALUE
+  const customEntry = isClaude && customEntryFor === provider
+  const modelSelectValue = customEntry || (model && !knownModels.has(model)) ? CUSTOM_SELECT_VALUE : model || DEFAULT_SELECT_VALUE
   const profileSelectValue = profile && !knownProfiles.has(profile) ? CUSTOM_SELECT_VALUE : profile || DEFAULT_SELECT_VALUE
   const isCodex = provider === 'codex-cli'
   const isCopilot = provider === 'copilot-cli'
@@ -94,18 +98,22 @@ export function ProviderLaunchOptionsFields({
     else updated.platform = next
     if (isClaude && next === 'bedrock') delete updated.model
     if (isClaude && next === 'anthropic') delete updated.bedrock_model
+    if (isClaude) setCustomEntryFor(null)
     onChange(updated)
   }
 
   const handleModelSelect = (selected: string) => {
     if (selected === DEFAULT_SELECT_VALUE) {
+      if (isClaude) setCustomEntryFor(null)
       setOption('model', '')
       return
     }
     if (selected === CUSTOM_SELECT_VALUE) {
+      if (isClaude) setCustomEntryFor(provider)
       setOption('model', model)
       return
     }
+    if (isClaude) setCustomEntryFor(null)
     setOption('model', selected)
   }
 
@@ -216,7 +224,10 @@ export function ProviderLaunchOptionsFields({
           {modelSelectValue === CUSTOM_SELECT_VALUE && (
             <Input
               value={model}
-              onChange={(event) => setOption('model', event.target.value)}
+              onChange={(event) => {
+                if (isClaude) setCustomEntryFor(provider)
+                setOption('model', event.target.value)
+              }}
               placeholder="model name"
               disabled={disabled}
             />
