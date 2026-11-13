@@ -46,6 +46,57 @@
           "title": "CampaignDecision",
           "type": "object"
         },
+        "CampaignDispatchItem": {
+          "additionalProperties": false,
+          "properties": {
+            "dispatch_position": {
+              "exclusiveMinimum": 0,
+              "title": "Dispatch Position",
+              "type": "integer"
+            },
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 9999,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Priority"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "scope_id",
+            "repository",
+            "issue_number",
+            "dispatch_position"
+          ],
+          "title": "CampaignDispatchItem",
+          "type": "object"
+        },
         "CampaignDoneItem": {
           "additionalProperties": false,
           "properties": {
@@ -414,6 +465,13 @@
                 "$ref": "#/$defs/CampaignDecision"
               },
               "title": "Decisions Ahead",
+              "type": "array"
+            },
+            "dispatch_order": {
+              "items": {
+                "$ref": "#/$defs/CampaignDispatchItem"
+              },
+              "title": "Dispatch Order",
               "type": "array"
             },
             "done_count": {
