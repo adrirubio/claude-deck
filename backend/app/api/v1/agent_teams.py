@@ -3327,6 +3327,7 @@ async def read_activation_readiness(
         if len(sessions) > 8:
             return False, "context_limit", member.id, None, None
         qualifying = []
+        skipped_dead = 0
         for session in sessions:
             if not session.wake_enabled:
                 continue
@@ -3335,6 +3336,16 @@ async def read_activation_readiness(
             if session.last_seen_at is None or session.last_seen_at < heartbeat_cutoff:
                 continue
             if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+                continue
+            # One strict liveness observation per candidate, reused by the lifetime check below.
+            # A restart leaves the old pane's session `connected` until its heartbeat expires, and
+            # its binding row is gone. A pane that is CONFIRMED dead (False) is skipped here, before
+            # the binding lookup, so it cannot refuse the slot. Unknown (None) is never skipped:
+            # it still refuses below. Two live candidates still refuse as ambiguous.
+            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
+            pane_alive = pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start)
+            if pane_alive is False:
+                skipped_dead += 1
                 continue
             binding = (await db.scalars(
                 select(AgentPaneBinding).where(
@@ -3352,8 +3363,7 @@ async def read_activation_readiness(
             # Strict native identity: confirm the pane process start-time
             # lifetime before and after a bounded command read. One probe per
             # candidate, capped by the bounded session query.
-            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
-            if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
+            if pane_alive is not True:
                 return False, "native_lifetime", member.id, None, None
             # Actual native provider/agent identity from the preserved
             # argument vector. argv[0] must be the registered executable;
@@ -3510,7 +3520,8 @@ async def read_activation_readiness(
             # silently.
             return False, "ambiguous", member.id, None, None
         if not qualifying:
-            return False, "stale", member.id, None, None
+            # Every candidate was a confirmed dead pane: the lifetime refusal, not a stale heartbeat.
+            return False, "native_lifetime" if skipped_dead else "stale", member.id, None, None
         return True, None, member.id, qualifying[0].id, observed_tick
 
     async def identity_signature(slot: AgentTeamSlot) -> tuple:

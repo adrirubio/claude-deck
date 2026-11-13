@@ -2363,6 +2363,159 @@ async def test_readiness_heartbeat_boundary_uses_shared_ttl(client, db, monkeypa
     assert "owner_binding_stale" in codes
 
 
+# A restarted member (stop its pane, launch again) leaves the old pane's MCP session `connected`
+# until the heartbeat window ends (#747). Pane liveness is faked in every test below: none reads
+# /proc, and no fake PID can collide with a real host process.
+OLD_OWNER_PANE, OLD_LEADER_PANE, SECOND_LIVE_PANE = 7010, 7011, 8001
+
+
+async def _restarted_team(db, monkeypatch, tmp_path, name, *, verdicts, old_owner=True, old_leader=True,
+                          old_binding=False, old_last_seen=None):
+    """A ready team whose slots each also hold an OLDER connected session on a dead pane.
+
+    The old sessions have a lower id than the live ones (the readiness walk is in id order) and, as
+    after a real relaunch, no pane binding row of their own.
+    """
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, name, 1)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 1120, 1020, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1121, 1021, last_seen=now)
+    await db.flush()
+    for wanted, slot, member_id, session_id, pane in (
+        (old_owner, preset.slots[1], 1120, 1010, OLD_OWNER_PANE),
+        (old_leader, preset.slots[0], 1121, 1011, OLD_LEADER_PANE),
+    ):
+        if wanted:
+            _add_live_session(db, preset, slot.id, member_id, session_id, pane,
+                              last_seen=old_last_seen or now, binding=old_binding)
+    await db.commit()
+    probes: dict[int, int] = {}
+
+    def liveness(pane_pid, _proc_start):
+        probes[pane_pid] = probes.get(pane_pid, 0) + 1
+        return verdicts.get(pane_pid, True)
+
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict", liveness)
+    return preset, scope, probes
+
+
+def _add_live_session(db, preset, slot_id, member_id, session_id, pane_pid, *, last_seen, binding):
+    from app.models.database import AgentPaneBinding, MailAgentSession
+
+    db.add(MailAgentSession(
+        id=session_id, member_id=member_id, provider="codex-cli", source="mcp",
+        session_key=f"mcp:restart-{session_id}", wake_enabled=True, mailbox_status="connected",
+        last_seen_at=last_seen, team_preset_id=preset.id, team_slot_id=slot_id, pid=pane_pid,
+        bound_pane_pid=pane_pid, bound_pane_proc_start="1", capability_token_hash=f"cap-{session_id}"))
+    if binding:
+        db.add(AgentPaneBinding(pane_pid=pane_pid, pane_proc_start="1", slot_id=slot_id, preset_id=preset.id))
+
+
+async def _readiness(client, scope):
+    response = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert response.status_code == 200
+    body = response.json()
+    return body, {blocker["code"] for blocker in body["blockers"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("which", ["owner", "leader", "both"])
+async def test_readiness_is_ready_at_once_after_a_restart_left_a_dead_old_session(
+    client, db, monkeypatch, tmp_path, which
+):
+    """#747: the old pane is gone, its session is still connected, and the binding row went with it."""
+    _preset, scope, _probes = await _restarted_team(
+        db, monkeypatch, tmp_path, f"Restart{which}",
+        verdicts={OLD_OWNER_PANE: False, OLD_LEADER_PANE: False},
+        old_owner=which in ("owner", "both"), old_leader=which in ("leader", "both"))
+    body, codes = await _readiness(client, scope)
+    assert body["status"] == "ready", codes
+    assert body["blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_readiness_probes_each_candidate_pane_once_per_observation(client, db, monkeypatch, tmp_path):
+    """One liveness observation per candidate, reused by the later checks (never a second probe)."""
+    _preset, scope, probes = await _restarted_team(
+        db, monkeypatch, tmp_path, "OneProbe", verdicts={OLD_OWNER_PANE: False, OLD_LEADER_PANE: False})
+    body, _codes = await _readiness(client, scope)
+    assert body["status"] == "ready"
+    # The readiness walk observes each slot twice (observation and revalidation), once per candidate.
+    assert {OLD_OWNER_PANE, OLD_LEADER_PANE} <= set(probes)
+    assert set(probes.values()) == {2}, probes
+
+
+@pytest.mark.asyncio
+async def test_readiness_still_refuses_two_live_bindings_next_to_a_dead_one(client, db, monkeypatch, tmp_path):
+    preset, scope, _probes = await _restarted_team(
+        db, monkeypatch, tmp_path, "TwoLive", verdicts={OLD_OWNER_PANE: False, OLD_LEADER_PANE: False})
+    _add_live_session(db, preset, preset.slots[1].id, 1120, 1030, SECOND_LIVE_PANE,
+                      last_seen=datetime.utcnow(), binding=True)
+    await db.commit()
+    body, codes = await _readiness(client, scope)
+    assert body["status"] == "blocked"
+    assert "owner_binding_ambiguous" in codes
+    assert "owner_binding_native_mismatch" not in codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_binding", [False, True])
+async def test_readiness_never_skips_a_session_whose_liveness_is_unknown(
+    client, db, monkeypatch, tmp_path, old_binding
+):
+    """Only a CONFIRMED dead pane (False) is skipped. Unknown (None) stays a refusal, never ready."""
+    _preset, scope, _probes = await _restarted_team(
+        db, monkeypatch, tmp_path, f"Unknown{old_binding}",
+        verdicts={OLD_OWNER_PANE: None, OLD_LEADER_PANE: None}, old_binding=old_binding)
+    body, codes = await _readiness(client, scope)
+    assert body["status"] == "blocked"
+    assert ("owner_binding_native_lifetime" if old_binding else "owner_binding_native_mismatch") in codes
+    assert "leader_binding_native_lifetime" in codes or "leader_binding_native_mismatch" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_all_sessions_dead_stays_native_lifetime_even_without_a_binding_row(
+    client, db, monkeypatch, tmp_path
+):
+    """No live session: skipping the dead ones must not turn into `ready` or into `stale`."""
+    preset, scope, _probes = await _restarted_team(
+        db, monkeypatch, tmp_path, "AllDead",
+        verdicts={OLD_OWNER_PANE: False, 1020 + 1000: False})
+    body, codes = await _readiness(client, scope)
+    assert body["status"] == "blocked"
+    assert "owner_binding_native_lifetime" in codes
+    assert "owner_binding_native_mismatch" not in codes
+    assert "owner_binding_stale" not in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_dead_old_sessions_with_a_stale_heartbeat_do_not_matter(client, db, monkeypatch, tmp_path):
+    stale = datetime.utcnow() - timedelta(hours=3)
+    _preset, scope, probes = await _restarted_team(
+        db, monkeypatch, tmp_path, "StaleOld",
+        verdicts={OLD_OWNER_PANE: False, OLD_LEADER_PANE: False}, old_last_seen=stale)
+    body, _codes = await _readiness(client, scope)
+    assert body["status"] == "ready"
+    # A stale session never qualifies, so its pane is not even probed.
+    assert OLD_OWNER_PANE not in probes and OLD_LEADER_PANE not in probes
+
+
+@pytest.mark.asyncio
+async def test_readiness_dead_old_sessions_on_retired_panes_do_not_matter(client, db, monkeypatch, tmp_path):
+    from app.models.database import MailPaneLifecycle
+
+    _preset, scope, _probes = await _restarted_team(
+        db, monkeypatch, tmp_path, "RetiredOld",
+        verdicts={OLD_OWNER_PANE: False, OLD_LEADER_PANE: False}, old_binding=True)
+    db.add_all([MailPaneLifecycle(pane_pid=pane, pane_proc_start="1", retired_at=datetime.utcnow())
+                for pane in (OLD_OWNER_PANE, OLD_LEADER_PANE)])
+    await db.commit()
+    body, _codes = await _readiness(client, scope)
+    assert body["status"] == "ready"
+
+
 @pytest.mark.asyncio
 async def test_readiness_authenticated_and_native_halves_never_combine(client, db, monkeypatch, tmp_path):
     """I06: authenticated session A and native match B cannot jointly satisfy
