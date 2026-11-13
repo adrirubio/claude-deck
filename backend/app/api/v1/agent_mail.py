@@ -56,7 +56,7 @@ from app.models.schemas import (
     MailThreadResponse,
     TeamListResponse,
 )
-from app.services import agent_mail_install_service, opencode_version
+from app.services import agent_mail_install_service, companion_paths, opencode_version
 from app.services import factory_audit_service
 from app.services.agent_mail_service import (
     MailAuthorityError,
@@ -337,15 +337,6 @@ async def send_operator_global_broadcast(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _plan_body(summary: str, plan_metadata: dict) -> str:
-    """The Leader's view of the plan: the owner's summary and the companion paths the map added."""
-    companions = plan_metadata.get("companion_paths")
-    if not isinstance(companions, list) or not companions:
-        return summary
-    listing = "\n".join(f"- `{path}`" for path in companions)
-    return f"{summary}\n\nCompanion paths added from the checked-in map (approved with this plan):\n{listing}"
-
-
 async def _persist_initial_approval(
     request: MailApprovalRequestCreate,
     session: MailAgentSession,
@@ -411,7 +402,7 @@ async def _persist_initial_approval(
                     sender_member_id=approval.owner_member_id,
                     recipient_member_id=approval.leader_member_id,
                     subject=f"Approval request for work item {item.id}",
-                    body_markdown=_plan_body(request.summary.strip(), plan_metadata),
+                    body_markdown=companion_paths.plan_body(request.summary.strip(), plan_metadata),
                     payload={
                         "approval_request_id": approval.id,
                         "approval_round": approval.approval_round,

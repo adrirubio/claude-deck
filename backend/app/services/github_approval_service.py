@@ -219,28 +219,49 @@ class GithubApprovalService:
             }
         )
 
+    def _lookup_paths(self, given: dict):
+        """The canonical form of ``allowed_paths`` for the companion lookup, or ``None`` when malformed."""
+        paths = given.get("allowed_paths")
+        if not isinstance(paths, list) or not paths:
+            return None
+        try:
+            return self._canonical_paths(paths)
+        except GithubApprovalError:
+            return None
+
     async def initial_plan_metadata(self, db, item, summary: str, plan_metadata: dict | None) -> dict:
         """Plan metadata with the companions the Leader is shown.
 
-        An existing request for this attempt keeps the companions it was approved with, so a later map edit
-        never changes a pending or decided plan or breaks its replay.
+        A request that already exists for this attempt keeps the metadata it was filed with, so a later map
+        edit never changes a pending or decided plan, its fingerprint or its replay.
         """
+        given = dict(plan_metadata or {})
         existing = await db.scalar(select(GithubApprovalRequest).where(
             GithubApprovalRequest.work_item_id == item.id,
             GithubApprovalRequest.request_kind == "initial_plan",
             GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
             GithubApprovalRequest.approval_round == item.approval_round_count,
             GithubApprovalRequest.status.in_({"pending", "approved", "rejected"}),
-            GithubApprovalRequest.request_message_id.is_not(None),
         ).order_by(GithubApprovalRequest.id.desc()).limit(1))
-        root = await db.get(MailMessage, existing.request_message_id) if existing else None
-        payload = (root.payload or {}) if root is not None else {}
-        stored = payload.get("plan_metadata")
-        given = dict(plan_metadata or {})
-        if (isinstance(stored, dict) and payload.get("summary") == summary.strip()
-                and {key: value for key, value in stored.items() if key != "companion_paths"} == given):
-            return dict(stored)
-        return companion_paths.with_companions(given)
+        if existing is not None:
+            if existing.request_message_id is None:
+                # A durable request whose Mail is missing or unlinked: repair under its original fingerprint.
+                if existing.request_fingerprint == self.initial_request_fingerprint(summary=summary, plan_metadata=given):
+                    return given
+            else:
+                root = await db.get(MailMessage, existing.request_message_id)
+                payload = (root.payload or {}) if root is not None else {}
+                stored = payload.get("plan_metadata")
+                if isinstance(stored, dict) and payload.get("summary") == summary.strip():
+                    if stored == given:
+                        return given
+                    if companion_paths.verified_companions(stored, payload.get("summary"), root.body_markdown) is not None:
+                        if {key: value for key, value in stored.items()
+                                if key not in companion_paths.RESERVED_KEYS} == given:
+                            return dict(stored)
+        if companion_paths.RESERVED_KEYS & set(given):
+            raise GithubApprovalError("plan_metadata_reserved_key", status_code=400)
+        return companion_paths.with_companions(given, lookup_paths=self._lookup_paths(given))
 
     @staticmethod
     def lease_token_hash(lease_token: str) -> str:
@@ -546,12 +567,14 @@ class GithubApprovalService:
                 raise GithubApprovalError("amendment_baseline_unverifiable")
             metadata = (root.payload or {}).get("plan_metadata") or {}
             paths = metadata.get("allowed_paths")
-            # Only the companions the Leader was shown with this plan are approved; the request fingerprint,
-            # checked above, covers them.
-            companions = metadata.get("companion_paths", [])
-            if not isinstance(companions, list) or not isinstance(paths, list):
+            # Only companions the server presented to the Leader are approved. The fingerprint, checked above,
+            # covers the metadata, and the server-rendered Mail body must show the same list. Old opaque
+            # metadata under the same key keeps the authority it always had.
+            if not isinstance(paths, list):
                 raise GithubApprovalError("amendment_baseline_unverifiable")
-            paths = [*paths, *companions]
+            companions = companion_paths.verified_companions(
+                metadata, (root.payload or {}).get("summary"), root.body_markdown)
+            paths = [*paths, *(companions or [])]
         if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
             raise GithubApprovalError("amendment_baseline_unverifiable")
         paths = self._canonical_paths(paths)
@@ -619,27 +642,32 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_path_limit_exceeded")
         if not proposal["summary"].strip():
             raise GithubApprovalError("continuation_summary_required", status_code=400)
+        if companion_paths.TRAILER_HEADER in proposal["summary"]:
+            raise GithubApprovalError("continuation_summary_reserved", status_code=400)
         max_failures = proposal["max_failed_heads"]
         if type(max_failures) is not int or max_failures < 1 or max_failures > scope.max_failed_heads_per_revision:
             raise GithubApprovalError("continuation_failed_head_limit_exceeded")
         base_paths = await self.amendment_base_paths(db, item, owner, leader)
-        extras = [path for path in companion_paths.companions_for(paths) if path not in paths]
-        if extras:
-            # The proposal shows the companions of every path it names, so the Leader approves them with it.
-            paths = self._canonical_paths([*paths, *extras])
-            if len(paths) > scope.max_scope_paths:
-                raise GithubApprovalError("continuation_path_limit_exceeded")
+        named = paths
+        owner_summary = proposal["summary"].strip()
+        identity = (item.id, item.dispatch_nonce, item.active_scope_revision)
         head, tree = await self.amendment_head(scope, item, workspace)
-        payload = self.canonical_continuation_payload(phase="implementation",
-            execution_target=proposal["execution_target"], summary=proposal["summary"].strip(),
-            allowed_paths=paths, allowed_actions=actions, allowed_commands=commands,
-            prohibited_actions=prohibitions, max_failed_heads=max_failures, tool_fallbacks=fallbacks,
-            baseline_head_sha=head, baseline_tree_sha=tree, expected_workspace_id=workspace.id,
-            originating_escalation_reason="")
-        added = sorted(set(paths) - set(base_paths))
-        payload.update(origin_kind="scope_amendment", amendment_base_paths=base_paths,
-            amendment_added_paths=added, previous_scope_revision=item.active_scope_revision)
-        fingerprint = self.fingerprint_payload(payload)
+
+        def same_request(existing):
+            """The same request as ``existing``, judged on what the owner named and not on today's map."""
+            stored_summary, stored_named, _extras = companion_paths.split_summary(
+                existing.summary, (item.id, item.dispatch_nonce, existing.previous_scope_revision),
+                existing.allowed_paths)
+            return (existing.origin_kind == "scope_amendment"
+                    and existing.baseline_head_sha == head and existing.baseline_tree_sha == tree
+                    and existing.expected_workspace_id == workspace.id
+                    and stored_summary == owner_summary and stored_named == named
+                    and all(getattr(existing, key) == value for key, value in (
+                        ("phase", "implementation"), ("execution_target", proposal["execution_target"]),
+                        ("allowed_actions", actions), ("allowed_commands", commands),
+                        ("prohibited_actions", prohibitions), ("tool_fallbacks", fallbacks),
+                        ("max_failed_heads", max_failures))))
+
         await self.claim_healthy_scope_context(db, context)
         latest = await db.scalar(select(GithubApprovalRequest).where(
             GithubApprovalRequest.work_item_id == item.id,
@@ -650,23 +678,38 @@ class GithubApprovalService:
             GithubApprovalRequest.leader_member_id == leader.id))
         if latest and latest.scope_revision_id:
             existing = await db.get(GithubAttemptScopeRevision, latest.scope_revision_id)
-            if (existing and existing.origin_kind == "scope_amendment"
-                    and existing.status in {"proposed", "approved", "rejected", "active"}
-                    and existing.baseline_head_sha == head and existing.baseline_tree_sha == tree
-                    and all(getattr(existing, key) == payload[key] for key in (
-                        "phase", "execution_target", "summary", "allowed_paths", "allowed_actions",
-                        "allowed_commands", "prohibited_actions", "tool_fallbacks", "max_failed_heads"))):
+            if (existing and existing.status in {"proposed", "approved", "rejected", "active"}
+                    and same_request(existing)):
                 self.verify_amendment_binding(latest, existing)
                 return existing, latest, False
         pending = await self.current_pending(db, item.id)
         if pending:
             if (pending.request_kind == "continuation" and pending.dispatch_nonce == item.dispatch_nonce
                     and pending.owner_member_id == owner.id and pending.leader_member_id == leader.id
-                    and pending.request_fingerprint == fingerprint and pending.scope_revision_id):
+                    and pending.scope_revision_id):
                 existing = await db.get(GithubAttemptScopeRevision, pending.scope_revision_id)
-                if existing and existing.origin_kind == "scope_amendment":
+                if existing and same_request(existing):
+                    self.verify_amendment_binding(pending, existing)
                     return existing, pending, False
             raise GithubApprovalError("approval_request_already_pending")
+        # A new request: the proposal shows the companions of every path it names, so the Leader approves
+        # them with it. The expansion is recorded in the stored summary, bound by a digest.
+        extras = [path for path in companion_paths.companions_for(named) if path not in named]
+        if extras:
+            paths = self._canonical_paths([*named, *extras])
+            if len(paths) > scope.max_scope_paths:
+                raise GithubApprovalError("continuation_path_limit_exceeded")
+        stored_summary = companion_paths.summary_with_trailer(owner_summary, identity, named, extras)
+        payload = self.canonical_continuation_payload(phase="implementation",
+            execution_target=proposal["execution_target"], summary=stored_summary,
+            allowed_paths=paths, allowed_actions=actions, allowed_commands=commands,
+            prohibited_actions=prohibitions, max_failed_heads=max_failures, tool_fallbacks=fallbacks,
+            baseline_head_sha=head, baseline_tree_sha=tree, expected_workspace_id=workspace.id,
+            originating_escalation_reason="")
+        added = sorted(set(paths) - set(base_paths))
+        payload.update(origin_kind="scope_amendment", amendment_base_paths=base_paths,
+            amendment_added_paths=added, previous_scope_revision=item.active_scope_revision)
+        fingerprint = self.fingerprint_payload(payload)
         prior = list((await db.scalars(select(GithubAttemptScopeRevision).where(
             GithubAttemptScopeRevision.work_item_id == item.id,
             GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
