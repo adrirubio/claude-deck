@@ -954,3 +954,110 @@ def test_plugin_denies_questions_only_for_team_slots_and_maps_tool_input(tmp_pat
     assert post["tool_input"]["file_path"] == "/w/a.py" and post["team_slot_id"] == 7
     solo = _run_plugin(tmp_path, [{"evaluate": {"action": "question", "resources": ["*"], "effect": "allow"}}])
     assert solo["results"][0]["effect"] == "allow"
+
+
+# V1 review 5890688064: plugin uncertainty must outlive the interval that caused it, and a
+# deny-rule ownership record must be revoked before any mutation and whenever it is ambiguous.
+from tests.agent_mail.test_opencode_input_wait import _binding, _gen, _record, maker, team  # noqa: E402,F401
+
+
+def _wait_states(out):
+    return [c["body"]["state"] for c in out["calls"] if c["route"] == "input-wait"]
+
+
+@pytest.mark.asyncio
+async def test_an_overflowed_wait_survives_a_later_complete_interval(tmp_path, maker, team):
+    generation = _gen()
+    steps = [{"event": _form("form.created", f"Q{i}", generation + i)} for i in range(65)]
+    # Q64 is dropped at the cap and stays open; only the 64 tracked forms close.
+    steps += [{"event": _form("form.replied", f"Q{i}", generation + 100 + i)} for i in range(64)]
+    steps += [{"event": _form("form.created", "later", generation + 200)},
+              {"event": _form("form.replied", "later", generation + 201)}]
+    out = _run_plugin(tmp_path, steps)
+    waits = [c["body"] for c in out["calls"] if c["route"] == "input-wait"]
+    assert [w["state"] for w in waits] == ["open", "open"]  # no clear once the process is uncertain
+    for wait in waits:
+        await _record(maker, wait["state"], wait["generation"])
+    assert (await _binding(maker, team)).waiting_input_reason == "question", "Q64 is still open"
+
+
+def test_an_unknown_close_keeps_the_plugin_uncertain_for_later_intervals(tmp_path):
+    out = _run_plugin(tmp_path, [
+        {"event": _form("form.created", "A", 5_000)},
+        {"event": _form("form.replied", "X", 5_001)},  # never seen: order is unprovable
+        {"event": _form("form.replied", "A", 5_002)},
+        {"event": _form("form.created", "B", 5_003)},
+        {"event": _form("form.replied", "B", 5_004)},
+        {"event": _form("form.created", "C", 5_005)},
+        {"event": _form("form.replied", "C", 5_006)},
+    ])
+    assert _wait_states(out) == ["open", "open", "open"]
+
+
+@pytest.mark.asyncio
+async def test_remove_after_duplicates_never_reuses_the_stale_ownership_record(oc, db):
+    await install.apply_opencode_install(db)
+    doc = oc.doc(); doc["permissions"].append(dict(_DENY)); _write(oc.json, doc)
+    await install.uninstall_opencode(db)
+    assert oc.doc()["permissions"] == [_DENY, _DENY]  # ambiguous: both kept
+    assert str(oc.json.resolve()) not in oc.ledger_doc()["entries"]  # and the claim is revoked
+    doc = oc.doc(); doc["permissions"] = [dict(_DENY)]; _write(oc.json, doc)  # the user keeps one
+    await install.uninstall_opencode(db)
+    assert oc.doc()["permissions"] == [_DENY]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["missing", "non_identical"])
+async def test_remove_revokes_ownership_when_the_rule_is_missing_or_changed(oc, db, change):
+    await install.apply_opencode_install(db)
+    doc = oc.doc()
+    doc["permissions"] = [] if change == "missing" else [{"action": "question", "resource": "*", "effect": "ask"}]
+    _write(oc.json, doc)
+    await install.uninstall_opencode(db)
+    assert str(oc.json.resolve()) not in oc.ledger_doc()["entries"]
+    doc = oc.doc(); doc["permissions"] = [dict(_DENY)]; _write(oc.json, doc)  # the user adds their own
+    await install.uninstall_opencode(db)
+    assert oc.doc()["permissions"] == [_DENY]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_ownership_revocation_leaves_the_config_unchanged(oc, db, monkeypatch):
+    await install.apply_opencode_install(db)
+    before = oc.json.read_text(encoding="utf-8")
+    real = install._atomic_write_text
+
+    def fail_ledger(path, text):
+        if path == oc.ledger:
+            raise OSError("synthetic interrupted uninstall")
+        real(path, text)
+
+    monkeypatch.setattr(install, "_atomic_write_text", fail_ledger)
+    with pytest.raises(OSError):
+        await install.uninstall_opencode(db)
+    assert oc.json.read_text(encoding="utf-8") == before  # nothing changed before the revocation
+    monkeypatch.setattr(install, "_atomic_write_text", real)
+    await install.uninstall_opencode(db)  # the proof is intact, so a retry removes only our rule
+    assert oc.doc().get("permissions") == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_config_write_after_revocation_keeps_the_rule_unowned(oc, db, monkeypatch):
+    await install.apply_opencode_install(db)
+    real = install._atomic_write_text
+    order = []
+
+    def fail_config(path, text):
+        order.append("ledger" if path == oc.ledger else "config" if path == oc.json else str(path))
+        if path == oc.json:
+            raise OSError("synthetic interrupted uninstall")
+        real(path, text)
+
+    monkeypatch.setattr(install, "_atomic_write_text", fail_config)
+    with pytest.raises(OSError):
+        await install.uninstall_opencode(db)
+    assert order[:2] == ["ledger", "config"]  # the revocation is durable before the config changes
+    assert oc.doc()["permissions"] == [_DENY]
+    assert str(oc.json.resolve()) not in oc.ledger_doc()["entries"]
+    monkeypatch.setattr(install, "_atomic_write_text", real)
+    await install.uninstall_opencode(db)  # unowned now: the user's view of the rule is kept
+    assert oc.doc()["permissions"] == [_DENY]

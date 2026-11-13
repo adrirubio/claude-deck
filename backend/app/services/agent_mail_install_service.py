@@ -697,8 +697,9 @@ export default {
     let generation = null;
     let lastGeneration = 0;
     let waitKind = null;
-    // Uncertain once an id is dropped or an unknown id closes: no clear is sent for that
-    // generation, so the backend keeps the wait rather than clearing it on a guess.
+    // Uncertain once an id is dropped or an unknown id closes. That lasts for the life of this
+    // process: a dropped question may still be open after the tracked ones close, so no clear is
+    // ever sent again and the backend keeps the wait rather than clearing it on a guess.
     let uncertain = false;
     const inputWait = async (event, state, kind, waitID) => {
       if (!waitID) { if (openWaits.size) uncertain = true; return; }
@@ -708,7 +709,6 @@ export default {
         if (openWaits.size >= 64) { uncertain = true; return; }
         openWaits.set(id, kind);
         if (openWaits.size !== 1) return;
-        uncertain = false;
         // Strictly increasing within this process, so its clears can never match an older wait.
         generation = Math.max(Math.trunc(Number(event?.created)) || Date.now(), lastGeneration + 1);
         lastGeneration = generation;
@@ -716,7 +716,7 @@ export default {
       } else {
         if (!openWaits.delete(id)) { if (openWaits.size) uncertain = true; return; }
         if (openWaits.size !== 0 || generation === null) return;
-        if (uncertain) { generation = null; waitKind = null; uncertain = false; return; }
+        if (uncertain) { generation = null; waitKind = null; return; }
       }
       const body = payload(sessionOf(event), { cwd: directoryOf(event), state, kind: waitKind, generation, source: `opencode-${event.type}` });
       if (state === "clear") { generation = null; waitKind = null; }
@@ -1260,7 +1260,12 @@ async def apply_opencode_install(db: AsyncSession) -> AgentMailInstallStatus:
 
 async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
     """Remove only Synth City's entries. The deny rule is removed only when the ledger proves this
-    install inserted it into that same file and exactly one identical rule is there."""
+    install inserted it into that same file and exactly one identical rule is there.
+
+    Remove ends every ownership claim for these files, proven or not: an ambiguous claim (a
+    duplicate, changed or missing rule) is dropped rather than kept, so a later Remove can never
+    treat a stale match as proof. The revocation is written before any config file changes, so a
+    failed ledger write changes nothing and a failed config write leaves the rule unowned."""
     _require_upgrade_complete("opencode-cli")
     docs = _preflight_opencode_docs()
     ledger = _read_question_deny_ledger()
@@ -1287,7 +1292,10 @@ async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
     if any(removals.values()) or plugin_ours:
         await _backup_before_mutation(db, "opencode")
 
-    ledger_changed = False
+    revoked = [entries.pop(_ledger_key(path)) for path in docs if _ledger_key(path) in entries]
+    if ledger is not None and revoked:
+        _write_question_deny_ledger(ledger)
+
     for path, doc in docs.items():
         remove_rule = doc.pop("_synth_city_remove_rule")
         if not removals[path]:
@@ -1301,16 +1309,6 @@ async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
         if remove_rule:
             doc["permissions"].remove(OPENCODE_QUESTION_DENY_RULE)
         _write_opencode_config_doc(doc, path)
-        if remove_rule:
-            entries.pop(_ledger_key(path), None)
-            ledger_changed = True
-    for path in docs:
-        record = entries.get(_ledger_key(path))
-        if isinstance(record, dict) and record.get("state") == "preexisting":
-            entries.pop(_ledger_key(path))
-            ledger_changed = True
-    if ledger is not None and ledger_changed:
-        _write_question_deny_ledger(ledger)
 
     if plugin_ours:
         try:
