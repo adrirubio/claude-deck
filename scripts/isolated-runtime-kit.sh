@@ -529,19 +529,37 @@ def _digest_path(root):
     return path
 
 _fdopen = os.fdopen
+
+class _Kept(OSError):
+    """A temporary file that failed and could not be removed either: it is kept and named."""
+    def __init__(self, path):
+        super().__init__("kept " + path)
+        self.path = path
+
+def _remove(path):
+    # Remove a temporary file of this run; return its path when it had to be kept.
+    try:
+        if os.path.lexists(path):
+            os.unlink(path)
+        return None
+    except OSError:
+        return path
+
 def _stage(directory, text):
-    # A new private file holding the whole text; a failed write removes it before raising.
+    # A new private file holding the whole text; a failed write removes it before raising,
+    # or raises _Kept naming it when it cannot be removed.
     temp = os.path.join(directory, ".opencode-" + os.urandom(8).hex())
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with _fdopen(fd, "w") as handle:
             handle.write(text)
-    except BaseException:
+    except BaseException as exc:
         try:
             os.close(fd)
         except OSError:
             pass
-        os.unlink(temp)
+        if _remove(temp):
+            raise _Kept(temp) from exc
         raise
     return temp
 
@@ -571,18 +589,24 @@ def opencode_config(root, stub_url):
     if os.path.lexists(digest):
         with open(digest) as handle:
             earlier = handle.read()
-    temps = []
+    temps, kept = [], []
+    proof_changed = False
     try:
         temps.append(_stage(os.path.dirname(path), text))
         temps.append(_stage(os.path.dirname(digest), hashlib.sha256(text.encode()).hexdigest() + "\n"))
         _replace(temps[1], digest)
         temps.pop()
-        try:
-            _replace(temps[0], path)
-            temps.pop()
-        except OSError:
-            # The config is unchanged: put the earlier proof back, or remove the new one. If
-            # that fails too, the proof no longer matches what it was: incomplete, not refused.
+        proof_changed = True
+        _replace(temps[0], path)
+        temps.pop()
+    except OSError as exc:
+        if isinstance(exc, _Kept):
+            kept.append(exc.path)
+        kept += [temp for temp in temps if _remove(temp)]
+        restored = not proof_changed
+        if proof_changed:
+            # The config rename failed after the proof was replaced: put the earlier proof
+            # back, or remove the new one.
             restore = None
             try:
                 if earlier is None:
@@ -591,21 +615,24 @@ def opencode_config(root, stub_url):
                     restore = _stage(os.path.dirname(digest), earlier)
                     _replace(restore, digest)
                     restore = None
-            except OSError:
-                if restore is not None and os.path.lexists(restore):
-                    os.unlink(restore)
-                for temp in temps:
-                    if os.path.lexists(temp):
-                        os.unlink(temp)
-                die(1, "incomplete: the OpenCode config is unchanged, but its earlier proof could not be restored")
-            raise
-    except OSError:
-        for temp in temps:
-            if os.path.lexists(temp):
-                os.unlink(temp)
+                restored = True
+            except OSError as again:
+                if isinstance(again, _Kept):
+                    kept.append(again.path)
+                if restore is not None and _remove(restore):
+                    kept.append(restore)
         with open(path, "rb") as handle:
-            if handle.read() != before:
-                die(1, "incomplete: the OpenCode config changed but its proof could not be written")
+            config_changed = handle.read() != before
+        if config_changed or not restored or kept:
+            # Never reported as an unchanged refusal: say exactly what is not as it was.
+            problems = []
+            if config_changed:
+                problems.append("the OpenCode config changed")
+            if not restored:
+                problems.append("its earlier proof could not be restored")
+            if kept:
+                problems.append("temporary files were kept: " + ", ".join(sorted(os.path.relpath(item, os.path.realpath(root)) for item in kept)))
+            die(1, "incomplete: " + "; ".join(problems))
         die(2, "refused: the OpenCode config could not be written; it is unchanged")
     return opencode_check(root, stub_url)
 

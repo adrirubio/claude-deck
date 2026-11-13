@@ -1392,3 +1392,87 @@ def test_launch_guard_control_is_caught(tmp_path, monkeypatch):
     monkeypatch.setitem(globals(), "_launch_guard", lambda: empty)
     with pytest.raises(AssertionError):
         test_kit_without_the_opt_in_runs_behind_a_boundary_that_cannot_launch(tmp_path, monkeypatch)
+
+
+# V1 review 5899323915: a cleanup that fails is never hidden. When a temporary file can't be
+# removed, or the earlier proof can't be restored, setup stops as incomplete (exit 1) and
+# names every file it kept; it never reports an unchanged refusal or raises.
+def _failing_temp_unlink(monkeypatch):
+    real = os.unlink
+    def unlink(path, *args, **kwargs):
+        if os.path.basename(str(path)).startswith(".opencode-"):
+            raise OSError("injected unlink failure")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "unlink", unlink)
+
+
+def _kept(directory):
+    return sorted(p.name for p in directory.iterdir() if p.name.startswith(".opencode-"))
+
+
+@pytest.mark.parametrize("stage", [0, 1])
+def test_opencode_partial_write_with_failed_cleanup_is_incomplete_and_names_the_file(tmp_path, monkeypatch,
+                                                                                    capsys, stage):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    config_before = path.read_bytes()
+    real = module["_fdopen"]
+    opened = []
+    class Broken:
+        def __init__(self, handle):
+            self.handle = handle
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self.handle.close()
+        def write(self, text):
+            self.handle.write(text[:4])
+            raise OSError("injected partial write")
+    def fdopen(fd, mode):
+        opened.append(fd)
+        handle = real(fd, mode)
+        return Broken(handle) if len(opened) - 1 == stage else handle
+    module["_fdopen"] = fdopen
+    _failing_temp_unlink(monkeypatch)
+    assert _opencode(module, "opencode_config", root) == 1
+    err = capsys.readouterr().err
+    assert "incomplete" in err
+    kept = _kept(path.parent) + _kept(root / "state")
+    assert kept and all(name in err for name in kept)
+    assert path.read_bytes() == config_before
+
+
+def test_opencode_failed_restore_with_failed_cleanup_is_incomplete_and_names_the_file(tmp_path, monkeypatch, capsys):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    doc = json.loads(path.read_text())
+    doc["instructions"] = ["kept as it is"]
+    path.write_text(json.dumps(doc))
+    config_before = path.read_bytes()
+    capsys.readouterr()
+    real = module["_replace"]
+    calls = []
+    def failing(src, dst):
+        calls.append(str(dst))
+        if str(dst).endswith("opencode.json") or len(calls) > 2:
+            raise OSError("injected")
+        return real(src, dst)
+    module["_replace"] = failing
+    _failing_temp_unlink(monkeypatch)
+    assert _opencode(module, "opencode_config", root) == 1
+    err = capsys.readouterr().err
+    assert "incomplete" in err and "proof" in err
+    kept = _kept(path.parent) + _kept(root / "state")
+    assert kept and all(name in err for name in kept)
+    assert path.read_bytes() == config_before
+
+
+def test_hidden_cleanup_failure_control_is_caught(tmp_path, monkeypatch, capsys):
+    # In-memory control: ignoring kept files would report an unchanged refusal again.
+    _opencode_control(tmp_path, monkeypatch, "        if config_changed or not restored or kept:\n",
+                      "        if config_changed or not restored:\n")
+    (tmp_path / "t").mkdir()
+    with pytest.raises(AssertionError):
+        test_opencode_partial_write_with_failed_cleanup_is_incomplete_and_names_the_file(
+            tmp_path / "t", monkeypatch, capsys, 0)
