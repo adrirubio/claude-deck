@@ -549,12 +549,14 @@ async def test_cancel_reads_app_authenticated_pull(
 async def test_cancel_refuses_to_charge_diagnostic_head_as_product_failure(
     client, db, tmp_path, monkeypatch
 ):
-    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+    _preset, _slots, _scope, item, workspace, revision, _approval, _owner = (
         await _active_continuation(db, tmp_path)
     )
     revision.phase = "diagnostic"
     item.attempt_phase = "diagnostic"
     await db.commit()
+    acquisition = (workspace.leased_item_id, workspace.lease_token, workspace.leased_at)
+    counters = (item.retry_count, item.diagnostic_retry_count, revision.failed_head_count)
 
     async def diagnostic_pull(owner, repo, _pr_number, *, token=None):
         return {
@@ -567,6 +569,10 @@ async def test_cancel_refuses_to_charge_diagnostic_head_as_product_failure(
         }
 
     monkeypatch.setattr(github_client, "get_pull", diagnostic_pull)
+    async def unrestored_tree(owner, repo, sha, *, token=None):
+        return GithubCommitSnapshot(sha=sha, tree_sha="unrestored-tree")
+
+    monkeypatch.setattr(github_client, "get_commit_snapshot", unrestored_tree)
     response = await client.post(
         _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
     )
@@ -578,6 +584,10 @@ async def test_cancel_refuses_to_charge_diagnostic_head_as_product_failure(
     assert item.dispatch_status == "dispatched"
     assert revision.status == "active"
     assert revision.failed_head_count == 0
+
+    await db.refresh(workspace)
+    assert (workspace.leased_item_id, workspace.lease_token, workspace.leased_at) == acquisition
+    assert (item.retry_count, item.diagnostic_retry_count, revision.failed_head_count) == counters
 
 
 @pytest.mark.asyncio
@@ -733,58 +743,51 @@ async def test_cancel_selects_the_revision_from_the_current_attempt(
 
 
 @pytest.mark.asyncio
-async def test_stale_or_submitted_active_cancel_refuses_before_mutation(
-    client, db, tmp_path
-):
-    _preset, _slots, _scope, item, workspace, revision, approval, _owner = (
-        await _active_continuation(db, tmp_path)
-    )
+async def test_stale_or_missing_active_cancel_refuses_before_mutation(client, db, tmp_path):
+    _preset, _slots, _scope, item, workspace, revision, approval, _owner = await _active_continuation(db, tmp_path)
     original_item = (item.dispatch_status, item.active_scope_revision, item.status_note)
     original_revision = (revision.status, revision.cancelled_at, revision.cancellation_reason)
     original_approval = approval.status
     original_lease = (workspace.leased_item_id, workspace.lease_token)
+    stale = await client.post(_cancel_url(item), json={**_cancel_body(item), "dispatch_nonce": "wrong-nonce"},
+        headers=OPERATOR_HEADERS)
+    missing = await client.post(_cancel_url(item, 999), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    assert stale.status_code == 409 and stale.json()["detail"] == "stale_nonce"
+    assert missing.status_code == 404 and missing.json()["detail"] == "scope_revision_not_found"
+    for row in (item, workspace, revision, approval):
+        await db.refresh(row)
+    assert (item.dispatch_status, item.active_scope_revision, item.status_note) == original_item
+    assert (revision.status, revision.cancelled_at, revision.cancellation_reason) == original_revision
+    assert approval.status == original_approval
+    assert (workspace.leased_item_id, workspace.lease_token) == original_lease
 
-    stale = await client.post(
-        _cancel_url(item),
-        json={**_cancel_body(item), "dispatch_nonce": "wrong-nonce"},
-        headers=OPERATOR_HEADERS,
-    )
-    missing = await client.post(
-        _cancel_url(item, 999),
-        json=_cancel_body(item),
-        headers=OPERATOR_HEADERS,
-    )
+
+@pytest.mark.asyncio
+async def test_operator_cancels_current_submitted_revision_and_preserves_budgets(client, db, tmp_path):
+    from app.models.database import FactoryAuditEvent
+    _preset, _slots, _scope, item, workspace, revision, approval, _owner = await _active_continuation(db, tmp_path)
     revision.status = "submitted"
     item.dispatch_status = "verifying"
     await db.commit()
-    submitted = await client.post(
-        _cancel_url(item),
-        json=_cancel_body(item),
-        headers=OPERATOR_HEADERS,
-    )
+    counters = (item.retry_count, item.diagnostic_retry_count, revision.failed_head_count)
+    acquisition = (workspace.leased_item_id, workspace.lease_token, workspace.leased_at)
+    submitted = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    assert submitted.status_code == 200
+    for row in (item, workspace, revision, approval):
+        await db.refresh(row)
+    assert item.dispatch_status == "escalated" and item.active_scope_revision == 0
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert revision.status == "superseded" and revision.cancelled_at
+    assert (item.retry_count, item.diagnostic_retry_count, revision.failed_head_count) == counters
+    assert (workspace.leased_item_id, workspace.lease_token, workspace.leased_at) == acquisition
+    assert approval.status == "approved"
 
-    assert stale.status_code == 409
-    assert stale.json()["detail"] == "stale_nonce"
-    assert missing.status_code == 404
-    assert missing.json()["detail"] == "scope_revision_not_found"
-    assert submitted.status_code == 409
-    assert submitted.json()["detail"] == "active_continuation_not_cancellable"
-    await db.refresh(item)
-    await db.refresh(workspace)
-    await db.refresh(revision)
-    await db.refresh(approval)
-    assert (item.dispatch_status, item.active_scope_revision, item.status_note) == (
-        "verifying",
-        original_item[1],
-        original_item[2],
-    )
-    assert (revision.status, revision.cancelled_at, revision.cancellation_reason) == (
-        "submitted",
-        original_revision[1],
-        original_revision[2],
-    )
-    assert approval.status == original_approval
-    assert (workspace.leased_item_id, workspace.lease_token) == original_lease
+    facts = list((await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "recovery_cancellation", FactoryAuditEvent.revision_id == revision.id,
+        FactoryAuditEvent.action_outcome == "applied"))).all())
+    assert len(facts) == 1 and facts[0].actor_kind == "operator"
+    assert facts[0].before_values["status"] == "submitted"
+    assert facts[0].after_values["status"] == "superseded"
 
 
 @pytest.mark.asyncio

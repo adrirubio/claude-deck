@@ -2011,6 +2011,43 @@ class GithubContinuationProposalCreate(BaseModel):
     lease_token: str = Field(min_length=1)
 
 
+class GithubScopeAmendmentCreate(GithubContinuationProposalCreate):
+    phase: Literal["implementation"] = "implementation"
+
+
+class GithubRevisionReviewCreate(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    summary: str = Field(min_length=1, max_length=12000)
+    evidence_url: str = Field(min_length=1, max_length=2000)
+
+
+class GithubRevisionReviewWithdraw(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+
+
+class GithubSubmittedRevisionEnd(GithubRevisionReviewWithdraw):
+    review_id: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=12000)
+
+
+class GithubRevisionReviewResponse(BaseModel):
+    id: int
+    work_item_id: int
+    revision_id: int
+    head_sha: str
+    reviewer_member_id: int
+    verdict: str
+    summary: str
+    evidence_url: str
+    status: str
+    created_at: datetime
+    ended_at: Optional[datetime] = None
+    settled_by_member_id: Optional[int] = None
+    settlement_reason: Optional[str] = None
+
+
 class GithubScopeRevisionResponse(BaseModel):
     id: int
     work_item_id: int
@@ -2018,6 +2055,10 @@ class GithubScopeRevisionResponse(BaseModel):
     revision: int
     owner_slot_id: int
     owner_member_id: int
+    origin_kind: str = "continuation"
+    amendment_base_paths: List[str] = Field(default_factory=list)
+    amendment_added_paths: List[str] = Field(default_factory=list)
+    previous_scope_revision: int = 0
     phase: str
     execution_target: str
     summary: str

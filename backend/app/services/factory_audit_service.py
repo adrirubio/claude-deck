@@ -42,6 +42,8 @@ SAFE_VALUE_FIELDS = {
     "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
     "max_auto_merges_per_day", "max_build_parallelism", "builds_out_of_tree",
     "supervisor_actor_id", "supervisor_grace_seconds", "supervisor_status",
+    "origin_kind", "previous_scope_revision", "review_id", "reviewer_member_id",
+    "head_sha", "verdict", "outcome",
 }
 
 # C10: typed, named fields for event-time snapshots. Values are primitive

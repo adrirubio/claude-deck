@@ -126,3 +126,23 @@ Open **Agent Mail** in Synth City and use the **Install** tab.
 - Install and uninstall actions require confirmation and attempt a backup before mutating config.
 
 The Install tab also shows manual Codex snippets and Copilot fallback commands/hook JSON.
+
+## Amend an approved scope and end a submitted revision
+
+An owner can request a healthy scope amendment before or after opening a PR. The current Leader
+reviews the normalized path/action/command scope, then the owner separately acknowledges the
+delivered approval. Held workspace edits remain intact. Three amendments and sixteen cumulative
+unique added file paths are the attempt limits; any stricter configured limits remain in force.
+Rejected amendments and removed paths retain their history and budget cost.
+
+When independent review requires changes to a submitted implementation revision, the assigned
+reviewer records a structured negative disposition for the exact head, then the current Leader
+ends that revision. The owner remains on the same issue, branch and lease, with source work
+stopped until fresh amendment approval and acknowledgement. Prose, CI completion and an old
+review cannot grant that authority. An operator can also cancel submitted revisions; diagnostic
+work must first restore the exact baseline tree, including when its failed head was already charged.
+
+Cancelled and timed-out CI runs remain blocked and visible without consuming a failed-head unit.
+Closing an unmerged submitted PR on an escalated attempt supersedes that revision without
+implicitly authorizing a retry or releasing the workspace. See the [API workflow](../api/agent-mail.md#healthy-scope-amendments-and-submitted-review-settlement)
+for tools, authentication, compatibility limits and separate review/merge gates.

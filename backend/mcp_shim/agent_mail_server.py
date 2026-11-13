@@ -660,6 +660,46 @@ def synth_city_request_continuation(
 
 
 @mcp.tool()
+def synth_city_request_scope_amendment(
+    work_item_id: int,
+    dispatch_nonce: str,
+    execution_target: str,
+    summary: str,
+    allowed_paths: list[str],
+    allowed_actions: list[str],
+    allowed_commands: list[str],
+    prohibited_actions: list[str],
+    max_failed_heads: int,
+    tool_fallbacks: dict[str, Any],
+    lease_token: str,
+) -> dict:
+    """Request a bounded healthy scope amendment. Fresh Leader decision and owner activation are required."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/scope-amendments",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "phase": "implementation",
+            "execution_target": execution_target,
+            "summary": summary,
+            "allowed_paths": allowed_paths,
+            "allowed_actions": allowed_actions,
+            "allowed_commands": allowed_commands,
+            "prohibited_actions": prohibited_actions,
+            "max_failed_heads": max_failed_heads,
+            "tool_fallbacks": tool_fallbacks,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
 def synth_city_decide_continuation(
     approval_request_id: int,
     work_item_id: int,
@@ -1492,6 +1532,49 @@ def synth_city_report_backlog_assessment(
     return _dispatch_request("POST", f"/github-scopes/{scope_id}/coordination-assessments",
                              json={"generation": generation, "request_sequence": request_sequence,
                                    "entries": entries, "snapshot_token": snapshot_token})
+
+
+
+
+def _revision_review_request(path: str, payload: dict) -> dict:
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request("POST", path, json=payload)
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
+def synth_city_record_revision_review(work_item_id: int, revision: int, dispatch_nonce: str,
+    head_sha: str, summary: str, evidence_url: str) -> dict:
+    """Assigned independent reviewer records CHANGES REQUIRED for this exact submitted head.
+
+    This negative fact grants no source or merge authority. Link the source review;
+    a separate current-Leader settlement must end the revision.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews",
+        {"revision": revision, "dispatch_nonce": dispatch_nonce, "head_sha": head_sha,
+         "summary": summary, "evidence_url": evidence_url})
+
+
+@mcp.tool()
+def synth_city_withdraw_revision_review(work_item_id: int, review_id: int, dispatch_nonce: str) -> dict:
+    """Withdraw your active negative review disposition. History is retained."""
+    return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews/{review_id}/withdraw",
+        {"dispatch_nonce": dispatch_nonce})
+
+
+@mcp.tool()
+def synth_city_end_submitted_revision(work_item_id: int, review_id: int, dispatch_nonce: str, reason: str) -> dict:
+    """Current Leader settles a current independent negative review and stops the revision.
+
+    Further source work needs a fresh bounded amendment, approval and owner acknowledgement.
+    This decision does not approve source, merge, retry or release the workspace.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/submitted-revision/end",
+        {"review_id": review_id, "dispatch_nonce": dispatch_nonce, "reason": reason})
 
 
 if __name__ == "__main__":

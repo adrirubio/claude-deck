@@ -110,6 +110,29 @@ class GithubWorkspaceService:
     def config_lock(self, workspace_id: int) -> asyncio.Lock:
         return self._config_locks.setdefault(workspace_id, asyncio.Lock())
 
+    async def attest_head(self, workspace: GithubWorkspace, expected_ref: str) -> tuple[str, str]:
+        """Read the leased branch's immutable commit/tree without touching held edits."""
+        if not workspace.enabled or not workspace.path or not expected_ref:
+            raise GithubWorkspaceError("Workspace head cannot be attested", "amendment_workspace_unverifiable")
+        try:
+            path = pathlib.Path(workspace.path).resolve(strict=True)
+            if not path.is_dir() or not pathlib.Path(workspace.path).is_absolute():
+                raise ValueError()
+            branch_code, branch = await self._runner(["-C", str(path), "symbolic-ref", "--short", "HEAD"])
+            head_code, head = await self._runner(["-C", str(path), "rev-parse", "--verify", "HEAD"])
+            head = head.strip()
+            if branch_code or head_code or branch.strip() != expected_ref or not re.fullmatch(r"[0-9a-f]{40}", head):
+                raise ValueError()
+            tree_code, tree = await self._runner(["-C", str(path), "rev-parse", "--verify", head + "^{tree}"])
+            final_code, final = await self._runner(["-C", str(path), "rev-parse", "--verify", "HEAD"])
+            branch_code, branch = await self._runner(["-C", str(path), "symbolic-ref", "--short", "HEAD"])
+            if (tree_code or final_code or branch_code or final.strip() != head
+                    or branch.strip() != expected_ref or not re.fullmatch(r"[0-9a-f]{40}", tree.strip())):
+                raise ValueError()
+        except (OSError, ValueError) as exc:
+            raise GithubWorkspaceError("Workspace head cannot be attested", "amendment_workspace_unverifiable") from exc
+        return head, tree.strip()
+
     async def _run_git(self, args: list[str]) -> tuple[int, str]:
         process = await asyncio.create_subprocess_exec(
             "git",

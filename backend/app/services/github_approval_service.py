@@ -11,7 +11,7 @@ from weakref import WeakValueDictionary
 
 import httpx
 from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -21,8 +21,10 @@ from app.models.database import (
     AgentTeamSlot,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
+    GithubOwnerObservationPause,
     GithubWorkItem,
     GithubWorkspace,
+    MailAgentSession,
     MailMessage,
     MailReceipt,
     MailTeamMember,
@@ -77,6 +79,8 @@ _HOSTED_ONLY_LOCAL_BUILD = re.compile(
 _TOOL_FALLBACK_KEYS = frozenset(
     {"target", "if_missing", "package", "revert_required"}
 )
+MAX_SCOPE_AMENDMENTS = 3
+MAX_AMENDMENT_ADDED_PATHS = 16
 
 
 class GithubApprovalError(ValueError):
@@ -345,6 +349,421 @@ class GithubApprovalService:
             purpose="pull_request",
             cache_subject="continuation",
         )
+
+    async def bind_actor_session(self, db, context, actor):
+        """Capture server-authenticated session and launch bindings before awaits."""
+        if not actor or actor.get("actor_session_id") is None:
+            return  # Internal callers; HTTP/MCP entry points always pass their session actor.
+        session = await db.get(MailAgentSession, actor["actor_session_id"], populate_existing=True)
+        if session is None or session.member_id != actor.get("actor_member_id"):
+            raise GithubApprovalError("current_mail_session_required", status_code=403)
+        keys = ("id", "member_id", "team_preset_id", "team_slot_id", "capability_token_hash",
+                "bound_pane_pid", "bound_pane_proc_start", "closed_at", "mailbox_status")
+        slot = await db.get(AgentTeamSlot, session.team_slot_id)
+        if slot is None or slot.preset_id != context["team_id"]:
+            raise GithubApprovalError("current_mail_session_required", status_code=403)
+        context["actor_session"] = {key: getattr(session, key) for key in keys}
+        context["actor_launch"] = (slot.id, slot.provider, slot.launch_options)
+        await self.require_bound_actor_session(db, context)
+
+    async def require_bound_actor_session(self, db, context):
+        from fastapi import HTTPException
+        from app.api.v1.deps import require_current_mail_session
+        expected = context.get("actor_session")
+        if not expected:
+            return
+        current = await db.get(MailAgentSession, expected["id"], populate_existing=True)
+        if current is None or any(getattr(current, key) != value for key, value in expected.items()):
+            await db.rollback()
+            raise GithubApprovalError("current_mail_session_required", status_code=403)
+        try:
+            require_current_mail_session(current)
+        except HTTPException as exc:
+            await db.rollback()
+            raise GithubApprovalError("current_mail_session_required", status_code=403) from exc
+
+    async def healthy_scope_context(self, db, item, scope, *, allow_recovery=False):
+        """Capture stopped/healthy authority; the returned private values are SQL fences."""
+        from app.services.github_coordination_service import hold_code
+        from app.services.factory_delivery_policy import policy_context
+        await db.refresh(item)
+        await db.refresh(scope)
+        team = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
+        if (hold_code() or not scope.enabled or not team or not team.autonomy_enabled
+                or item.scope_id != scope.id or item.handoff_state is not None
+                or item.dispatch_status not in ({"dispatched", "verifying", "ready_for_review", "awaiting_human_review"}
+                    | ({"escalated"} if allow_recovery else set()))
+                or not item.dispatch_nonce or not item.dispatch_head_ref):
+            raise GithubApprovalError("amendment_context_unavailable")
+        owner, leader = await self._current_participants(db, item)
+        workspace = await db.scalar(select(GithubWorkspace).where(
+            GithubWorkspace.leased_item_id == item.id, GithubWorkspace.scope_id == scope.id))
+        if not workspace or not workspace.lease_token or not workspace.enabled:
+            raise GithubApprovalError("workspace_lease_required")
+        context = {key: getattr(item, key) for key in (
+            "id", "scope_id", "dispatch_nonce", "dispatch_status", "owner_slot_id", "active_scope_revision",
+            "approval_round_count", "attempt_phase", "pr_number", "dispatch_head_ref", "dispatch_base_ref",
+            "handoff_state", "ack_received_at", "ack_approval_round", "ack_approver_member_id",
+            "ack_enforcement_epoch", "ack_evidence_message_id", "retry_count", "last_verified_sha",
+            "diagnostic_retry_count", "diagnostic_last_verified_sha")}
+        context.update(team_id=team.id, leader_slot_id=team.leader_slot_id,
+            owner_member_id=owner.id, leader_member_id=leader.id, workspace_id=workspace.id,
+            lease_token=workspace.lease_token, leased_at=workspace.leased_at, workspace_path=workspace.path,
+            policy=policy_context(item))
+        context["scope"] = {key: getattr(scope, key) for key in (
+            "id", "preset_id", "repo_owner", "repo_name", "github_auth_mode", "continuation_enabled",
+            "max_scope_paths", "max_scope_commands", "max_continuation_revisions",
+            "max_continuation_failed_heads", "max_failed_heads_per_revision")}
+        if not await db.scalar(select(exists(select(GithubWorkItem.id).where(
+                *self.healthy_scope_conditions(context))))):
+            raise GithubApprovalError("amendment_context_unavailable")
+        return context, owner, leader, workspace
+
+    @staticmethod
+    def healthy_scope_conditions(context):
+        from app.services.factory_delivery_policy import policy_context_conditions
+        c = context
+        fields = ("scope_id", "dispatch_nonce", "dispatch_status", "owner_slot_id", "active_scope_revision",
+            "approval_round_count", "attempt_phase", "pr_number", "dispatch_head_ref", "dispatch_base_ref",
+            "handoff_state", "ack_received_at", "ack_approval_round", "ack_approver_member_id",
+            "ack_enforcement_epoch", "ack_evidence_message_id", "retry_count", "last_verified_sha",
+            "diagnostic_retry_count", "diagnostic_last_verified_sha")
+        clauses = [GithubWorkItem.id == c["id"],
+            *(getattr(GithubWorkItem, key) == c[key] for key in fields),
+            *policy_context_conditions(c["policy"]),
+            exists(select(AgentTeamPreset.id).where(AgentTeamPreset.id == c["team_id"],
+                AgentTeamPreset.autonomy_enabled.is_(True), AgentTeamPreset.leader_slot_id == c["leader_slot_id"])),
+            exists(select(TeamGithubScope.id).where(TeamGithubScope.enabled.is_(True),
+                *(getattr(TeamGithubScope, key) == value for key, value in c["scope"].items()))),
+            exists(select(GithubWorkspace.id).where(GithubWorkspace.id == c["workspace_id"],
+                GithubWorkspace.leased_item_id == c["id"], GithubWorkspace.scope_id == c["scope_id"],
+                GithubWorkspace.enabled.is_(True), GithubWorkspace.lease_token == c["lease_token"],
+                GithubWorkspace.leased_at == c["leased_at"], GithubWorkspace.path == c["workspace_path"])),
+            ~exists(select(GithubOwnerObservationPause.id).where(
+                GithubOwnerObservationPause.work_item_id == c["id"],
+                GithubOwnerObservationPause.status.in_(("waiting", "paused"))))]
+        for member_id, slot_id in ((c["owner_member_id"], c["owner_slot_id"]),
+                                   (c["leader_member_id"], c["leader_slot_id"])):
+            member, newer = aliased(MailTeamMember), aliased(MailTeamMember)
+            clauses.append(exists(select(member.id).join(AgentTeamSlot,
+                AgentTeamSlot.id == member.team_slot_id).where(
+                member.id == member_id, member.team_preset_id == c["team_id"],
+                member.participant_kind == "team_slot", AgentTeamSlot.id == slot_id,
+                AgentTeamSlot.preset_id == c["team_id"], AgentTeamSlot.enabled.is_(True),
+                ~exists(select(newer.id).where(newer.team_slot_id == slot_id,
+                    or_(newer.updated_at > member.updated_at,
+                        and_(newer.updated_at == member.updated_at, newer.id > member.id)))))))
+        if c.get("actor_session"):
+            clauses.append(exists(select(MailAgentSession.id).where(*(
+                getattr(MailAgentSession, key) == value for key, value in c["actor_session"].items()))))
+            slot_id, provider, launch = c["actor_launch"]
+            clauses.append(exists(select(AgentTeamSlot.id).where(AgentTeamSlot.id == slot_id,
+                AgentTeamSlot.enabled.is_(True), AgentTeamSlot.provider == provider,
+                AgentTeamSlot.launch_options == launch)))
+        return clauses
+
+    async def claim_healthy_scope_context(self, db, context):
+        from app.services.github_coordination_service import hold_code
+        await self.require_bound_actor_session(db, context)
+        if hold_code():
+            await db.rollback()
+            raise GithubApprovalError("amendment_context_unavailable")
+        try:
+            result = await db.execute(update(GithubWorkItem).where(*self.healthy_scope_conditions(context))
+                .values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+        except OperationalError as exc:
+            await db.rollback()
+            raise GithubApprovalError("stale_amendment_context") from exc
+        if result.rowcount != 1 or hold_code():
+            await db.rollback()
+            raise GithubApprovalError("stale_amendment_context")
+
+    async def amendment_base_paths(self, db, item, owner, leader):
+        """Read structured approved authority, never a path list inferred from prose."""
+        if item.active_scope_revision:
+            previous = await db.scalar(select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == item.active_scope_revision))
+            if (not previous or previous.owner_slot_id != owner.team_slot_id
+                    or previous.owner_member_id != owner.id or previous.phase != "implementation"
+                    or previous.status not in {"active", "completed", "superseded"}):
+                raise GithubApprovalError("amendment_prior_revision_unsettled")
+            approved = await db.get(GithubApprovalRequest, previous.approval_request_id)
+            if (not approved or approved.status != "approved" or approved.scope_revision_id != previous.id
+                    or approved.owner_member_id != owner.id or approved.leader_member_id != leader.id):
+                raise GithubApprovalError("amendment_baseline_unverifiable")
+            paths = previous.allowed_paths
+        else:
+            approved = await db.scalar(select(GithubApprovalRequest).where(
+                GithubApprovalRequest.work_item_id == item.id,
+                GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+                GithubApprovalRequest.request_kind == "initial_plan", GithubApprovalRequest.status == "approved",
+                GithubApprovalRequest.owner_member_id == owner.id, GithubApprovalRequest.leader_member_id == leader.id,
+            ).order_by(GithubApprovalRequest.approval_round.desc(), GithubApprovalRequest.id.desc()).limit(1))
+            root = await db.get(MailMessage, approved.request_message_id) if approved and approved.request_message_id else None
+            history = await db.scalar(select(exists(select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                GithubAttemptScopeRevision.owner_member_id == owner.id,
+                GithubAttemptScopeRevision.origin_kind == "scope_amendment"))))
+            if (not approved or not root or not self.matches_linked_request_message(
+                    approved, root, delivery_key=f"github-approval:{approved.id}:request")
+                    or item.ack_received_at is None and not history):
+                raise GithubApprovalError("amendment_baseline_unverifiable")
+            metadata = (root.payload or {}).get("plan_metadata") or {}
+            paths = metadata.get("allowed_paths")
+        if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
+            raise GithubApprovalError("amendment_baseline_unverifiable")
+        paths = self._canonical_paths(paths)
+        if any(path.endswith("/") for path in paths):
+            raise GithubApprovalError("amendment_closed_file_paths_required")
+        return paths
+
+    async def amendment_head(self, scope, item, workspace):
+        from app.services.github_workspace_service import github_workspace_service, GithubWorkspaceError
+        try:
+            head, tree = await github_workspace_service.attest_head(workspace, item.dispatch_head_ref)
+        except GithubWorkspaceError as exc:
+            raise GithubApprovalError("amendment_workspace_unverifiable") from exc
+        if item.pr_number is not None:
+            token = await self.github_read_token(scope)
+            pull = await github_client.get_pull(scope.repo_owner, scope.repo_name, item.pr_number, token=token)
+            remote = pull.get("head") or {}
+            base = pull.get("base") or {}
+            if (pull.get("state") != "open" or pull.get("merged_at") is not None
+                    or pull.get("number") != item.pr_number or remote.get("sha") != head
+                    or remote.get("ref") != item.dispatch_head_ref
+                    or item.dispatch_base_ref and base.get("ref") != item.dispatch_base_ref
+                    or (remote.get("repo") or {}).get("full_name") != f"{scope.repo_owner}/{scope.repo_name}"):
+                raise GithubApprovalError("amendment_head_changed")
+            if await github_workspace_service.attest_head(workspace, item.dispatch_head_ref) != (head, tree):
+                raise GithubApprovalError("amendment_head_changed")
+        return head, tree
+
+    async def create_scope_amendment_request(self, db, item, scope, **proposal):
+        """Create an explicit healthy amendment using normalized revision transport."""
+        context, owner, leader, workspace = await self.healthy_scope_context(db, item, scope)
+        await self.bind_actor_session(db, context, proposal.get("actor"))
+        if not scope.continuation_enabled:
+            raise GithubApprovalError("continuation_disabled")
+        if (proposal["authenticated_owner_member_id"] != owner.id
+                or proposal["authenticated_owner_slot_id"] != item.owner_slot_id):
+            raise GithubApprovalError("not_item_owner", status_code=403)
+        if proposal["dispatch_nonce"] != item.dispatch_nonce:
+            raise GithubApprovalError("stale_nonce")
+        if not hmac.compare_digest(proposal["lease_token"], workspace.lease_token):
+            raise GithubApprovalError("lease_token_mismatch", status_code=403)
+        if proposal["phase"] != "implementation" or item.attempt_phase != "implementation":
+            raise GithubApprovalError("amendment_diagnostic_restoration_required")
+        if proposal["execution_target"] not in {"workspace", "hosted_ci", "workspace_and_hosted_ci"}:
+            raise GithubApprovalError("execution_target_invalid", status_code=400)
+        paths = self._canonical_paths(proposal["allowed_paths"])
+        if any(path.endswith("/") for path in paths):
+            raise GithubApprovalError("amendment_closed_file_paths_required")
+        actions = self._canonical_strings(proposal["allowed_actions"], label="allowed_actions", allow_empty=False)
+        if set(actions) - _CONTINUATION_ACTIONS or not IMPLEMENTATION_COMPLETION_ACTIONS <= set(actions):
+            raise GithubApprovalError("implementation_completion_actions_required", status_code=400)
+        commands = self._canonical_strings(proposal["allowed_commands"], label="allowed_commands")
+        prohibitions = self._canonical_strings(proposal["prohibited_actions"], label="prohibited_actions")
+        fallbacks = self._canonical_tool_fallbacks(proposal["tool_fallbacks"], execution_target=proposal["execution_target"])
+        if bool(fallbacks) != ("install_hosted_ci_tool" in actions):
+            raise GithubApprovalError("hosted_tool_fallback_required", status_code=400)
+        if len(paths) > scope.max_scope_paths or len(commands) > scope.max_scope_commands:
+            raise GithubApprovalError("continuation_path_limit_exceeded")
+        if not proposal["summary"].strip():
+            raise GithubApprovalError("continuation_summary_required", status_code=400)
+        max_failures = proposal["max_failed_heads"]
+        if type(max_failures) is not int or max_failures < 1 or max_failures > scope.max_failed_heads_per_revision:
+            raise GithubApprovalError("continuation_failed_head_limit_exceeded")
+        base_paths = await self.amendment_base_paths(db, item, owner, leader)
+        head, tree = await self.amendment_head(scope, item, workspace)
+        payload = self.canonical_continuation_payload(phase="implementation",
+            execution_target=proposal["execution_target"], summary=proposal["summary"].strip(),
+            allowed_paths=paths, allowed_actions=actions, allowed_commands=commands,
+            prohibited_actions=prohibitions, max_failed_heads=max_failures, tool_fallbacks=fallbacks,
+            baseline_head_sha=head, baseline_tree_sha=tree, expected_workspace_id=workspace.id,
+            originating_escalation_reason="")
+        added = sorted(set(paths) - set(base_paths))
+        payload.update(origin_kind="scope_amendment", amendment_base_paths=base_paths,
+            amendment_added_paths=added, previous_scope_revision=item.active_scope_revision)
+        fingerprint = self.fingerprint_payload(payload)
+        await self.claim_healthy_scope_context(db, context)
+        latest = await db.scalar(select(GithubApprovalRequest).where(
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+            GithubApprovalRequest.approval_round == item.approval_round_count,
+            GithubApprovalRequest.request_kind == "continuation",
+            GithubApprovalRequest.owner_member_id == owner.id,
+            GithubApprovalRequest.leader_member_id == leader.id))
+        if latest and latest.scope_revision_id:
+            existing = await db.get(GithubAttemptScopeRevision, latest.scope_revision_id)
+            if (existing and existing.origin_kind == "scope_amendment"
+                    and existing.status in {"proposed", "approved", "rejected", "active"}
+                    and existing.baseline_head_sha == head and existing.baseline_tree_sha == tree
+                    and all(getattr(existing, key) == payload[key] for key in (
+                        "phase", "execution_target", "summary", "allowed_paths", "allowed_actions",
+                        "allowed_commands", "prohibited_actions", "tool_fallbacks", "max_failed_heads"))):
+                self.verify_amendment_binding(latest, existing)
+                return existing, latest, False
+        pending = await self.current_pending(db, item.id)
+        if pending:
+            if (pending.request_kind == "continuation" and pending.dispatch_nonce == item.dispatch_nonce
+                    and pending.owner_member_id == owner.id and pending.leader_member_id == leader.id
+                    and pending.request_fingerprint == fingerprint and pending.scope_revision_id):
+                existing = await db.get(GithubAttemptScopeRevision, pending.scope_revision_id)
+                if existing and existing.origin_kind == "scope_amendment":
+                    return existing, pending, False
+            raise GithubApprovalError("approval_request_already_pending")
+        prior = list((await db.scalars(select(GithubAttemptScopeRevision).where(
+            GithubAttemptScopeRevision.work_item_id == item.id,
+            GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+        ))).all())
+        amendments = [row for row in prior if row.origin_kind == "scope_amendment"]
+        previous_added = {path for row in amendments for path in row.amendment_added_paths}
+        if len(amendments) >= MAX_SCOPE_AMENDMENTS:
+            raise GithubApprovalError("amendment_count_limit")
+        if len(previous_added | set(added)) > MAX_AMENDMENT_ADDED_PATHS:
+            raise GithubApprovalError("amendment_added_path_limit")
+        if len(prior) >= scope.max_continuation_revisions or (
+                sum(row.failed_head_count for row in prior) + max_failures > scope.max_continuation_failed_heads):
+            raise GithubApprovalError("continuation_budget_exhausted")
+        if any(row.status in {"proposed", "approved", "submitted"} for row in prior):
+            raise GithubApprovalError("amendment_prior_revision_unsettled")
+        now = datetime.utcnow()
+        number = max((row.revision for row in prior), default=0) + 1
+        request = GithubApprovalRequest(work_item_id=item.id, request_kind="continuation",
+            dispatch_nonce=item.dispatch_nonce, approval_round=item.approval_round_count + 1,
+            owner_member_id=owner.id, leader_member_id=leader.id, request_fingerprint=fingerprint)
+        revision = GithubAttemptScopeRevision(work_item_id=item.id, dispatch_nonce=item.dispatch_nonce,
+            revision=number, owner_slot_id=owner.team_slot_id, owner_member_id=owner.id,
+            origin_kind="scope_amendment", amendment_base_paths=base_paths, amendment_added_paths=added,
+            previous_scope_revision=item.active_scope_revision, phase="implementation",
+            execution_target=payload["execution_target"], summary=payload["summary"], allowed_paths=paths,
+            allowed_actions=actions, allowed_commands=commands, prohibited_actions=prohibitions,
+            tool_fallbacks=fallbacks, baseline_head_sha=head, baseline_tree_sha=tree,
+            originating_escalation_reason="", expected_workspace_id=workspace.id,
+            expected_lease_token_hash=self.lease_token_hash(workspace.lease_token), max_failed_heads=max_failures,
+            expires_at=now + timedelta(seconds=settings.github_continuation_proposal_expiry_seconds))
+        db.add_all([request, revision])
+        await db.flush()
+        request.scope_revision_id = revision.id
+        revision.approval_request_id = request.id
+        item.approval_round_count = request.approval_round
+        item.ack_received_at = None
+        await _record_decision_fact(db, event_kind="continuation_request",
+            source="github_approval_service.create_scope_amendment_request",
+            actor=proposal.get("actor") or audit.derive_actor(actor_kind="member", member_id=owner.id),
+            scope_id=scope.id, item_id=item.id, request_id=request.id, revision_id=revision.id,
+            request_kind="scope_amendment", decision="requested")
+        final_context = dict(context)
+        final_context.update(approval_round_count=request.approval_round, ack_received_at=None)
+        await self.claim_healthy_scope_context(db, final_context)
+        await db.commit()
+        return revision, request, True
+
+    def verify_amendment_binding(self, request, revision):
+        if (revision.origin_kind != "scope_amendment" or request.request_kind != "continuation"
+                or request.scope_revision_id != revision.id or revision.approval_request_id != request.id
+                or revision.phase != "implementation" or revision.originating_escalation_reason != ""):
+            raise GithubApprovalError("amendment_origin_unverifiable")
+        payload = self.canonical_continuation_payload(phase=revision.phase,
+            execution_target=revision.execution_target, summary=revision.summary,
+            allowed_paths=revision.allowed_paths, allowed_actions=revision.allowed_actions,
+            allowed_commands=revision.allowed_commands, prohibited_actions=revision.prohibited_actions,
+            max_failed_heads=revision.max_failed_heads, tool_fallbacks=revision.tool_fallbacks,
+            baseline_head_sha=revision.baseline_head_sha, baseline_tree_sha=revision.baseline_tree_sha,
+            expected_workspace_id=revision.expected_workspace_id, originating_escalation_reason="")
+        payload.update(origin_kind=revision.origin_kind, amendment_base_paths=revision.amendment_base_paths,
+            amendment_added_paths=revision.amendment_added_paths,
+            previous_scope_revision=revision.previous_scope_revision)
+        if self.fingerprint_payload(payload) != request.request_fingerprint:
+            raise GithubApprovalError("amendment_origin_unverifiable")
+
+    async def validate_amendment_budget(self, db, item, scope, revision):
+        rows = list((await db.scalars(select(GithubAttemptScopeRevision).where(
+            GithubAttemptScopeRevision.work_item_id == item.id,
+            GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce))).all())
+        amendments = [row for row in rows if row.origin_kind == "scope_amendment"]
+        if len(amendments) > MAX_SCOPE_AMENDMENTS:
+            raise GithubApprovalError("amendment_count_limit")
+        if len({path for row in amendments for path in row.amendment_added_paths}) > MAX_AMENDMENT_ADDED_PATHS:
+            raise GithubApprovalError("amendment_added_path_limit")
+        if (len(rows) > scope.max_continuation_revisions
+                or sum(row.failed_head_count for row in rows) + revision.max_failed_heads > scope.max_continuation_failed_heads
+                or revision.max_failed_heads > scope.max_failed_heads_per_revision
+                or len(revision.allowed_paths) > scope.max_scope_paths
+                or len(revision.allowed_commands) > scope.max_scope_commands):
+            raise GithubApprovalError("continuation_budget_exhausted")
+
+    @staticmethod
+    def amendment_revision_conditions(revision):
+        return [getattr(GithubAttemptScopeRevision, key) == getattr(revision, key) for key in (
+            "id", "work_item_id", "dispatch_nonce", "revision", "owner_slot_id", "owner_member_id",
+            "origin_kind", "phase", "execution_target", "summary", "allowed_paths", "allowed_actions",
+            "allowed_commands", "prohibited_actions", "tool_fallbacks", "baseline_head_sha", "baseline_tree_sha",
+            "amendment_base_paths", "amendment_added_paths", "previous_scope_revision",
+            "expected_workspace_id", "expected_lease_token_hash", "max_failed_heads", "approval_request_id",
+            "failed_head_count", "last_failed_head_sha",
+            "status", "expires_at")]
+
+    async def decide_scope_amendment(self, db, item, request, revision, *, leader_id, decision, reason, actor):
+        self.verify_amendment_binding(request, revision)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        if scope is None:
+            raise GithubApprovalError("scope_not_found")
+        context, owner, leader, workspace = await self.healthy_scope_context(db, item, scope)
+        await self.bind_actor_session(db, context, actor)
+        if leader.id != leader_id or request.leader_member_id != leader.id:
+            raise GithubApprovalError("not_designated_leader", status_code=403)
+        if (request.owner_member_id != owner.id or request.approval_round != item.approval_round_count
+                or item.active_scope_revision != revision.previous_scope_revision
+                or revision.status != "proposed" or request.status != "pending"
+                or revision.expires_at is not None and revision.expires_at <= datetime.utcnow()
+                or revision.expected_workspace_id != workspace.id
+                or not self.lease_token_matches(workspace.lease_token, revision.expected_lease_token_hash)):
+            raise GithubApprovalError("stale_amendment_context")
+        guards = self.amendment_revision_conditions(revision)
+        base = await self.amendment_base_paths(db, item, owner, leader)
+        if base != revision.amendment_base_paths:
+            raise GithubApprovalError("amendment_baseline_unverifiable")
+        if decision == "approved":
+            head, tree = await self.amendment_head(scope, item, workspace)
+            if head != revision.baseline_head_sha or tree != revision.baseline_tree_sha:
+                raise GithubApprovalError("amendment_head_changed")
+        await self.claim_healthy_scope_context(db, context)
+        if decision == "approved":
+            await self.validate_amendment_budget(db, item, scope, revision)
+        now = datetime.utcnow()
+        if revision.expires_at is not None and revision.expires_at <= now:
+            raise GithubApprovalError("continuation_request_expired")
+        request_result = await db.execute(update(GithubApprovalRequest).where(
+            GithubApprovalRequest.id == request.id, GithubApprovalRequest.status == "pending",
+            GithubApprovalRequest.scope_revision_id == revision.id,
+            GithubApprovalRequest.request_fingerprint == request.request_fingerprint,
+            GithubApprovalRequest.approval_round == context["approval_round_count"],
+            GithubApprovalRequest.owner_member_id == owner.id, GithubApprovalRequest.leader_member_id == leader.id,
+            exists(select(GithubAttemptScopeRevision.id).where(*guards)),
+        ).values(status=decision, reason=reason, decided_at=now).execution_options(synchronize_session=False))
+        revision_result = await db.execute(update(GithubAttemptScopeRevision).where(*guards).values(
+            status="approved" if decision == "approved" else "rejected",
+            approved_at=now if decision == "approved" else None).execution_options(synchronize_session=False))
+        if request_result.rowcount != 1 or revision_result.rowcount != 1:
+            await db.rollback()
+            raise GithubApprovalError("stale_amendment_context")
+        await _record_decision_fact(db, event_kind="continuation_decision",
+            source="github_approval_service.decide_scope_amendment",
+            actor=actor or audit.derive_actor(actor_kind="member", member_id=leader_id),
+            scope_id=scope.id, item_id=item.id, request_id=request.id, revision_id=revision.id,
+            request_kind="scope_amendment", decision=decision)
+        await self.claim_healthy_scope_context(db, context)
+        if revision.expires_at is not None and revision.expires_at <= datetime.utcnow():
+            await db.rollback()
+            raise GithubApprovalError("continuation_request_expired")
+        await db.commit()
+        await db.refresh(request)
+        await db.refresh(revision)
+        return request, revision, True
 
     async def create_continuation_request(
         self,
@@ -774,7 +1193,7 @@ class GithubApprovalService:
         request: GithubApprovalRequest,
         revision: GithubAttemptScopeRevision,
     ) -> dict:
-        return {
+        payload = {
             "approval_request_id": request.id,
             "approval_round": request.approval_round,
             "dispatch_nonce": request.dispatch_nonce,
@@ -796,6 +1215,12 @@ class GithubApprovalService:
             },
             "work_item_id": request.work_item_id,
         }
+        if revision.origin_kind == "scope_amendment":
+            payload["scope_revision"].update(
+                origin_kind=revision.origin_kind, amendment_base_paths=revision.amendment_base_paths,
+                amendment_added_paths=revision.amendment_added_paths,
+                previous_scope_revision=revision.previous_scope_revision)
+        return payload
 
     @classmethod
     def matches_linked_continuation_request_message(
@@ -855,7 +1280,7 @@ class GithubApprovalService:
         request: GithubApprovalRequest,
         revision: GithubAttemptScopeRevision,
     ) -> dict:
-        return {
+        payload = {
             "ack_required": True,
             "approval_request_id": request.id,
             "dispatch_nonce": revision.dispatch_nonce,
@@ -877,6 +1302,12 @@ class GithubApprovalService:
             },
             "work_item_id": revision.work_item_id,
         }
+        if revision.origin_kind == "scope_amendment":
+            payload["scope_revision"].update(
+                origin_kind=revision.origin_kind, amendment_base_paths=revision.amendment_base_paths,
+                amendment_added_paths=revision.amendment_added_paths,
+                previous_scope_revision=revision.previous_scope_revision)
+        return payload
 
     @staticmethod
     def continuation_owner_ack_nudge_prompt(
@@ -930,7 +1361,8 @@ class GithubApprovalService:
             and message.delivery_key == delivery_key
             and message.body_markdown
             == (
-                f"Continuation revision {revision.revision} is approved. "
+                f"{'Scope amendment' if revision.origin_kind == 'scope_amendment' else 'Continuation'} "
+                f"revision {revision.revision} is approved. "
                 "Acknowledge it before making changes.\n\n"
                 f"{revision.summary}"
             )
@@ -981,7 +1413,8 @@ class GithubApprovalService:
                 sender_member_id=request.owner_member_id,
                 recipient_member_id=request.leader_member_id,
                 subject=(
-                    f"Continuation revision {revision.revision} for work item "
+                    f"{'Scope amendment' if revision.origin_kind == 'scope_amendment' else 'Continuation'} "
+                    f"revision {revision.revision} for work item "
                     f"{item.id}"
                 ),
                 body_markdown=revision.summary,
@@ -1441,11 +1874,13 @@ class GithubApprovalService:
             db,
             recipient_member_id=revision.owner_member_id,
             subject=(
-                f"Approved continuation revision {revision.revision} for work item "
+                f"Approved {'scope amendment' if revision.origin_kind == 'scope_amendment' else 'continuation'} "
+                f"revision {revision.revision} for work item "
                 f"{item.id}"
             ),
             body_markdown=(
-                f"Continuation revision {revision.revision} is approved. "
+                f"{'Scope amendment' if revision.origin_kind == 'scope_amendment' else 'Continuation'} "
+                f"revision {revision.revision} is approved. "
                 "Acknowledge it before making changes.\n\n"
                 f"{revision.summary}"
             ),
@@ -2015,6 +2450,9 @@ class GithubApprovalService:
             ):
                 return request, revision, False
             raise GithubApprovalError("approval_request_already_decided")
+        if revision.origin_kind == "scope_amendment":
+            return await self.decide_scope_amendment(db, item, request, revision,
+                leader_id=authenticated_leader_member_id, decision=decision, reason=reason, actor=actor)
         if item.dispatch_status != "escalated":
             raise GithubApprovalError("continuation_not_escalated")
         if item.escalation_reason != revision.originating_escalation_reason:
@@ -2455,7 +2893,7 @@ class GithubApprovalService:
         ):
             return False
         if item.escalation_reason not in {
-            revision.originating_escalation_reason,
+            revision.originating_escalation_reason or "plan_blocked",
             "continuation_budget_exhausted",
         }:
             return False
@@ -2531,7 +2969,7 @@ class GithubApprovalService:
         reason: str,
         actor: dict | None = None,
     ) -> tuple[GithubWorkItem, GithubAttemptScopeRevision, bool]:
-        """Cancel one active continuation revision.
+        """Cancel one current active or submitted revision, retaining its history.
 
         A caller that supplies its trusted ``actor`` gets one action fact in
         the cancellation transaction and a separate notification fact. A
@@ -2577,9 +3015,20 @@ class GithubApprovalService:
             if revision.approval_request_id is not None
             else None
         )
+        revision_status = revision.status
+        item_status = item.dispatch_status
+        revision_guards = self.amendment_revision_conditions(revision)
+        baseline_tree = revision.baseline_tree_sha
+        revision_phase = revision.phase
+        cancellable_state = (
+            (revision_status == "active" and item_status == "dispatched")
+            or (revision_status == "submitted" and item_status in {
+                "dispatched", "verifying", "ready_for_review", "awaiting_human_review", "escalated"})
+            or (revision_status == "exhausted" and revision.phase == "diagnostic"
+                and item_status == "escalated")
+        )
         if (
-            revision.status != "active"
-            or item.dispatch_status != "dispatched"
+            not cancellable_state
             or item.active_scope_revision != revision.revision
             or item.owner_slot_id != revision.owner_slot_id
             or item.handoff_state is not None
@@ -2612,9 +3061,28 @@ class GithubApprovalService:
         scope = await db.get(TeamGithubScope, item.scope_id)
         if scope is None:
             raise GithubApprovalError("scope_not_found")
+        cancellation_context = None
+        if revision_status in {"submitted", "exhausted"} or revision.origin_kind == "scope_amendment":
+            cancellation_context, _, _, _ = await self.healthy_scope_context(db, item, scope, allow_recovery=True)
         head_sha = await self._active_cancellation_head_sha(scope, item)
+        if revision_phase == "diagnostic":
+            # Restoring the immutable baseline tree is mandatory even when this
+            # head already consumed the diagnostic budget. A restore commit may
+            # legitimately have a different SHA from the original baseline.
+            try:
+                snapshot = await github_client.get_commit_snapshot(
+                    scope.repo_owner, scope.repo_name, head_sha,
+                    token=await self.github_read_token(scope),
+                )
+            except (GithubApprovalError, GithubAppAuthError, GithubClientResponseError, httpx.HTTPError) as exc:
+                raise GithubApprovalError("active_continuation_head_unverifiable") from exc
+            if snapshot.sha != head_sha or snapshot.tree_sha != baseline_tree:
+                raise GithubApprovalError("active_continuation_diagnostic_head_unrestored")
+        if cancellation_context is not None:
+            await self.claim_healthy_scope_context(db, cancellation_context)
         charge_head = (
-            head_sha != revision.baseline_head_sha
+            revision.phase == "implementation"
+            and head_sha != revision.baseline_head_sha
             and not (
                 revision.failed_head_count > 0
                 and revision.last_failed_head_sha == head_sha
@@ -2643,6 +3111,7 @@ class GithubApprovalService:
         revision_result = await db.execute(
             update(GithubAttemptScopeRevision)
             .where(
+                *revision_guards,
                 GithubAttemptScopeRevision.id == revision.id,
                 GithubAttemptScopeRevision.work_item_id == item.id,
                 GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
@@ -2650,7 +3119,7 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision.owner_slot_id == item.owner_slot_id,
                 GithubAttemptScopeRevision.baseline_head_sha
                 == revision.baseline_head_sha,
-                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.status == revision_status,
                 GithubAttemptScopeRevision.cancelled_at.is_(None),
                 GithubAttemptScopeRevision.failed_head_count
                 == revision.failed_head_count,
@@ -2666,7 +3135,7 @@ class GithubApprovalService:
                 exists(
                     select(GithubWorkItem.id).where(
                         GithubWorkItem.id == item.id,
-                        GithubWorkItem.dispatch_status == "dispatched",
+                        GithubWorkItem.dispatch_status == item_status,
                         GithubWorkItem.dispatch_nonce == dispatch_nonce,
                         GithubWorkItem.active_scope_revision == revision_number,
                         GithubWorkItem.owner_slot_id == revision.owner_slot_id,
@@ -2700,7 +3169,7 @@ class GithubApprovalService:
             update(GithubWorkItem)
             .where(
                 GithubWorkItem.id == item.id,
-                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_status == item_status,
                 GithubWorkItem.dispatch_nonce == dispatch_nonce,
                 GithubWorkItem.active_scope_revision == revision_number,
                 GithubWorkItem.owner_slot_id == revision.owner_slot_id,
@@ -2740,7 +3209,7 @@ class GithubApprovalService:
                 escalation_reason=(
                     "continuation_budget_exhausted"
                     if attempt_exhausted
-                    else revision.originating_escalation_reason
+                    else revision.originating_escalation_reason or "plan_blocked"
                 ),
                 status_note=(
                     f"Continuation revision {revision.revision} was cancelled by "
@@ -2794,7 +3263,14 @@ class GithubApprovalService:
         try:
             if await self._active_cancellation_head_sha(scope, item) != head_sha:
                 raise GithubApprovalError("active_continuation_head_changed")
-        except GithubApprovalError:
+            if revision_phase == "diagnostic":
+                current_snapshot = await github_client.get_commit_snapshot(
+                    scope.repo_owner, scope.repo_name, head_sha,
+                    token=await self.github_read_token(scope),
+                )
+                if current_snapshot.sha != head_sha or current_snapshot.tree_sha != baseline_tree:
+                    raise GithubApprovalError("active_continuation_diagnostic_head_unrestored")
+        except (GithubApprovalError, GithubAppAuthError, GithubClientResponseError, httpx.HTTPError):
             await db.rollback()
             raise
         if actor is not None:
@@ -2811,7 +3287,7 @@ class GithubApprovalService:
                 item_id=item_id,
                 revision_id=revision_id,
                 request_id=approval.id,
-                before_values={"status": "active", "dispatch_status": "dispatched"},
+                before_values={"status": revision_status, "dispatch_status": item_status},
                 after_values={
                     "status": "superseded",
                     "dispatch_status": "escalated",
@@ -2822,6 +3298,11 @@ class GithubApprovalService:
                 operation_id=operation_id,
                 correlation_id=operation_id,
             )
+        if cancellation_context is not None:
+            cancellation_context.update(dispatch_status="escalated", active_scope_revision=0,
+                attempt_phase="implementation", retry_count=cancellation_context["retry_count"] + int(charge_head),
+                last_verified_sha=head_sha if charge_head else cancellation_context["last_verified_sha"])
+            await self.claim_healthy_scope_context(db, cancellation_context)
         await db.commit()
         await db.refresh(item)
         await db.refresh(revision)

@@ -105,14 +105,16 @@ async def _sqlite_columns(conn, table_name: str) -> set[str]:
 
 
 async def _sqlite_create_approval_tables(conn) -> None:
-    from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision
+    from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision, GithubRevisionReview
 
     def create_tables(sync_conn) -> None:
         GithubApprovalRequest.__table__.create(sync_conn, checkfirst=True)
         GithubAttemptScopeRevision.__table__.create(sync_conn, checkfirst=True)
+        GithubRevisionReview.__table__.create(sync_conn, checkfirst=True)
         for table in (
             GithubApprovalRequest.__table__,
             GithubAttemptScopeRevision.__table__,
+            GithubRevisionReview.__table__,
         ):
             for index in table.indexes:
                 index.create(sync_conn, checkfirst=True)
@@ -1084,6 +1086,16 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     await _sqlite_create_approval_tables(conn)
     revision_columns = await _sqlite_columns(conn, "github_attempt_scope_revisions")
+    for column, definition in (
+        ("origin_kind", "VARCHAR NOT NULL DEFAULT 'continuation'"),
+        ("amendment_base_paths", "JSON NOT NULL DEFAULT '[]'"),
+        ("amendment_added_paths", "JSON NOT NULL DEFAULT '[]'"),
+        ("previous_scope_revision", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if revision_columns and column not in revision_columns:
+            await conn.execute(text(
+                f"ALTER TABLE github_attempt_scope_revisions ADD COLUMN {column} {definition}"
+            ))
     if revision_columns and "submitted_head_sha" not in revision_columns:
         await conn.execute(
             text(

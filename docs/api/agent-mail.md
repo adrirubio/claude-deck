@@ -190,3 +190,49 @@ External broadcasts require `audience_type` and `audience_id`. Supported scoped 
 ```
 
 Receipt recipients are snapshotted when the message is stored. A keyed replay uses those receipts, not current membership. Existing messages retain their historical receipts and have no inferred audience.
+
+## Healthy scope amendments and submitted review settlement
+
+These routes use the `/api/v1/agent-teams` prefix and current member session authentication.
+The owner requests `POST /github-work-items/{id}/scope-amendments` with the same normalized
+proposal fields as a continuation, with `phase: implementation`. The server assigns immutable
+`origin_kind: scope_amendment`; ordinary continuations retain their escalation and PR requirements.
+The corresponding MCP tool is `synth_city_request_scope_amendment`.
+
+A healthy amendment works before a PR exists. It reads the assigned branch's committed head
+and tree without discarding held edits. Its path baseline must come from structured approved
+initial-plan metadata or the preceding approved implementation revision. Legacy plans without
+verifiable structured paths are refused; prose does not establish authority. Each attempt allows
+at most three amendments and sixteen cumulative normalized unique added file paths. Rejection
+and removal do not refund those limits. Existing stricter path, command, revision and failed-head
+limits still apply. Exact current-round replays consume no additional unit.
+
+Amendments reuse `synth_city_decide_continuation` and `synth_city_ack_continuation` for the
+current Leader decision and separate delivered owner activation. Requesting an amendment stops
+existing source authority until that round is approved and acknowledged. The attempt, lease,
+held edits and budget history remain bound; no retry, merge or lease release is granted.
+
+For a submitted implementation revision, the current Leader first assigns an independent reviewer
+for the exact attempt/revision/head through `synth_city_watch_required_checks`. That assignment
+identifies the reviewer; CI success alone is never review authority. The assigned reviewer calls
+`synth_city_record_revision_review`, or `POST /github-work-items/{id}/revision-reviews`, with
+`dispatch_nonce`, `revision`, a full `head_sha`, `summary`, and a GitHub `evidence_url` linking the
+source review. This records only CHANGES REQUIRED. Reviewer identity comes from the authenticated
+session. A superseding disposition retains history; the reviewer may explicitly withdraw through
+`synth_city_withdraw_revision_review` / `POST /github-work-items/{id}/revision-reviews/{review_id}/withdraw`.
+
+The current Leader settles an active negative fact through `synth_city_end_submitted_revision`
+or `POST /github-work-items/{id}/submitted-revision/end`, supplying `review_id`, `dispatch_nonce`
+and `reason`. The server rechecks reviewer assignment, source head, current sessions, owner,
+Leader, policy, lease and pause/HOLD fences after external reads. It supersedes the submitted
+revision and clears owner acknowledgement without escalating or splitting the issue. Source work
+is stopped until a fresh bounded amendment, approval and owner activation. This action does not
+approve the source or satisfy independent acceptance, CI, human review or merge policy.
+
+Operator cancellation also accepts submitted revisions, and exhausted diagnostics after exact
+baseline-tree restoration. A restoration commit may have a different SHA. An already charged
+failed head still requires restoration; cancelling preserves budget history and the lease.
+Closed, unmerged submitted PRs on escalated attempts are superseded by bounded verification;
+that observation grants neither retry nor lease release. Cancelled or timed-out check runs remain
+visible and inconclusive, consume no product-failure unit, and cannot satisfy required CI.
+A real failed check in the same observation still charges the head once.

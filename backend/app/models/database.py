@@ -907,6 +907,10 @@ class GithubAttemptScopeRevision(Base):
         ForeignKey("mail_team_members.id", ondelete="CASCADE"),
         nullable=False,
     )
+    origin_kind: Mapped[str] = mapped_column(String, default="continuation", server_default="continuation", nullable=False)
+    amendment_base_paths: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    amendment_added_paths: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    previous_scope_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     phase: Mapped[str] = mapped_column(String, nullable=False)
     execution_target: Mapped[str] = mapped_column(String, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
@@ -965,6 +969,28 @@ class GithubAttemptScopeRevision(Base):
             name="uix_github_attempt_scope_revision",
         ),
     )
+
+
+class GithubRevisionReview(Base):
+    """Authenticated negative review fact; never independent acceptance authority."""
+
+    __tablename__ = "github_revision_reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    revision_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="CASCADE"))
+    watch_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_required_check_watches.id", ondelete="CASCADE"))
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    reviewer_member_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_lease_token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    verdict: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_url: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    settled_by_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    settlement_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class FactoryContextKey(Base):
