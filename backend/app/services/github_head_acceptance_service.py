@@ -126,18 +126,29 @@ async def record_head_review(db, item: GithubWorkItem, *, dispatch_nonce, head_s
     return fact
 
 
-async def gate_note(db, scope: TeamGithubScope, item: GithubWorkItem, head_sha) -> str | None:
+async def gate_note(db, scope: TeamGithubScope, item: GithubWorkItem, head_sha, identity=None) -> str | None:
     """None when the current head carries a valid acceptance; otherwise the work-view note that blocks the merge.
+
+    ``identity`` is the (PR number, dispatch nonce, scope id) the merge operation started with; it defaults to the item's
+    loaded values. A fact is read only for that identity, and if the item has been rebound since, the gate blocks
+    and refreshes the item so the next poll restarts verification, instead of letting a fact from the new context
+    authorize the old operation.
 
     The work item identity and every fact are read fresh, so a second connection's change is never hidden by a
     cached object.
     """
     head = _short(head_sha)
+    expected_pr, expected_nonce, expected_scope = (
+        identity if identity is not None else (item.pr_number, item.dispatch_nonce, item.scope_id))
     fresh = await _fresh_item(db, item.id)
-    if fresh is None or fresh.pr_number is None:
+    if expected_pr is None or fresh is None or fresh.pr_number is None:
         return f"Waiting for reviewer acceptance at {head}."
-    base = (GithubHeadReview.work_item_id == item.id, GithubHeadReview.dispatch_nonce == fresh.dispatch_nonce,
-            GithubHeadReview.pr_number == fresh.pr_number, GithubHeadReview.status == "active")
+    if (fresh.pr_number != expected_pr or fresh.dispatch_nonce != expected_nonce
+            or fresh.scope_id != expected_scope):
+        await db.refresh(item)
+        return "The pull request or attempt changed during verification; re-verifying before auto-merge."
+    base = (GithubHeadReview.work_item_id == item.id, GithubHeadReview.dispatch_nonce == expected_nonce,
+            GithubHeadReview.pr_number == expected_pr, GithubHeadReview.status == "active")
     latest = await db.scalar(select(GithubHeadReview).where(*base, GithubHeadReview.head_sha == head_sha)
         .order_by(GithubHeadReview.id.desc()).limit(1).execution_options(populate_existing=True))
     if latest is not None:

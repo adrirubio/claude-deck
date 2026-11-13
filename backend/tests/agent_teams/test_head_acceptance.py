@@ -469,3 +469,48 @@ async def test_authority_that_changes_during_the_github_read_is_refused_before_a
     with pytest.raises(GithubApprovalError, match=code):
         await case.record(HEAD_A)
     assert (await db.execute(select(GithubHeadReview))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["pr", "nonce", "scope"])
+async def test_an_acceptance_in_a_new_context_cannot_authorize_the_operation_that_started_in_the_old_one(twin, monkeypatch, kind):
+    """Review 5899405466: rebinding the item while checks are read must not let a fact from the new context merge the old PR."""
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    await case.record(HEAD_A)
+    original = case.client.list_check_runs_for_ref
+    reviewer = case.verifier.id
+    other_scope = await _scope(db, merge_policy="auto", repo_name="elsewhere")
+    await db.commit()  # no open write transaction may block the second connection
+
+    async def rebinding(owner, repo, ref):
+        async with maker() as other:
+            if kind == "scope":  # the item moves to another team scope while the old one's facts stay active
+                await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == case.item.id)
+                                    .values(scope_id=other_scope.id))
+            else:
+                await other.execute(update(GithubHeadReview).values(status="superseded"))
+                values = {"pr_number": 6} if kind == "pr" else {"dispatch_nonce": "nonce-2"}
+                await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == case.item.id).values(**values))
+                other.add(GithubHeadReview(work_item_id=case.item.id, dispatch_nonce="nonce-2" if kind == "nonce" else "nonce-1",
+                    pr_number=6 if kind == "pr" else 5, head_sha=HEAD_A, scope_revision=0, reviewer_member_id=reviewer,
+                    verdict="accepted", summary="Accepted in the new context", evidence_url=EVIDENCE))
+            await other.commit()
+        return await original(owner, repo, ref)
+
+    case.client.list_check_runs_for_ref = rebinding
+    await case.tick()
+    assert case.client.merge_calls == 0 and case.item.dispatch_status != "merged"
+    assert "changed during verification" in case.item.status_note.lower()
+
+
+@pytest.mark.asyncio
+async def test_the_gate_reports_a_mismatch_between_the_operation_identity_and_the_item(twin, monkeypatch):
+    db, maker = twin
+    case = await make_case(db, monkeypatch)
+    await case.record(HEAD_A)
+    scope_id = case.scope.id
+    assert await acceptance.gate_note(db, case.scope, case.item, HEAD_A, identity=(5, "nonce-1", scope_id)) is None
+    for identity in ((6, "nonce-1", scope_id), (5, "other", scope_id), (5, "nonce-1", scope_id + 1)):
+        note = await acceptance.gate_note(db, case.scope, case.item, HEAD_A, identity=identity)
+        assert "changed during verification" in note.lower()
