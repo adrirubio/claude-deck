@@ -1,10 +1,10 @@
 # OpenCode v2 harness support
 
-Date: 2026-11-12. Status: spike result and design for review (#729). It feeds #730, #731, #732 and #733.
+Date: 2026-11-12. Status: partial spike result and design for review (#729, closed as a partial spike by the Supervisor's [acceptance-scope decision](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839946321)). It feeds #730, #731, #732 and #733.
 
 ## Goal
 
-Deck's `opencode-cli` provider was written for OpenCode v1 (tested on 1.17.11). OpenCode v2 is now the current major version. This spike checks v2's behaviour with live team-member sessions in tmux. It answers the seven questions in #729 and turns the answers into a design for the four follow-up issues.
+Deck's `opencode-cli` provider was written for OpenCode v1 (tested on 1.17.11). OpenCode v2 is now the current major version. This spike checks v2's behaviour with live team-member sessions in tmux. It addresses the seven questions in #729 and turns the results into a design for the four follow-up issues. Q1, Q2 and Q7 are answered with retained evidence. Q3–Q6 stay open and move to the implementation issues (see "Acceptance questions that stay open").
 
 ## Summary
 
@@ -71,12 +71,12 @@ Each problem has a working fix in v2: `--standalone`, a per-launch `OPENCODE_CON
 
 ### Acceptance questions that stay open
 
-These parts of #729 have no retained acceptance evidence. **The spike leaves them as open gaps, and #729 is not answered with acceptance evidence on these points.** The Supervisor's [incident disposition](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839418536) allows no further probes in #729. The implementation issues #730–#733 must close these gaps with their own tests. The restoration-run observations (E1–E5, below) bear on all four, but they are research observations with explicit provenance, not acceptance evidence. The design below treats these points as unverified and gives no guarantee:
+These parts of #729 have no retained acceptance evidence. **The spike leaves them as open gaps, and #729 is not answered with acceptance evidence on these points.** The Supervisor's [incident disposition](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839418536) allows no further probes in #729. The Supervisor's [acceptance-scope decision](https://github.com/albiexai/synth-city/issues/729#issuecomment-6839946321) closes #729 as a partial spike. It moves each gap to the implementation issue that needs it, to be proved there by tests against an isolated Synth City backend under the probe rules below. **Q3 goes to #732 and #733, Q4 and Q5 to #732, and Q6 to #733.** The restoration-run observations (E1–E5, below) bear on all four, but they are research observations with explicit provenance, not acceptance evidence. The design below treats these points as unverified and gives no guarantee:
 
-- **Q3:** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. In the original spike only the service-mode config effect is R. See E1 and E2.
-- **Q4:** the hook order and live payloads for `tool.execute.after` and `permission.evaluate`, and whether text pushed in the `context` hook reaches the model. In the original spike these are NR on both versions; only the 2.2.0 `context` and `prompt` hooks firing (P4) and the published types (A10) are retained. See E3.
-- **Q5, second half:** which event shows an open question and what a row looks like while it is open. See E4.
-- **Q6:** a reliable activity source after a crash, an interrupt or a relaunch. See E4 and E5.
+- **Q3 (→ #732, #733):** which process runs the MCP shim and the plugin, which pid the registration reports, and what `pane_current_command` shows. In the original spike only the service-mode config effect is R. See E1 and E2.
+- **Q4 (→ #732):** the hook order and live payloads for `tool.execute.after` and `permission.evaluate`, and whether text pushed in the `context` hook reaches the model. In the original spike these are NR on both versions; only the 2.2.0 `context` and `prompt` hooks firing (P4) and the published types (A10) are retained. See E3.
+- **Q5, second half (→ #732):** which event shows an open question and what a row looks like while it is open. See E4.
+- **Q6 (→ #733):** a reliable activity source after a crash, an interrupt or a relaunch. See E4 and E5.
 
 ### Evidence retention
 
