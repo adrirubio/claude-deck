@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test'
 import { contrastFailures, useTheme, type Theme } from '../support/contrast'
 import { expect, test, type Guard } from '../support/guard'
 import { expectKeyboardReachable } from '../support/keyboard'
-import { INSTALL_WRITE } from './mail-page'
+import { INSTALL_STATUS, INSTALL_WRITE } from './mail-page'
 import { enterDirectorKey } from '../support/director-key'
 
 // #531 (merged, PR #664): Agent Mail setup lives on each harness page. Agent
@@ -115,4 +115,69 @@ for (const theme of ['light', 'dark'] as Theme[]) {
     expect(failures, JSON.stringify(failures)).toEqual([])
     await expectKeyboardReachable(page, dialog, 2)
   })
+}
+
+// #732: OpenCode 2. An OpenCode 1 setup shows "Needs update" and Set up replaces it; a current
+// setup is connected and its Technical details show whether the question tool is denied. The
+// browser rewrites only its view of the status read; writes are still answered with 503.
+type OpenCodeState = 'needs_update' | 'current'
+const OPENCODE_STATES: Record<OpenCodeState, { line: string; setUp: boolean; questionTool: string; status: Record<string, unknown> }> = {
+  needs_update: {
+    line: 'Needs update · Set up replaces the older OpenCode setup',
+    setUp: true,
+    questionTool: 'not denied',
+    status: {
+      opencode_mcp_installed: false, opencode_plugin_events: [], opencode_plugin_events_missing: ['session.created'],
+      opencode_plugin_needs_update: true, opencode_question_denied: false,
+    },
+  },
+  current: {
+    line: '✓ Connected · Restart sessions to apply changes',
+    setUp: false,
+    questionTool: 'denied',
+    status: {
+      opencode_mcp_installed: true, opencode_plugin_events: ['session.created'], opencode_plugin_events_missing: [],
+      opencode_plugin_needs_update: false, opencode_question_denied: true,
+    },
+  },
+}
+const VIEWPORTS = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } }
+
+async function showOpenCode(page: Page, state: OpenCodeState) {
+  await page.route(INSTALL_STATUS, async route => {
+    const response = await route.fetch()
+    const status = { ...(await response.json() as Record<string, unknown>), opencode_cli_available: true, ...OPENCODE_STATES[state].status }
+    await route.fulfill({ response, json: status })
+  })
+}
+
+for (const state of Object.keys(OPENCODE_STATES) as OpenCodeState[]) {
+  for (const [size, viewport] of Object.entries(VIEWPORTS)) {
+    for (const theme of ['light', 'dark'] as Theme[]) {
+      test(`@active OpenCode ${state} setup on the harness page, ${size}, ${theme} theme`, async ({ page, guard }) => {
+        const expected = OPENCODE_STATES[state]
+        const writes = await failWrites(page, guard)
+        await page.setViewportSize(viewport)
+        await useTheme(page, theme)
+        await showOpenCode(page, state)
+        const line = await openHarness(page, 'opencode-cli')
+        await expect(line).toContainText(expected.line)
+        await expect(line.getByRole('button', { name: 'Set up', exact: true })).toHaveCount(expected.setUp ? 1 : 0)
+        await expect(line.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(1)
+
+        const details = page.locator('details').filter({ has: page.locator('summary', { hasText: 'Technical details' }) }).first()
+        await details.locator(':scope > summary').click()  // it holds nested <details> of its own
+        const row = details.getByRole('region', { name: 'OpenCode CLI Agent Mail details' }).locator('div')
+          .filter({ has: page.locator('dt', { hasText: 'Question tool' }) })
+        await expect(row.locator('dd')).toHaveText(expected.questionTool)
+
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        expect(overflow, 'no horizontal scroll').toBeLessThanOrEqual(0)
+        const failures = await contrastFailures(line)
+        expect(failures, JSON.stringify(failures)).toEqual([])
+        await expectKeyboardReachable(page, page.locator('main'), 3)
+        expect(writes, 'no install write').toEqual([])
+      })
+    }
+  }
 }

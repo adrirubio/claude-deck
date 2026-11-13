@@ -130,6 +130,8 @@ export interface AgentMailInstallStatus {
   opencode_mcp_installed: boolean
   opencode_plugin_events: string[]
   opencode_plugin_events_missing: string[]
+  opencode_plugin_needs_update?: boolean
+  opencode_question_denied?: boolean
   opencode_version?: string | null
   opencode_version_ready?: boolean
   opencode_version_reason?: string | null

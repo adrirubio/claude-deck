@@ -76,7 +76,15 @@ Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for se
 
 GitHub Copilot CLI gets the MCP server through `copilot mcp add` and user-level hook JSON for session registration, activity updates, and idle inbox reminders.
 
-OpenCode CLI gets the MCP server entry and a lifecycle plugin from the Install tab. A backup is attempted first.
+OpenCode CLI (OpenCode 2) gets three things from the Install tab:
+
+- **MCP server:** `mcp.servers.albiex-synth-city-mail`, with `codemode: false` so that the Mail tools are direct tool calls. An older flat `mcp.albiex-synth-city-mail` entry that Synth City wrote is moved there. An entry under that name that Synth City did not write is refused, not overwritten.
+- **Lifecycle plugin:** an OpenCode 2 plugin. An OpenCode 1 plugin never loads on OpenCode 2, so it shows as **Needs update**, and **Set up** replaces it in place.
+- **Question deny:** a `permissions` rule that denies the question tool, so unattended members never stall on a question. The plugin also denies it for team members, and every team launch carries the same rule.
+
+Everything is read and checked first. A malformed config file is refused before the backup and before any write, and each file is replaced atomically. Synth City records whether it added the deny rule. **Remove** deletes the rule only when that record proves it added it to that file and the file still has exactly one such rule; a rule you added yourself is kept.
+
+If a team member still opens a question or a permission prompt, the plugin reports it and Synth City sends the bound Supervisor (or the Leader) the usual "Waiting for input" notice. When the order of reports cannot be proven, the wait is kept rather than cleared. This is a notice only: the activity view does not show OpenCode waits yet.
 
 Pi uses the repository-local Agent Mail extension. Synth City passes it explicitly on Synth City launches and changes no global Pi configuration. The Install tab shows only its readiness; it has no Pi install action.
 

@@ -14,7 +14,7 @@ export function isCompleteInstallStatus(value: unknown): value is AgentMailInsta
     .every((name) => Array.isArray(status[name]))
 }
 
-export type MailSetupState = 'connected' | 'partial' | 'not_set_up' | 'automatic_ready' | 'automatic_unavailable' | 'upgrade_incomplete' | 'upgrade_needs_attention'
+export type MailSetupState = 'connected' | 'partial' | 'needs_update' | 'not_set_up' | 'automatic_ready' | 'automatic_unavailable' | 'upgrade_incomplete' | 'upgrade_needs_attention'
 
 /** The four harnesses with a managed Set up and Remove action. */
 export type MailActionHarness = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'muse-cli'
@@ -64,6 +64,8 @@ export function mailSetupState(providerId: AgentProviderId, status: AgentMailIns
       return whole ? 'connected' : some ? 'partial' : 'not_set_up'
     }
     case 'opencode-cli': {
+      // An OpenCode 1 plugin never loads on OpenCode 2; Set up replaces it in place (#732).
+      if (status.opencode_plugin_needs_update) return 'needs_update'
       const whole = status.opencode_mcp_installed && status.opencode_plugin_events_missing.length === 0
       const some = status.opencode_mcp_installed || status.opencode_plugin_events.length > 0
       return whole ? 'connected' : some ? 'partial' : 'not_set_up'
@@ -80,6 +82,7 @@ export function mailSetupLine(state: MailSetupState): string {
     case 'upgrade_needs_attention': return 'Upgrade needs attention · Review the existing setup before changing it'
     case 'connected': return '✓ Connected · Restart sessions to apply changes'
     case 'partial': return 'Needs repair · Some parts are missing'
+    case 'needs_update': return 'Needs update · Set up replaces the older OpenCode setup'
     case 'automatic_ready': return '✓ Ready · Synth City adds it when it launches Pi'
     case 'automatic_unavailable': return 'Not ready · See Technical details'
     default: return 'Not set up'
@@ -88,7 +91,10 @@ export function mailSetupLine(state: MailSetupState): string {
 
 /** Set up is offered unless everything is installed. Remove is offered when any part is installed. */
 export function mailSetupActions(state: MailSetupState): { setUp: boolean; remove: boolean } {
-  return { setUp: state === 'not_set_up' || state === 'partial', remove: state === 'connected' || state === 'partial' }
+  return {
+    setUp: state === 'not_set_up' || state === 'partial' || state === 'needs_update',
+    remove: state === 'connected' || state === 'partial' || state === 'needs_update',
+  }
 }
 
 /** The harnesses with a connected setup, for the line on the Agent Mail page. */
@@ -173,6 +179,7 @@ export function mailTechnicalLines(providerId: AgentProviderId, status: AgentMai
         { label: 'Plugin file', value: status.opencode_plugin_path || 'unavailable' },
         { label: 'Plugin events', value: status.opencode_plugin_events_missing.length === 0 ? 'installed' : `${status.opencode_plugin_events.length}/${total} installed` },
         { label: 'MCP', value: status.opencode_mcp_installed ? 'installed' : 'not installed' },
+        { label: 'Question tool', value: status.opencode_question_denied ? 'denied' : 'not denied' },
         ...common,
       ]
     }
@@ -279,7 +286,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
         title: 'Install Agent Mail for OpenCode CLI',
         description: 'A backup is attempted before Albiex Synth City writes the managed OpenCode MCP entry and lifecycle plugin.',
         mutations: [
-          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: add MCP server ${server}`,
+          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: add MCP server mcp.servers.${server} (direct tool calls) and a permissions rule to deny the question tool`,
           `${status.opencode_plugin_path || '~/.config/opencode/plugins/albiex-synth-city-agent-mail.js'}: write Agent Mail lifecycle plugin`,
           command,
         ],
@@ -289,7 +296,7 @@ export function mailConfirm(harness: MailActionHarness, mode: MailActionMode, st
         title: 'Remove Agent Mail from OpenCode CLI',
         description: 'A backup is attempted before Albiex Synth City removes the managed MCP entry and plugin file.',
         mutations: [
-          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: remove MCP server ${server}`,
+          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: remove MCP server ${server}, and the question-tool deny rule only if this setup added it`,
           `${status.opencode_plugin_path || '~/.config/opencode/plugins/albiex-synth-city-agent-mail.js'}: remove managed Agent Mail plugin`,
         ],
       }

@@ -77,16 +77,19 @@ def test_config_content_carries_model_agent_and_provider_allowlist():
 
     content = identity.config_content(model="anthropic/claude-sonnet-4.6#high", agent="plan")
     assert "\n" not in content
+    deny = [{"action": "question", "resource": "*", "effect": "deny"}]
     assert json.loads(content) == {
         "model": "anthropic/claude-sonnet-4.6#high",
         "default_agent": "plan",
         "update": "disable",
         "enabled_providers": ["anthropic"],
+        "permissions": deny,  # unattended members never stall on a question (#732)
     }
     # Without a model, the hosted free models are disabled so no silent fallback happens (#729 F5).
     assert json.loads(identity.config_content(model=None, agent=None)) == {
         "update": "disable",
         "disabled_providers": ["opencode"],
+        "permissions": deny,
     }
 
 

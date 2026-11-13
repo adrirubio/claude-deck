@@ -746,6 +746,7 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         ("waiting_input_reason", "VARCHAR"), ("waiting_input_started_at", "DATETIME"),
         ("waiting_input_observed_at", "DATETIME"),
         ("waiting_input_notice_id", "INTEGER REFERENCES mail_messages(id) ON DELETE SET NULL"),
+        ("opencode_wait_generation", "BIGINT"), ("opencode_wait_uncertain", "BOOLEAN DEFAULT 0"),
     ):
         if binding_columns and column not in binding_columns:
             await conn.execute(text(f"ALTER TABLE agent_pane_bindings ADD COLUMN {column} {definition}"))

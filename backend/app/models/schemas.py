@@ -2315,6 +2315,8 @@ class AgentMailInstallStatus(BaseModel):
     opencode_mcp_installed: bool = False
     opencode_plugin_events: List[str] = Field(default_factory=list)
     opencode_plugin_events_missing: List[str] = Field(default_factory=list)
+    opencode_plugin_needs_update: bool = False
+    opencode_question_denied: bool = False
     opencode_version: Optional[str] = None
     opencode_version_ready: bool = False
     opencode_version_reason: Optional[str] = None

@@ -1346,6 +1346,33 @@ async def hook_session_end(
     return {}
 
 
+@router.post("/hooks/input-wait")
+async def hook_input_wait(
+    http_request: Request,
+    payload: dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """An OpenCode 2 member's open question or permission prompt (#732).
+
+    Identity comes from the kernel: the request's peer chain must reach a tmux pane through a
+    process that runs the trusted OpenCode 2 binary. The payload never chooses the slot.
+    """
+    try:
+        if payload.get("provider") != "opencode-cli":
+            return {}
+        from app.services import opencode_input_wait
+        resolution = resolve_request_pane_detailed(http_request)
+        pane = resolution.pane
+        if pane is None or not opencode_version.member_gate_for_peer(pane, resolution.walked_pids).ready:
+            return {}
+        await opencode_input_wait.record(
+            db, pane_pid=pane.pane_pid, pane_proc_start=pane.pane_proc_start,
+            state=payload.get("state"), generation=payload.get("generation"))
+    except Exception as exc:
+        logger.warning("input-wait hook failed: %s", exc)
+    return {}
+
+
 @router.post("/hooks/post-tool-use")
 async def hook_post_tool_use(
     http_request: Request,
