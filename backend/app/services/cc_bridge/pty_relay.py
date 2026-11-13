@@ -34,6 +34,15 @@ _ATTACH_STDERR_LOG_LIMIT = 4096
 # and no text from sudo, the wrapper or the exception ever goes to the client.
 ATTACH_FAILED_MESSAGE = "Could not attach to the terminal. See the backend log."
 
+# sudo prints this when it cannot allocate its own pty (use_pty without CAP_CHOWN). The relay only
+# detects the phrase in the attach stderr it already reads. It never sends sudo's text to the client.
+_PTY_ALLOCATION_PHRASE = "unable to allocate pty"
+# What the browser is told then. Also fixed text: it names the setup rule, not the cause text.
+ATTACH_PTY_MESSAGE = (
+    "Could not attach to the terminal: sudo needs `!use_pty` for the agent tmux command. "
+    "See the setup docs and the backend log."
+)
+
 # How long the relay waits for an attach process whose output has ended to report its status.
 _ATTACH_EXIT_WAIT_SECONDS = 2
 
@@ -114,6 +123,7 @@ class PtyRelay:
         self._stderr_logged = 0
         self._stderr_suppressed = False
         self._output_seen = False
+        self._pty_allocation_failed = False
 
     def set_read_only(self, requested: bool) -> None:
         self.read_only = not (self._interactive_granted and requested is False)
@@ -154,9 +164,12 @@ class PtyRelay:
         The log holds at most _ATTACH_STDERR_LOG_LIMIT characters for one relay. A line that
         does not fit is cut to what is left, and one notice says the rest is suppressed.
         """
+        text = data.decode("utf-8", errors="replace")
+        if _PTY_ALLOCATION_PHRASE in text:
+            self._pty_allocation_failed = True  # remembered even after the log limit is reached
         if self._stderr_suppressed:
             return
-        for line in data.decode("utf-8", errors="replace").splitlines():
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -301,7 +314,8 @@ class PtyRelay:
                 if attach_failed:
                     # The reason is in the log. The client gets one fixed message.
                     logger.warning("tmux attach for %s ended with a failure before any output", self.target)
-                    await websocket.send_json({"type": "error", "message": ATTACH_FAILED_MESSAGE})
+                    message = ATTACH_PTY_MESSAGE if self._pty_allocation_failed else ATTACH_FAILED_MESSAGE
+                    await websocket.send_json({"type": "error", "message": message})
                     await websocket.close(code=4000)
                 else:
                     await websocket.close()

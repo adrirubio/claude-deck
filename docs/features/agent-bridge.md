@@ -93,7 +93,7 @@ Albiex Synth City can run its controller and the agents as different OS users. T
 
 - **Resize.** The relay makes its terminal the controlling terminal of the attach process. When the browser terminal changes size, including full screen and back, the kernel tells the attach process the new size. The relay sends no signal to the attach process.
 - **Errors.** What the attach process or the wrapper writes to stderr goes to the backend log, up to a fixed size. It does not go into the terminal and it does not go to the browser. A failed resize is logged once for each terminal connection.
-- **A failed attach.** If the attach process ends with a failure before it showed anything, the lane shows one fixed message, "Could not attach to the terminal. See the backend log.", and the connection closes. The cause is in the backend log. The same message is used when the attach program cannot be started.
+- **A failed attach.** If the attach process ends with a failure before it showed anything, the lane shows one fixed message and the connection closes. The cause is in the backend log. When `sudo` reported that it could not allocate its own pty, the message names the setup rule: "Could not attach to the terminal: sudo needs `!use_pty` for the agent tmux command. See the setup docs and the backend log." Every other failure, and an attach program that cannot be started, shows "Could not attach to the terminal. See the backend log." Neither message contains text from `sudo`.
 
 ### What you must set up: a command-scoped `!use_pty`
 
@@ -105,19 +105,19 @@ Defaults!<the agent tmux command> !use_pty
 
 Use the full path of the command that the controller runs through `sudo`. Do not turn `use_pty` off for all commands. Albiex Synth City does not change `sudoers`. The operator does.
 
-Why. The relay terminal is the controlling terminal of the attach process. With `use_pty`, `sudo` then allocates its own pty and must hand it to the agent user, which needs the `CAP_CHOWN` capability. A service that runs with a limited capability set, as the product factory does (no `CAP_CHOWN` and no `CAP_KILL`), cannot do that. `sudo` stops with `unable to allocate pty: Operation not permitted`, and the lane shows the fixed message above. Without `use_pty` there is no second pty. The command runs on the relay terminal directly, and the kernel resize reaches it without a signal that `sudo` would have to relay.
+Why. The relay terminal is the controlling terminal of the attach process. With `use_pty`, `sudo` then allocates its own pty and must hand it to the agent user, which needs the `CAP_CHOWN` capability. A service that runs with a limited capability set, as the product factory does (no `CAP_CHOWN` and no `CAP_KILL`), cannot do that. `sudo` stops with `unable to allocate pty: Operation not permitted`, and the lane shows the message that names `!use_pty`. Without `use_pty` there is no second pty. The command runs on the relay terminal directly, and the kernel resize reaches it without a signal that `sudo` would have to relay.
 
 ### What is verified and what is not
 
 | Check | State |
 |---|---|
 | Real cross-user trial of the first version of this change under the production capability limits, with `use_pty` left on | **Failed.** The lane did not attach: `sudo: unable to allocate pty: Operation not permitted`. The original bug (no resize, and a `sudo: kill(...): Operation not permitted` error in the lane) reproduced on the version before the change. Without the limits, or with `CAP_CHOWN` added, the change resized correctly. |
-| The same change with `!use_pty` for the attach command, under the production capability limits | **Not verified.** It is what this page requires. The real trial for it is pending. |
+| The relay code of this change with `!use_pty` for the attach command, under the production capability limits | **Verified** by the Supervisor's production-capability trial 2 on the parent head `3e15ff09`, in an isolated run with the production capability limits (`setpriv`), a copied wrapper and a temporary command-scoped `!use_pty` rule. The lane resized 83x31, 157x45, 83x31 twice, with no `sudo` text in the lane. In the same run, with `use_pty` left on, the lane did not attach (`sudo` could not allocate its pty), and the version before the change with `!use_pty` failed (`SIGWINCH` not permitted, shown in the lane). So production needs the code change and the `!use_pty` rule. The trial ran on the parent head; the relay code of this change differs from it only by the message text above. |
 | Same user: a real child on a real pty gets every size change, including full screen and back | Verified by automated tests. |
-| A failed attach shows the fixed message, with no raw `sudo` or exception text in the lane or the browser | Verified by automated tests with a stand-in attach program. |
-| Real `sudo` with a disposable agent user and the production capability limits, once with `use_pty` and once with `!use_pty` | An automated test. It runs only on ephemeral GitHub-hosted runners, because it creates a temporary user and a temporary `sudoers.d` file. Its results belong to the pull request that adds it. It does not replace the real cross-user trial. |
+| A failed attach shows a fixed message (the one that names `!use_pty` when `sudo` could not allocate its pty, the generic one otherwise), with no raw `sudo` or exception text in the lane or the browser | Verified by automated tests with a stand-in attach program. |
+| An automated test with real `sudo`, a disposable agent user and the production capability limits, on a GitHub-hosted runner | **Not part of this change, and not passing.** It was moved to follow-up issue #880. On the hosted runner (`sudo-rs`, not the `sudo` of production) it failed in its first phase for a reason that is not yet explained. It never reached the `!use_pty` phase there. It does not replace the real cross-user trial. |
 
-This page will record the result of the real trial for `!use_pty`.
+The production behavior rests on that trial. The operator deploys the `sudoers` rule.
 
 ### Checking a setup
 
