@@ -112,8 +112,14 @@ class AgentTeamSummaryService:
             attention.append(TeamSummaryAttention(code=hold))
             actors.add("operator")
 
-        async def bounded(read):
-            remaining = deadline - asyncio.get_running_loop().time()
+        # The stall signal keeps its own five-second native-plus-mail budget, counted from here and
+        # capped by this summary's earlier deadline; the native await itself stops at it. The
+        # summary's other reads keep the full window.
+        from app.services.mail_request_stall_service import mail_request_stall_service
+        stall_deadline = min(deadline, asyncio.get_running_loop().time() + mail_request_stall_service.deadline_seconds)
+
+        async def bounded(read, limit=None):
+            remaining = (deadline if limit is None else min(deadline, limit)) - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError
             return await asyncio.wait_for(read(), timeout=remaining)
@@ -121,7 +127,7 @@ class AgentTeamSummaryService:
         try:
             from app.services.agent_activity_service import observe_team, _team_inputs
             native = await bounded(lambda: observe_team(db, preset_id, include_agent_status=False,
-                persist_identities=False, max_input_rows=256, input_fence=native_fence))
+                persist_identities=False, max_input_rows=256, input_fence=native_fence), stall_deadline)
             native_known = all(entry.state != "unknown" for entry in native.slots)
             native_states = {entry.slot_id: entry.state for entry in native.slots}
             waiting_input = [TeamWaitingInput(slot_id=entry.slot_id, reason=entry.waiting_input.reason)
@@ -238,9 +244,9 @@ class AgentTeamSummaryService:
         # Unanswered explicit requests (#752): its own bounded, read-only view. It reuses the native
         # observation above and its fence; a changed context is not a stable observation. It never
         # adds a next actor and does not change team_idle.
-        from app.services.mail_request_stall_service import mail_request_stall_service
         stall = await mail_request_stall_service.observe(db, preset_id, now=now, native_states=native_states,
-                                                         native_ok=native_ok and not changed)
+                                                         native_ok=native_ok and not changed,
+                                                         deadline=stall_deadline)
         for entry in stall.items:
             attention.append(TeamSummaryAttention(code="unanswered_request", request_id=entry.request_id,
                 requester=entry.requester, recipient=entry.recipient, unanswered_seconds=entry.unanswered_seconds))

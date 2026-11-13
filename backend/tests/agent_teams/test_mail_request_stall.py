@@ -294,6 +294,56 @@ async def test_a_reply_with_broken_ancestry_does_not_clear_and_is_not_proven(db)
     assert request.id
 
 
+# --- exact-target answers never clear another request (#752, V1 finding 1) ---------------------
+
+@pytest.mark.asyncio
+async def test_an_answer_to_a_nested_request_does_not_clear_the_root_request(db):
+    team, people = await make_team(db)
+    root = await add_request(db, people[0], people[1])
+    nested = await add_request(db, people[2], people[1], thread=root.id)
+    await db.commit()
+    # The real service stores the answer under the canonical root and records the exact target.
+    answer = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=people[1].id, thread_root_id=nested.id, body_markdown="Done."),
+        auto_nudge=False)
+    stored = await db.get(MailMessage, answer.id)
+    assert stored.thread_root_id == root.id and stored.payload == {"resolves_request_id": nested.id}
+    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
+    assert (await db.get(MailMessage, root.id)).request_status == "pending"
+    view = await observe(db, team, states(people))
+    assert ids(view) == [root.id] and view.complete is True and view.reason is None
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_row_that_resolves_another_request_does_not_clear_but_the_same_row_without_it_does(db):
+    team, people = await make_team(db)
+    keyed, plain = (await add_request(db, people[0], people[1]), await add_request(db, people[0], people[1]))
+    await db.flush()
+    for root, payload in ((keyed, {"resolves_request_id": 999}), (plain, None)):
+        # A requester's reply under the request, then the recipient's answer stored under that reply.
+        intermediate = await add_reply(db, people[0], root.id)
+        db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=intermediate.id,
+                           payload=payload, body_markdown="reply", audience_type="member",
+                           audience_id=str(people[1].id)))
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert ids(view) == [keyed.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_plain_and_unkeyed_canonical_replies_still_clear_and_a_keyed_one_does_not(db):
+    team, people = await make_team(db)
+    plain, unkeyed, keyed = [await add_request(db, people[0], people[1]) for _ in range(3)]
+    await db.flush()
+    await add_reply(db, people[1], plain.id)
+    await add_reply(db, people[1], unkeyed.id, kind="answer")
+    db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=keyed.id,
+                       payload={"resolves_request_id": 999}, body_markdown="reply", audience_type="member",
+                       audience_id=str(people[1].id)))
+    await db.commit()
+    assert ids(await observe(db, team, states(people))) == [keyed.id]
+
+
 # --- legacy nested requests -------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -438,6 +488,74 @@ async def test_a_slow_observation_times_out_into_an_incomplete_view(db):
     assert view.items == [] and view.reason == "native_unknown" and not view.complete
 
 
+def slow_phases(service, states_by_slot, native=0.0, mail=0.0):
+    """Only the two phases are slow; everything else is the real projection."""
+    async def native_phase(db, preset_id):
+        await asyncio.sleep(native)
+        return states_by_slot, True
+
+    original = service._observe
+
+    async def mail_phase(*args):
+        await asyncio.sleep(mail)
+        return await original(*args)
+
+    service._native_states = native_phase
+    service._observe = mail_phase
+
+
+@pytest.mark.asyncio
+async def test_native_and_mail_phases_share_one_deadline(db):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    service = MailRequestStallService()
+    service.deadline_seconds = 0.2
+    slow_phases(service, states(people), native=0.15, mail=0.15)
+    view = await service.projection(db, team.id)
+    assert view.items == [] and view.reason == "native_unknown" and not view.complete
+
+
+@pytest.mark.asyncio
+async def test_two_phases_inside_the_budget_are_complete_and_listed(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.commit()
+    service = MailRequestStallService()
+    service.deadline_seconds = 2.0
+    slow_phases(service, states(people), native=0.05, mail=0.05)
+    view = await service.projection(db, team.id)
+    assert ids(view) == [request.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_budget_before_the_mail_phase_is_incomplete_and_leaves_no_transaction(db):
+    from sqlalchemy import select
+
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    await db.execute(select(MailMessage.id).limit(1))
+    assert db.in_transaction()
+    service = MailRequestStallService()
+    service.deadline_seconds = 0.05
+    slow_phases(service, states(people), native=0.3, mail=0.0)
+    view = await service.projection(db, team.id)
+    assert view.items == [] and view.reason == "native_unknown" and not view.complete
+    assert not db.in_transaction()
+
+
+@pytest.mark.asyncio
+async def test_an_absolute_deadline_that_has_already_passed_is_the_incomplete_view(db):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    past = asyncio.get_running_loop().time() - 1
+    view = await MailRequestStallService().observe(
+        db, team.id, now=datetime.now(timezone.utc), native_states=states(people), native_ok=True, deadline=past)
+    assert view.items == [] and view.reason == "native_unknown" and not view.complete
+
+
 # --- privacy, order, repetition ---------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -473,10 +591,11 @@ async def test_order_is_deterministic_and_repeated_observations_are_identical(db
 
 # --- the real summary and the authenticated check-in ------------------------------------------
 
-def fake_native(monkeypatch, people, by_index=None, boom=False):
+def fake_native(monkeypatch, people, by_index=None, boom=False, delay=0.0):
     by_index = by_index or {}
 
     async def observe_team(db, preset_id, **kwargs):
+        await asyncio.sleep(delay)
         if kwargs.get("input_fence") is not None:
             kwargs["input_fence"].clear()
         return SimpleNamespace(
@@ -552,6 +671,79 @@ async def test_the_team_summary_labels_an_incomplete_view_with_its_reason(db, mo
     assert len(incomplete) == 1 and incomplete[0].coverage_reason == "native_unknown"
     assert not [item for item in summary.attention if item.code == "unanswered_request"]
     assert summary.supervisor_observation.unanswered_requests.complete is False
+
+
+async def summary_for(db, monkeypatch, people, team, **service_args):
+    from app.services.agent_team_summary_service import AgentTeamSummaryService
+
+    monkeypatch.setattr("app.services.agent_team_summary_service.hold_code", lambda: None)
+
+    async def no_supervisor(db, preset_id, now=None):
+        return None
+
+    monkeypatch.setattr("app.services.agent_team_summary_service.observe_supervisor", no_supervisor)
+    started = asyncio.get_running_loop().time()
+    summary = await AgentTeamSummaryService(attention=_Attention(), **service_args).summary(db, team.id)
+    return summary, asyncio.get_running_loop().time() - started
+
+
+def slow_stall_mail_phase(monkeypatch, seconds):
+    from app.services.mail_request_stall_service import mail_request_stall_service
+
+    original = mail_request_stall_service._observe
+
+    async def slow(*args):
+        await asyncio.sleep(seconds)
+        return await original(*args)
+
+    monkeypatch.setattr(mail_request_stall_service, "_observe", slow)
+    return mail_request_stall_service
+
+
+@pytest.mark.asyncio
+async def test_the_summary_keeps_the_five_second_stall_budget_inside_its_eight_second_window(db, monkeypatch):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    fake_native(monkeypatch, people, delay=0.15)
+    stall = slow_stall_mail_phase(monkeypatch, 0.15)
+    monkeypatch.setattr(stall, "deadline_seconds", 0.2)
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)    # the default eight-second window
+    # The summary's own window is not exceeded, so it completes; the stall view is bounded by its own budget.
+    assert summary.coverage_complete is True
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.reason == "native_unknown" and view.complete is False
+    assert not [item for item in summary.attention if item.code == "unanswered_request"]
+
+
+@pytest.mark.asyncio
+async def test_the_summary_native_await_itself_stops_at_the_stall_budget(db, monkeypatch):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    fake_native(monkeypatch, people, delay=2.0)          # far longer than the stall budget, shorter than eight seconds
+    from app.services.mail_request_stall_service import mail_request_stall_service
+
+    monkeypatch.setattr(mail_request_stall_service, "deadline_seconds", 0.2)
+    summary, elapsed = await summary_for(db, monkeypatch, people, team)
+    assert elapsed < 1.0
+    assert summary.coverage_complete is False
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.reason == "native_unknown" and view.complete is False
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_summary_deadline_caps_the_stall_observation(db, monkeypatch):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    fake_native(monkeypatch, people)
+    stall = slow_stall_mail_phase(monkeypatch, 2.0)
+    monkeypatch.setattr(stall, "deadline_seconds", 5.0)
+    summary, elapsed = await summary_for(db, monkeypatch, people, team, observation_seconds=0.5)
+    assert elapsed < 1.5
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
 
 
 @pytest_asyncio.fixture

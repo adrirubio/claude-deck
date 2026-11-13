@@ -63,23 +63,33 @@ class MailRequestStallService:
 
     async def projection(self, db, preset_id, *, now: datetime | None = None) -> UnansweredRequestView:
         """The view for a caller that holds no observation of its own (the Supervisor check-in)."""
+        # One absolute deadline, taken before the native phase, covers the native and the mail phase.
+        deadline = asyncio.get_running_loop().time() + self.deadline_seconds
         try:
-            states, ok = await asyncio.wait_for(self._native_states(db, preset_id), timeout=self.deadline_seconds)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError
+            states, ok = await asyncio.wait_for(self._native_states(db, preset_id), timeout=remaining)
         except (TimeoutError, OSError, ValueError, OperationalError):
             if db.in_transaction():
                 await db.rollback()
             states, ok = {}, False
         return await self.observe(db, preset_id, now=now or datetime.now(timezone.utc),
-                                  native_states=states, native_ok=ok)
+                                  native_states=states, native_ok=ok, deadline=deadline)
 
     # -- the view ----------------------------------------------------------------------------------
 
     async def observe(self, db, preset_id, *, now: datetime, native_states: dict[int, str],
-                      native_ok: bool) -> UnansweredRequestView:
+                      native_ok: bool, deadline: float | None = None) -> UnansweredRequestView:
+        """``deadline`` is an absolute monotonic loop time; omitted, the view gets its own full budget."""
+        loop = asyncio.get_running_loop()
+        limit = loop.time() + self.deadline_seconds if deadline is None else deadline
         try:
+            remaining = limit - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
             return await asyncio.wait_for(
-                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok),
-                timeout=self.deadline_seconds)
+                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok), timeout=remaining)
         except (TimeoutError, OSError, ValueError, OperationalError):
             if db.in_transaction():
                 await db.rollback()
@@ -105,9 +115,11 @@ class MailRequestStallService:
             .join(MailTeamMember, MailTeamMember.id == MailMessage.recipient_member_id)
             .where(*self._request_filters(preset_id), MailMessage.thread_root_id.is_(None),
                    # A plain reply by the addressed member in the request's own thread answers it.
+                   # An answer that names another request (reserved resolves_request_id) does not.
                    ~exists().where(reply.sender_member_id == MailMessage.recipient_member_id,
                                    reply.thread_root_id == MailMessage.id, reply.id > MailMessage.id,
-                                   reply.kind.in_(("message", "answer"))))
+                                   reply.kind.in_(("message", "answer")),
+                                   func.json_extract(reply.payload, "$.resolves_request_id").is_(None)))
             .order_by(MailMessage.created_at.asc(), MailMessage.id.asc())
             .limit(CANDIDATE_LIMIT + 1))).all()
         return rows[:CANDIDATE_LIMIT], len(rows) > CANDIDATE_LIMIT
@@ -160,7 +172,8 @@ class MailRequestStallService:
         if limit <= 0:
             return False, False, 0
         replies = (await db.execute(
-            select(MailMessage.id, MailMessage.thread_root_id)
+            select(MailMessage.id, MailMessage.thread_root_id,
+                   func.json_extract(MailMessage.payload, "$.resolves_request_id").label("resolves"))
             .where(MailMessage.sender_member_id == candidate.recipient_member_id,
                    MailMessage.id > candidate.id, MailMessage.thread_root_id.is_not(None),
                    MailMessage.kind.in_(("message", "answer")))
@@ -168,6 +181,8 @@ class MailRequestStallService:
         broken = False
         try:
             for reply in replies:
+                if reply.resolves is not None:      # it answers another request: it never clears this one
+                    continue
                 root = await self._canonical_root(db, reply.thread_root_id, cache, counter)
                 if root == candidate.id:
                     return True, True, len(replies)
