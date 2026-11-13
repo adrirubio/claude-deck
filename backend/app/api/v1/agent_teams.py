@@ -3733,7 +3733,7 @@ async def record_github_revision_review(item_id: int, request: GithubRevisionRev
     try:
         fact = await record_revision_review(db, item, revision_number=request.revision,
             dispatch_nonce=request.dispatch_nonce, head_sha=request.head_sha,
-            reviewer_member_id=session.member_id, verdict='changes_required', summary=request.summary,
+            reviewer_member_id=session.member_id, verdict=request.verdict, summary=request.summary,
             evidence_url=request.evidence_url, actor=_session_actor(session))
         return _revision_review_response(fact)
     except GithubApprovalError as exc:
@@ -3755,6 +3755,26 @@ async def withdraw_github_revision_review(item_id: int, review_id: int, request:
         fact = await withdraw_revision_review(db, item, review_id=review_id,
             reviewer_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce, actor=_session_actor(session))
         return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/submitted-revision/settle-accepted', response_model=GithubScopeRevisionResponse)
+async def settle_github_accepted_revision(item_id: int, request: GithubSubmittedRevisionEnd,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import settle_accepted_revision
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        revision = await settle_accepted_revision(db, item, review_id=request.review_id,
+            leader_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason, actor=_session_actor(session))
+        return _scope_revision_response(revision)
     except GithubApprovalError as exc:
         await db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

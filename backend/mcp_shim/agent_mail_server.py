@@ -1548,15 +1548,15 @@ def _revision_review_request(path: str, payload: dict) -> dict:
 
 @mcp.tool()
 def synth_city_record_revision_review(work_item_id: int, revision: int, dispatch_nonce: str,
-    head_sha: str, summary: str, evidence_url: str) -> dict:
-    """Assigned independent reviewer records CHANGES REQUIRED for this exact submitted head.
+    head_sha: str, summary: str, evidence_url: str, verdict: str = "changes_required") -> dict:
+    """Assigned independent reviewer records CHANGES REQUIRED (default) or ACCEPTED for this exact submitted head.
 
-    This negative fact grants no source or merge authority. Link the source review;
-    a separate current-Leader settlement must end the revision.
+    This fact grants no source, readiness or merge authority. Link the source review;
+    a separate current-Leader settlement must act on it.
     """
     return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews",
         {"revision": revision, "dispatch_nonce": dispatch_nonce, "head_sha": head_sha,
-         "summary": summary, "evidence_url": evidence_url})
+         "summary": summary, "evidence_url": evidence_url, "verdict": verdict})
 
 
 @mcp.tool()
@@ -1564,6 +1564,18 @@ def synth_city_withdraw_revision_review(work_item_id: int, review_id: int, dispa
     """Withdraw your active negative review disposition. History is retained."""
     return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews/{review_id}/withdraw",
         {"dispatch_nonce": dispatch_nonce})
+
+
+@mcp.tool()
+def synth_city_settle_accepted_revision(work_item_id: int, review_id: int, dispatch_nonce: str, reason: str) -> dict:
+    """Current Leader completes a submitted revision from a current independent ACCEPTED review.
+
+    Every required job must be successful at the exact head with GitHub Actions provenance.
+    This does not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition,
+    change policy or budgets, release a lease or approve source.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/submitted-revision/settle-accepted",
+        {"review_id": review_id, "dispatch_nonce": dispatch_nonce, "reason": reason})
 
 
 @mcp.tool()

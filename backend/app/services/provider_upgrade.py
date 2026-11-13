@@ -42,7 +42,7 @@ _SUFFIXES = {
     "send_message", "supervisor_checkin", "update_team_campaign", "update_team_parent_issue",
     "watch_required_checks", "whoami",
     "request_scope_amendment", "record_revision_review", "withdraw_revision_review",
-    "end_submitted_revision",
+    "end_submitted_revision", "settle_accepted_revision",
 }
 
 
