@@ -376,6 +376,13 @@
               ],
               "title": "Status",
               "type": "string"
+            },
+            "team_idle": {
+              "items": {
+                "$ref": "#/$defs/TeamIdleItem"
+              },
+              "title": "Team Idle",
+              "type": "array"
             }
           },
           "required": [
@@ -478,6 +485,45 @@
             "decisions_ahead"
           ],
           "title": "TeamCampaignSummary",
+          "type": "object"
+        },
+        "TeamIdleItem": {
+          "additionalProperties": false,
+          "properties": {
+            "issue_number": {
+              "exclusiveMinimum": 0,
+              "title": "Issue Number",
+              "type": "integer"
+            },
+            "last_actor": {
+              "maxLength": 80,
+              "title": "Last Actor",
+              "type": "string"
+            },
+            "last_progress_at": {
+              "format": "date-time",
+              "title": "Last Progress At",
+              "type": "string"
+            },
+            "scope_id": {
+              "exclusiveMinimum": 0,
+              "title": "Scope Id",
+              "type": "integer"
+            },
+            "work_item_id": {
+              "exclusiveMinimum": 0,
+              "title": "Work Item Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "work_item_id",
+            "scope_id",
+            "issue_number",
+            "last_actor",
+            "last_progress_at"
+          ],
+          "title": "TeamIdleItem",
           "type": "object"
         },
         "TeamRemainingWork": {
@@ -632,7 +678,8 @@
                 "observation_pause",
                 "hold",
                 "recovery_only",
-                "hold_unavailable"
+                "hold_unavailable",
+                "team_idle"
               ],
               "title": "Code",
               "type": "string"
@@ -649,6 +696,32 @@
               ],
               "default": null,
               "title": "Issue Number"
+            },
+            "last_actor": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Actor"
+            },
+            "last_progress_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Progress At"
             },
             "observed_at": {
               "anyOf": [
@@ -911,7 +984,8 @@
               "owner",
               "leader",
               "operator",
-              "controller"
+              "controller",
+              "reviewer"
             ],
             "type": "string"
           },

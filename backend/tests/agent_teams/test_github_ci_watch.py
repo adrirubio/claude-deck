@@ -7,8 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
+import app.models.github_work_progress  # Register snapshot tables before isolated fixture create_all.
 from app.models.database import (AgentTeamPreset, AgentTeamSlot, GithubWorkItem, GithubWorkspace,
-    MailMessage, MailTeamMember, TeamGithubScope)
+    MailAgentSession, MailMessage, MailTeamMember, TeamGithubScope)
 from app.models.schemas import FactoryDeliveryPolicy
 from app.services.github_ci_watch_service import GithubCIWatchService
 
@@ -40,8 +41,13 @@ async def seed(db):
             provider='codex-cli', repo_id='fixture', repo_path='/fixture', repo_name='repo', enabled=True)
         db.add(slot); await db.flush()
         member = MailTeamMember(identity_key=f'fixture:{n}', repo_id='fixture', repo_path='/fixture',
-            repo_name='repo', display_name=name, team_preset_id=team.id, team_slot_id=slot.id)
+            repo_name='repo', display_name=name, participant_kind='team_slot',
+            team_preset_id=team.id, team_slot_id=slot.id)
         db.add(member); await db.flush(); members.append(member)
+        db.add(MailAgentSession(member_id=member.id, source='mcp', provider='codex-cli',
+            session_key=f'fixture-session:{n}', team_preset_id=team.id, team_slot_id=slot.id,
+            capability_token_hash=f'fixture-hash:{n}', bound_pane_pid=100+member.id,
+            bound_pane_proc_start='fixture-start', mailbox_status='connected', wake_enabled=True))
     team.leader_slot_id = members[0].team_slot_id
     policy = FactoryDeliveryPolicy(required_checks=[{'name':'backend', 'app_slug':'github-actions'},
         {'name':'e2e', 'app_slug':'github-actions'}])
@@ -66,13 +72,30 @@ def checks(first='success', second='in_progress', *, head=HEAD):
 
 def service(monkeypatch, wakes):
     from app.services.agent_mail_service import agent_mail_service
+    from app.utils import peer_process
+    from types import SimpleNamespace
     monkeypatch.setattr('app.services.github_ci_watch_service.hold_code', lambda: None)
+    monkeypatch.setattr(peer_process, 'pane_is_alive', lambda *args: True)
     async def wake(db, ids, **kwargs):
         wakes.extend(sorted(ids)); return [{'member_id':i, 'method':'fixture'} for i in ids]
+    async def guarded_wake(db, member_id, now, *, delivery_guard, transport_guard, **kwargs):
+        from app.services.agent_mail_service import MailWakeError
+        if not await delivery_guard() or not transport_guard():
+            raise MailWakeError('wake_session_mismatch')
+        wakes.append(member_id); return {'method':'fixture'}
+    async def sync(db): pass
+    async def pane(db, member_id, now):
+        member=await db.get(MailTeamMember,member_id)
+        return SimpleNamespace(id=1000+member_id, pane_id=f'%{member_id}', pid=100+member_id,
+            tmux_target=f'fixture:{member_id}', provider='codex-cli',
+            team_slot_id=member.team_slot_id, team_preset_id=member.team_preset_id)
     async def read_pull(self, scope, number):
         return {'number':874,'merged_at':None,'state':'open','head':{'sha':HEAD,'ref':'fixture/839','repo':{'full_name':'example/repo'}}}
     monkeypatch.setattr(GithubCIWatchService, '_read_pull', read_pull)
     monkeypatch.setattr(agent_mail_service, 'auto_nudge_members', wake)
+    monkeypatch.setattr(agent_mail_service, '_wake_member', guarded_wake)
+    monkeypatch.setattr(agent_mail_service, 'sync_observed_sessions', sync)
+    monkeypatch.setattr(agent_mail_service, '_nudge_session_for_member', pane)
     return GithubCIWatchService()
 
 
@@ -182,9 +205,9 @@ async def test_wake_crash_is_unconfirmed_after_new_service_and_session(db,monkey
     _,scope,item,members,policy=await seed(db);wakes=[];svc=service(monkeypatch,wakes)
     await bind(svc,db,item,members)
     item_id,scope_id=item.id,scope.id
-    async def interrupted(db,ids,**kwargs):
-        wakes.extend(ids);raise InterruptedWake()
-    monkeypatch.setattr(agent_mail_service,'auto_nudge_members',interrupted)
+    async def interrupted(db,member_id,now,**kwargs):
+        wakes.append(member_id);raise InterruptedWake()
+    monkeypatch.setattr(agent_mail_service,'_wake_member',interrupted)
     with pytest.raises(InterruptedWake):
         await svc.observe(db,scope,item,HEAD,checks(second='success'),policy)
     await db.rollback()  # A stopped process closes its in-flight post-claim transaction.
@@ -335,10 +358,183 @@ async def test_work_progress_exposes_counts_and_finished_actor_confirmation(db,m
     assert '1 of 2 done' in result.next_action and 'fixture-private' not in result.model_dump_json()
     item=await db.get(GithubWorkItem,item_id);scope=await db.get(TeamGithubScope,scope_id)
     if not wake_confirmed:
-        async def no_target(*args,**kwargs):return []
-        monkeypatch.setattr(agent_mail_service,'auto_nudge_members',no_target)
+        async def no_target(*args,**kwargs):return None
+        monkeypatch.setattr(agent_mail_service,'_wake_member',no_target)
     await svc.observe(db,scope,item,HEAD,checks(second='success'),policy)
     result=await progress.summary(db,item_id)
     assert result.phase==('ci_finished' if wake_confirmed else 'ci_no_next_actor')
     assert result.required_checks.state==('finished' if wake_confirmed else 'no_next_actor')
     assert result.required_checks.completed==2 and result.required_checks.head_sha==HEAD
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('clear_at_claim', [False, True])
+async def test_v1_cleared_reviewer_after_durable_claim_is_not_woken(db,monkeypatch,clear_at_claim):
+    from app.models.database import GithubRequiredCheckRecipient, GithubRequiredCheckWatch
+    from sqlalchemy import update
+    _,scope,item,members,policy=await seed(db);wakes=[];svc=service(monkeypatch,wakes)
+    await bind(svc,db,item,members)
+    leader_id,reviewer_id=members[0].id,members[2].id
+    original_commit=db.commit
+    changed=[]
+    async def commit():
+        await original_commit()
+        claimed=await db.scalar(select(GithubRequiredCheckRecipient.id).where(
+            GithubRequiredCheckRecipient.member_id==reviewer_id,
+            GithubRequiredCheckRecipient.wake_state=='claimed'))
+        if clear_at_claim and claimed and not changed:
+            changed.append(True)
+            await db.execute(update(GithubRequiredCheckWatch).values(reviewer_member_id=None))
+            await original_commit()
+    monkeypatch.setattr(db,'commit',commit)
+    await svc.observe(db,scope,item,HEAD,checks(second='success'),policy)
+    assert wakes == ([leader_id] if clear_at_claim else [leader_id,reviewer_id]), wakes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('hold_during_sync', [False, True])
+async def test_v1_hold_during_actual_mail_wake_prevents_transport(db,monkeypatch,hold_during_sync):
+    from types import SimpleNamespace
+    from app.services.agent_mail_service import agent_mail_service, AgentMailService
+    _,scope,item,members,policy=await seed(db);svc=service(monkeypatch,[])
+    await bind(svc,db,item,members)
+    monkeypatch.setattr(agent_mail_service,'_wake_member',AgentMailService._wake_member.__get__(agent_mail_service))
+    held=[];sent=[]
+    async def sync(db):
+        if hold_during_sync:
+            held.append(True)
+            monkeypatch.setattr('app.services.github_ci_watch_service.hold_code',lambda:'hold')
+    def run(args,**kwargs):
+        if args[1]=='display-message':
+            target=args[4]
+            return SimpleNamespace(stdout=f'{target}|{100+int(target[1:])}')
+        sent.append((args[-1]=='Enter',bool(held)))
+        return SimpleNamespace(stdout='')
+    monkeypatch.setattr(agent_mail_service,'sync_observed_sessions',sync)
+    monkeypatch.setattr('app.services.agent_mail_service.subprocess.run',run)
+    await svc.observe(db,scope,item,HEAD,checks(second='success'),policy)
+    assert sent == ([] if hold_during_sync else [(False,False),(True,False)]*2), sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stale_during_read', [False, True])
+async def test_v1_registration_revalidates_leader_session_after_pull_read(db,monkeypatch,stale_during_read):
+    from app.models.database import MailAgentSession, GithubRequiredCheckWatch
+    from app.api.v1.deps import require_current_mail_session
+    from app.config import settings
+    from app.utils import peer_process
+    team,scope,item,members,policy=await seed(db);svc=service(monkeypatch,[])
+    session=MailAgentSession(member_id=members[0].id,source='mcp',provider='codex-cli',session_key='v1-current-leader',team_preset_id=team.id,team_slot_id=members[0].team_slot_id,capability_token_hash='synthetic-hash',bound_pane_pid=123,bound_pane_proc_start='start',mailbox_status='connected')
+    db.add(session);await db.commit()
+    alive=[True]
+    monkeypatch.setattr(settings,'mail_capability_tokens_required',True)
+    monkeypatch.setattr(peer_process,'pane_is_alive',lambda *args:alive[0])
+    require_current_mail_session(session)
+    original=svc._read_pull
+    async def read(scope,number):
+        result=await original(scope,number)
+        if stale_during_read:
+            alive[0]=False;session.mailbox_status='offline';await db.commit()
+        return result
+    monkeypatch.setattr(svc,'_read_pull',read)
+    rejected=False
+    try: await bind(svc,db,item,members,session=session)
+    except (ValueError,PermissionError): rejected=True
+    assert rejected is stale_during_read
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('head_changes', [False,True])
+async def test_v1_monitor_rechecks_remote_head_before_completion_notice(db,monkeypatch,head_changes):
+    from app.services.github_verification_service import GithubVerificationService
+    _,scope,item,members,policy=await seed(db);wakes=[];svc=service(monkeypatch,wakes)
+    await bind(svc,db,item,members)
+    verifier=GithubVerificationService()
+    async def identity(*args,**kwargs):return True
+    monkeypatch.setattr(verifier,'_validate_polled_pull_identity',identity)
+    current=[HEAD]
+    class Client:
+        async def get_pull(self,*args,**kwargs):return {'number':874,'state':'open','merged_at':None,'draft':False,'head':{'sha':current[0]}}
+        async def list_check_runs_for_ref(self,*args,**kwargs):
+            if head_changes:current[0]=OTHER
+            return checks(second='success')
+    await verifier._verify_item(db,scope,item,Client())
+    review_wakes=[member_id for member_id in wakes if member_id in {members[0].id,members[2].id}]
+    assert review_wakes == ([] if head_changes else [members[0].id,members[2].id]), wakes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('path',['human_review','merge_wait'])
+@pytest.mark.parametrize('head_changes',[False,True])
+async def test_remote_head_fence_also_covers_review_and_merge_wait(db,monkeypatch,path,head_changes):
+    from app.services.github_verification_service import GithubVerificationService
+    _,scope,item,members,policy=await seed(db);wakes=[];svc=service(monkeypatch,wakes)
+    await bind(svc,db,item,members)
+    verifier=GithubVerificationService()
+    async def identity(*args,**kwargs):return True
+    monkeypatch.setattr(verifier,'_validate_polled_pull_identity',identity)
+    current=[HEAD]
+    class Client:
+        async def get_pull(self,*args,**kwargs):
+            return {'number':874,'state':'open','merged_at':None,'draft':False,'head':{'sha':current[0]}}
+        async def list_check_runs_for_ref(self,*args,**kwargs):
+            if head_changes:current[0]=OTHER
+            return checks(second='success')
+        async def get_combined_status_for_ref(self,*args,**kwargs):return {'state':'success','statuses':[]}
+    if path=='human_review':
+        item.issue_type='code';item.dispatch_status='ready_for_review';item.last_verified_sha=HEAD
+        scope.merge_policy='human';await db.commit()
+        await verifier._process_review_item(db,scope,item,Client())
+    else:
+        await verifier._wait_for_merge_checks(db,scope,item,Client(),HEAD)
+    assert wakes==([] if head_changes else [members[0].id,members[2].id])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage',['after_lookup','after_literal'])
+@pytest.mark.parametrize('change',['none','hold','reviewer','nonce','lease','policy','session'])
+async def test_actual_transport_rechecks_authority_before_text_and_enter(db,monkeypatch,stage,change):
+    from types import SimpleNamespace
+    from sqlalchemy import update
+    from app.models.database import GithubRequiredCheckRecipient,GithubRequiredCheckWatch
+    from app.services.agent_mail_service import agent_mail_service,AgentMailService
+    _,scope,item,members,policy=await seed(db);svc=service(monkeypatch,[])
+    await bind(svc,db,item,members)
+    item_id,leader_id,reviewer_id=item.id,members[0].id,members[2].id
+    session_id=await db.scalar(select(MailAgentSession.id).where(MailAgentSession.member_id==reviewer_id))
+    monkeypatch.setattr(agent_mail_service,'_wake_member',AgentMailService._wake_member.__get__(agent_mail_service))
+    original=agent_mail_service._send_guarded_tmux_inbox_check
+    sends=[];changed=[]
+    def run(args,**kwargs):
+        if args[1]=='display-message':
+            target=args[4]
+            return SimpleNamespace(stdout=f'{target}|{100+int(target[1:])}')
+        sends.append((args[3],args[-1]=='Enter'))
+        return SimpleNamespace(stdout='')
+    monkeypatch.setattr('app.services.agent_mail_service.subprocess.run',run)
+    async def transport(pane,prompt,start,delivery_guard,transport_guard):
+        calls=0
+        async def guarded():
+            nonlocal calls
+            calls+=1
+            boundary=1 if stage=='after_lookup' else 2
+            if pane.pane_id==f'%{reviewer_id}' and calls==boundary and change!='none':
+                changed.append(change)
+                if change=='hold':monkeypatch.setattr('app.services.github_ci_watch_service.hold_code',lambda:'hold')
+                elif change=='reviewer':await db.execute(update(GithubRequiredCheckWatch).values(reviewer_member_id=None))
+                elif change=='nonce':await db.execute(update(GithubWorkItem).where(GithubWorkItem.id==item_id).values(dispatch_nonce='changed'))
+                elif change=='lease':await db.execute(update(GithubWorkspace).where(GithubWorkspace.leased_item_id==item_id).values(lease_token='changed'))
+                elif change=='policy':await db.execute(update(GithubWorkItem).where(GithubWorkItem.id==item_id).values(delivery_policy_revision=2))
+                elif change=='session':await db.execute(update(MailAgentSession).where(MailAgentSession.id==session_id).values(mailbox_status='offline'))
+                await db.commit()
+            return await delivery_guard()
+        return await original(pane,prompt,start,guarded,transport_guard)
+    monkeypatch.setattr(agent_mail_service,'_send_guarded_tmux_inbox_check',transport)
+    await svc.observe(db,scope,item,HEAD,checks(second='success'),policy)
+    expected=[(f'%{leader_id}',False),(f'%{leader_id}',True)]
+    if change=='none':expected += [(f'%{reviewer_id}',False),(f'%{reviewer_id}',True)]
+    elif stage=='after_literal':expected += [(f'%{reviewer_id}',False)]
+    assert sends==expected
+    assert changed==([] if change=='none' else [change])
+    states=(await db.execute(select(GithubRequiredCheckRecipient.member_id,GithubRequiredCheckRecipient.wake_state))).all()
+    assert dict(states)=={leader_id:'confirmed',reviewer_id:'confirmed' if change=='none' else 'unknown'}

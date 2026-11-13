@@ -178,3 +178,23 @@ async def test_supervisor_checkin_exposes_idle_without_clearing_it(db,monkeypatc
     assert 'fixture-private' not in str(result)
     again=await supervisor_checkin(db,actor,team_id,now+timedelta(minutes=11),now=now+timedelta(minutes=1))
     assert len(again['team_idle'])==1
+
+
+@pytest.mark.asyncio
+async def test_v1_last_actor_is_retained_per_item_after_other_item_mail(db,monkeypatch):
+    from app.models.database import MailMessage, MailTeamMember
+    monkeypatch.setattr('app.services.github_team_idle_service.hold_code',lambda:None)
+    team,scope,item=await seed(db);svc=GithubTeamIdleService();now=datetime.utcnow()
+    other=GithubWorkItem(scope_id=scope.id,issue_number=840,issue_title='Other',issue_url='https://github.com/example/repo/issues/840',github_updated_at=now,dispatch_status='dispatched',dispatch_nonce='other-attempt',ack_received_at=now)
+    member=MailTeamMember(identity_key='v1-idle-actor',repo_id='fixture',repo_path='/fixture',repo_name='repo',display_name='Ada',team_preset_id=team.id)
+    db.add_all([other,member]);await db.commit()
+    db.add(MailMessage(kind='message',sender_member_id=member.id,audience_type='team_preset',audience_id=str(team.id),body_markdown='First item progress',payload={'work_item_id':item.id},created_at=now))
+    await db.commit()
+    await svc.observe(db,team.id,now=now)
+    first=await svc.observe(db,team.id,now=now+timedelta(minutes=31))
+    assert next(x for x in first if x['work_item_id']==item.id)['last_actor']=='Ada'
+    db.add(MailMessage(kind='message',sender_member_id=member.id,audience_type='team_preset',audience_id=str(team.id),body_markdown='Second item progress',payload={'work_item_id':other.id},created_at=now+timedelta(minutes=32)))
+    await db.commit()
+    await svc.observe(db,team.id,now=now+timedelta(minutes=32))
+    later=await svc.observe(db,team.id,now=now+timedelta(minutes=63))
+    assert next(x for x in later if x['work_item_id']==item.id)['last_actor']=='Ada'

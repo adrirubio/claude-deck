@@ -1689,6 +1689,14 @@ class GithubVerificationService:
             )
             await db.rollback()
 
+    async def _completion_head_is_current(self, db, scope, item, client, head_sha, *, revision=None):
+        """Check remote identity again after fetching checks, before publishing a handoff."""
+        current = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        if self._classify_pull(current) != "open" or self._head_sha(current) != head_sha:
+            return False  # The next normal poll handles a changed or closed pull.
+        return await self._validate_polled_pull_identity(db, scope, item, client, current,
+            retry_status=item.dispatch_status, revision=revision)
+
     async def _verify_item(
         self,
         db: AsyncSession,
@@ -1785,6 +1793,9 @@ class GithubVerificationService:
             scope.repo_name,
             head_sha or "",
         )
+        if ci_context is not None and policy.required_checks and not await self._completion_head_is_current(
+                db, scope, item, client, head_sha, revision=revision):
+            return
         if not await claim_policy_context(db, item, policy_guard):
             return
         if ci_context is not None:
@@ -1991,6 +2002,9 @@ class GithubVerificationService:
                 # Human review can remain open across reruns. Keep its check view
                 # current in the normal monitor, without polling from UI reads.
                 checks = await client.list_check_runs_for_ref(scope.repo_owner, scope.repo_name, current_head)
+                if ci_context is not None and not await self._completion_head_is_current(
+                        db, scope, item, client, current_head):
+                    return
                 await github_ci_watch_service.observe(db, scope, item, current_head, checks,
                     effective_policy(item, scope), context=ci_context)
             return
@@ -2257,6 +2271,9 @@ class GithubVerificationService:
         checks = await client.list_check_runs_for_ref(
             scope.repo_owner, scope.repo_name, head_sha,
         )
+        if ci_context is not None and policy.required_checks and not await self._completion_head_is_current(
+                db, scope, item, client, head_sha):
+            return True
         observed = await github_ci_watch_service.observe(
             db, scope, item, head_sha, checks, policy, context=ci_context)
         if observed is None:

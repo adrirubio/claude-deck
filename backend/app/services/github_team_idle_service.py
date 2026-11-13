@@ -77,14 +77,15 @@ class GithubTeamIdleService:
         if len(rows) > 64 or not coverage_complete:
             return await self._unavailable(db, preset_id, now)
         item_ids = [item.id for item, _ in rows]
-        mail = (await db.execute(select(MailMessage).where(
+        team_mail = select(MailMessage).where(
             or_(MailMessage.sender_member_id.is_not(None), MailMessage.sender_actor_id.is_not(None)),
             or_(MailMessage.sender_member_id.in_(select(MailTeamMember.id).where(
                     MailTeamMember.team_preset_id == preset_id)),
                 MailMessage.id.in_(select(MailReceipt.message_id).join(MailTeamMember,
                     MailTeamMember.id == MailReceipt.member_id).where(MailTeamMember.team_preset_id == preset_id)),
                 (MailMessage.audience_type == 'team_preset') & (MailMessage.audience_id == str(preset_id))))
-            .order_by(MailMessage.created_at.desc(), MailMessage.id.desc()).limit(1))).scalar_one_or_none()
+        mail = (await db.execute(team_mail.order_by(MailMessage.created_at.desc(), MailMessage.id.desc())
+            .limit(1))).scalar_one_or_none()
         latest = select(func.max(FactoryAuditEvent.id)).where(
             FactoryAuditEvent.item_id.in_(item_ids), FactoryAuditEvent.event_kind.in_(_MUTATIONS),
             FactoryAuditEvent.record_kind == 'observed',
@@ -125,13 +126,15 @@ class GithubTeamIdleService:
                     actor_member_id = event.actor_member_id
                 elif event.actor_kind == 'external_actor':
                     actor = 'External actor'
-            if mail:
-                payload = mail.payload if isinstance(mail.payload, dict) else {}
-                applies = (payload.get('work_item_id') == item.id or
-                    (mail.audience_type == 'work_item' and mail.audience_id == str(item.id)))
-                if applies and (evidence_at is None or mail.created_at > evidence_at):
-                    actor_member_id = mail.sender_member_id
-                    actor = 'External actor' if mail.sender_actor_id else 'Unknown'
+            # At most one evidence row per unfinished item (at most 64 items).
+            # New mail for another item must not erase this item's authenticated actor.
+            item_mail = (await db.execute(team_mail.where(or_(
+                MailMessage.payload['work_item_id'].as_integer() == item.id,
+                (MailMessage.audience_type == 'work_item') & (MailMessage.audience_id == str(item.id))))
+                .order_by(MailMessage.created_at.desc(), MailMessage.id.desc()).limit(1))).scalar_one_or_none()
+            if item_mail and (evidence_at is None or item_mail.created_at > evidence_at):
+                actor_member_id = item_mail.sender_member_id
+                actor = 'External actor' if item_mail.sender_actor_id else 'Unknown'
             if actor_member_id:
                 member = await db.get(MailTeamMember, actor_member_id)
                 if member and member.team_preset_id == preset_id:

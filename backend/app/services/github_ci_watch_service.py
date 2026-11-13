@@ -13,7 +13,7 @@ from app.models.database import (AgentTeamPreset, AgentTeamSlot, GithubOwnerObse
     GithubRequiredCheckRecipient, GithubRequiredCheckWatch, GithubWorkItem, GithubWorkspace,
     MailAgentSession, MailTeamMember, TeamGithubScope)
 from app.models.schemas import MailMessageCreate
-from app.services.agent_mail_service import agent_mail_service
+from app.services.agent_mail_service import agent_mail_service, MailWakeError, MCP_HEARTBEAT_TTL_SECONDS
 from app.services.factory_delivery_policy import effective_policy, policy_context, policy_context_conditions
 from app.services.github_coordination_service import hold_code
 from app.services.factory_audit_service import sanitize_text
@@ -153,6 +153,7 @@ class GithubCIWatchService:
 
     async def register(self, db, *, work_item_id, dispatch_nonce, scope_revision, head_sha,
                        reviewer_member_id, actor_member_id, session=None):
+        session_binding = self._session_binding(session) if session is not None else None
         if not isinstance(head_sha, str) or not _SHA.fullmatch(head_sha):
             raise ValueError('full_head_required')
         item = await db.get(GithubWorkItem, work_item_id, populate_existing=True)
@@ -181,13 +182,7 @@ class GithubCIWatchService:
         # The authenticated caller and current role must still be bound after the remote await.
         if await self._member(db, context['team_id'], context['leader_slot_id']) != actor_member_id:
             await db.rollback(); raise PermissionError('current_leader_required')
-        if session is not None:
-            valid = await db.scalar(select(MailAgentSession.id).where(MailAgentSession.id == session.id,
-                MailAgentSession.member_id == actor_member_id, MailAgentSession.team_preset_id == context['team_id'],
-                MailAgentSession.team_slot_id == context['leader_slot_id'], MailAgentSession.closed_at.is_(None),
-                MailAgentSession.capability_token_hash == session.capability_token_hash))
-            if valid is None:
-                await db.rollback(); raise PermissionError('current_mail_session_required')
+        await self._require_leader_session(db, context, actor_member_id, session_binding)
         await self._reviewer(db, context, reviewer_member_id)
         watch = await self._watch(db, context, head_sha, policy, datetime.utcnow())
         if watch is None:
@@ -201,9 +196,30 @@ class GithubCIWatchService:
         await self._deliver(db, context, watch)
         if not await self._claim(db, context):
             await db.rollback(); raise ValueError('stale_check_watch_context')
+        await self._require_leader_session(db, context, actor_member_id, session_binding)
         await db.commit()
         await self._wake(db, context, watch.id)
         return {'work_item_id': work_item_id, 'head_sha': head_sha, 'reviewer_member_id': reviewer_member_id}
+
+    @staticmethod
+    def _session_binding(session):
+        return tuple(getattr(session, field) for field in ('id', 'member_id', 'team_preset_id',
+            'team_slot_id', 'capability_token_hash', 'bound_pane_pid', 'bound_pane_proc_start'))
+
+    async def _require_leader_session(self, db, context, actor_member_id, binding):
+        if binding is None:
+            return  # Internal callers have no HTTP capability; the API always supplies one.
+        from fastapi import HTTPException
+        from app.api.v1.deps import require_current_mail_session
+        current = await db.get(MailAgentSession, binding[0], populate_existing=True)
+        if (current is None or self._session_binding(current) != binding
+                or current.member_id != actor_member_id or current.team_preset_id != context['team_id']
+                or current.team_slot_id != context['leader_slot_id']):
+            await db.rollback(); raise PermissionError('current_mail_session_required')
+        try:
+            require_current_mail_session(current)
+        except HTTPException:
+            await db.rollback(); raise PermissionError('current_mail_session_required') from None
 
     async def observe(self, db, scope, item, head_sha, checks, policy, *, context=...):
         """Return whether this head's required-failure owner notice is already durable."""
@@ -306,11 +322,71 @@ class GithubCIWatchService:
             if claim.rowcount != 1:
                 continue
             await db.commit()  # Durable before the external side effect; crashes stay visibly unconfirmed.
-            if not await self._claim(db, context):
-                await db.rollback(); return False
             try:
-                result = await agent_mail_service.auto_nudge_members(db, {member_id}, bypass_cooldown=True)
-                state = 'confirmed' if any(r.get('member_id') == member_id for r in result) else 'unknown'
+                async def delivery_guard():
+                    if not await self._claim(db, context):
+                        return False
+                    live = await db.get(GithubRequiredCheckWatch, watch_id, populate_existing=True)
+                    claimed = await db.get(GithubRequiredCheckRecipient, recipient_id, populate_existing=True)
+                    if (live is None or claimed is None or claimed.watch_id != watch_id
+                            or claimed.member_id != member_id or claimed.wake_state != 'claimed'
+                            or live.work_item_id != context['id'] or live.dispatch_nonce != context['dispatch_nonce']
+                            or live.scope_revision != context['active_scope_revision']
+                            or live.pr_number != context['pr_number'] or live.owner_slot_id != context['owner_slot_id']
+                            or live.head_sha != context['verification_head_sha']):
+                        return False
+                    leader = await self._member(db, context['team_id'], context['leader_slot_id'])
+                    valid = {leader}
+                    if live.completion_kind == 'failure':
+                        valid.add(await self._member(db, context['team_id'], context['owner_slot_id']))
+                    elif live.completion_kind == 'success':
+                        try: valid.add(await self._reviewer(db, context, live.reviewer_member_id))
+                        except ValueError: pass
+                    else:
+                        return False
+                    return member_id in valid and not hold_code()
+
+                if not await delivery_guard():
+                    raise MailWakeError('wake_session_mismatch')
+                await agent_mail_service.sync_observed_sessions(db)
+                if not await delivery_guard():
+                    raise MailWakeError('wake_session_mismatch')
+                now = datetime.utcnow()
+                pane = await agent_mail_service._nudge_session_for_member(db, member_id, now)
+                bindings = (await db.execute(select(MailAgentSession).where(
+                    MailAgentSession.member_id == member_id, MailAgentSession.source == 'mcp',
+                    MailAgentSession.team_preset_id == context['team_id'],
+                    MailAgentSession.team_slot_id == pane.team_slot_id,
+                    MailAgentSession.bound_pane_pid == pane.pid,
+                    MailAgentSession.bound_pane_proc_start.is_not(None),
+                    MailAgentSession.closed_at.is_(None), MailAgentSession.mailbox_status == 'connected',
+                    MailAgentSession.wake_enabled.is_(True), MailAgentSession.capability_token_hash.is_not(None),
+                    MailAgentSession.last_seen_at >= now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS))
+                    .limit(2))).scalars().all()
+                if len(bindings) != 1:
+                    raise MailWakeError('wake_session_mismatch')
+                binding = self._session_binding(bindings[0])
+                recipient_guard = delivery_guard
+
+                async def delivery_guard():
+                    from app.utils import peer_process
+                    if not await recipient_guard():
+                        return False
+                    session = await db.get(MailAgentSession, binding[0], populate_existing=True)
+                    return (session is not None and self._session_binding(session) == binding
+                        and session.source == 'mcp' and session.closed_at is None
+                        and session.mailbox_status == 'connected' and session.wake_enabled
+                        and bool(session.capability_token_hash)
+                        and session.last_seen_at >= datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+                        and peer_process.pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is True
+                        and not hold_code())
+
+                result = await agent_mail_service._wake_member(db, member_id, now,
+                    expected_session_id=binding[0], delivery_guard=delivery_guard,
+                    transport_guard=lambda: hold_code() is None, source='required_checks')
+                state = 'confirmed' if result else 'unknown'
+                if result:
+                    agent_mail_service._last_auto_nudge_at[member_id] = now
             except Exception:
                 await db.rollback()
                 intact = False
