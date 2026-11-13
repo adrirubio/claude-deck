@@ -16,6 +16,14 @@ Local observation is shared across cards by one snapshot worker per API process,
 
 OpenCode requires version 2 or later. With OpenCode 1 or an unreadable version, the OpenCode card shows a blocked configuration with the reason "OpenCode 2 or later is required". Launch planning and the Live sessions dialog refuse to start OpenCode with the block code `opencode_version_unsupported`. Synth City also does not adopt, register in Agent Mail or wake a running OpenCode member unless its process runs the OpenCode 2 binary that Synth City found on its own `PATH`. A member started before OpenCode was updated in place must be relaunched.
 
+OpenCode members launch as `opencode <directory> --standalone --session <id> [--auto] [--prompt <text>]`. `--standalone` gives each member its own private server, so its tools and Agent Mail run in its own process tree. The shared background service (`opencode serve --service`) is never treated as a member.
+
+- **Model and agent:** the OpenCode 2 TUI has no `--model` or `--agent` flag. Synth City passes the slot's model (`provider/model`, with an optional `#variant`) and default agent in the member's `OPENCODE_CONFIG_CONTENT`. It also turns off updates and allows only the model's provider; with no model it disables OpenCode's hosted free models. The config holds no secret, because the member's plugins can read it.
+- **Exact session:** on a slot's first launch, Synth City chooses the session id (`ses_` and 26 letters and digits), saves it on the slot and resumes with `--session <saved id>`. `--continue` is not offered; a slot still stored with "use last" is blocked with `opencode_continue_unsupported`.
+- **Permissions:** the slot's skip-permissions option maps to `--auto`, which approves prompts that no rule denies. Deny rules still apply.
+- **Bedrock:** use an `amazon-bedrock/…` model.
+- **Ownership:** an OpenCode member can own GitHub work items. Activation readiness and the owner-observation pause accept it only when its process is the exact `--standalone --session <saved id>` member on OpenCode 2, and its Agent Mail registration comes from that pane or its own private server.
+
 Codex has no native Backup/Usage/Context/transcript adapter here; export and diagnostics API support is separate from browser-page access. See restore/usage limits in [Multi-Provider and Codex CLI](/guide/multi-provider-codex-v2). See [Teams](/features/agent-teams) for reviewed launch/reuse and [Live sessions](/features/agent-bridge) for standalone work. Existing Pi opt-in/runtime/exact-resume requirements remain; this index changes neither integration nor sandboxing.
 
 ## Muse Code

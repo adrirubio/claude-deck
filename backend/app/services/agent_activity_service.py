@@ -132,6 +132,13 @@ def _canonical_session_id(value: object) -> str | None:
         return None
 
 
+def _native_identity_key(value: object) -> str | None:
+    """The key that counts session-id reuse: a UUID, or an OpenCode ``ses…`` id (#731)."""
+    from app.services.opencode_process_identity import is_session_id
+
+    return _canonical_session_id(value) or (value if is_session_id(value) else None)
+
+
 def _process(pid: int) -> tuple[str, str]:
     fields = (_PROC / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
     return fields[0], fields[19]  # state and kernel process start, not PID alone
@@ -533,7 +540,7 @@ def _inputs_from_rows(slots, options, members, bound_rows):
     # so another harness cannot supply a false Working event for this owner.
     native_identity_counts: dict[str, int] = {}
     for (launch_options,) in options:
-        session_id = _canonical_session_id((launch_options or {}).get("session_id"))
+        session_id = _native_identity_key((launch_options or {}).get("session_id"))
         if session_id is not None:
             native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
     current_member = {}
@@ -553,7 +560,7 @@ def _inputs_from_rows(slots, options, members, bound_rows):
                        if provider == slot.provider), key=lambda x: (
                            x.pane_pid, x.pane_start, x.cwd, x.native_pid or 0,
                            str(x.registered_at))),
-               native_identity_counts.get(_canonical_session_id((slot.launch_options or {}).get("session_id")) or "", 0) > 1)
+               native_identity_counts.get(_native_identity_key((slot.launch_options or {}).get("session_id")) or "", 0) > 1)
             for slot in slots]
 
 

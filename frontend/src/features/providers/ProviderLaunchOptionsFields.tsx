@@ -170,7 +170,7 @@ export function ProviderLaunchOptionsFields({
             id="provider-model"
             value={simpleModelValue}
             onChange={(event) => setOption(simpleModelKey, event.target.value)}
-            placeholder={isMuse ? 'muse-wonder-1.0' : isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
+            placeholder={isMuse ? 'muse-wonder-1.0' : isOpenCode ? 'provider/model or provider/model#variant' : isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
             disabled={disabled}
           />
         </div>
@@ -263,9 +263,13 @@ export function ProviderLaunchOptionsFields({
         <p className="text-xs text-muted-foreground">OpenCode TUI launches cannot pin reasoning effort.</p>
       )}
 
+      {isOpenCode && isBedrock && (
+        <p className="text-xs text-muted-foreground">On Bedrock, use an amazon-bedrock/ model.</p>
+      )}
+
       {(isCopilot || isOpenCode) && (
         <div className="grid gap-2">
-          <Label htmlFor="provider-agent">Custom agent</Label>
+          <Label htmlFor="provider-agent">{isOpenCode ? 'Default agent' : 'Custom agent'}</Label>
           <Input
             id="provider-agent"
             value={stringValue(value.agent)}
@@ -296,6 +300,20 @@ export function ProviderLaunchOptionsFields({
               ))}
             </SelectContent>
           </Select>
+        </div>
+      )}
+
+      {isOpenCode && (
+        <div className="grid gap-1">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={boolValue(value.skip_permissions)}
+              onCheckedChange={(checked) => setOption('skip_permissions', checked === true)}
+              disabled={disabled}
+            />
+            Auto-approve permissions (--auto)
+          </label>
+          <p className="ml-6 text-xs text-muted-foreground">Deny rules still apply.</p>
         </div>
       )}
 

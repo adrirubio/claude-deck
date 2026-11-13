@@ -2,6 +2,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 
 def test_provider_registry_contains_initial_providers():
     from app.services.providers import get_provider, get_providers
@@ -113,17 +115,44 @@ def test_copilot_process_detection_matches_binary_and_node_wrapper():
         assert provider.is_process_match("node", "123") is True
 
 
-def test_opencode_process_detection_matches_binary_and_wrappers():
+def test_opencode_process_detection_matches_binary_and_wrappers(monkeypatch):
+    from app.services import opencode_process_identity
     from app.services.providers import get_provider
 
     provider = get_provider("opencode-cli")
+    argv = {123: ["/usr/local/bin/opencode", "/work", "--standalone", "--session", "ses_a"],
+            124: ["opencode", "serve", "--service"], 125: ["opencode", "serve", "--stdio", "--port", "0"],
+            126: ["/usr/sbin/rsyslogd", "-n", "-iNONE"]}
+    monkeypatch.setattr(opencode_process_identity, "read_argv", lambda pid: argv.get(pid))
 
+    # A member's own private server and the shared service are never sessions (#731).
+    assert provider.is_process_match("opencode", "124") is False
+    assert provider.is_process_match("opencode", "125") is False
+    # Membership needs positive evidence: an unreadable cmdline is no match (V1 F2).
+    assert provider.is_process_match("opencode", "999") is False
+    # A pane named opencode whose process runs another program is not a member (#879 review).
+    assert provider.is_process_match("opencode", "126") is False
     assert provider.is_process_match("opencode", "123") is True
     assert provider.is_process_match("/usr/local/bin/opencode", "123") is True
     assert provider.is_process_match("opencode-server", "123") is False
+
+
+@pytest.mark.parametrize("child", [
+    "456 /usr/bin/opencode serve --service",
+    "456 /usr/bin/opencode serve --stdio --port 0",
+    "456 /usr/local/bin/opencode /work --standalone --session ses_a",
+])
+def test_opencode_wrappers_never_establish_a_member(monkeypatch, child):
+    # OpenCode 2 is a compiled binary: a node or bun wrapper is not a member, whatever its child is (V1 F2).
+    from app.services import opencode_process_identity
+    from app.services.providers import get_provider
+
+    monkeypatch.setattr(opencode_process_identity, "read_argv", lambda pid: None)
+    provider = get_provider("opencode-cli")
     with patch("app.services.providers.base.subprocess.run") as run:
-        run.return_value = SimpleNamespace(stdout="456 /usr/local/bin/opencode\n")
-        assert provider.is_process_match("bun", "123") is True
+        run.return_value = SimpleNamespace(stdout=child + "\n")
+        assert provider.is_process_match("bun", "123") is False
+        assert provider.is_process_match("node", "123") is False
 
 
 def test_argv0_name_tolerates_blank_commands():
@@ -179,3 +208,16 @@ def test_fresh_claude_command_selects_session_uuid():
     command = get_provider("claude-code").build_spawn_command(
         SpawnCommandOptions(directory="/fixture", session_id=session_id))
     assert command == ["claude", "--session-id", session_id]
+
+
+def test_opencode_launch_contract_matches_v2():
+    # OpenCode 2 members have no --continue and cannot pin a reasoning effort (#731).
+    from app.services.providers import get_provider
+    from app.services.providers.launch_options import build_provider_launch_options
+
+    descriptor = build_provider_launch_options(get_provider("opencode-cli"))
+    options = set(descriptor["supported_launch_options"])
+    assert {"model", "agent", "skip_permissions", "session_id", "prompt"} <= options
+    assert not options & {"use_last", "reasoning_effort"}
+    assert descriptor["reasoning_effort_supported"] is False
+    assert descriptor["supported_launch_modes"] == ["plain", "resume"]

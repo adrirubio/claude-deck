@@ -207,6 +207,21 @@ Copilot example:
 }
 ```
 
+OpenCode 2 example:
+
+```json
+{
+  "provider": "opencode-cli",
+  "directory": "/home/user/repo",
+  "mode": "plain",
+  "model": "anthropic/claude-sonnet-4.6",
+  "agent": "plan",
+  "skip_permissions": true
+}
+```
+
+OpenCode launches with `--standalone`. A plain launch chooses an exact `ses_…` session id and returns it as `session_id`; resume needs that id (`"mode": "resume", "session_id": "ses_…"`). `use_last` is refused with the block code `opencode_continue_unsupported`. `model` must be `provider/model`, optionally with `#variant`, and reaches the member through `OPENCODE_CONFIG_CONTENT` together with `agent`. `skip_permissions` maps to `--auto`.
+
 ### Delete Session
 
 ```http

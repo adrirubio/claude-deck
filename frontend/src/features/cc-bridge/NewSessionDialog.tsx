@@ -68,6 +68,7 @@ const OPENCODE_MODE_OPTIONS: { value: Mode; label: string }[] = [
 ]
 
 const OTHER_FOLDER = '__other_folder__'
+const OPENCODE_SESSION_ID = /^ses[0-9A-Za-z_-]{1,96}$/
 
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
 const DEFAULT_LAUNCH_OPTIONS: SlotLaunchOptions = { no_alt_screen: true }
@@ -274,7 +275,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (isCopilot && mode === 'resume') {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
-    if ((isOpenCode || isPi) && mode === 'resume') {
+    if (isOpenCode && mode === 'resume') {
+      // OpenCode 2 members resume only an exact ses… session; there is no "use last".
+      return directory.trim().length > 0 && OPENCODE_SESSION_ID.test(codexSessionId.trim())
+    }
+    if (isPi && mode === 'resume') {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
     if (isClaude && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
@@ -345,10 +350,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
-        ...((isOpenCode || isPi) && mode === 'resume' && {
+        ...(isPi && mode === 'resume' && {
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
+        ...(isOpenCode && mode === 'resume' && { session_id: codexSessionId.trim() }),
+        ...(isOpenCode && boolOption(launchOptions, 'skip_permissions') && { skip_permissions: true }),
         ...((isCopilot || isOpenCode) && optionAgent && { agent: optionAgent }),
         ...(isCopilot && optionContextTier && { context_tier: optionContextTier }),
         ...((isCodex || isCopilot || isPi) && optionReasoningEffort && { reasoning_effort: optionReasoningEffort }),
@@ -530,7 +537,20 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {(isCodex || isCopilot || isOpenCode || isPi) && (mode === 'resume' || mode === 'fork') && (
+          {isOpenCode && mode === 'resume' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="opencode-session-id">OpenCode session ID</Label>
+              <Input
+                id="opencode-session-id"
+                value={codexSessionId}
+                onChange={(e) => setCodexSessionId(e.target.value)}
+                placeholder="ses_…"
+              />
+              <p className="text-xs text-muted-foreground">The exact session id, starting with ses.</p>
+            </div>
+          )}
+
+          {(isCodex || isCopilot || isPi) && (mode === 'resume' || mode === 'fork') && (
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -539,12 +559,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   onCheckedChange={(checked) => setUseLast(checked === true)}
                 />
                 <Label htmlFor="codex-use-last" className="cursor-pointer">
-                  Use last {isPi ? 'Pi' : isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} session
+                  Use last {isPi ? 'Pi' : isCopilot ? 'Copilot' : 'Codex'} session
                 </Label>
               </div>
               {!useLast && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="codex-session-id">{isPi ? 'Pi exact project-local path or full ID' : isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
+                  <Label htmlFor="codex-session-id">{isPi ? 'Pi exact project-local path or full ID' : isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
                   <Input
                     id="codex-session-id"
                     value={codexSessionId}

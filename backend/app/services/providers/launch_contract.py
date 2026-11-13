@@ -92,12 +92,11 @@ PROVIDER_OPTION_KEYS: dict[str, tuple[str, ...]] = {
     PROVIDER_OPENCODE_CLI: (
         "model",
         "agent",
-        "use_last",
+        "skip_permissions",
         "session_id",
         "platform",
         "aws_region",
         "aws_profile",
-        "reasoning_effort",
         "prompt",
     ),
 }
@@ -143,6 +142,11 @@ MODEL_EXAMPLES: dict[str, tuple[dict[str, str], ...]] = {
         {
             "value": "anthropic/claude-sonnet-4.6",
             "label": "Anthropic Claude Sonnet 4.6",
+            "source": "example",
+        },
+        {
+            "value": "openai/gpt-5.5#high",
+            "label": "OpenAI GPT-5.5, high variant",
             "source": "example",
         },
     ),

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_base_sha": "667841e7e71ea4c1007a4124273bb7c3a6b04869",
   "exact_review_head": "Recorded in external authenticated freeze receipt; no self-referential commit hash",
-  "catalog_sha256": "9cba036bd82f008b4ad49d5058c1cd0fcbcb736b7ef0969878e530002f2bf577",
+  "catalog_sha256": "8124062a55ebb442df8c8db2239e9dba155c7661d6cd7b33bc9f00b0d2b71d8b",
   "source_sha256": {
     "backend/app/models/provider_operations_schemas.py": "53e6e0a3aac830a381e7c06e7157ac3987d60a178e0263859c6792675f101fac",
     "backend/app/services/provider_readiness_service.py": "cad7cc4ad28b56957c5fc26a53387ee2387b297fb5ba75cb288d8defaf9ac432",

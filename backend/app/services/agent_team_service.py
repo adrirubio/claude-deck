@@ -50,8 +50,11 @@ from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mai
 from app.services.github_recovery_gate import configured_recovery_only_attempt
 from app.services.providers import get_provider, get_providers
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+from app.services.opencode_process_identity import new_session_id as new_opencode_session_id
+from app.services.providers.opencode_cli import OpenCodeCliProvider
 from app.services.providers.launch_contract import (
     PROVIDER_CODEX_CLI,
+    PROVIDER_OPENCODE_CLI,
     launch_modes_for,
     option_keys_for,
     reasoning_efforts_for,
@@ -1022,6 +1025,9 @@ class AgentTeamService:
             )
             if slot.provider == "claude-code" and options.mode != "resume":
                 options = SpawnCommandOptions(**{**options.__dict__, "session_id": str(uuid.uuid4())})
+            elif slot.provider == PROVIDER_OPENCODE_CLI and options.mode != "resume":
+                # Synth City chooses the OpenCode session id so that resume is exact (#731).
+                options = SpawnCommandOptions(**{**options.__dict__, "session_id": new_opencode_session_id()})
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -1034,7 +1040,7 @@ class AgentTeamService:
                     **({"SYNTH_CITY_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
-            if slot.provider == "claude-code" and options.session_id:
+            if slot.provider in {"claude-code", PROVIDER_OPENCODE_CLI} and options.session_id:
                 slot.launch_options = {**(slot.launch_options or {}), "session_id": options.session_id}
                 slot.launch_mode = "resume"
             elif slot.provider == "codex-cli" and options.mode != "resume":
@@ -1208,6 +1214,18 @@ class AgentTeamService:
             reasons.append(opencode_version.REASON_REQUIRED)
             block_code = opencode_version.BLOCK_CODE
 
+        if (
+            block_code is None
+            and slot.provider == PROVIDER_OPENCODE_CLI
+            and self._truthy_launch_option((slot.launch_options or {}).get("use_last"))
+        ):
+            # A slot stored with use_last before #731 fails closed on every path,
+            # before any reuse or adoption: --continue is not an exact session.
+            reasons.append(
+                "OpenCode members resume only an exact saved session; --continue is not supported"
+            )
+            block_code = "opencode_continue_unsupported"
+
         mail_reason = self._agent_mail_ready_reason(slot.provider, install_status)
         if mail_reason and mail_reason not in reasons:
             reasons.append(mail_reason)
@@ -1302,16 +1320,14 @@ class AgentTeamService:
             block_code = (
                 "unsafe_copilot_continue"
                 if slot.provider == "copilot-cli"
-                else "unsafe_opencode_continue"
-                if slot.provider == "opencode-cli"
                 else "unsafe_codex_resume_last"
             )
 
         if block_code is None:
             validation_error = self._validate_spawn_options(slot)
             if validation_error:
-                reasons.append(validation_error)
-                block_code = "invalid_launch_options"
+                reasons.append(validation_error[0])
+                block_code = validation_error[1]
 
         if block_code:
             return AgentTeamLaunchPlanItem(
@@ -1362,7 +1378,8 @@ class AgentTeamService:
         }
 
     def _is_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
-        if slot.provider not in {"codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}:
+        # OpenCode has no --continue for members; its provider refuses a stored use_last (#731).
+        if slot.provider not in {"codex-cli", "copilot-cli", "pi-cli"}:
             return False
         if (slot.launch_mode or "plain").strip() != "resume":
             return False
@@ -1379,8 +1396,6 @@ class AgentTeamService:
         label = (
             "GitHub Copilot CLI --continue"
             if provider == "copilot-cli"
-            else "OpenCode --continue"
-            if provider == "opencode-cli"
             else "Codex resume --last"
         )
         return (
@@ -1713,12 +1728,14 @@ class AgentTeamService:
             session.team_preset_id = None
             session.team_slot_id = None
 
-    def _validate_spawn_options(self, slot: AgentTeamSlot) -> str | None:
+    def _validate_spawn_options(self, slot: AgentTeamSlot) -> tuple[str, str] | None:
+        """(reason, block code) when the stored options cannot launch."""
         try:
             get_provider(slot.provider).build_spawn_command(self._spawn_options_for_slot(slot, prompt=None))
             return None
         except Exception as exc:
-            return str(exc)
+            code = exc.block_code if isinstance(exc, ProviderLaunchError) and exc.block_code else "invalid_launch_options"
+            return str(exc), code
 
     def _spawn_options_for_slot(
         self, slot: AgentTeamSlot, prompt: str | None, repo_path_override: str | None = None
@@ -2069,6 +2086,7 @@ class AgentTeamService:
     ) -> dict[str, Any]:
         if not value:
             return {}
+        self._refuse_unsupported_reasoning_effort(provider, value)
         if provider is not None:
             allowed = set(option_keys_for(provider))
             if not supports_bedrock(provider):
@@ -2077,6 +2095,14 @@ class AgentTeamService:
             if unknown:
                 raise ValueError(f"Unsupported launch_options for {provider}: {', '.join(unknown)}")
         return {key: option for key, option in value.items() if key in _OPTION_FIELDS}
+
+    def _refuse_unsupported_reasoning_effort(self, provider: str | None, options: dict[str, Any]) -> None:
+        """OpenCode does not list reasoning_effort, but keeps its precise refusal (#731)."""
+        if provider == PROVIDER_OPENCODE_CLI and self._clean_optional(options.get("reasoning_effort")):
+            raise ProviderLaunchError(
+                f"{provider} does not support reasoning_effort",
+                "reasoning_effort_unsupported",
+            )
 
     def _validate_slot_options(
         self,
@@ -2095,6 +2121,7 @@ class AgentTeamService:
                 f"{', '.join(unsupported_bedrock_keys)}"
             )
 
+        self._refuse_unsupported_reasoning_effort(provider, options)
         allowed_keys = set(option_keys_for(provider))
         if not supports_bedrock(provider):
             allowed_keys |= _BEDROCK_LAUNCH_OPTION_KEYS
@@ -2137,8 +2164,15 @@ class AgentTeamService:
             value = self._clean_optional(options.get(key))
             if value and any(char in value for char in ("\n", "\r", "\x00")):
                 raise ValueError(f"launch_options.{key} must not contain control characters")
-            if value:
+            if value and not (provider == PROVIDER_OPENCODE_CLI and key == "model"):
                 self._validate_model_id(key, value)
+        if provider == PROVIDER_OPENCODE_CLI:
+            # The v2 contract: provider/model[#variant], a plain agent name, a ses… id (#731).
+            OpenCodeCliProvider().build_spawn_command(SpawnCommandOptions(
+                directory=".",
+                mode=launch_mode,
+                **{key: value for key, value in options.items() if key in _OPTION_FIELDS - {"directory", "mode"}},
+            ))
 
     def _slot_launch_warnings(self, provider: str, launch_options: dict[str, Any]) -> list[str]:
         warnings: list[str] = []
