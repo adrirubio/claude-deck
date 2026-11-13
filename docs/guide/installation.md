@@ -14,8 +14,10 @@ Claude Deck 3.0.0 includes the Overview, Work, Repositories and Harnesses pages.
   - Claude Code
   - Codex CLI
   - GitHub Copilot CLI
-  - OpenCode CLI
+  - OpenCode CLI 2 or later
   - Pi
+
+Synth City requires OpenCode 2 or later. It reads the version from `opencode --version` (for example `opencode v2.0.29` or `2.0.29`). With OpenCode 1, or a version it cannot read, the OpenCode harness shows a blocked configuration with the reason "OpenCode 2 or later is required", and OpenCode team members cannot launch.
 
 Pi has additional requirements:
 

@@ -22,7 +22,6 @@ These are **black-box, agent-driven** scenarios — they drive the running syste
 | Claude Deck backend running | all | `deck_whoami` must return `ok:true`, not `deck_unreachable` |
 | `tmux` installed | launch scenarios (L*) | sessions spawn into tmux |
 | `codex` CLI installed | scenarios using `codex-cli` | `codex --version` |
-| `opencode` CLI installed (≥1.17) | scenarios using `opencode-cli` | `opencode --version` |
 | AWS profile `jrubio` configured in `~/.aws` | Bedrock scenarios | non-secret region/profile only; creds resolve from host chain |
 | Repos exist on disk | launch scenarios | `/home/juan/work/repos/juanrubio/snazzyemail`, `/home/juan/work/repos/juanrubio/claude-deck` |
 

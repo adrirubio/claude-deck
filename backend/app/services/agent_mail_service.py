@@ -2300,6 +2300,25 @@ class AgentMailService:
             raise MailWakeError("wake_transport_uncertain" if staged else "wake_transport_failed") from error
         return {"method": "tmux", "target": session.tmux_target}
 
+    @staticmethod
+    def _require_opencode_2_pane(session: MailAgentSession) -> None:
+        """Refuse to wake an OpenCode member unless its pane runs the trusted OpenCode 2 binary."""
+        from app.services import opencode_version
+
+        pane_pid = session.bound_pane_pid if session.bound_pane_pid is not None else session.pid
+        if isinstance(pane_pid, str) and pane_pid.isdigit():
+            pane_pid = int(pane_pid)
+        start = session.bound_pane_proc_start
+        if start is None and type(pane_pid) is int:
+            stat = peer_process.read_proc_stat(pane_pid)
+            start = stat[1] if stat is not None else None
+        if (
+            type(pane_pid) is not int
+            or not isinstance(start, str)
+            or not opencode_version.member_gate_for_pane(pane_pid, start).ready
+        ):
+            raise MailWakeError(opencode_version.BLOCK_CODE)
+
     async def _wake_member(
         self,
         db: AsyncSession,
@@ -2335,6 +2354,8 @@ class AgentMailService:
                 else:
                     raise MailWakeError("inbox_empty")
             session = await self._nudge_session_for_member(db, member_id, now)
+            if session.provider == "opencode-cli":
+                self._require_opencode_2_pane(session)
             expected_start = None
             if expected_session_id is not None:
                 expected = await db.get(MailAgentSession, expected_session_id, populate_existing=True)

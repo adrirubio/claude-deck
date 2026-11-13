@@ -1,7 +1,7 @@
-"""OpenCode version gate: Deck runs OpenCode 2 or later only (#730).
+"""OpenCode version gate: Synth City runs OpenCode 2 or later only (#730).
 
-Provenance. Deck asks exactly one executable for its version: the trusted
-binary T, which is ``shutil.which("opencode")`` in Deck's own process resolved
+Provenance. Synth City asks exactly one executable for its version: the trusted
+binary T, which is ``shutil.which("opencode")`` in the backend's own process resolved
 with realpath and identified by (st_dev, st_ino, st_size, st_mtime_ns). The
 probe runs ``T --version`` with an empty environment plus an explicit
 allowlist, a timeout and bounded output. A member's own executable is never
@@ -92,7 +92,7 @@ def _unknown(identity: Optional[BinaryIdentity] = None) -> VersionGate:
 
 
 def trusted_binary() -> Optional[BinaryIdentity]:
-    """Resolve T from Deck's own PATH. None when absent or not a regular file."""
+    """Resolve T from the backend's own PATH. None when absent or not a regular file."""
     found = shutil.which("opencode")
     if not found:
         return None
