@@ -504,3 +504,85 @@ def test_opencode_fetch_budget_counts_the_last_part_before_decoding(tmp_path, mo
     monkeypatch.setattr(ts, "OC_FETCH_MAX", 80)  # the message cell fits; message + part does not
     with pytest.raises(ValueError, match="opencode_guard_budget"):
         _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+# V1 review 5894667853 (PR #898): no cell beyond the fetch budget is ever materialized,
+# the SQLite URI opens exactly the checked file, and the workspace binding is rechecked
+# inside the content snapshot.
+def _materialized(sup, monkeypatch):
+    total = [0]
+    original = sup.opencode_query
+
+    def query(db, budget, sql, args=()):
+        rows = original(db, budget, sql, args)
+        if sql.startswith('SELECT data FROM'):  # payload cells only; metadata is bounded separately
+            total[0] += sum(len(cell.encode()) for row in rows for cell in row if isinstance(cell, str))
+        return rows
+
+    monkeypatch.setattr(sup, "opencode_query", query)
+    return total
+
+
+@pytest.mark.parametrize("kind", ["messages", "parts"])
+def test_opencode_fetch_budget_is_enforced_before_cells_are_materialized(tmp_path, monkeypatch, kind):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    if kind == "messages":
+        for seq in range(1, 9):
+            _oc_message(db, seq, inline=[{"type": "text", "text": "x" * 80}])
+    else:
+        _oc_message(db, 1, parts=[_text("x" * 80) for _ in range(8)])
+    monkeypatch.setattr(ts, "OC_FETCH_MAX", 200)
+    sup = _oc_supervisor(tmp_path)
+    total = _materialized(sup, monkeypatch)
+    with pytest.raises(ValueError, match="opencode_guard_budget"):
+        _oc_scan(sup, monkeypatch)
+    assert total[0] <= ts.OC_FETCH_MAX, total[0]
+
+
+@pytest.mark.parametrize("folder", ["oc#suffix", "oc?mode=rw", "oc%23suffix"])
+def test_opencode_uri_opens_exactly_the_checked_file(tmp_path, monkeypatch, folder):
+    checked = _oc_db(tmp_path / folder / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    _oc_db(tmp_path / "oc")  # a file a truncated "file:" URI would open instead
+    sup = _oc_supervisor(tmp_path, roots=[checked.parent])
+    assert _oc_scan(sup, monkeypatch) == (False, ["cybersecurity_notice"])
+
+
+@pytest.mark.parametrize("change", ["moved", "deleted"])
+def test_opencode_workspace_binding_is_rechecked_in_the_content_snapshot(tmp_path, monkeypatch, change):
+    # session_v2.id is the primary key, so two rows for one id cannot exist in one database.
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("safe")])
+    sup = _oc_supervisor(tmp_path)
+    original = sup.opencode_scan_session
+
+    def moved(*args, **kwargs):
+        with sqlite3.connect(db) as conn:
+            if change == "moved":
+                conn.execute("UPDATE session_v2 SET directory='/w/another-member' WHERE id=?", (OC_SESSION,))
+            else:
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn.execute("DELETE FROM session_v2 WHERE id=?", (OC_SESSION,))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sup, "opencode_scan_session", moved)
+    with pytest.raises(ValueError, match="opencode_session_missing"):
+        _oc_scan(sup, monkeypatch)
+
+
+def test_opencode_oversized_message_id_or_part_type_refuses_before_fetch(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[("t" * 300, {"type": "text", "text": "x"})])
+    with pytest.raises(ValueError, match="opencode_record_too_large"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+def test_opencode_connection_must_name_the_checked_file(tmp_path, monkeypatch):
+    # Defence in depth behind the URI encoding: if the connection ever opened another
+    # file than the identity-checked path, PRAGMA database_list exposes it.
+    checked = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    sibling = _oc_db(tmp_path / "sibling" / "opencode.db")
+    monkeypatch.setattr(ts.urllib.parse, "quote", lambda path, safe="/": str(sibling))
+    with pytest.raises(ValueError, match="opencode_db_unsafe_file"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)

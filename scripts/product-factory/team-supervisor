@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 
 def now():
@@ -139,6 +140,7 @@ OC_REQUIRED = {
     'session_part': {'message_id', 'ordinal', 'type', 'data'},
 }
 OC_MAX_ROOT_PATH = 4096
+OC_ID_MAX = 256               # bytes per message id or part type, checked in SQL before fetch
 OC_MAX_ENTRIES = 256          # directory entries examined per data root
 OC_MAX_CANDIDATES = 16
 OC_CELL_MAX = 1 << 20         # bytes per data cell, checked in SQL before the cell is fetched
@@ -401,9 +403,21 @@ class Supervisor:
         return [info.st_dev, info.st_ino, info.st_uid]
 
     def opencode_connect(self, path, budget):
-        db = sqlite3.connect('file:' + path + '?mode=ro', uri=True, timeout=OC_BUSY_MS / 1000)
-        db.execute('PRAGMA query_only = ON')
-        db.set_progress_handler(budget.progress, OC_VM_INTERVAL)
+        # Percent-encode the path: a raw '#' or '?' would end the URI early and open another file.
+        db = sqlite3.connect('file:' + urllib.parse.quote(path, safe='/') + '?mode=ro', uri=True,
+                             timeout=OC_BUSY_MS / 1000)
+        try:
+            db.execute('PRAGMA query_only = ON')
+            opened = [row[2] for row in db.execute('PRAGMA database_list') if row[1] == 'main']
+            if opened != [os.path.realpath(path)]:
+                raise ValueError('opencode_db_unsafe_file')
+            db.set_progress_handler(budget.progress, OC_VM_INTERVAL)
+        except sqlite3.DatabaseError as exc:
+            db.close()
+            raise ValueError('opencode_db_unreadable') from exc
+        except Exception:
+            db.close()
+            raise
         return db
 
     @staticmethod
@@ -449,47 +463,63 @@ class Supervisor:
         if known.get(native_id, identity) != identity:
             raise ValueError('opencode_db_replaced')
         known[native_id] = identity
-        return self.opencode_scan_session(path, identity, native_id, budget)
+        return self.opencode_scan_session(path, identity, native_id, repo_path, budget)
 
-    def opencode_scan_session(self, path, identity, native_id, budget):
+    def opencode_cell(self, db, budget, size, fetched, sql, args):
+        """Fetch one data cell only after its byte size fits the cell and cumulative budgets."""
+        if size is None or size > OC_CELL_MAX:
+            raise ValueError('opencode_record_too_large')
+        fetched += size
+        if fetched > OC_FETCH_MAX:
+            raise ValueError('opencode_guard_budget')
+        rows = self.opencode_query(db, budget, sql, args)
+        if len(rows) != 1 or not isinstance(rows[0][0], str) or len(rows[0][0].encode('utf-8', 'surrogatepass')) != size:
+            raise ValueError('opencode_record_malformed')
+        return rows[0][0], fetched
+
+    def opencode_scan_session(self, path, identity, native_id, repo_path, budget):
         fetched = 0
         emitted = 0
         db = self.opencode_connect(path, budget)
         try:
-            db.execute('BEGIN')  # one read snapshot for the messages and their parts
+            db.execute('BEGIN')  # one read snapshot for the binding, the messages and their parts
             if self.opencode_identity(path) != identity:
                 raise ValueError('opencode_db_replaced')
+            bound = self.opencode_query(db, budget, 'SELECT id FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
+                                        (native_id, repo_path))
+            if len(bound) != 1:
+                raise ValueError('opencode_session_missing' if not bound else 'opencode_session_ambiguous')
+            # Sizes first, data later: no cell is materialized before its bytes fit the budget.
             messages = self.opencode_query(
                 db, budget,
-                'SELECT id, length(CAST(data AS BLOB)), CASE WHEN length(CAST(data AS BLOB)) <= ? THEN data END '
+                'SELECT CASE WHEN length(CAST(id AS BLOB)) <= ? THEN id END, length(CAST(data AS BLOB)) '
                 'FROM session_message WHERE session_id=? AND type=? ORDER BY seq LIMIT ?',
-                (OC_CELL_MAX, native_id, 'assistant', OC_MAX_MESSAGES + 1))
+                (OC_ID_MAX, native_id, 'assistant', OC_MAX_MESSAGES + 1))
             if len(messages) > OC_MAX_MESSAGES:
                 raise ValueError('opencode_guard_budget')
             parts_seen = 0
-            for message_id, size, raw in messages:
-                if raw is None:
+            for message_id, size in messages:
+                if message_id is None:
                     raise ValueError('opencode_record_too_large')
-                fetched += size
-                if fetched > OC_FETCH_MAX:
-                    raise ValueError('opencode_guard_budget')
+                raw, fetched = self.opencode_cell(db, budget, size, fetched,
+                                                  'SELECT data FROM session_message WHERE id=?', (message_id,))
                 parts = self.opencode_query(
                     db, budget,
-                    'SELECT type, length(CAST(data AS BLOB)), CASE WHEN type=? AND length(CAST(data AS BLOB)) <= ? THEN data END '
-                    'FROM session_part WHERE message_id=? ORDER BY ordinal LIMIT ?',
-                    ('text', OC_CELL_MAX, message_id, OC_MAX_PARTS - parts_seen + 1))
+                    'SELECT ordinal, CASE WHEN length(CAST(type AS BLOB)) <= ? THEN type END, '
+                    'length(CAST(data AS BLOB)) FROM session_part WHERE message_id=? ORDER BY ordinal LIMIT ?',
+                    (OC_ID_MAX, message_id, OC_MAX_PARTS - parts_seen + 1))
                 parts_seen += len(parts)
                 if parts_seen > OC_MAX_PARTS:
                     raise ValueError('opencode_guard_budget')
                 texts = []
-                for part_type, part_size, part_raw in parts:
+                for ordinal, part_type, part_size in parts:
+                    if part_type is None or not isinstance(ordinal, int):
+                        raise ValueError('opencode_record_too_large' if part_type is None else 'opencode_record_malformed')
                     if part_type != 'text':
                         continue
-                    if part_raw is None:
-                        raise ValueError('opencode_record_too_large')
-                    fetched += part_size
-                    if fetched > OC_FETCH_MAX:
-                        raise ValueError('opencode_guard_budget')
+                    part_raw, fetched = self.opencode_cell(
+                        db, budget, part_size, fetched,
+                        'SELECT data FROM session_part WHERE message_id=? AND ordinal=?', (message_id, ordinal))
                     texts.append(_oc_text(_oc_json(part_raw)))
                 budget.check()
                 content = _oc_json(raw).get('content')
