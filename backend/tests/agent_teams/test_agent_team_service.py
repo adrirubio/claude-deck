@@ -127,6 +127,7 @@ def _ready_install_status():
         opencode_cli_available=True,
         opencode_mcp_installed=True,
         opencode_plugin_events_missing=[],
+        opencode_version_ready=True,
         muse_cli_available=True,
         muse_mcp_installed=True,
         muse_hooks_missing=[],
@@ -2860,3 +2861,104 @@ async def test_muse_launch_sends_the_bootstrap_prompt_only_to_a_new_session(db, 
         assert not any("Custom team startup prompt." in part for part in commands[0])
     else:
         assert commands[0][-1].startswith("Custom team startup prompt.")
+
+
+async def _opencode_preset(db, repo, *, launch_mode="plain"):
+    return await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="OpenCode version team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="OpenCode member",
+                    provider="opencode-cli",
+                    repo_path=str(repo),
+                    launch_mode=launch_mode,
+                    launch_options={"session_id": "ses_fixture"} if launch_mode == "resume" else {},
+                )
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_mode", ["plain", "resume"])
+async def test_opencode_v1_is_refused_before_any_tmux_session(db, tmp_path, monkeypatch, launch_mode):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo, launch_mode=launch_mode)
+
+    async def v1_status():
+        return SimpleNamespace(**{**vars(_ready_install_status()), "opencode_version_ready": False})
+
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_install_service.get_install_status", v1_status
+    )
+    spawned = []
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", lambda *a, **k: spawned.append(a))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest())
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert item.block_code == opencode_version.BLOCK_CODE
+    assert item.reasons == [opencode_version.REASON_REQUIRED]
+    with pytest.raises(ValueError, match="Launch plan is blocked"):
+        await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(skip_plan_confirmation=True))
+    assert spawned == []
+
+
+def _opencode_pane(monkeypatch, repo):
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [{"provider": "opencode-cli", "session_name": "repo", "tmux_target": "repo:0.0", "pid": "4242", "cwd": str(repo)}],
+    )
+    monkeypatch.setattr("app.services.agent_team_service.read_proc_stat", lambda pid: (1, "start-4242"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+async def test_opencode_pane_below_2_or_unknown_is_not_adopted(db, tmp_path, monkeypatch, state):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    _opencode_pane(monkeypatch, repo)
+    seen = []
+
+    def gate(pid, start):
+        seen.append((pid, start))
+        reason = opencode_version.REASON_REQUIRED if state == "unsupported" else opencode_version.REASON_UNKNOWN
+        return opencode_version.VersionGate(state, "1.17.11" if state == "unsupported" else None, reason)
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", gate)
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert item.action == "blocked"
+    assert item.block_code == opencode_version.BLOCK_CODE
+    assert seen == [(4242, "start-4242")]
+
+
+@pytest.mark.asyncio
+async def test_opencode_pane_running_trusted_v2_is_adopted(db, tmp_path, monkeypatch):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.0.29", None))
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    assert plan.can_launch is True
+    assert plan.items[0].action == "adopt"
+
+
+def test_opencode_pane_without_identity_fails_closed():
+    from app.services import opencode_version
+
+    reason = agent_team_service._opencode_pane_refusal({"pid": None, "pane_proc_start": "x"})
+    assert reason == opencode_version.REASON_UNKNOWN
+    assert agent_team_service._opencode_pane_refusal({"pid": "not-a-pid", "pane_proc_start": "x"}) == opencode_version.REASON_UNKNOWN

@@ -82,6 +82,19 @@ def spawn_session(
     if provider.id == "claude-code" and options.mode == "worktree" and not options.worktree_name:
         options = SpawnCommandOptions(**{**options.__dict__, "worktree_name": name})
     command = provider.build_spawn_command(options)
+    if provider.id == "opencode-cli":
+        from app.services import opencode_version
+
+        # OpenCode 2 or later only; v1 and an unknown version never reach tmux.
+        gate = opencode_version.opencode_version_gate()
+        if not gate.ready or gate.identity is None:
+            raise ProviderLaunchError(
+                f"{opencode_version.BLOCK_CODE}: {opencode_version.REASON_REQUIRED}",
+                opencode_version.BLOCK_CODE,
+            )
+        # Launch the exact binary that was probed, not whatever the tmux
+        # server's PATH resolves "opencode" to.
+        command[0] = gate.identity.path
     if provider.id == "pi-cli":
         from app.services.pi_mail_readiness import integration_path, pi_mail_environment, pi_mail_readiness
 

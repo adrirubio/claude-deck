@@ -2215,6 +2215,9 @@ class AgentMailService:
             )
             if current.stdout.strip() != f"{session.pane_id}|{session.pid}":
                 raise MailWakeError("wake_target_stale")
+            if session.provider == "opencode-cli":
+                # Before the text and before the Enter: the member's OpenCode may have changed.
+                self._require_opencode_2_pane(session)
 
         try:
             require_current_pane()
@@ -2281,6 +2284,9 @@ class AgentMailService:
                     or peer_process.pane_is_alive(session.pid, pane_start) is not True
                     or (transport_guard is not None and not transport_guard())):
                 raise MailWakeError("wake_transport_uncertain" if staged else "wake_target_stale")
+            if getattr(session, "provider", None) == "opencode-cli":
+                # The lookup and guard awaited; the member's OpenCode may have changed meanwhile.
+                self._require_opencode_2_pane(session)
 
         if not session.tmux_target or not session.pane_id or session.pid is None:
             raise MailWakeError("wake_target_unbound")
@@ -2299,6 +2305,25 @@ class AgentMailService:
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             raise MailWakeError("wake_transport_uncertain" if staged else "wake_transport_failed") from error
         return {"method": "tmux", "target": session.tmux_target}
+
+    @staticmethod
+    def _require_opencode_2_pane(session: MailAgentSession) -> None:
+        """Refuse to wake an OpenCode member unless its pane runs the trusted OpenCode 2 binary."""
+        from app.services import opencode_version
+
+        pane_pid = session.bound_pane_pid if session.bound_pane_pid is not None else session.pid
+        if isinstance(pane_pid, str) and pane_pid.isdigit():
+            pane_pid = int(pane_pid)
+        start = session.bound_pane_proc_start
+        if start is None and type(pane_pid) is int:
+            stat = peer_process.read_proc_stat(pane_pid)
+            start = stat[1] if stat is not None else None
+        if (
+            type(pane_pid) is not int
+            or not isinstance(start, str)
+            or not opencode_version.member_gate_for_pane(pane_pid, start).ready
+        ):
+            raise MailWakeError(opencode_version.BLOCK_CODE)
 
     async def _wake_member(
         self,
@@ -2335,6 +2360,8 @@ class AgentMailService:
                 else:
                     raise MailWakeError("inbox_empty")
             session = await self._nudge_session_for_member(db, member_id, now)
+            if session.provider == "opencode-cli":
+                self._require_opencode_2_pane(session)
             expected_start = None
             if expected_session_id is not None:
                 expected = await db.get(MailAgentSession, expected_session_id, populate_existing=True)
@@ -2379,6 +2406,9 @@ class AgentMailService:
                     raise MailWakeError("wake_session_mismatch")
             if delivery_guard is not None and not await delivery_guard():
                 raise MailWakeError("wake_session_mismatch")
+            if session.provider == "opencode-cli":
+                # Check again after the awaited audit commit and guard, just before transport.
+                self._require_opencode_2_pane(session)
             if expected_session_id is not None:
                 if delivery_guard is None:
                     raise MailWakeError("wake_session_mismatch")

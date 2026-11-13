@@ -175,3 +175,21 @@ async def test_real_slot_sql_observation_is_bounded_read_only(tmp_path, monkeypa
             assert not db.new and not db.dirty and not db.deleted
     finally:
         await engine.dispose()
+
+
+def test_observer_allowlist_carries_the_opencode_version_flag_only():
+    assert ops.INSTALL_FIELDS["opencode_version_ready"] is bool
+    assert not any("opencode_version" in key and key != "opencode_version_ready" for key in ops.INSTALL_FIELDS)
+
+
+def test_catalog_shows_opencode_v1_as_blocked_with_the_required_reason():
+    from app.services.opencode_version import BLOCK_CODE, REASON_REQUIRED
+    from app.services.providers import get_provider
+
+    blocked = ops.Snapshot({p.id: True for p in get_providers()}, configured(opencode_version_ready=False), NOW, NOW, 0)
+    report = ops.catalog(get_provider("opencode-cli"), blocked).model_dump(mode="json")
+    configuration = report["readiness"]["configuration"]
+    assert configuration["state"] == "blocked"
+    assert {"state": "blocked", "code": BLOCK_CODE, "reason": REASON_REQUIRED} == {
+        key: configuration["checks"][-1][key] for key in ("state", "code", "reason")
+    }
