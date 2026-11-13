@@ -261,3 +261,476 @@ def test_muse_sessions_root_must_be_configured(tmp_path):
     # The guard runs as root, so a ~ default would point at root's home.
     with pytest.raises(KeyError):
         _supervisor(tmp_path).transcript("muse-cli", "/w/research", SESSION)
+
+
+# --- OpenCode 2 (#733 guard checkpoint) -------------------------------------
+# Schema from pinned anomalyco/opencode fedc6f208aa2bd54c1019227214568083f6380ad
+# (v2.2.7): packages/core/src/database/schema.gen.ts. Assistant content is its
+# session_part rows by ordinal, then inline data.content (session/history.ts
+# L91-122); answer text is {type: "text", text} (schema/session-message.ts L185).
+import os  # noqa: E402
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+
+OC_SESSION = "ses_0abcDEF1234567890ghijKLMNo"
+OC_REPO = "/w/opencode-member"
+OC_DDL = [
+    "CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, slug text NOT NULL, directory text NOT NULL, "
+    "version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, time_busy integer, "
+    "time_idle integer, idle_outcome text, time_suspended integer)",
+    "CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL, "
+    "time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
+    "CREATE TABLE session_part (message_id text NOT NULL, session_id text NOT NULL, ordinal integer NOT NULL, "
+    "type text NOT NULL, call_id text, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL, "
+    "PRIMARY KEY(message_id, ordinal))",
+]
+
+
+def _oc_db(path, *, schema=OC_DDL, directory=OC_REPO, session=OC_SESSION):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as db:
+        for statement in schema:
+            db.execute(statement)
+        if session:
+            db.execute("INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated) "
+                       "VALUES (?, 'p', 's', ?, '2.2.7', 1, 1)", (session, directory))
+    os.chmod(path, 0o600)
+    return path
+
+
+def _oc_message(path, seq, *, kind="assistant", inline=None, completed=True, parts=()):
+    data = {"time": {"created": 1, **({"completed": 2} if completed else {})}}
+    if inline is not None:
+        data["content"] = inline
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO session_message VALUES (?, ?, ?, ?, 1, 1, ?)",
+                   (f"msg{seq}", OC_SESSION, kind, seq, json.dumps(data)))
+        for ordinal, (part_type, part) in enumerate(parts):
+            db.execute("INSERT INTO session_part VALUES (?, ?, ?, ?, NULL, 1, 1, ?)",
+                       (f"msg{seq}", OC_SESSION, ordinal, part_type, part if isinstance(part, str) else json.dumps(part)))
+
+
+def _oc_supervisor(tmp_path, roots=None, **extra):
+    root = tmp_path / "oc-data"
+    return _supervisor(tmp_path, opencode_data_roots=[str(r) for r in (roots or [root])], agent_uid=os.getuid(), **extra)
+
+
+def _oc_scan(sup, monkeypatch, session=OC_SESSION, repo=OC_REPO):
+    stopped = []
+    monkeypatch.setattr(sup, "stop", lambda reason, **kw: stopped.append(kw.get("rule")))
+    binding = {"provider": "opencode-cli", "repo_path": repo, "launch_options": json.dumps({"session_id": session})}
+    return sup.scan([binding]), stopped
+
+
+def _text(text):
+    return ("text", {"type": "text", "text": text})
+
+
+def test_opencode_assistant_text_notice_in_a_part_stops(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("hello"), _text(NOTICE)])
+    ok, stopped = _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+    assert ok is False and stopped == ["cybersecurity_notice"]
+
+
+def test_opencode_inline_assistant_text_notice_stops(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, inline=[{"type": "text", "text": NOTICE}])
+    ok, stopped = _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+    assert ok is False and stopped == ["cybersecurity_notice"]
+
+
+@pytest.mark.parametrize("case", ["reasoning_part", "tool_part", "user_message", "reasoning_inline"])
+def test_opencode_reasoning_tool_or_user_text_never_holds(tmp_path, monkeypatch, case):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    if case == "reasoning_part":
+        _oc_message(db, 1, parts=[("reasoning", {"type": "reasoning", "text": NOTICE})])
+    elif case == "tool_part":
+        _oc_message(db, 1, parts=[("tool", {"type": "tool", "state": {"output": NOTICE}})])
+    elif case == "user_message":
+        _oc_message(db, 1, kind="user", inline=[{"type": "text", "text": NOTICE}])
+    else:
+        _oc_message(db, 1, inline=[{"type": "reasoning", "text": NOTICE}])
+    ok, stopped = _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+    assert ok is True and stopped == []
+
+
+def test_opencode_updated_or_reopened_message_is_rescanned(tmp_path, monkeypatch):
+    # message-updater.ts L93-94 / L220-239 can replace or reopen a completed message
+    # without a new seq, so every tick rescans all assistant text.
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("fine")])
+    sup = _oc_supervisor(tmp_path)
+    assert _oc_scan(sup, monkeypatch) == (True, [])
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE session_part SET data=? WHERE message_id='msg1'", (json.dumps({"type": "text", "text": NOTICE}),))
+        conn.execute("UPDATE session_message SET data=? WHERE id='msg1'", (json.dumps({"time": {"created": 1}}),))
+    assert _oc_scan(sup, monkeypatch) == (False, ["cybersecurity_notice"])
+
+
+def test_opencode_stale_unfinished_row_does_not_hide_later_text(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, completed=False, parts=[_text("still streaming")])
+    for seq in range(2, 62):
+        _oc_message(db, seq, parts=[_text(NOTICE if seq == 61 else "ok")])
+    assert _oc_scan(_oc_supervisor(tmp_path), monkeypatch) == (False, ["cybersecurity_notice"])
+
+
+def test_opencode_db_replacement_refuses(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("ok")])
+    sup = _oc_supervisor(tmp_path)
+    assert _oc_scan(sup, monkeypatch) == (True, [])
+    copy = tmp_path / "copy.db"
+    shutil.copy2(db, copy)
+    os.replace(copy, db)  # same content, new inode
+    with pytest.raises(ValueError, match="opencode_db_replaced"):
+        _oc_scan(sup, monkeypatch)
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("no_db", "opencode_db_missing"),
+    ("two_channel_dbs", "opencode_db_ambiguous"),
+    ("wrong_directory", "opencode_session_missing"),
+    ("two_roots", "opencode_session_ambiguous"),
+    ("missing_part_table", "opencode_schema_unsupported"),
+    ("not_sqlite", "opencode_db_unsafe_file"),
+])
+def test_opencode_discovery_refusals(tmp_path, monkeypatch, case, reason):
+    root, other = tmp_path / "oc-data", tmp_path / "oc-other"
+    roots = [root]
+    if case == "no_db":
+        root.mkdir()
+    elif case == "two_channel_dbs":
+        _oc_db(root / "opencode-beta.db")
+        _oc_db(root / "opencode-dev.db")
+    elif case == "wrong_directory":
+        _oc_db(root / "opencode.db", directory="/w/elsewhere")
+    elif case == "two_roots":
+        _oc_db(root / "opencode.db")
+        _oc_db(other / "opencode.db")
+        roots = [root, other]
+    elif case == "missing_part_table":
+        _oc_db(root / "opencode.db", schema=OC_DDL[:2])
+    else:
+        root.mkdir()
+        (root / "opencode.db").write_bytes(b"not a database at all")
+        os.chmod(root / "opencode.db", 0o600)
+    with pytest.raises(ValueError, match=reason):
+        _oc_scan(_oc_supervisor(tmp_path, roots=roots), monkeypatch)
+
+
+@pytest.mark.parametrize("case", ["symlink", "group_writable", "wrong_owner"])
+def test_opencode_unsafe_db_file_refuses(tmp_path, monkeypatch, case):
+    root = tmp_path / "oc-data"
+    if case == "symlink":
+        real = _oc_db(tmp_path / "elsewhere" / "opencode.db")
+        root.mkdir()
+        (root / "opencode.db").symlink_to(real)
+        sup = _oc_supervisor(tmp_path)
+    else:
+        db = _oc_db(root / "opencode.db")
+        if case == "group_writable":
+            os.chmod(db, 0o620)
+            sup = _oc_supervisor(tmp_path)
+        else:
+            sup = _supervisor(tmp_path, opencode_data_roots=[str(root)], agent_uid=os.getuid() + 1)
+    with pytest.raises(ValueError, match="opencode_db_unsafe_file"):
+        _oc_scan(sup, monkeypatch)
+
+
+@pytest.mark.parametrize("session", ["abc_123", "01a13115-7287-73b1-a44f-c5609e22ae2d", "ses_" + "x" * 200, "ses_a/b"])
+def test_opencode_session_id_must_be_an_opencode_id(tmp_path, monkeypatch, session):
+    _oc_db(tmp_path / "oc-data" / "opencode.db")
+    with pytest.raises(ValueError, match="opencode_session_id_invalid"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch, session=session)
+
+
+def test_opencode_nul_and_multibyte_text_is_scanned(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("naïve 日本語 \x00 ok"), _text("ünïcode " + NOTICE)])
+    assert _oc_scan(_oc_supervisor(tmp_path), monkeypatch) == (False, ["cybersecurity_notice"])
+
+
+@pytest.mark.parametrize("case", ["bad_json_part", "non_string_text", "non_object_message", "inline_non_string"])
+def test_opencode_malformed_records_refuse(tmp_path, monkeypatch, case):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    if case == "bad_json_part":
+        _oc_message(db, 1, parts=[("text", "{not json")])
+    elif case == "non_string_text":
+        _oc_message(db, 1, parts=[("text", {"type": "text", "text": 7})])
+    elif case == "inline_non_string":
+        _oc_message(db, 1, inline=[{"type": "text", "text": ["x"]}])
+    else:
+        with sqlite3.connect(db) as conn:
+            conn.execute("INSERT INTO session_message VALUES ('m1', ?, 'assistant', 1, 1, 1, '[1, 2]')", (OC_SESSION,))
+    with pytest.raises(ValueError, match="opencode_record_malformed"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+@pytest.mark.parametrize("limit,value,reason", [
+    ("OC_CELL_MAX", 32, "opencode_record_too_large"),
+    ("OC_FETCH_MAX", 200, "opencode_guard_budget"),
+    ("OC_TEXT_MAX", 40, "opencode_guard_budget"),
+    ("OC_MAX_MESSAGES", 2, "opencode_guard_budget"),
+    ("OC_MAX_PARTS", 3, "opencode_guard_budget"),
+    ("OC_VM_MAX", 1, "opencode_guard_budget"),
+    ("OC_DEADLINE", 0.0, "opencode_guard_deadline"),
+])
+def test_opencode_bounds_refuse_and_never_skip(tmp_path, monkeypatch, limit, value, reason):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    for seq in range(1, 5):
+        _oc_message(db, seq, parts=[_text("a fairly ordinary reply number %d" % seq)])
+    monkeypatch.setattr(ts, limit, value)
+    if limit == "OC_VM_MAX":
+        monkeypatch.setattr(ts, "OC_VM_INTERVAL", 1)  # fixture queries are far below 1000 VM operations
+    with pytest.raises(ValueError, match=reason):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+def test_opencode_clean_session_passes_and_records_identity(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("all fine")])
+    sup = _oc_supervisor(tmp_path)
+    assert _oc_scan(sup, monkeypatch) == (True, [])
+    stat = os.lstat(db)
+    assert sup.state["opencode_db_identity"][OC_SESSION] == [stat.st_dev, stat.st_ino, stat.st_uid]
+
+
+def test_opencode_fetch_budget_counts_the_last_part_before_decoding(tmp_path, monkeypatch):
+    # The overflow falls on the final part, so no later message check can catch it.
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("x" * 100)])
+    monkeypatch.setattr(ts, "OC_FETCH_MAX", 80)  # the message cell fits; message + part does not
+    with pytest.raises(ValueError, match="opencode_guard_budget"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+# V1 review 5894667853 (PR #898): no cell beyond the fetch budget is ever materialized,
+# the SQLite URI opens exactly the checked file, and the workspace binding is rechecked
+# inside the content snapshot.
+def _materialized(sup, monkeypatch):
+    total = [0]
+    original = sup.opencode_query
+
+    def query(db, budget, sql, args=()):
+        rows = original(db, budget, sql, args)
+        if sql.startswith('SELECT CASE WHEN length(CAST(data AS BLOB)) = ?'):  # payload cells only
+            total[0] += sum(len(cell.encode()) for row in rows for cell in row if isinstance(cell, str))
+        return rows
+
+    monkeypatch.setattr(sup, "opencode_query", query)
+    return total
+
+
+@pytest.mark.parametrize("kind", ["messages", "parts"])
+def test_opencode_fetch_budget_is_enforced_before_cells_are_materialized(tmp_path, monkeypatch, kind):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    if kind == "messages":
+        for seq in range(1, 9):
+            _oc_message(db, seq, inline=[{"type": "text", "text": "x" * 80}])
+    else:
+        _oc_message(db, 1, parts=[_text("x" * 80) for _ in range(8)])
+    monkeypatch.setattr(ts, "OC_FETCH_MAX", 200)
+    sup = _oc_supervisor(tmp_path)
+    total = _materialized(sup, monkeypatch)
+    with pytest.raises(ValueError, match="opencode_guard_budget"):
+        _oc_scan(sup, monkeypatch)
+    assert total[0] <= ts.OC_FETCH_MAX, total[0]
+
+
+@pytest.mark.parametrize("folder", ["oc#suffix", "oc?mode=rw", "oc%23suffix"])
+def test_opencode_uri_opens_exactly_the_checked_file(tmp_path, monkeypatch, folder):
+    checked = _oc_db(tmp_path / folder / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    _oc_db(tmp_path / "oc")  # a file a truncated "file:" URI would open instead
+    sup = _oc_supervisor(tmp_path, roots=[checked.parent])
+    assert _oc_scan(sup, monkeypatch) == (False, ["cybersecurity_notice"])
+
+
+@pytest.mark.parametrize("change", ["moved", "deleted"])
+def test_opencode_workspace_binding_is_rechecked_in_the_content_snapshot(tmp_path, monkeypatch, change):
+    # session_v2.id is the primary key, so two rows for one id cannot exist in one database.
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("safe")])
+    sup = _oc_supervisor(tmp_path)
+    original = sup.opencode_scan_session
+
+    def moved(*args, **kwargs):
+        with sqlite3.connect(db) as conn:
+            if change == "moved":
+                conn.execute("UPDATE session_v2 SET directory='/w/another-member' WHERE id=?", (OC_SESSION,))
+            else:
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn.execute("DELETE FROM session_v2 WHERE id=?", (OC_SESSION,))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sup, "opencode_scan_session", moved)
+    with pytest.raises(ValueError, match="opencode_session_missing"):
+        _oc_scan(sup, monkeypatch)
+
+
+def test_opencode_oversized_message_id_or_part_type_refuses_before_fetch(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[("t" * 300, {"type": "text", "text": "x"})])
+    with pytest.raises(ValueError, match="opencode_record_too_large"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+def test_opencode_connection_must_name_the_checked_file(tmp_path, monkeypatch):
+    # Defence in depth behind the URI encoding: if the connection ever opened another
+    # file than the identity-checked path, PRAGMA database_list exposes it.
+    checked = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    sibling = _oc_db(tmp_path / "sibling" / "opencode.db")
+    monkeypatch.setattr(ts.urllib.parse, "quote", lambda path, safe="/": str(sibling))
+    with pytest.raises(ValueError, match="opencode_db_replaced|opencode_db_unsafe_file"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+# V1 review 5894764968 (PR #898): SQLite's own open file must be the checked file, and
+# every value SQLite returns to Python is bounded in SQL before it is materialized.
+def _swap_on_connect(monkeypatch, checked, replacement, call):
+    saved = checked.with_name("saved.db")
+    original = ts.sqlite3.connect
+    calls = []
+
+    def connect(*args, **kwargs):
+        calls.append(1)
+        if len(calls) != call:
+            return original(*args, **kwargs)
+        os.rename(checked, saved)
+        os.rename(replacement, checked)
+        try:
+            return original(*args, **kwargs)
+        finally:
+            os.rename(checked, replacement)
+            os.rename(saved, checked)
+
+    monkeypatch.setattr(ts.sqlite3, "connect", connect)
+
+
+@pytest.mark.parametrize("call", [1, 2])  # the discovery and the content connection
+def test_opencode_connection_must_hold_the_checked_inode(tmp_path, monkeypatch, call):
+    checked = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    replacement = _oc_db(tmp_path / "replacement.db")
+    _oc_message(replacement, 1, parts=[_text("safe")])
+    _swap_on_connect(monkeypatch, checked, replacement, call)
+    with pytest.raises(ValueError, match="opencode_db_replaced"):
+        _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+
+
+def test_opencode_open_file_is_rechecked_inside_the_snapshot(tmp_path, monkeypatch):
+    checked = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(checked, 1, parts=[_text(NOTICE)])
+    replacement = _oc_db(tmp_path / "replacement.db")
+    sup = _oc_supervisor(tmp_path)
+    original = sup.opencode_connect
+    calls = []
+
+    def connect(path, identity, budget):
+        db, fd = original(path, identity, budget)
+        calls.append(fd)
+        if len(calls) == 2:  # the content connection: its descriptor now names another file
+            other = os.open(replacement, os.O_RDONLY)
+            os.dup2(other, int(fd))
+            os.close(other)
+        return db, fd
+
+    monkeypatch.setattr(sup, "opencode_connect", connect)
+    with pytest.raises(ValueError, match="opencode_db_replaced"):
+        _oc_scan(sup, monkeypatch)
+
+
+@pytest.mark.parametrize("evidence", ["unreadable", "extra_file", "reused", "over_cap"])
+def test_opencode_descriptor_evidence_must_be_exact(tmp_path, monkeypatch, evidence):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("safe")])
+    held = []
+    if evidence == "unreadable":
+        monkeypatch.setattr(ts, "OC_FD_DIR", str(tmp_path / "no-such-fd-dir"))
+    elif evidence == "extra_file":
+        original = ts.sqlite3.connect
+
+        def connect(*args, **kwargs):
+            held.append(open(db, "rb"))  # a second new descriptor makes the evidence ambiguous
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ts.sqlite3, "connect", connect)
+    elif evidence == "reused":
+        monkeypatch.setattr(ts, "_oc_open_files", lambda budget: {})  # no new descriptor appears
+    else:
+        monkeypatch.setattr(ts, "OC_FD_MAX", 1)
+    reason = "opencode_guard_budget" if evidence == "over_cap" else "opencode_db_unreadable"
+    try:
+        with pytest.raises(ValueError, match=reason):
+            _oc_scan(_oc_supervisor(tmp_path), monkeypatch)
+    finally:
+        for handle in held:
+            handle.close()
+
+
+def _returned_strings(sup, monkeypatch):
+    seen = []
+    original = sup.opencode_query
+
+    def query(db, budget, sql, args=()):
+        rows = original(db, budget, sql, args)
+        if not sql.startswith("SELECT CASE WHEN length(CAST(data AS BLOB)) = ?"):  # payload cells are budgeted
+            seen.extend(len(cell) for row in rows for cell in row if isinstance(cell, (str, bytes)))
+        return rows
+
+    monkeypatch.setattr(sup, "opencode_query", query)
+    return seen
+
+
+def test_opencode_text_ordinal_refuses_before_it_is_fetched(tmp_path, monkeypatch):
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db")
+    _oc_message(db, 1, parts=[_text("safe")])
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO session_part VALUES ('msg1', ?, ?, 'text', NULL, 1, 1, '{}')", (OC_SESSION, "o" * 10000))
+    sup = _oc_supervisor(tmp_path)
+    seen = _returned_strings(sup, monkeypatch)
+    with pytest.raises(ValueError, match="opencode_record_malformed"):
+        _oc_scan(sup, monkeypatch)
+    assert max(seen) <= ts.OC_ID_MAX, max(seen)
+
+
+def test_opencode_schema_names_are_not_fetched_unbounded(tmp_path, monkeypatch):
+    huge = "c" * 100000
+    schema = [OC_DDL[0].replace("time_suspended integer)", f"time_suspended integer, {huge} text)")] + OC_DDL[1:]
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db", schema=schema)
+    _oc_message(db, 1, parts=[_text(NOTICE)])
+    sup = _oc_supervisor(tmp_path)
+    seen = _returned_strings(sup, monkeypatch)
+    assert _oc_scan(sup, monkeypatch) == (False, ["cybersecurity_notice"])
+    assert max(seen) <= 4096, max(seen)  # only required column names and our own path come back
+
+
+@pytest.mark.parametrize("table", ["session_message", "session_part"])
+def test_opencode_duplicate_rows_refuse_before_a_second_cell_is_fetched(tmp_path, monkeypatch, table):
+    # The column check doesn't prove the pinned keys, so a single-row fetch must not trust them.
+    schema = [OC_DDL[0], OC_DDL[1].replace("id text PRIMARY KEY", "id text"),
+              OC_DDL[2].replace(", PRIMARY KEY(message_id, ordinal)", "")]
+    db = _oc_db(tmp_path / "oc-data" / "opencode.db", schema=schema)
+    _oc_message(db, 1, parts=[_text("safe")])
+    with sqlite3.connect(db) as conn:
+        if table == "session_message":
+            conn.execute("INSERT INTO session_message SELECT * FROM session_message WHERE id='msg1'")
+        else:
+            conn.execute("INSERT INTO session_part SELECT * FROM session_part WHERE message_id='msg1'")
+    sup = _oc_supervisor(tmp_path)
+    payload_rows = []
+    original = sup.opencode_query
+
+    def query(db, budget, sql, args=()):
+        rows = original(db, budget, sql, args)
+        if "THEN data END" in sql:
+            payload_rows.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(sup, "opencode_query", query)
+    with pytest.raises(ValueError, match="opencode_record_malformed"):
+        _oc_scan(sup, monkeypatch)
+    assert all(n <= 1 for n in payload_rows), payload_rows
