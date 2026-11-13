@@ -457,6 +457,9 @@ def classify_agent_argv(argv: list[str] | None) -> str | None:
     if name == "pi":
         return "pi-cli"
     provider = _AGENT_EXECUTABLES.get(name.lower())
+    if provider == "opencode-cli" and len(argv) > 1 and argv[1] == "serve":
+        # An OpenCode server (a member's private one or the shared service) is not a member (#731).
+        return None
     if provider is not None:
         return provider
     if (name.lower() == "node" and len(argv) > 1 and isinstance(argv[1], str)

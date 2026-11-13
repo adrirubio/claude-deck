@@ -2642,7 +2642,7 @@ async def test_readiness_recognizes_all_five_provider_families(client, db, monke
         ("claude-code", ["claude"]),
         ("codex-cli", ["codex"]),
         ("copilot-cli", ["copilot"]),
-        ("opencode-cli", ["opencode"]),
+        ("opencode-cli", ["/opt/bin/opencode", "/r", "--standalone", "--session", "SLOT_SESSION"]),
         ("pi-cli", ["pi"]),
         ("pi-cli", ["node", "/srv/app/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"]),
     ]
@@ -2657,12 +2657,91 @@ async def test_readiness_recognizes_all_five_provider_families(client, db, monke
         for sid in (8200 + index, 8220 + index):
             row = await db.get(Sess, sid)
             row.provider = provider
+        # An OpenCode member is identified by its saved exact session (#731).
+        pane_session = {9200 + index: f"ses_owner{index}", 9220 + index: f"ses_leader{index}"}
+        if provider == "opencode-cli":
+            from app.services import opencode_version
+            for slot_index, pane in ((1, 9200 + index), (0, 9220 + index)):
+                await db.execute(text("UPDATE agent_team_slots SET launch_options = :o WHERE id = :id"),
+                                 {"o": f'{{"session_id": "{pane_session[pane]}"}}', "id": preset.slots[slot_index].id})
+            monkeypatch.setattr(opencode_version, "member_gate_for_pane",
+                                lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
         await db.commit()
         monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
-                            lambda pane_pid, proc_start, _argv=list(argv): _argv)
+                            lambda pane_pid, proc_start, _argv=list(argv): [
+                                pane_session.get(pane_pid) if part == "SLOT_SESSION" else part for part in _argv])
         readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
         body = readiness.json()
         assert body["status"] == "ready", (provider, argv, body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("argv,ready", [
+    (["opencode", "/r", "--standalone", "--session", "ses_other"], True),
+    (["opencode", "/r", "--standalone", "--continue"], True),
+    (["opencode", "/r", "--session", "ses_owner"], True),
+    (["opencode", "serve", "--service"], True),
+    (["opencode"], True),
+    (["opencode", "/r", "--standalone", "--session", "ses_owner"], False),
+])
+async def test_readiness_needs_the_exact_opencode_2_member(client, db, monkeypatch, tmp_path, argv, ready):
+    from app.models.database import MailAgentSession as Sess
+    from app.services import opencode_version
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "OpenCodeExact", 1)
+    await db.execute(text("UPDATE agent_team_slots SET provider = 'opencode-cli', launch_options = :o WHERE id = :id"),
+                     {"o": '{"session_id": "ses_owner"}', "id": preset.slots[1].id})
+    _bind_owner(db, preset, preset.slots[1].id, 1150, 8250, last_seen=datetime.utcnow())
+    (await db.get(Sess, 8250)).provider = "opencode-cli"
+    await db.commit()
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv", lambda pane_pid, proc_start: list(argv))
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate(
+        "ok" if ready else "unsupported", "2.2.7" if ready else "1.17.11", None))
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert "owner_binding_native_identity" in {b["code"] for b in readiness.json()["blockers"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_argv,accepted", [
+    (["/opt/bin/opencode", "serve", "--stdio", "--port", "0"], True),
+    (["/opt/bin/opencode", "serve", "--service"], False),
+    (["/opt/bin/opencode", "/r", "--standalone", "--session", "ses_owner"], False),
+])
+async def test_readiness_opencode_registration_comes_from_the_private_server(
+    client, db, monkeypatch, tmp_path, server_argv, accepted,
+):
+    from app.models.database import MailAgentSession as Sess
+    from app.services import opencode_version
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "OpenCodeServer", 1)
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    await db.execute(text("UPDATE agent_team_slots SET provider = 'opencode-cli', launch_options = :o WHERE id = :id"),
+                     {"o": '{"session_id": "ses_owner"}', "id": preset.slots[1].id})
+    await db.execute(text("UPDATE agent_team_slots SET provider = 'opencode-cli', launch_options = :o WHERE id = :id"),
+                     {"o": '{"session_id": "ses_leader"}', "id": preset.slots[0].id})
+    _bind_owner(db, preset, preset.slots[1].id, 1160, 8260, last_seen=datetime.utcnow())
+    _bind_owner(db, preset, preset.slots[0].id, 1161, 8261, last_seen=datetime.utcnow())
+    owner = await db.get(Sess, 8260)
+    owner.provider, owner.pid = "opencode-cli", 5060  # the registration came from the private server
+    (await db.get(Sess, 8261)).provider = "opencode-cli"
+    await db.commit()
+    pane = 1000 + 8260
+    member = {pane: ["/opt/bin/opencode", "/r", "--standalone", "--session", "ses_owner"],
+              1000 + 8261: ["/opt/bin/opencode", "/r", "--standalone", "--session", "ses_leader"],
+              5060: list(server_argv)}
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv", lambda pid, start: member.get(pid))
+    monkeypatch.setattr("app.utils.peer_process.read_proc_stat", lambda pid: (pane, "1") if pid == 5060 else (1, "1"))
+    monkeypatch.setattr("app.utils.peer_process.process_is_confirmed_dead", lambda pid: False)
+    monkeypatch.setattr("app.services.agent_activity_service._process_started_at",
+                        lambda start: datetime.now(timezone.utc) - timedelta(hours=1))
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane",
+                        lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+    body = (await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")).json()
+    if accepted:
+        assert body["status"] == "ready", body
+    else:
+        assert "owner_binding_mcp_process_gap" in {b["code"] for b in body["blockers"]}
 
 
 @pytest.mark.asyncio

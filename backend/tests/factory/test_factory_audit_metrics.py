@@ -4965,6 +4965,10 @@ def test_a20_classifier_labels_match_the_provider_registry():
     assert _audit.classify_agent_argv(["node", "/x/claude/cli.js"]) is None
     assert _audit.classify_agent_argv(["bash", "-c", "codex"]) is None
     assert _audit.classify_agent_argv(["codex-cli"]) is None
+    # An OpenCode server, private or shared, is never the member itself (#731).
+    assert _audit.classify_agent_argv(["/opt/bin/opencode", "/r", "--standalone", "--session", "ses_a"]) == "opencode-cli"
+    assert _audit.classify_agent_argv(["opencode", "serve", "--service"]) is None
+    assert _audit.classify_agent_argv(["opencode", "serve", "--stdio", "--port", "0"]) is None
 
 
 async def test_r03_one_result_per_attempt_survives_late_evidence_and_deletion(store):

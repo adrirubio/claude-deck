@@ -936,9 +936,12 @@ def synth_city_create_team(
       session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;
       context_tier: default/long_context. Bedrock launch options are not
       supported for copilot-cli.
-    - opencode-cli: modes plain/resume; launch_options model, agent,
-      use_last, session_id, platform, aws_region, aws_profile, prompt.
-      OpenCode TUI launch does not support reasoning_effort.
+    - opencode-cli (OpenCode 2): modes plain/resume; launch_options model
+      (provider/model with an optional #variant), agent (default agent),
+      skip_permissions (--auto), session_id (ses…), platform, aws_region,
+      aws_profile, prompt. A first launch saves an exact ses… session id;
+      --continue (use_last) and reasoning_effort are not supported. On
+      Bedrock the model must be amazon-bedrock/….
     Use synth_city_plan_team_launch before launch.
     """
     payload = {

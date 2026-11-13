@@ -113,11 +113,19 @@ def test_copilot_process_detection_matches_binary_and_node_wrapper():
         assert provider.is_process_match("node", "123") is True
 
 
-def test_opencode_process_detection_matches_binary_and_wrappers():
+def test_opencode_process_detection_matches_binary_and_wrappers(monkeypatch):
+    from app.services import opencode_process_identity
     from app.services.providers import get_provider
 
     provider = get_provider("opencode-cli")
+    argv = {123: ["/usr/local/bin/opencode", "/work", "--standalone", "--session", "ses_a"],
+            124: ["opencode", "serve", "--service"], 125: ["opencode", "serve", "--stdio", "--port", "0"]}
+    monkeypatch.setattr(opencode_process_identity, "read_argv", lambda pid: argv.get(pid))
 
+    # A member's own private server and the shared service are never sessions (#731).
+    assert provider.is_process_match("opencode", "124") is False
+    assert provider.is_process_match("opencode", "125") is False
+    assert provider.is_process_match("opencode", "999") is True  # cmdline unreadable: name only
     assert provider.is_process_match("opencode", "123") is True
     assert provider.is_process_match("/usr/local/bin/opencode", "123") is True
     assert provider.is_process_match("opencode-server", "123") is False

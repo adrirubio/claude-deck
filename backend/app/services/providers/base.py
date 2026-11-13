@@ -143,6 +143,10 @@ class AgentProvider(ABC):
     def build_spawn_command(self, options: SpawnCommandOptions) -> list[str]:
         """Build the provider CLI command for a tmux session."""
 
+    def build_spawn_env(self, options: SpawnCommandOptions) -> dict[str, str]:
+        """Provider-specific environment for the tmux session. It must hold no secret."""
+        return {}
+
     @abstractmethod
     def get_allowed_cli_commands(self) -> list[str]:
         """Return safe command names exposed by a provider CLI API."""

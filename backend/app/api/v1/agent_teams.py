@@ -3382,6 +3382,18 @@ async def read_activation_readiness(
                     return False, "native_identity", member.id, None, None
             elif not (argv0 == marker or argv0 == slot.provider):
                 return False, "native_identity", member.id, None, None
+            if slot.provider == "opencode-cli":
+                # The exact v2 member for the slot's saved session, on OpenCode 2:
+                # `opencode <dir> --standalone --session <id>`, never --continue
+                # or the shared service (#731).
+                from app.services import opencode_version
+                from app.services.opencode_process_identity import parse_member_argv
+                opencode_member = parse_member_argv(argv)
+                if (opencode_member is None
+                        or opencode_member.session_id != (slot.launch_options or {}).get("session_id")
+                        or not opencode_version.member_gate_for_pane(
+                            session.bound_pane_pid, session.bound_pane_proc_start).ready):
+                    return False, "native_identity", member.id, None, None
             # Authenticated MCP process: when the session process differs
             # from the pane process it must not be confirmed dead. This is the
             # separate current process check, not connected or heartbeat
@@ -3455,6 +3467,10 @@ async def read_activation_readiness(
                             and bool(_re_aux.search(
                                 r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
                         )
+                    elif slot.provider == "opencode-cli":
+                        # Only the member's own private server, never the shared service.
+                        from app.services.opencode_process_identity import is_private_server_argv
+                        aux_identity = is_private_server_argv(argv)
                     else:
                         aux_identity = aux_name == marker or aux_name == slot.provider
                     if not aux_identity:

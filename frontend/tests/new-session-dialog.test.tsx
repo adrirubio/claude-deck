@@ -26,7 +26,7 @@ vi.mock('../src/hooks/useProviders', () => ({
 vi.mock('../src/contexts/ProviderContext', () => ({
   useProviderContext: () => ({
     selectedProviderId: 'claude-code',
-    providers: [{ id: 'claude-code', display_name: 'Claude Code', installed: true }, { id: 'codex-cli', display_name: 'Codex CLI', installed: true }, { id: 'muse-cli', display_name: 'Muse Code', installed: true }],
+    providers: [{ id: 'claude-code', display_name: 'Claude Code', installed: true }, { id: 'codex-cli', display_name: 'Codex CLI', installed: true }, { id: 'muse-cli', display_name: 'Muse Code', installed: true }, { id: 'opencode-cli', display_name: 'OpenCode CLI', installed: true }],
   }),
 }))
 const folders = vi.hoisted(() => ({ value: [] as Array<{ path: string; name: string; source: 'team' | 'tracked'; detail?: string }> }))
@@ -112,6 +112,28 @@ describe('NewSessionDialog', () => {
     const request = vi.mocked(spawnSession).mock.calls[0][0]
     expect(request).toMatchObject({ provider: 'muse-cli', mode: 'plain' })
     expect(JSON.stringify(request)).not.toMatch(/bedrock|aws_region/)
+  })
+
+  it('resumes an OpenCode member only by its exact ses… session id, never "use last"', async () => {
+    setOperatorToken('stored-key')
+    open()
+    fireEvent.change(selects()[0], { target: { value: 'opencode-cli' } })
+    fireEvent.change(selects()[1], { target: { value: 'resume' } })
+    fireEvent.change(selects()[2], { target: { value: TEAM } })
+
+    expect(screen.queryByRole('checkbox', { name: /Use last OpenCode session/ })).not.toBeInTheDocument()
+    const start = screen.getByRole('button', { name: 'Start session' })
+    expect(start).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('OpenCode session ID'), { target: { value: '0b5b3c1e-uuid' } })
+    expect(start).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('OpenCode session ID'), { target: { value: 'ses_e2e111c0dffe5XAqhRWBFFBZDf' } })
+    expect(start).toBeEnabled()
+    fireEvent.click(start)
+
+    await waitFor(() => expect(spawnSession).toHaveBeenCalledTimes(1))
+    const request = vi.mocked(spawnSession).mock.calls[0][0]
+    expect(request).toMatchObject({ provider: 'opencode-cli', mode: 'resume', session_id: 'ses_e2e111c0dffe5XAqhRWBFFBZDf' })
+    expect(request).not.toHaveProperty('use_last')
   })
 
   it('shows the path field only for "Other folder…" or when no folder is known', () => {

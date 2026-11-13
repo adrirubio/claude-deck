@@ -42,6 +42,15 @@ def test_contract_matrix(provider):
         assert "project-local" in " ".join(report.operations["resume_exact"].conditions)
     if provider.id in {"opencode-cli", "copilot-cli"}:
         assert report.operations["execution_controls"].state == "unknown"
+    resume_conditions = " ".join(report.operations["resume_exact"].conditions)
+    if provider.id == "opencode-cli":
+        # v2 members resume only their saved ses… session; --continue is gone (#731).
+        assert "Latest/continue" not in resume_conditions
+        assert "--standalone --session" in resume_conditions
+        assert "--session" in report.native_capabilities["resume"]["reason"]
+        assert "continue" not in report.native_capabilities["resume"]["reason"]
+    if provider.id == "copilot-cli":
+        assert "Latest/continue is not exact resume" in resume_conditions
 
 
 @pytest.mark.parametrize("provider", get_providers(), ids=lambda p: p.id)
