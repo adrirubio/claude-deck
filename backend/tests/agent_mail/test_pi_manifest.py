@@ -34,7 +34,7 @@ def test_manifest_matches_real_mcp_tools_without_registration(sync_module, monke
         "synth_city_supervisor_checkin", "synth_city_watch_required_checks",
         "synth_city_request_scope_amendment", "synth_city_record_revision_review",
         "synth_city_withdraw_revision_review", "synth_city_end_submitted_revision",
-        "synth_city_settle_accepted_revision",
+        "synth_city_settle_accepted_revision", "synth_city_record_head_review",
     ):
         assert f'"name": "{name}"' in expected
     public, private = expected.split("export const privateTools = ")

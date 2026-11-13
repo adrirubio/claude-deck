@@ -44,6 +44,7 @@ from app.models.database import (
 from app.models.schemas import (
     GithubScopeAmendmentCreate, GithubRevisionReviewCreate, GithubRevisionReviewWithdraw,
     GithubSubmittedRevisionEnd, GithubRevisionReviewResponse,
+    GithubHeadReviewCreate, GithubHeadReviewResponse,
     AgentTeamActivityResponse,
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
@@ -3747,6 +3748,27 @@ async def record_github_revision_review(item_id: int, request: GithubRevisionRev
             reviewer_member_id=session.member_id, verdict=request.verdict, summary=request.summary,
             evidence_url=request.evidence_url, actor=_session_actor(session))
         return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/head-reviews', response_model=GithubHeadReviewResponse)
+async def record_github_head_review(item_id: int, request: GithubHeadReviewCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    """Record an explicit accepted or changes_required verdict for the PR's exact current head (#904)."""
+    from app.services.github_head_acceptance_service import record_head_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await record_head_review(db, item, dispatch_nonce=request.dispatch_nonce, head_sha=request.head_sha,
+            reviewer_member_id=session.member_id, verdict=request.verdict, summary=request.summary,
+            evidence_url=request.evidence_url, actor=_session_actor(session))
+        return GithubHeadReviewResponse(**{key: getattr(fact, key) for key in GithubHeadReviewResponse.model_fields})
     except GithubApprovalError as exc:
         await db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

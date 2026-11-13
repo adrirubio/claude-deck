@@ -1221,7 +1221,7 @@ def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monke
             types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
                 name=name, arguments=arguments)))
         assert wire.root.structuredContent == denied
-        assert len(tools) == 42
+        assert len(tools) == 43
         # Every published tool is refused before validation or execution.
         for tool in tools:
             assert await shim.mcp.call_tool(tool.name, {}) == denied
@@ -1251,7 +1251,7 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     spec.loader.exec_module(shim)
     calls = []
     monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert len(asyncio.run(shim.mcp.list_tools())) == 42
+    assert len(asyncio.run(shim.mcp.list_tools())) == 43
     assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     assert shim._state["member_id"] is None and shim._state["capability_token"] is None
     assert calls == []
@@ -1282,6 +1282,25 @@ def test_required_check_watch_passes_explicit_head_reviewer_and_attempt(monkeypa
     assert shim.synth_city_watch_required_checks(149,'fixture',0,'a'*40,45)=={'ok':True}
     assert calls==[(('POST','/required-check-watch'),{'json':{'work_item_id':149,
         'dispatch_nonce':'fixture','scope_revision':0,'head_sha':'a'*40,'reviewer_member_id':45}})]
+
+
+def test_head_review_tool_sends_an_explicit_verdict_and_binds_server_identity(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    calls = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs:
+        calls.append((method, path, kwargs)) or {"ok": True, "data": {"id": 1}})
+    assert shim.synth_city_record_head_review(19, "attempt", "a" * 40, "accepted", "Accepted at the exact head",
+        "https://github.com/o/r/pull/5#pullrequestreview-2")["ok"]
+    shim.synth_city_record_head_review(19, "attempt", "a" * 40, "changes_required", "Needs correction",
+        "https://github.com/o/r/pull/5#pullrequestreview-3")
+    assert [row[1] for row in calls] == ["/github-work-items/19/head-reviews"] * 2
+    assert [row[2]["json"]["verdict"] for row in calls] == ["accepted", "changes_required"]
+    for _, _, kwargs in calls:
+        assert set(kwargs["json"]) == {"dispatch_nonce", "head_sha", "verdict", "summary", "evidence_url"}
+    import inspect
+    assert inspect.signature(shim.synth_city_record_head_review).parameters["verdict"].default is inspect.Parameter.empty
 
 
 def test_scope_amendment_and_negative_review_tools_bind_server_identity(monkeypatch):

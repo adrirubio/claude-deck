@@ -152,6 +152,12 @@ stopped until fresh amendment approval and acknowledgement. Prose, CI completion
 review cannot grant that authority. An operator can also cancel submitted revisions; diagnostic
 work must first restore the exact baseline tree, including when its failed head was already charged.
 
+With the automatic merge policy, a code item merges only after the team's verifier has recorded an
+explicit `accepted` verdict for the pull request's exact current head (`synth_city_record_head_review`).
+A push after the acceptance waits for a new acceptance, an owner or non-verifier cannot supply one, and
+the work view shows `Waiting for reviewer acceptance` or `Head changed since acceptance`. The review hold
+label keeps working as an extra control. See the API workflow for the exact rules.
+
 Cancelled and timed-out CI runs remain blocked and visible without consuming a failed-head unit.
 Closing an unmerged submitted PR on an escalated attempt supersedes that revision without
 implicitly authorizing a retry or releasing the workspace. See the [API workflow](../api/agent-mail.md#healthy-scope-amendments-and-submitted-review-settlement)
