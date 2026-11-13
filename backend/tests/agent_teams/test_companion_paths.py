@@ -53,6 +53,13 @@ def test_a_service_source_brings_its_mapped_test_modules():
     assert "backend/tests/agent_teams/test_scope_amendments.py" in found
 
 
+@pytest.mark.parametrize("service", [
+    "backend/app/services/github_approval_service.py", "backend/app/services/github_terminal_revision_service.py"])
+def test_a_service_that_records_refusal_codes_brings_the_plain_language_catalogue_and_its_scan(service):
+    found = companion_paths.companions_for([service])
+    assert {"frontend/src/features/factory/auditRefusals.ts", "frontend/tests/audit-refusals.test.ts"} <= set(found)
+
+
 def test_the_tool_surface_brings_the_inventory_tests_and_the_doc_page():
     found = companion_paths.companions_for(["backend/mcp_shim/agent_mail_server.py"])
     assert {"backend/tests/agent_mail/test_mcp_shim.py", "backend/tests/agent_mail/test_pi_shim.py",

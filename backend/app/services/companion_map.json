@@ -33,14 +33,18 @@
         {"path": "backend/tests/agent_teams/test_active_continuation_cancellation.py", "kind": "test"},
         {"path": "backend/tests/agent_teams/test_initial_approval_atomicity.py", "kind": "test"},
         {"path": "backend/tests/agent_teams/test_initial_approval_cancellation.py", "kind": "test"},
-        {"path": "backend/tests/agent_teams/test_initial_approval_diagnostics.py", "kind": "test"}
+        {"path": "backend/tests/agent_teams/test_initial_approval_diagnostics.py", "kind": "test"},
+        {"path": "frontend/src/features/factory/auditRefusals.ts", "kind": "contract"},
+        {"path": "frontend/tests/audit-refusals.test.ts", "kind": "test"}
       ]
     },
     {
       "source": "backend/app/services/github_terminal_revision_service.py",
       "companions": [
         {"path": "backend/tests/agent_teams/test_scope_amendments.py", "kind": "test"},
-        {"path": "backend/tests/agent_teams/test_terminal_revision_reconciliation.py", "kind": "test"}
+        {"path": "backend/tests/agent_teams/test_terminal_revision_reconciliation.py", "kind": "test"},
+        {"path": "frontend/src/features/factory/auditRefusals.ts", "kind": "contract"},
+        {"path": "frontend/tests/audit-refusals.test.ts", "kind": "test"}
       ]
     },
     {
