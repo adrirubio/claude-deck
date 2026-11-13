@@ -639,10 +639,24 @@ async def test_scheduler_promotes_retry_before_fetching_labels_and_routes_by_lab
         github_dispatch_service, "_available_memory_mb", lambda: 999_999
     )
     scope = await _scope(db, autonomy=True, enabled=True)
-    slot = (
+    leader = (
         await db.execute(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id))
     ).scalar_one()
-    slot.area_labels = ["area:backend"]
+    # The Leader approves plans and never owns an item, even with the matching area label.
+    leader.area_labels = ["area:backend"]
+    slot = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=1,
+        display_name="Backend",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        area_labels=["area:backend"],
+        enabled=True,
+    )
+    db.add(slot)
+    await db.flush()
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=77,
@@ -687,6 +701,7 @@ async def test_scheduler_promotes_retry_before_fetching_labels_and_routes_by_lab
     assert item.dispatch_status == "dispatched"
     assert item.routing_method == "label"
     assert item.owner_slot_id == slot.id
+    assert item.owner_slot_id != leader.id
 
 
 @pytest.mark.asyncio

@@ -160,8 +160,31 @@ PENDING_REASONS = frozenset(
         "queued_ambiguous_sessions",
         "queued_no_workspace",
         "queued_auth_mode_unresolved",
+        "no_eligible_owner",
     }
 )
+
+NO_ELIGIBLE_OWNER_NOTE = (
+    "No eligible owner: no enabled implementer slot matches this issue. "
+    "The Leader and coordinator slots never own an item."
+)
+
+
+_ROLE_TRIM = " \t\r\n"
+
+
+def _ineligible_owner(slot: AgentTeamSlot, leader_slot_id: int | None) -> bool:
+    """The Leader approves every plan, and a coordinator never builds, so neither may own an item."""
+    return slot.id == leader_slot_id or (slot.role or "").strip(_ROLE_TRIM).lower() == "coordinator"
+
+
+def _eligible_owner_condition(preset_id: int):
+    """The same rule as _ineligible_owner, for a conditional write against the current rows."""
+    leader_id = select(AgentTeamPreset.leader_slot_id).where(AgentTeamPreset.id == preset_id).scalar_subquery()
+    return and_(
+        AgentTeamSlot.id.is_distinct_from(leader_id),
+        func.lower(func.trim(func.coalesce(AgentTeamSlot.role, ""), _ROLE_TRIM)) != "coordinator",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -930,10 +953,13 @@ class GithubDispatchService:
         classify=None,
         leader_slot_id: int | None = None,
     ) -> tuple[int | None, str]:
-        enabled = [slot for slot in preset_slots if slot.enabled]
+        enabled = [
+            slot for slot in preset_slots
+            if slot.enabled and not _ineligible_owner(slot, leader_slot_id)
+        ]
         enabled.sort(key=lambda slot: slot.position)
         if not enabled:
-            return None, "leader_fallback"
+            return None, "no_eligible_owner"
 
         issue_label_set = set(issue_labels)
         for slot in enabled:
@@ -947,8 +973,7 @@ class GithubDispatchService:
             if chosen is not None:
                 return chosen, "classified"
 
-        leader = next((slot for slot in enabled if slot.id == leader_slot_id), None)
-        return (leader.id, "leader_fallback") if leader is not None else (None, "leader_unavailable")
+        return None, "no_eligible_owner"
 
     async def slot_is_busy(
         self, db: AsyncSession, slot_id: int, *, exclude_item_id: int | None = None,
@@ -988,7 +1013,8 @@ class GithubDispatchService:
             return False
         if owner_slot_id is not None:
             owner = await db.get(AgentTeamSlot, owner_slot_id, populate_existing=True)
-            if owner is None or not owner.enabled or owner.preset_id != scope.preset_id:
+            if (owner is None or not owner.enabled or owner.preset_id != scope.preset_id
+                    or _ineligible_owner(owner, preset.leader_slot_id)):
                 return False
         if require_autonomy:
             from app.services.github_coordination_service import hold_code
@@ -1026,7 +1052,7 @@ class GithubDispatchService:
             AgentTeamPreset.autonomy_enabled.is_(True) if require_autonomy else True,
         )) & exists(select(AgentTeamSlot.id).where(
             AgentTeamSlot.id == identity[3], AgentTeamSlot.preset_id == scope.preset_id,
-            AgentTeamSlot.enabled.is_(True),
+            AgentTeamSlot.enabled.is_(True), _eligible_owner_condition(scope.preset_id),
         )) & exists(select(GithubWorkspace.id).where(
             GithubWorkspace.id == acquisition[0], GithubWorkspace.scope_id == scope.id,
             GithubWorkspace.leased_item_id == acquisition[1],
@@ -1071,6 +1097,12 @@ class GithubDispatchService:
             or scope.preset_id != preset_id or owner is None or not owner.enabled
             or owner.preset_id != preset_id):
             item.pending_reason = "leader_unavailable"
+            await db.commit()
+            return False
+        preset = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
+        if _ineligible_owner(owner, preset.leader_slot_id if preset else None):
+            item.pending_reason = "no_eligible_owner"
+            item.status_note = NO_ELIGIBLE_OWNER_NOTE
             await db.commit()
             return False
         if await self.slot_is_busy(db, owner_slot_id, exclude_item_id=item_id):
@@ -1263,7 +1295,10 @@ class GithubDispatchService:
                     leader_slot_id=preset.leader_slot_id if preset else None,
                 )
             if owner_slot_id is None:
-                await self._escalate_current_item(db, item, pending_identity, "plan_blocked")
+                await self._update_current_item(
+                    db, item, pending_identity, pending_reason="no_eligible_owner",
+                    status_note=NO_ELIGIBLE_OWNER_NOTE,
+                )
                 await db.commit()
                 continue
             owner_slot = slots_by_id.get(owner_slot_id)
