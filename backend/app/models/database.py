@@ -1001,6 +1001,28 @@ class GithubRevisionReview(Base):
     settlement_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class GithubHeadReview(Base):
+    """Authenticated reviewer verdict bound to one PR head; the auto-merge gate reads it.
+
+    It grants no source authority. A newer fact for the same work item, nonce, PR and head supersedes older ones.
+    """
+
+    __tablename__ = "github_head_reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    scope_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    reviewer_member_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_url: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class FactoryContextKey(Base):
     """Immutable context key allocation for audit history.
 

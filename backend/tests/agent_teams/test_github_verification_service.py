@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -147,6 +149,16 @@ async def _item(db, scope, **kwargs):
 @pytest.fixture(autouse=True)
 def capability_enforcement(monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+
+
+@pytest.fixture(autouse=True)
+def reviewer_acceptance_gate_open(monkeypatch):
+    """These tests cover the other merge gates (draft, hold label, approval, budget, head, checks).
+
+    The reviewer-acceptance gate is covered in full, with its fail-closed cases, by tests/agent_teams/test_head_acceptance.py.
+    """
+    from app.services import github_head_acceptance_service as acceptance
+    monkeypatch.setattr(acceptance, "gate_note", AsyncMock(return_value=None))
 
 
 async def _owner(db, scope):

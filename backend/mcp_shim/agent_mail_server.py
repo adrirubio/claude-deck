@@ -1560,6 +1560,19 @@ def synth_city_record_revision_review(work_item_id: int, revision: int, dispatch
 
 
 @mcp.tool()
+def synth_city_record_head_review(work_item_id: int, dispatch_nonce: str, head_sha: str, verdict: str,
+    summary: str, evidence_url: str) -> dict:
+    """Assigned verifier records an explicit ACCEPTED or CHANGES_REQUIRED verdict for the PR's exact current head.
+
+    The verdict is required and is never inferred from the summary. Auto-merge needs an accepted fact for the
+    current head. The fact grants no source or readiness authority; link the source review on this PR.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/head-reviews",
+        {"dispatch_nonce": dispatch_nonce, "head_sha": head_sha, "verdict": verdict,
+         "summary": summary, "evidence_url": evidence_url})
+
+
+@mcp.tool()
 def synth_city_withdraw_revision_review(work_item_id: int, review_id: int, dispatch_nonce: str) -> dict:
     """Withdraw your active negative review disposition. History is retained."""
     return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews/{review_id}/withdraw",

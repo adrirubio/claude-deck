@@ -662,6 +662,48 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_record_head_review",
+    "description": "Assigned verifier records an explicit ACCEPTED or CHANGES_REQUIRED verdict for the PR's exact current head.\n\n    The verdict is required and is never inferred from the summary. Auto-merge needs an accepted fact for the\n    current head. The fact grants no source or readiness authority; link the source review on this PR.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "verdict": {
+          "title": "Verdict",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_url": {
+          "title": "Evidence Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "head_sha",
+        "verdict",
+        "summary",
+        "evidence_url"
+      ],
+      "title": "synth_city_record_head_reviewArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_record_revision_review",
     "description": "Assigned independent reviewer records CHANGES REQUIRED (default) or ACCEPTED for this exact submitted head.\n\n    This fact grants no source, readiness or merge authority. Link the source review;\n    a separate current-Leader settlement must act on it.\n    ",
     "inputSchema": {

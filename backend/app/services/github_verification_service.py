@@ -2122,6 +2122,10 @@ class GithubVerificationService:
         if hold_note is not None:
             await self._record_readiness_hold(db, item, hold_note)
             return
+        acceptance_note = await self._acceptance_note(db, scope, item, pull)
+        if acceptance_note is not None:
+            await self._record_readiness_hold(db, item, acceptance_note)
+            return
         approval_reason = await self._approval_gate_reason(db, scope, item)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
@@ -2195,6 +2199,10 @@ class GithubVerificationService:
         if hold_note is not None:
             await self._record_readiness_hold(db, item, hold_note)
             return
+        acceptance_note = await self._acceptance_note(db, scope, item, fresh_pull)
+        if acceptance_note is not None:
+            await self._record_readiness_hold(db, item, acceptance_note)
+            return
         approval_reason = await self._approval_gate_reason(db, scope, item)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
@@ -2250,6 +2258,17 @@ class GithubVerificationService:
         item.status_note = note
         item.updated_at = datetime.utcnow()
         await db.commit()
+
+    async def _acceptance_note(
+        self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem, pull: dict,
+    ) -> str | None:
+        """Auto-merge needs the team's verifier to have accepted this exact head; it fails closed."""
+        from app.services import github_head_acceptance_service as acceptance
+        head = self._head_sha(pull)
+        if not head:
+            # An unreadable head is demoted to re-verification by the head check that follows; it cannot merge.
+            return None
+        return await acceptance.gate_note(db, scope, item, head)
 
     async def _review_hold_note(
         self, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient, pull: dict,

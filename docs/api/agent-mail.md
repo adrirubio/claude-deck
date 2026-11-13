@@ -251,3 +251,25 @@ Closed, unmerged submitted PRs on escalated attempts are superseded by bounded v
 that observation grants neither retry nor lease release. Cancelled or timed-out check runs remain
 visible and inconclusive, consume no product-failure unit, and cannot satisfy required CI.
 A real failed check in the same observation still charges the head once.
+
+
+### Reviewer verdict for the exact head and the auto-merge gate
+
+`synth_city_record_head_review`, or `POST /github-work-items/{id}/head-reviews`, records an explicit
+`accepted` or `changes_required` verdict for the pull request's exact current head. The verdict is
+required and is never inferred from the summary. The request carries the attempt nonce, the 40-character
+head, the verdict, a summary and the link to the source review on this pull request. It covers initial
+attempts and scoped correction heads alike, and it does not replace the revision-review tools or the
+Leader's settlement of a submitted revision.
+
+The recording member comes from the authenticated session. It must be, at that moment, the current
+member of an enabled slot of this team whose role is `verifier`, and it must not be the owner or the
+Leader. A newer fact for the same head supersedes older ones, and an identical replay returns the
+existing fact. A fact grants no source, readiness or merge authority.
+
+With `merge_policy` set to `auto`, a code item merges automatically only when the latest active fact for
+the pull request's current head is `accepted` and its reviewer still qualifies when the gate runs. This
+check does not depend on a required-check watch. The review hold label still blocks first, and the
+gate runs again at the merge boundary. The work view shows the state through the item's status note:
+`Waiting for reviewer acceptance at <sha>`, `Head changed since acceptance (accepted at <sha>, head is
+<sha>)`, `Reviewer requires changes at <sha>` or `Reviewer accepted head <sha>`.

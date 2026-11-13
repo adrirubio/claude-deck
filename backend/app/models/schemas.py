@@ -2024,6 +2024,31 @@ class GithubRevisionReviewCreate(BaseModel):
     verdict: str = Field(default="changes_required", pattern=r"^(changes_required|accepted)$")
 
 
+class GithubHeadReviewCreate(BaseModel):
+    """An explicit reviewer verdict for the exact current head of a work item's PR; the verdict has no default."""
+
+    dispatch_nonce: str = Field(min_length=1)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    verdict: str = Field(pattern=r"^(changes_required|accepted)$")
+    summary: str = Field(min_length=1, max_length=12000)
+    evidence_url: str = Field(min_length=1, max_length=2000)
+
+
+class GithubHeadReviewResponse(BaseModel):
+    id: int
+    work_item_id: int
+    pr_number: int
+    head_sha: str
+    scope_revision: int
+    reviewer_member_id: int
+    verdict: str
+    summary: str
+    evidence_url: str
+    status: str
+    created_at: datetime
+    ended_at: Optional[datetime] = None
+
+
 class GithubRevisionReviewWithdraw(BaseModel):
     dispatch_nonce: str = Field(min_length=1)
 
