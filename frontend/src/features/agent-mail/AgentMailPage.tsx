@@ -89,6 +89,8 @@ export function AgentMailPage() {
   const [installStatus, setInstallStatus] = useState<AgentMailInstallStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [installLoading, setInstallLoading] = useState(true)
+  // The installation requires the Director key and the browser has none. The Team list says so.
+  const [directorKeyNeeded, setDirectorKeyNeeded] = useState(false)
   const [activeTab, setActiveTab] = useState('team')
   const [teamSearch, setTeamSearch] = useState('')
   const [teamStatus, setTeamStatus] = useState<TeamStatusFilter>('all')
@@ -105,7 +107,10 @@ export function AgentMailPage() {
   const [nudgingMemberId, setNudgingMemberId] = useState<number | null>(null)
 
   const loadOperationalData = useCallback(async (showLoading = true) => {
-    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) {
+      if (showLoading) setLoading(false)
+      return
+    }
     if (showLoading) {
       setLoading(true)
     }
@@ -128,7 +133,10 @@ export function AgentMailPage() {
   }, [stopRefusedReads, requiresDirectorKey])
 
   const loadInstallData = useCallback(async () => {
-    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) return
+    if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) {
+      setInstallLoading(false)
+      return
+    }
     setInstallLoading(true)
     try {
       setInstallStatus(await fetchAgentMailInstallStatus())
@@ -151,12 +159,21 @@ export function AgentMailPage() {
       toast.error(error instanceof Error ? error.message : 'Mail authentication status is unavailable.')
       return
     }
+    // The key dialog waits for the person. Until it is answered nothing is loading.
+    const keyNeeded = configured && !getOperatorToken()
+    setDirectorKeyNeeded(keyNeeded)
+    if (keyNeeded) {
+      setLoading(false)
+      setInstallLoading(false)
+    }
     if (configured && !await requestToken()) {
       protectedReadsBlocked.current = true
+      setDirectorKeyNeeded(true)
       setLoading(false)
       setInstallLoading(false)
       return
     }
+    setDirectorKeyNeeded(false)
     protectedReadsBlocked.current = false
     pollingEnabled.current = true
     await Promise.all([loadOperationalData(), loadInstallData()])
@@ -423,6 +440,8 @@ export function AgentMailPage() {
           <TeamTab
             members={teamMembers}
             loading={loading}
+            directorKeyNeeded={directorKeyNeeded}
+            onEnterDirectorKey={() => void refreshAll()}
             repoSearch={teamSearch}
             statusFilter={teamStatus}
             onRepoSearchChange={setTeamSearch}
