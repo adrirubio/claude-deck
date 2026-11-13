@@ -1,4 +1,4 @@
-import type { Locator } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { contrastFailures, useTheme, type Theme } from '../support/contrast'
 import { expect, test } from '../support/guard'
 import { expectKeyboardReachable } from '../support/keyboard'
@@ -50,16 +50,80 @@ test('@active no card shows technical words outside Technical details', async ({
   }
 })
 
-test('@active a card opens its harness page by click and by keyboard', async ({ page }) => {
-  await page.goto('/harnesses')
-  await card(page, 'codex-cli').click()
-  await expect(page).toHaveURL(/\/harnesses\/codex-cli$/)
-  await page.goto('/harnesses')
-  await expectKeyboardReachable(page, page.locator('main'), 3)
-  await page.locator('main').locator('a[href="/harnesses/claude-code"]').first().focus()
-  await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/harnesses\/claude-code$/)
-})
+// The cards stay skeletons until each harness's operations response arrives. A keyboard check
+// that starts before the card links exist finds no controls (the failure seen on the hosted run).
+const OPERATIONS = /\/api\/v1\/providers\/[^/]+\/operations/
+const SLOW_RELEASE_MS = 2_500
+const SLOW_HOLD_LIMIT_MS = 10_000
+const READY_TIMEOUT_MS = 15_000
+
+function cardLink(page: Page, harness: string): Locator {
+  return page.locator('main').locator(`a[href="/harnesses/${harness}"]`).first()
+}
+
+/** The actual card links of every harness are on the page. A heading or a page load is not enough. */
+async function expectCardLinksReady(page: Page): Promise<void> {
+  for (const harness of HARNESSES) {
+    await expect(cardLink(page, harness), `the ${harness} card link is ready`).toBeVisible({ timeout: READY_TIMEOUT_MS })
+  }
+}
+
+/**
+ * Holds the operations responses of the next page load. They are released after SLOW_RELEASE_MS
+ * or by release(), and never wait longer than SLOW_HOLD_LIMIT_MS. dispose() always removes the route
+ * and the timer, so a failing test cannot leave a request hanging.
+ */
+async function holdOperations(page: Page) {
+  let held = 0
+  let release = () => {}
+  const released = new Promise<void>(resolve => { release = resolve })
+  const handler = async (route: import('@playwright/test').Route) => {
+    held += 1
+    await Promise.race([released, new Promise(resolve => setTimeout(resolve, SLOW_HOLD_LIMIT_MS))])
+    await route.fallback()
+  }
+  // Registered after the guard route, so it runs first; fallback() hands the request to the guard.
+  await page.route(OPERATIONS, handler)
+  const timer = setTimeout(release, SLOW_RELEASE_MS)
+  return {
+    held: () => held,
+    async dispose() {
+      clearTimeout(timer)
+      release()
+      await page.unroute(OPERATIONS, handler)
+    },
+  }
+}
+
+// The normal and the slow case run the same sequence. Only the slow case holds the operations
+// responses of the second visit, and it proves the cards are still loading before they are released.
+for (const slow of [false, true]) {
+  const name = slow
+    ? '@active a card opens its harness page by click and by keyboard while the cards load slowly'
+    : '@active a card opens its harness page by click and by keyboard'
+  test(name, async ({ page }) => {
+    await page.goto('/harnesses')
+    await card(page, 'codex-cli').click()
+    await expect(page).toHaveURL(/\/harnesses\/codex-cli$/)
+    const hold = slow ? await holdOperations(page) : null
+    try {
+      await page.goto('/harnesses')
+      if (hold) {
+        await expect.poll(hold.held, 'the operations requests are held').toBeGreaterThan(0)
+        await expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible()
+        await expect(page.locator('main').locator('a[href^="/harnesses/"]'), 'no card link exists while the cards load').toHaveCount(0)
+        await expect(page.getByRole('status').filter({ hasText: /^Loading /i }).first(), 'a loading state is shown').toBeVisible()
+      }
+      await expectCardLinksReady(page)
+      await expectKeyboardReachable(page, page.locator('main'), 3)
+      await cardLink(page, 'claude-code').focus()
+      await page.keyboard.press('Enter')
+      await expect(page).toHaveURL(/\/harnesses\/claude-code$/)
+    } finally {
+      await hold?.dispose()
+    }
+  })
+}
 
 for (const theme of ['light', 'dark'] as Theme[]) {
   test(`@active the harness list meets AA contrast in the ${theme} theme`, async ({ page }) => {
