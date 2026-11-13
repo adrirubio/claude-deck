@@ -58,13 +58,8 @@ def _pidfd_kill(entry: dict) -> None:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """Read-only: whether a process with this pid exists (no signal, not even signal 0)."""
+    return Path(f"/proc/{pid}").exists()
 
 
 def _root_users(root: Path) -> list[int]:
@@ -216,14 +211,14 @@ def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state)
     root = tmp_path / "kit"
     (root / "state").mkdir(parents=True)
     (root / ".deck-runtime-kit").write_text("")
-    # The victim lives in a namespace of its own, so a forged record can name it exactly.
+    # The victim lives in a namespace of its own, so a full-shaped forged record can name it exactly.
     victim = subprocess.Popen(["unshare", "--user", "--map-root-user", "--net", "sleep", "300"], start_new_session=True)
     time.sleep(0.3)
-    start = Path(f"/proc/{victim.pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    victim_id = _identity(victim.pid)  # captured once, immutable, for the proved cleanup below
     victim_net = os.readlink(f"/proc/{victim.pid}/ns/net")
     try:
         (root / "state" / "processes.json").write_text(json.dumps({
-            "outer": {"pid": victim.pid, "start": start}, "backend": {"pid": victim.pid, "start": start}}))
+            "launcher": _identity(os.getpid()), "outer": victim_id, "backend": victim_id}))
         here = root.stat()
         record = {"id": "0" * 32, "root_dev": here.st_dev, "root_ino": here.st_ino, "uid": os.getuid(),
                   "net": None, "user": None}
@@ -243,7 +238,7 @@ def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state)
         assert (result.returncode, expected[0] in result.stderr) == (expected[1], True), result.stderr
         assert victim.poll() is None and root.exists()
     finally:
-        victim.kill()
+        _pidfd_kill(victim_id)
         victim.wait()
 
 
@@ -337,80 +332,9 @@ def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
     result = _kit("status", "--root", str(kit_root))
     assert result.returncode != 0 and ("incomplete" in result.stderr or "refused" in result.stderr), result.stderr
     assert not (kit_root / "evidence" / "MANIFEST.sha256").exists()
-
-
-# Synthetic, signal-free checks of the teardown planner and the pidfd identity check. They
-# run everywhere: plain processes spawned and recorded by the test, no namespace, no signal.
-@pytest.fixture
-def synthetic(tmp_path):
-    root = tmp_path / "kit"
-    (root / "state").mkdir(parents=True)
-    (root / ".deck-runtime-kit").write_text("")
-    here = root.stat()
-    record = root / "state" / "instance.json"
-    record.write_text(json.dumps({"id": "ab" * 16, "root_dev": here.st_dev, "root_ino": here.st_ino,
-                                  "uid": os.getuid(), "net": None, "user": None}))
-    record.chmod(0o600)
-    procs = [subprocess.Popen(["sleep", "300"]) for _ in range(2)]
-    time.sleep(0.1)
-    entries = {"inner": _identity(procs[0].pid), "outer": _identity(procs[1].pid)}
-    yield root, entries, procs
-    for proc in procs:
-        proc.kill()
-        proc.wait()
-
-
-def _write(root, entries):
-    (root / "state" / "processes.json").write_text(json.dumps(entries))
-
-
-def _helper(*args, env=None):
-    return subprocess.run(["bash", str(KIT), "_kitpy", *args], capture_output=True, text=True,
-                          env=env or _env(), timeout=30)
-
-
-def test_synthetic_plan_targets_only_proved_records_in_order(synthetic):
-    root, entries, procs = synthetic
-    _write(root, entries)
-    stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(300)", "ab" * 16])  # carries the id
-    try:
-        result = _helper("plan-teardown", str(root))
-        assert result.returncode == 0, result.stderr
-        plan = json.loads(result.stdout)
-        assert plan == {"targets": ["inner", "outer"], "problems": []}
-        checked = _helper("check-signal", str(root), "outer")
-        assert (checked.returncode, checked.stdout.strip()) == (0, "checked")
-        assert all(proc.poll() is None for proc in procs) and stranger.poll() is None
-    finally:
-        stranger.kill()
-        stranger.wait()
-
-
-@pytest.mark.parametrize("fault", ["start_mismatch", "start_prefix", "argv_mismatch", "parent_gone", "no_pidfd"])
-def test_synthetic_identity_mismatch_is_never_signalled(synthetic, fault):
-    root, entries, procs = synthetic
-    env = None
-    if fault == "start_mismatch":
-        entries["outer"]["start"] = str(int(entries["outer"]["start"]) + 1)
-    elif fault == "start_prefix":  # a near-match: the recorded value is a prefix of the real one
-        entries["outer"]["start"] = entries["outer"]["start"][:-1]
-    elif fault == "argv_mismatch":
-        entries["outer"]["argv"] = "0" * 64
-    elif fault == "parent_gone":
-        gone = subprocess.Popen(["true"])
-        gone.wait()
-        entries["outer"]["ppid"] = gone.pid
-    else:
-        env = _env(RUNTIME_KIT_TEST_NO_PIDFD="1")
-    _write(root, entries)
-    checked = _helper("check-signal", str(root), "outer", env=env)
-    assert checked.returncode != 0 and checked.stdout.strip() != "checked"
-    plan = _helper("plan-teardown", str(root))
-    targets = json.loads(plan.stdout)["targets"]
-    assert "outer" not in targets or fault == "no_pidfd"
-    if fault in ("argv_mismatch", "parent_gone"):
-        assert plan.returncode == 5  # a live process that fails its proof refuses the whole teardown
-    assert all(proc.poll() is None for proc in procs)
+    if fault == "reused_cli":  # restore the true record so the fixture's proved teardown can run
+        processes["cli"]["start"] = str(int(processes["cli"]["start"]) - 1)
+        state.write_text(json.dumps(processes))
 
 
 def test_down_kills_a_recorded_child_that_ignores_term(kit_root):
@@ -419,3 +343,175 @@ def test_down_kills_a_recorded_child_that_ignores_term(kit_root):
     down = _kit("down", "--root", str(kit_root))
     assert down.returncode == 0, down.stderr
     assert not _alive(stub) and not kit_root.exists()
+
+
+# Signal-free model tests of the ownership helper. The embedded Python helper is loaded in
+# process with every /proc read mocked: no process is started and no signal can be sent.
+# RUNTIME_KIT_SCRIPT_UNDER_TEST lets an in-memory removal control load a mutated copy.
+def _helper_module():
+    script = Path(os.environ.get("RUNTIME_KIT_SCRIPT_UNDER_TEST", KIT)).read_text()
+    source = script[script.index("KITPY=\'\n") + 7:script.index("\n\'\nkitpy()")]
+    namespace = {"__name__": "kitpy_model"}
+    exec(compile(source, "kitpy", "exec"), namespace)
+    return namespace
+
+
+ROOT_MODEL = "/tmp/model-kit"
+ID_MODEL = "ab" * 16
+
+
+def _model(preflight=False):
+    """A complete, valid kit: launcher, outer, inner, tmux, stub, backend and cli."""
+    net, outer_user, inner_user = "net:[50]", "user:[51]", "user:[52]"
+    world = {
+        100: {"ppid": 1, "net": "net:[1]", "user": "user:[1]", "argv": [b"unshare"]},
+        101: {"ppid": 100, "net": net, "user": outer_user,
+              "argv": [b"bash", b"/x/scripts/isolated-runtime-kit.sh", b"_outer", ROOT_MODEL.encode(),
+                       str(os.getuid()).encode(), str(os.getgid()).encode(), ID_MODEL.encode()]},
+        102: {"ppid": 101, "net": net, "user": inner_user,
+              "argv": [b"bash", b"/x/scripts/isolated-runtime-kit.sh", b"_inner", ROOT_MODEL.encode(), ID_MODEL.encode()]},
+    }
+    if not preflight:
+        world.update({103: {"ppid": 102, "net": net, "user": inner_user, "argv": [b"tmux"]},
+                      104: {"ppid": 102, "net": net, "user": inner_user, "argv": [b"stub"]},
+                      105: {"ppid": 102, "net": net, "user": inner_user, "argv": [b"backend"]},
+                      106: {"ppid": 103, "net": net, "user": inner_user, "argv": [b"cli"]}})
+    for pid, proc in world.items():
+        proc["start"] = str(1000 + pid)
+    roles = {100: "launcher", 101: "outer", 102: "inner", 103: "tmux", 104: "stub", 105: "backend", 106: "cli"}
+    procs = {roles[pid]: {"pid": pid, "start": proc["start"], "argv": f"h{pid}", "ppid": proc["ppid"],
+                          "pstart": str(1000 + proc["ppid"])} for pid, proc in world.items()}
+    inst = {"id": ID_MODEL, "uid": os.getuid(), "net": None if preflight else net, "user": None if preflight else inner_user}
+    return world, procs, inst
+
+
+def _bind(module, world, procs, inst):
+    def proc_stat(pid):
+        proc = world.get(int(pid))
+        return None if proc is None else (proc["start"], proc["ppid"])
+    module["proc_stat"] = proc_stat
+    module["argv_hash"] = lambda pid: f"h{pid}" if int(pid) in world else None
+    module["argv_list"] = lambda pid: world[int(pid)]["argv"] if int(pid) in world else None
+    def link(pid, kind):
+        proc = world.get(int(pid))
+        if proc is None:
+            raise FileNotFoundError(pid)
+        if proc.get("unreadable"):
+            raise PermissionError(pid)
+        return proc[kind]
+    module["link"] = link
+    module["own_pids"] = lambda: sorted(world)
+    module["HOST"] = {"net": "net:[1]", "user": "user:[1]"}
+    module["instance"] = lambda root: inst
+    module["processes"] = lambda root: procs
+    return module
+
+
+def test_model_plan_proves_every_role_and_orders_children_first():
+    world, procs, inst = _model()
+    module = _bind(_helper_module(), world, procs, inst)
+    assert module["plan"](ROOT_MODEL) == {"targets": ["cli", "stub", "backend", "tmux", "inner", "outer"], "problems": []}
+
+
+@pytest.mark.parametrize("role", ["outer", "inner", "tmux", "stub", "backend", "cli"])
+def test_model_every_role_needs_its_recorded_parent_role(role):
+    world, procs, inst = _model()
+    procs[role]["ppid"], procs[role]["pstart"] = 999, "1999"  # a valid-looking but foreign parent
+    world[999] = {"ppid": 1, "start": "1999", "net": "net:[1]", "user": "user:[1]", "argv": [b"x"]}
+    world[procs[role]["pid"]]["ppid"] = 999
+    module = _bind(_helper_module(), world, procs, inst)
+    result = module["plan"](ROOT_MODEL)
+    assert role not in result["targets"] and result["problems"]
+
+
+def test_model_a_host_namespace_anchor_never_qualifies_even_with_a_valid_chain():
+    world, procs, inst = _model(preflight=True)
+    world[101]["net"] = world[102]["net"] = "net:[1]"
+    module = _bind(_helper_module(), world, procs, inst)
+    result = module["plan"](ROOT_MODEL)
+    assert result["targets"] == [] and any("host namespace" in p for p in result["problems"])
+
+
+def test_model_preflight_anchors_in_their_own_namespaces_qualify():
+    world, procs, inst = _model(preflight=True)
+    module = _bind(_helper_module(), world, procs, inst)
+    assert module["plan"](ROOT_MODEL) == {"targets": ["inner", "outer"], "problems": []}
+
+
+def test_model_a_foreign_anchor_with_a_wrong_command_is_refused():
+    world, procs, inst = _model()
+    world[101]["argv"] = [b"bash", b"/x/scripts/isolated-runtime-kit.sh", b"_outer", b"/other/root",
+                          str(os.getuid()).encode(), str(os.getgid()).encode(), ID_MODEL.encode()]
+    module = _bind(_helper_module(), world, procs, inst)
+    result = module["plan"](ROOT_MODEL)
+    assert "outer" not in result["targets"] and result["problems"]
+
+
+def test_model_a_stale_record_never_hides_a_live_process():
+    world, procs, inst = _model()
+    procs["stub"]["start"] = "7"  # recorded stub exited; pid 104 now names another process in the namespace
+    module = _bind(_helper_module(), world, procs, inst)
+    result = module["plan"](ROOT_MODEL)
+    assert "stub" not in result["targets"] and any("104" in p for p in result["problems"])
+
+
+def test_model_an_unknown_role_record_is_a_problem():
+    world, procs, inst = _model()
+    procs["helper"] = dict(procs["stub"])
+    module = _bind(_helper_module(), world, procs, inst)
+    assert any("unknown role" in p for p in module["plan"](ROOT_MODEL)["problems"])
+
+
+def test_model_an_unreadable_process_refuses_the_plan():
+    world, procs, inst = _model()
+    world[200] = {"ppid": 1, "start": "1200", "net": "net:[50]", "user": "user:[52]", "argv": [b"x"], "unreadable": True}
+    module = _bind(_helper_module(), world, procs, inst)
+    assert any("cannot be inspected" in p for p in module["plan"](ROOT_MODEL)["problems"])
+
+
+@pytest.mark.parametrize("change", ["argv_only", "replacement_pid", "new_parent"])
+def test_model_refresh_changes_only_the_command_line(tmp_path, change):
+    world, procs, inst = _model()
+    (tmp_path / "state").mkdir()
+    module = _bind(_helper_module(), world, procs, inst)
+    if change == "argv_only":
+        module["argv_hash"] = lambda pid: "after-exec" if int(pid) == 105 else f"h{pid}"
+    elif change == "replacement_pid":
+        world[105]["start"] = "9999"
+    else:
+        world[105]["ppid"] = 103
+    if change == "argv_only":
+        module["refresh"](str(tmp_path), "backend")
+        assert json.loads((tmp_path / "state" / "processes.json").read_text())["backend"]["argv"] == "after-exec"
+        assert procs["backend"]["start"] == "1105" and procs["backend"]["ppid"] == 102
+    else:
+        with pytest.raises(SystemExit) as refused:
+            module["refresh"](str(tmp_path), "backend")
+        assert refused.value.code == 2 and not (tmp_path / "state" / "processes.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["start", "argv", "parent", "no_pidfd", "launcher"])
+def test_model_signal_check_refuses_before_any_signal(monkeypatch, fault):
+    world, procs, inst = _model()
+    name = "stub"
+    if fault == "start":
+        procs["stub"]["start"] = "1104" + "0"
+    elif fault == "argv":
+        procs["stub"]["argv"] = "0" * 64
+    elif fault == "parent":
+        world[104]["ppid"] = 103
+    elif fault == "no_pidfd":
+        monkeypatch.setenv("RUNTIME_KIT_TEST_NO_PIDFD", "1")
+    else:
+        name = "launcher"
+    module = _bind(_helper_module(), world, procs, inst)
+    module["os"] = type("NoPidfd", (), {"environ": os.environ, "getpid": os.getpid, "getppid": os.getppid,
+                                         "getuid": os.getuid, "getgid": os.getgid,
+                                         # the pidfd is opened first, by design; only signalling must never happen
+                                         "pidfd_open": staticmethod(lambda pid: -7),
+                                         "close": staticmethod(lambda fd: None)})
+    module["signal"] = type("NoSignal", (), {"pidfd_send_signal": staticmethod(
+        lambda fd, sig: (_ for _ in ()).throw(AssertionError("signalled")))})
+    with pytest.raises(SystemExit) as refused:
+        module["send"](ROOT_MODEL, name, "TERM", dry=False)
+    assert refused.value.code in (2, 3, 4)

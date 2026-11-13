@@ -67,6 +67,9 @@ import hashlib, json, os, re, signal, stat, sys
 
 ROLES_ORDER = ["cli", "stub", "backend", "tmux", "inner", "outer"]
 SERVICES = {"cli", "stub", "backend", "tmux"}
+# Every role has exactly one expected parent role; the launcher is a parent witness only.
+PARENT = {"outer": "launcher", "inner": "outer", "tmux": "inner", "stub": "inner", "backend": "inner", "cli": "tmux"}
+KNOWN_ROLES = set(PARENT) | {"launcher"}
 
 def die(code, message):
     print(message, file=sys.stderr)
@@ -88,6 +91,24 @@ def argv_hash(pid):
 
 def link(pid, kind):
     return os.readlink(f"/proc/{pid}/ns/{kind}")
+
+def argv_list(pid):
+    try:
+        return open(f"/proc/{pid}/cmdline", "rb").read().split(bytes(1))[:-1]
+    except OSError:
+        return None
+
+def own_pids():
+    """Pids of the processes of the caller."""
+    found = []
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                if os.stat(f"/proc/{name}").st_uid == os.getuid():
+                    found.append(int(name))
+            except OSError:
+                pass
+    return found
 
 HOST = {kind: link("self", kind) for kind in ("net", "user")}
 
@@ -131,63 +152,123 @@ def entry_of(procs, name):
         return None
     return entry
 
-def check(inst, procs, name, entry):
-    """The word gone, the word ok, or a reason: compares the full recorded identity of one role, field by field."""
-    now = proc_stat(entry["pid"])
+def anchor_argv_ok(inst, root, name, pid):
+    args = argv_list(pid)
+    if not args or len(args) < 5:
+        return False
+    tail = [a.decode(errors="replace") for a in args]
+    if name == "outer":
+        expected = ["_outer", root, str(inst["uid"]), str(os.getgid()), inst["id"]]
+    else:
+        expected = ["_inner", root, inst["id"]]
+    return tail[-len(expected):] == expected and tail[-len(expected) - 1].endswith("/isolated-runtime-kit.sh")
+
+def namespaces_ok(inst, procs, name, pid):
+    """Role-specific namespace proof; a host-namespace anchor never qualifies."""
+    try:
+        net, user = link(pid, "net"), link(pid, "user")
+    except OSError:
+        return f"{name} pid {pid} cannot be inspected"
+    if net == HOST["net"] or user == HOST["user"]:
+        return f"{name} pid {pid} runs in a host namespace"
+    if inst["net"] is not None:
+        if net != inst["net"]:
+            return f"{name} pid {pid} is outside the kit network namespace"
+        if name == "inner" and user != inst["user"]:
+            return f"{name} pid {pid} is outside the kit user namespace"
+        return "ok"
+    # Preflight: only the anchors may exist; both must share one non-host network namespace.
+    if name not in ("outer", "inner"):
+        return f"{name} cannot exist before the kit namespaces are recorded"
+    other = entry_of(procs, "inner" if name == "outer" else "outer")
+    try:
+        if other is None or proc_stat(other["pid"]) is None:
+            return "the other anchor is not running"
+        other_net, other_user = link(other["pid"], "net"), link(other["pid"], "user")
+    except OSError:
+        return "the other anchor cannot be inspected"
+    if other_net != net:
+        return "the anchors are not in one network namespace"
+    inner_user = user if name == "inner" else other_user
+    outer_user = other_user if name == "inner" else user
+    if inner_user in (HOST["user"], outer_user):
+        return "the inner anchor is not in its own user namespace"
+    return "ok"
+
+def check(inst, procs, name, entry, root=None, argv=True):
+    """The word gone, the word ok, or a reason: the full recorded identity, field by field."""
+    if name not in PARENT:
+        return f"{name} is not a signallable kit role"
+    pid = entry["pid"]
+    now = proc_stat(pid)
     if now is None:
         return "gone"
     start, ppid = now
     if start != entry["start"]:
         return "gone"  # the recorded process has exited; this pid now names another process
-    if argv_hash(entry["pid"]) != entry["argv"]:
-        return f"{name} pid {entry["pid"]} has another command line"
+    if argv and argv_hash(pid) != entry["argv"]:
+        return f"{name} pid {pid} has another command line"
     parent = proc_stat(entry["ppid"])
     if ppid != entry["ppid"] or parent is None or parent[0] != entry["pstart"]:
-        return f"{name} pid {entry["pid"]} no longer has its recorded parent"
-    if name in SERVICES:
-        try:
-            if inst["net"] is None or link(entry["pid"], "net") != inst["net"]:
-                return f"{name} pid {entry["pid"]} is outside the kit network namespace"
-        except OSError:
-            return f"{name} pid {entry["pid"]} cannot be inspected"
-    return "ok"
+        return f"{name} pid {pid} no longer has its recorded parent"
+    expected = entry_of(procs, PARENT[name])
+    if expected is None or (expected["pid"], expected["start"]) != (entry["ppid"], entry["pstart"]):
+        return f"{name} pid {pid} is not a child of the recorded {PARENT[name]}"
+    if name in ("outer", "inner") and root is not None and not anchor_argv_ok(inst, root, name, pid):
+        return f"{name} pid {pid} is not this instance anchor"
+    return namespaces_ok(inst, procs, name, pid)
 
 def verify(root, name):
     inst, procs = instance(root), processes(root)
     entry = entry_of(procs, name)
     if entry is None:
         die(2, f"no recorded {name} process")
-    result = check(inst, procs, name, entry)
+    result = check(inst, procs, name, entry, root)
     if result == "gone":
-        die(3, f"{name} (pid {entry["pid"]}) is not running")
+        die(3, f"{name} (pid {entry.get(chr(112) + chr(105) + chr(100))}) is not running")
     if result != "ok":
         die(2, result)
     print(entry["pid"])
 
-def unrecorded(inst, procs):
-    """Own processes inside the kit network namespace that are not recorded roles."""
+def unrecorded(inst, procs, root):
+    """Own processes inside the kit network namespace that are not currently proved roles."""
     if inst["net"] is None:
         return [], []
-    known = {entry["pid"] for entry in (entry_of(procs, n) for n in procs) if entry}
+    proved = set()
+    for name in ROLES_ORDER:
+        entry = entry_of(procs, name)
+        if entry is not None and check(inst, procs, name, entry, root) == "ok":
+            proved.add(entry["pid"])
+    # The launcher (unshare --kill-child) joins the new network namespace before it forks the
+    # outer anchor. It is excluded only while its own start and command line still match and
+    # it is still the proved parent of the outer anchor; it is never a signal target.
+    launcher, outer = entry_of(procs, "launcher"), entry_of(procs, "outer")
+    if (launcher is not None and outer is not None and "outer" in procs
+            and proc_stat(launcher["pid"]) is not None and proc_stat(launcher["pid"])[0] == launcher["start"]
+            and argv_hash(launcher["pid"]) == launcher["argv"]
+            and (launcher["pid"], launcher["start"]) == (outer["ppid"], outer["pstart"])
+            and outer["pid"] in proved):
+        proved.add(launcher["pid"])
     found, unreadable = [], []
-    for name in os.listdir("/proc"):
-        if not name.isdigit() or int(name) in (os.getpid(), os.getppid()) or int(name) in known:
+    for pid in own_pids():
+        if pid in proved or pid in (os.getpid(), os.getppid()):
             continue
         try:
-            if os.stat(f"/proc/{name}").st_uid != os.getuid():
-                continue
-            if link(name, "net") == inst["net"]:
-                found.append(int(name))
+            if link(pid, "net") == inst["net"]:
+                found.append(pid)
         except FileNotFoundError:
             continue
         except OSError:
-            unreadable.append(int(name))
+            unreadable.append(pid)
     return found, unreadable
 
 def plan(root):
     """Read-only teardown plan: every proof first, then the ordered targets; never signals."""
     inst, procs = instance(root), processes(root)
     targets, problems = [], []
+    for name in procs:
+        if name not in KNOWN_ROLES:
+            problems.append(f"unknown role record: {name}")
     for name in ROLES_ORDER:
         if name not in procs:
             continue
@@ -195,12 +276,12 @@ def plan(root):
         if entry is None:
             problems.append(f"{name} record is malformed")
             continue
-        result = check(inst, procs, name, entry)
+        result = check(inst, procs, name, entry, root)
         if result == "ok":
             targets.append(name)
         elif result != "gone":
             problems.append(result)
-    found, unreadable = unrecorded(inst, procs)
+    found, unreadable = unrecorded(inst, procs, root)
     if found:
         problems.append("unrecorded processes in the kit namespace: " + " ".join(map(str, found)))
     if unreadable:
@@ -210,6 +291,8 @@ def plan(root):
 def send(root, name, signame, dry):
     """Open a pidfd first, then prove the full recorded identity, then signal through that pidfd."""
     inst, procs = instance(root), processes(root)
+    if name not in PARENT:
+        die(2, f"{name} is never a signal target")
     entry = entry_of(procs, name)
     if entry is None:
         die(2, f"no recorded {name} process")
@@ -223,7 +306,7 @@ def send(root, name, signame, dry):
     except OSError as exc:
         die(4, f"cannot open a pidfd for {name}: {exc}")
     try:
-        result = check(inst, procs, name, entry)
+        result = check(inst, procs, name, entry, root)
         if result == "gone":
             die(3, f"{name} is gone")
         if result != "ok":
@@ -252,6 +335,24 @@ def record(root, name, pid):
     os.replace(tmp, path)
     print(now[1])
 
+def refresh(root, name):
+    """After an exec: only the argv may change; pid, start, parent and role proof must hold first."""
+    inst, procs = instance(root), processes(root)
+    entry = entry_of(procs, name)
+    if entry is None:
+        die(2, f"no recorded {name} process")
+    result = check(inst, procs, name, entry, root, argv=False)
+    if result != "ok":
+        die(2, f"{name} cannot be refreshed: {result}")
+    digest = argv_hash(entry["pid"])
+    if digest is None or proc_stat(entry["pid"]) != (entry["start"], entry["ppid"]):
+        die(2, f"{name} changed while it was refreshed")
+    entry["argv"] = digest
+    path = os.path.join(root, "state", "processes.json")
+    with open(path + ".tmp", "w") as out:
+        json.dump(procs, out)
+    os.replace(path + ".tmp", path)
+
 def set_instance(root, ident, net, user):
     path = os.path.join(root, "state", "instance.json")
     here = os.stat(root)
@@ -262,26 +363,36 @@ def set_instance(root, ident, net, user):
         json.dump(data, out)
     os.replace(path + ".tmp", path)
 
-command, root, *rest = sys.argv[1:]
-if command == "instance":
-    data = instance(root)
-    print(data["id"], data["net"] or "-", data["user"] or "-")
-elif command == "verify":
-    verify(root, rest[0])
-elif command == "plan-teardown":
-    result = plan(root)
-    print(json.dumps(result))
-    sys.exit(0 if not result["problems"] else 5)
-elif command == "check-signal":
-    send(root, rest[0], rest[1] if len(rest) > 1 else "TERM", dry=True)
-elif command == "signal":
-    send(root, rest[0], rest[1], dry=False)
-elif command == "record":
-    record(root, rest[0], rest[1])
-elif command == "set-instance":
-    set_instance(root, *rest)
-else:
-    die(2, "unknown helper command")
+def main():
+    command, root, *rest = sys.argv[1:]
+    if command == "instance":
+        data = instance(root)
+        print(data["id"], data["net"] or "-", data["user"] or "-")
+    elif command == "verify":
+        verify(root, rest[0])
+    elif command == "plan-teardown":
+        result = plan(root)
+        print(json.dumps(result))
+        sys.exit(0 if not result["problems"] else 5)
+    elif command == "check-signal":
+        send(root, rest[0], rest[1] if len(rest) > 1 else "TERM", dry=True)
+    elif command == "signal":
+        send(root, rest[0], rest[1], dry=False)
+    elif command == "gone":
+        entry = entry_of(processes(root), rest[0])
+        now = None if entry is None else proc_stat(entry["pid"])
+        sys.exit(0 if entry is not None and (now is None or now[0] != entry["start"]) else 1)
+    elif command == "refresh":
+        refresh(root, rest[0])
+    elif command == "record":
+        record(root, rest[0], rest[1])
+    elif command == "set-instance":
+        set_instance(root, *rest)
+    else:
+        die(2, "unknown helper command")
+
+if __name__ == "__main__":
+    main()
 '
 kitpy() { python3 -I -c "$KITPY" "$@"; }
 
@@ -349,7 +460,7 @@ if [[ "$COMMAND" == _outer ]]; then
   echo "$$" >"$ready/outer.pid"
   unshare --user --map-user="$CALLER_UID" --map-group="$CALLER_GID" "$SELF" _inner "$ROOT" "$INSTANCE" &
   inner=$!
-  trap 'kill -TERM "$inner" 2>/dev/null; exit 0' TERM INT
+  trap 'exit 0' TERM INT  # no forwarding: down stops the inner anchor first, by pidfd
   wait "$inner"
   exit 0
 fi
@@ -574,7 +685,7 @@ up() {
     sleep 0.5
   done
   # The launcher script has exec'd into the server by now: record its final command line.
-  record backend "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["backend"]["pid"])' "$ROOT/state/processes.json")"
+  kitpy refresh "$ROOT" backend || refuse "the backend could not be refreshed with an unchanged identity"
   verify backend >/dev/null
 
   # --- Team slot, real launch, Agent Mail registration --------------------------------
@@ -644,8 +755,8 @@ PY
   done
   [[ "$(registration_row | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["bound_pane_pid"])')" == "$pane_pid" ]] \
     || refuse "the registration is bound to another pane than the recorded CLI"
-  # The fake CLI exec'd into its idle loop after registering: record its final command line.
-  record cli "$pane_pid"
+  # The fake CLI exec'd into its idle loop after registering: refresh only its command line.
+  kitpy refresh "$ROOT" cli || refuse "the CLI could not be refreshed with an unchanged identity"
   verify cli >/dev/null
 
   trap - EXIT
@@ -793,13 +904,13 @@ down() {
   # The launcher (host side of the anchors) is never signalled: it exits with its child.
   local i
   for i in $(seq 1 30); do
-    [[ "$(kitpy verify "$ROOT" launcher >/dev/null 2>&1; echo $?)" == 3 ]] && break
+    kitpy gone "$ROOT" launcher && break
     sleep 0.1
   done
   code=0
   plan="$(kitpy plan-teardown "$ROOT")" || code=$?
   [[ $code -eq 0 && "$plan" == *'"targets": []'* ]] || incomplete "processes of this kit instance are still running; the root is kept"
-  [[ "$(kitpy verify "$ROOT" launcher >/dev/null 2>&1; echo $?)" == 3 ]] || incomplete "the anchor launcher has not exited; the root is kept"
+  kitpy gone "$ROOT" launcher || incomplete "the anchor launcher has not exited; the root is kept"
   if [[ -f "$ROOT/evidence/MANIFEST.sha256" ]]; then
     (cd "$ROOT/evidence" && sha256sum -c --quiet MANIFEST.sha256) || fail "the evidence manifest does not match; the root is kept"
   fi
