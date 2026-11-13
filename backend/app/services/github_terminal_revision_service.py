@@ -407,7 +407,9 @@ async def settle_accepted_revision(db, item, *, review_id, leader_member_id, dis
             GithubApprovalRequest.work_item_id == item.id, GithubApprovalRequest.status == 'pending').limit(1)):
         raise GithubApprovalError('pending_approval_blocks_settlement')
     policy = effective_policy(item, scope)
-    if not policy.required_checks:
+    # The contract is GitHub Actions provenance. A policy naming another app must never settle, even when its
+    # digest matches the watch and the runs match that app.
+    if not policy.required_checks or any(required.app_slug != 'github-actions' for required in policy.required_checks):
         raise GithubApprovalError('required_checks_not_successful')
     checks = await github_client.list_check_runs_for_ref(scope.repo_owner, scope.repo_name, fact.head_sha,
         token=await approval.github_read_token(scope))

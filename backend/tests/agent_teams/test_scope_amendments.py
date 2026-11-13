@@ -1505,3 +1505,49 @@ async def test_accepted_review_http_routes_derive_identity_and_settle(db, submit
     leader_session = await db.scalar(select(MailAgentSession).where(MailAgentSession.member_id == leader_id))
     settled = await agent_teams.settle_github_accepted_revision(item_id, body, leader_session, db)
     assert settled.status == "completed" and settled.origin_kind == "scope_amendment"
+
+
+async def require_jobs_from_apps(db, a, monkeypatch, apps):
+    """A delivery policy whose required checks name the given apps, with matching successful exact-head runs."""
+    from app.services.factory_delivery_policy import effective_policy
+    from app.services.github_ci_watch_service import _digest
+    a.item.delivery_policy = {"required_checks": [
+        {"name": name, "app_slug": app} for name, app in zip(REQUIRED_JOBS, apps)]}
+    await db.commit()
+    a.watch.policy_digest = _digest(effective_policy(a.item, a.scope))
+    await db.commit()
+    runs = [{"name": name, "status": "completed", "conclusion": "success", "app": {"slug": app},
+             "head_sha": a.head} for name, app in zip(REQUIRED_JOBS, apps)]
+    served = AsyncMock(return_value=runs)
+    monkeypatch.setattr(github_client, "list_check_runs_for_ref", served)
+    return served
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apps", [
+    ("another-app", "another-app"), ("github-actions", "another-app"), ("another-app", "github-actions"),
+    ("github-actions-lookalike", "github-actions"),
+])
+async def test_settlement_requires_github_actions_for_every_required_check_even_with_a_matching_policy_and_runs(
+        db, submitted_attempt, monkeypatch, apps):
+    a = submitted_attempt
+    served = await require_jobs_from_apps(db, a, monkeypatch, apps)
+    fact = await record_accepted(db, a)
+    before = await attempt_facts(db, a)
+    with pytest.raises(GithubApprovalError, match="required_checks_not_successful"):
+        await settle_accepted(db, a, fact)
+    await db.refresh(fact)
+    assert fact.status == "active" and a.revision.status == "submitted" and a.revision.completed_at is None
+    assert await attempt_facts(db, a) == before
+    served.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_settlement_still_completes_when_every_required_check_is_from_github_actions(
+        db, submitted_attempt, monkeypatch):
+    a = submitted_attempt
+    served = await require_jobs_from_apps(db, a, monkeypatch, ("github-actions", "github-actions"))
+    fact = await record_accepted(db, a)
+    revision = await settle_accepted(db, a, fact)
+    assert revision.status == "completed" and revision.completed_at is not None
+    served.assert_awaited()
