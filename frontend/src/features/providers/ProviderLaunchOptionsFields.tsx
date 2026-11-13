@@ -71,20 +71,31 @@ export function ProviderLaunchOptionsFields({
   const model = stringValue(value.model)
   const bedrockModel = stringValue(value.bedrock_model)
   const profile = stringValue(value.profile)
-  const modelOptions = descriptor?.model_options ?? []
+  const isClaude = provider === 'claude-code'
+  // The Bedrock inference profile example is a placeholder for the Bedrock model ID field, not a model to choose.
+  const modelOptions = (descriptor?.model_options ?? []).filter((option) => !(isClaude && option.value.startsWith('arn:')))
   const profileOptions = descriptor?.profile_options ?? []
   const knownModels = optionValues(modelOptions)
   const knownProfiles = new Set(profileOptions.map((option) => option.value))
   const modelSelectValue = model && !knownModels.has(model) ? CUSTOM_SELECT_VALUE : model || DEFAULT_SELECT_VALUE
   const profileSelectValue = profile && !knownProfiles.has(profile) ? CUSTOM_SELECT_VALUE : profile || DEFAULT_SELECT_VALUE
   const isCodex = provider === 'codex-cli'
-  const isClaude = provider === 'claude-code'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
   const isMuse = provider === 'muse-cli'
   const usesSimpleModelInput = isCopilot || isOpenCode || isMuse || provider === 'pi-cli' || ((isCodex || isClaude) && isBedrock)
   const simpleModelKey: keyof SlotLaunchOptions = (isCodex || isClaude) && isBedrock ? 'bedrock_model' : 'model'
   const simpleModelValue = (isCodex || isClaude) && isBedrock ? bedrockModel : model
+
+  // A Claude Code member on Bedrock sets bedrock_model, on the default platform it sets model; never both.
+  const handlePlatformChange = (next: string) => {
+    const updated = { ...value }
+    if (next === 'anthropic') delete updated.platform
+    else updated.platform = next
+    if (isClaude && next === 'bedrock') delete updated.model
+    if (isClaude && next === 'anthropic') delete updated.bedrock_model
+    onChange(updated)
+  }
 
   const handleModelSelect = (selected: string) => {
     if (selected === DEFAULT_SELECT_VALUE) {
@@ -123,7 +134,7 @@ export function ProviderLaunchOptionsFields({
           <Label>Platform</Label>
           <Select
             value={platform}
-            onValueChange={(next) => setOption('platform', next === 'anthropic' ? '' : next)}
+            onValueChange={handlePlatformChange}
             disabled={disabled}
           >
             <SelectTrigger>
@@ -163,6 +174,13 @@ export function ProviderLaunchOptionsFields({
         </div>
       )}
 
+      {isClaude && isBedrock && model && bedrockModel && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+          <span>Model and Bedrock model ID cannot both be set on Bedrock. Clear the model.</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => setOption('model', '')} disabled={disabled}>Clear model</Button>
+        </div>
+      )}
+
       {usesSimpleModelInput && (
         <div className="grid gap-2">
           <Label htmlFor="provider-model">{(isCodex || isClaude) && isBedrock ? 'Bedrock model ID' : 'Model'}</Label>
@@ -176,7 +194,7 @@ export function ProviderLaunchOptionsFields({
         </div>
       )}
 
-      {isCodex && !isBedrock && (
+      {(isCodex || isClaude) && !isBedrock && (
         <div className="grid gap-2">
           <Label>Model</Label>
           <Select value={modelSelectValue} onValueChange={handleModelSelect} disabled={disabled}>

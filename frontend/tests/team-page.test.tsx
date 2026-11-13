@@ -296,3 +296,60 @@ describe('members', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })
+
+// #869: the slot row and the launch plan show the Claude model and effort.
+describe('Claude model and effort', () => {
+  const ARN = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/profile-1'
+  const claudeTeam = {
+    ...team,
+    slots: [
+      slot(11, 'R1 Leader', { role: 'Leader', launch_options: { model: 'claude-opus-5-5', reasoning_effort: 'high' } }),
+      slot(12, 'R2 implementer', { launch_options: {} }),
+      slot(13, 'R3 implementer', { launch_options: { reasoning_effort: 'low' } }),
+      slot(14, 'R4 verifier', { launch_options: { platform: 'bedrock', bedrock_model: ARN } }),
+    ],
+  } as unknown as AgentTeamPreset
+
+  function memberRows() {
+    return screen.getAllByRole('listitem').filter((row) => within(row).queryByRole('button', { name: /^Details for / }))
+  }
+
+  it('shows the model and the effort on the member row, and the Bedrock model when that is the one set', async () => {
+    vi.mocked(fetchAgentTeamPresets).mockResolvedValue({ presets: [claudeTeam] })
+    open()
+    await screen.findAllByRole('listitem')
+    const rows = memberRows()
+    expect(rows[0]).toHaveTextContent('Claude Code · claude-opus-5-5 · high effort')
+    expect(rows[1]).toHaveTextContent('Claude Code')
+    expect(rows[1]).not.toHaveTextContent('effort')
+    expect(rows[1]).not.toHaveTextContent('Claude Code ·')
+    expect(rows[2]).toHaveTextContent('Claude Code · low effort')
+    expect(rows[3]).toHaveTextContent(`Claude Code · ${ARN}`)
+  })
+
+  it('shows the model and the effort on each launch plan row, and nothing for a default member', async () => {
+    const user = userEvent.setup()
+    const item = (slotId: number, name: string, extra: Record<string, unknown>) => ({
+      slot_id: slotId, slot_name: name, provider: 'claude-code', repo_id: 'repo', repo_path: `/work/${name}`, repo_name: 'repo',
+      action: 'spawn', status: 'ready', reasons: [], ...extra,
+    })
+    vi.mocked(planAgentTeamLaunch).mockResolvedValueOnce({
+      preset_id: 1, plan_hash: 'h', generated_at: stamp, can_launch: true, reuse_count: 0, adopt_count: 0, spawn_count: 3,
+      skipped_count: 0, blocked_count: 0, warnings: [],
+      items: [
+        item(11, 'Opus builder', { model: 'claude-opus-5-5', reasoning_effort: 'xhigh' }),
+        item(12, 'Default builder', {}),
+        item(14, 'Bedrock builder', { model: ARN, reasoning_effort: null }),
+      ],
+    } as never)
+    vi.mocked(fetchAgentTeamPresets).mockResolvedValue({ presets: [claudeTeam] })
+    open()
+    await user.click(await screen.findByRole('button', { name: 'Actions for R2 implementer' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Launch' }))
+
+    expect(await screen.findByText('Model: claude-opus-5-5 · xhigh effort')).toBeInTheDocument()
+    expect(screen.getByText(`Model: ${ARN}`)).toBeInTheDocument()
+    const defaultRow = screen.getByText('Default builder').closest('div.rounded-lg') as HTMLElement
+    expect(within(defaultRow).queryByText(/^Model:/)).not.toBeInTheDocument()
+  })
+})

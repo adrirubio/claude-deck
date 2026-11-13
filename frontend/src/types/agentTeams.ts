@@ -565,6 +565,8 @@ export interface AgentTeamLaunchPlanItem {
   matching_session?: Record<string, unknown> | null
   block_code?: string | null
   warnings?: string[]
+  model?: string | null
+  reasoning_effort?: string | null
 }
 
 export interface AgentTeamLaunchPlan {

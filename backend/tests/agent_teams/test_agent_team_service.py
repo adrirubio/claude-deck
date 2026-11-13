@@ -3094,3 +3094,127 @@ async def test_opencode_slot_with_a_saved_session_is_still_adopted(db, tmp_path,
     plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
     assert plan.can_launch is True
     assert plan.items[0].action == "adopt"
+
+
+# --- #869: Claude Code model and reasoning effort per member ---------------------------------
+
+_CLAUDE_OPUS = "claude-opus-5-5"
+_CLAUDE_ARN = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/profile-1"
+
+
+async def _claude_preset(db, repo, name, *slots):
+    return await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name=name,
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name=display_name,
+                    provider="claude-code",
+                    repo_path=str(repo),
+                    launch_options=launch_options,
+                )
+                for display_name, launch_options in slots
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_slot_accepts_a_claude_model_and_effort_on_the_default_platform(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    preset = await _claude_preset(
+        db, repo, "Claude model", ("Builder", {"model": _CLAUDE_OPUS, "reasoning_effort": "high"})
+    )
+
+    assert preset.slots[0].launch_options == {"model": _CLAUDE_OPUS, "reasoning_effort": "high"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_options,fragment", [
+    ({"model": "opus"}, "must be a concrete provider model ID"),
+    ({"model": "Claude Opus 5.5"}, "must be a concrete provider model ID"),
+    ({"model": "claude-opus-5-5", "reasoning_effort": "extreme"}, "Unsupported reasoning_effort for claude-code"),
+])
+async def test_create_slot_rejects_an_invalid_claude_model_or_effort(db, tmp_path, launch_options, fragment):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await _claude_preset(db, repo, "Bad Claude options", ("Builder", launch_options))
+
+    assert fragment in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_refuses_model_with_bedrock_model_on_a_bedrock_slot(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await _claude_preset(
+            db, repo, "Conflict",
+            ("Builder", {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod",
+                         "model": _CLAUDE_OPUS, "bedrock_model": _CLAUDE_ARN}),
+        )
+
+    assert getattr(exc_info.value, "block_code", None) == "bedrock_model_conflict"
+    assert "bedrock_model" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_keeps_a_bedrock_model_only_claude_slot(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    options = {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod", "bedrock_model": _CLAUDE_ARN}
+
+    preset = await _claude_preset(db, repo, "Bedrock only", ("Builder", options))
+
+    assert preset.slots[0].launch_options == options
+
+
+@pytest.mark.asyncio
+async def test_launch_plan_items_show_the_claude_model_and_effort(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _claude_preset(
+        db, repo, "Plan shows model",
+        ("Opus builder", {"model": _CLAUDE_OPUS, "reasoning_effort": "xhigh"}),
+        ("Default builder", {}),
+        ("Bedrock builder", {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod",
+                             "bedrock_model": _CLAUDE_ARN, "reasoning_effort": "low"}),
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(reuse_existing=False))
+    by_name = {item.slot_name: item for item in plan.items}
+
+    assert (by_name["Opus builder"].model, by_name["Opus builder"].reasoning_effort) == (_CLAUDE_OPUS, "xhigh")
+    assert (by_name["Default builder"].model, by_name["Default builder"].reasoning_effort) == (None, None)
+    assert (by_name["Bedrock builder"].model, by_name["Bedrock builder"].reasoning_effort) == (_CLAUDE_ARN, "low")
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_slot_still_shows_its_model_in_the_launch_plan(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _claude_preset(db, repo, "Disabled shows model", ("Builder", {"model": _CLAUDE_OPUS}))
+    await agent_team_service.update_slot(db, preset.slots[0].id, AgentTeamSlotUpdate(enabled=False))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(slot_ids=[preset.slots[0].id]))
+
+    assert plan.items[0].action == "skip"
+    assert plan.items[0].model == _CLAUDE_OPUS
+
+
+def test_launch_plan_item_fields_are_additive_and_default_to_null():
+    from app.models.schemas import AgentTeamLaunchPlanItem
+
+    item = AgentTeamLaunchPlanItem(
+        slot_id=1, slot_name="S", provider="claude-code", repo_id="r", repo_path="/r", repo_name="r",
+        action="spawn", status="ready",
+    )
+
+    assert item.model is None and item.reasoning_effort is None
+    assert item.model_dump()["model"] is None

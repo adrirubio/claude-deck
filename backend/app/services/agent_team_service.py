@@ -1164,7 +1164,19 @@ class AgentTeamService:
             )
         )
 
-    def _plan_slot(
+    def _plan_slot(self, slot: AgentTeamSlot, *args: Any, **kwargs: Any) -> AgentTeamLaunchPlanItem:
+        item = self._plan_slot_item(slot, *args, **kwargs)
+        options = slot.launch_options or {}
+        bedrock_model = (
+            self._clean_optional(options.get("bedrock_model"))
+            if self._clean_optional(options.get("platform")) == PLATFORM_BEDROCK
+            else None
+        )
+        item.model = bedrock_model or self._clean_optional(options.get("model"))
+        item.reasoning_effort = self._clean_optional(options.get("reasoning_effort"))
+        return item
+
+    def _plan_slot_item(
         self,
         slot: AgentTeamSlot,
         matching_session: dict[str, Any] | None,
@@ -2144,6 +2156,16 @@ class AgentTeamService:
                 raise ProviderLaunchError("Pi requires platform=openrouter", "pi_platform_unsupported")
         if platform == PLATFORM_BEDROCK and not supports_bedrock(provider):
             raise ValueError(f"{provider} does not support platform=bedrock")
+        if (
+            provider == "claude-code"
+            and platform == PLATFORM_BEDROCK
+            and self._clean_optional(options.get("model"))
+            and self._clean_optional(options.get("bedrock_model"))
+        ):
+            raise ProviderLaunchError(
+                "Set either model or bedrock_model on a Bedrock Claude Code member, not both",
+                "bedrock_model_conflict",
+            )
 
         reasoning_effort = self._clean_optional(options.get("reasoning_effort"))
         if reasoning_effort:

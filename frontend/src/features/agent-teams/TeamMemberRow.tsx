@@ -38,7 +38,9 @@ export function TeamMemberRow({
   const [menuOpen, setMenuOpen] = useState(false)
   const colors = getTeamSlotColorClasses(slot.ui_color)
   const harness = (harnesses as Record<string, string>)[slot.provider] ?? slot.provider
-  const model = slot.launch_options?.model
+  const options = slot.launch_options
+  const model = (options?.platform === 'bedrock' && options.bedrock_model) || options?.model
+  const effort = options?.reasoning_effort
   const detailsId = `member-details-${slot.id}`
   const choose = (action: () => void) => () => {
     setMenuOpen(false)
@@ -60,7 +62,7 @@ export function TeamMemberRow({
           {isLeader && <Badge variant="outline" title="This slot has the explicit Leader assignment.">Leader</Badge>}
           {!slot.enabled && <Badge variant="secondary">Disabled</Badge>}
         </button>
-        <span className="text-sm text-muted-foreground">{harness}{model ? ` · ${model}` : ''}</span>
+        <span className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{harness}{model ? ` · ${model}` : ''}{effort ? ` · ${effort} effort` : ''}</span>
         <span className="min-w-24 text-sm">{slot.role || 'Unassigned'}</span>
         <AgentStatusBadges status={status} compact />
         <div className="relative">
