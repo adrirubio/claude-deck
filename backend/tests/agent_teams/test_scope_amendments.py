@@ -1169,3 +1169,66 @@ async def test_healthy_amendment_still_refuses_an_unsettled_or_unknown_handoff(d
         await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
     await db.refresh(a.item)
     assert a.item.active_scope_revision == 0 and a.item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_amendment_after_a_handoff_to_a_new_owner_needs_the_new_owners_fresh_approval(
+    db, healthy_attempt
+):
+    from app.models.database import AgentTeamSlot, MailTeamMember
+    a = healthy_attempt
+    old_owner_slot_id, old_owner_id, old_round = a.item.owner_slot_id, a.owner.id, a.item.approval_round_count
+    new_slot = AgentTeamSlot(preset_id=a.preset.id, position=5, display_name="New owner", provider="codex-cli",
+        repo_id="approval", repo_path="/tmp/approval", repo_name="approval", launch_mode="plain",
+        launch_options={}, enabled=True)
+    db.add(new_slot)
+    await db.flush()
+    new_owner = MailTeamMember(identity_key=f"slot:approval:{new_slot.id}", repo_id="approval",
+        repo_path="/tmp/approval", repo_name="approval", display_name="New owner",
+        participant_kind="team_slot", team_preset_id=a.preset.id, team_slot_id=new_slot.id)
+    db.add(new_owner)
+    await db.flush()
+    new_session = MailAgentSession(member_id=new_owner.id, provider="codex-cli", source="mcp",
+        session_key="mcp:approval:new-owner", cwd="/tmp/approval", team_preset_id=a.preset.id,
+        team_slot_id=new_slot.id, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token("token-new-owner"),
+        bound_pane_pid=1999, bound_pane_proc_start="start-new-owner")
+    db.add(new_session)
+    # The state accept_handoff leaves behind: new owner, accepted handoff, cleared acknowledgement.
+    a.item.owner_slot_id = new_slot.id
+    a.item.handoff_state, a.item.handoff_target_slot_id, a.item.routing_method = "accepted", None, "reassigned"
+    a.item.ack_received_at = a.item.ack_approver_member_id = a.item.ack_evidence_message_id = None
+    a.item.ack_enforcement_epoch = a.item.ack_approval_round = None
+    await db.commit()
+
+    def as_new_owner(**overrides):
+        return amendment(a) | dict(authenticated_owner_member_id=new_owner.id,
+                                   authenticated_owner_slot_id=new_slot.id) | overrides
+
+    # Only the former owner's approved plan exists, so the new owner cannot amend yet.
+    with pytest.raises(GithubApprovalError, match="amendment_baseline_unverifiable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **as_new_owner())
+    await db.refresh(a.item)
+    assert a.item.owner_slot_id == new_slot.id and a.item.active_scope_revision == 0
+    assert a.item.approval_round_count == old_round
+
+    # The new owner gets a fresh approval and acknowledgement from the Leader.
+    response = await agent_mail.request_work_item_approval(MailApprovalRequestCreate(
+        work_item_id=a.item.id, dispatch_nonce=a.item.dispatch_nonce, summary="New owner closed scope",
+        plan_metadata={"allowed_paths": ["src/base.py"]}), new_session, db)
+    fresh = await db.get(GithubApprovalRequest, response.id)
+    assert fresh.owner_member_id == new_owner.id and fresh.owner_member_id != old_owner_id
+    await github_approval_service.decide(db, a.item, authenticated_leader_member_id=a.leader.id,
+        decision="approved", reason="Fresh decision for the new owner", request_id=fresh.id)
+    await db.refresh(a.item)
+    a.item.ack_received_at, a.item.ack_approver_member_id = datetime.utcnow(), a.leader.id
+    a.item.ack_enforcement_epoch = a.item.ack_approval_round = fresh.approval_round
+    await db.commit()
+
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **as_new_owner())
+    assert created and request.status == "pending" and revision.status == "proposed"
+    assert revision.owner_member_id == new_owner.id and revision.owner_slot_id == new_slot.id
+    assert request.owner_member_id == new_owner.id and request.approval_round == fresh.approval_round + 1
+    assert a.item.approval_round_count == request.approval_round > old_round
+    assert request.owner_member_id != old_owner_id and revision.owner_slot_id != old_owner_slot_id

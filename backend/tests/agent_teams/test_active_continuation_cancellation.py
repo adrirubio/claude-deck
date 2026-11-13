@@ -1289,3 +1289,71 @@ async def test_the_item_stays_plan_blocked_even_when_the_revision_started_from_a
     assert response.status_code == 200, response.text
     await db.refresh(item)
     assert item.dispatch_status == "escalated" and item.escalation_reason == "plan_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["before_context", "head_read", "final_write"])
+@pytest.mark.parametrize("changed_reason", ["owner_idle_timeout", None])
+async def test_a_late_escalation_reason_change_refuses_the_cancellation_before_any_mutation(
+    client, db, tmp_path, monkeypatch, boundary, changed_reason
+):
+    from app.models.database import FactoryAuditEvent
+    _preset, _slots, _scope, item, workspace, revision, approval, _owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    before = await _counters(db, item, revision, workspace)
+    item_id = item.id
+    changed = []
+
+    async def change_reason():
+        if changed:
+            return
+        changed.append(True)
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id)
+                         .values(escalation_reason=changed_reason))
+        await db.commit()
+
+    if boundary == "before_context":
+        original_context = github_approval_service.healthy_scope_context
+
+        async def changing_context(*args, **kwargs):
+            await change_reason()
+            return await original_context(*args, **kwargs)
+
+        monkeypatch.setattr(github_approval_service, "healthy_scope_context", changing_context)
+    elif boundary == "head_read":
+        original_get_pull = github_client.get_pull
+
+        async def changing_pull(*args, **kwargs):
+            await change_reason()
+            return await original_get_pull(*args, **kwargs)
+
+        monkeypatch.setattr(github_client, "get_pull", changing_pull)
+    else:
+        original_usage = github_approval_service.continuation_budget_usage
+
+        async def changing_usage(*args, **kwargs):
+            await change_reason()
+            return await original_usage(*args, **kwargs)
+
+        monkeypatch.setattr(github_approval_service, "continuation_budget_usage", changing_usage)
+
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+
+    assert changed, "the late change must have run"
+    assert response.status_code == 409, response.text
+    # Each boundary is refused by its own guard, so removing any one fence fails a test.
+    assert response.json()["detail"] == {
+        "before_context": "active_continuation_not_cancellable",
+        "head_read": "stale_amendment_context",
+        "final_write": "active_continuation_cancel_conflict",
+    }[boundary]
+    after = await _counters(db, item, revision, workspace)
+    assert after == before
+    await db.refresh(approval)
+    assert item.dispatch_status == "escalated" and item.escalation_reason == changed_reason
+    assert item.active_scope_revision == revision.revision
+    assert revision.status == "active" and revision.cancelled_at is None and approval.status == "approved"
+    applied = list((await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "recovery_cancellation", FactoryAuditEvent.revision_id == revision.id,
+        FactoryAuditEvent.action_outcome == "applied"))).all())
+    assert applied == []
