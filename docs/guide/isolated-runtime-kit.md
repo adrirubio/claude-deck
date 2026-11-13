@@ -109,7 +109,7 @@ For `--provider opencode-cli`, `up` pins the member to the kit's stub model befo
 2. Run `up`, then `status`, and keep the printed summary and the evidence manifest as the check's evidence.
 3. Run `down` and keep its result as proof of cleanup.
 
-The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake provider CLI (`scripts/runtime-kit/fake_cli.sh`) through these steps. Its tests that start a namespace, backend or CLI are **opt-in**: they run only with `SYNTH_CITY_KIT_RUNTIME=1` and otherwise skip with "kit runtime tests are opt-in", so a broad `-k` filter or a full local run never starts a runtime by accident. The model and refusal tests run everywhere.
+The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake provider CLI (`scripts/runtime-kit/fake_cli.sh`) through these steps. Its tests that start a namespace, backend or CLI are **opt-in**: they run only with `SYNTH_CITY_KIT_RUNTIME=1` and otherwise skip with "kit runtime tests are opt-in", so a broad `-k` filter or a full local run never starts a runtime by accident. Without the flag, every kit command in the tests also runs with a `PATH` whose `setsid`, `unshare` and `nsenter` refuse, so even a regressed refusal can't start an anchor. The model and refusal tests run everywhere.
 
 ## Limits
 

@@ -34,8 +34,30 @@ def _env(**extra: str) -> dict[str, str]:
 
 
 def _kit(*args: str, env: dict[str, str] | None = None, timeout: float = 150) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", str(KIT), *args], capture_output=True, text=True,
-                          env=env or _env(), timeout=timeout)
+    env = dict(env or _env())
+    if _kit_runtime_skip_reason() is not None:  # not opted in: nothing may launch (Leader 13723)
+        env["PATH"] = str(_launch_guard()) + os.pathsep + env.get("PATH", "")
+    return subprocess.run(["bash", str(KIT), *args], capture_output=True, text=True, env=env, timeout=timeout)
+
+
+_GUARD: list[Path] = []
+
+
+def _launch_guard() -> Path:
+    """A private directory whose setsid, unshare and nsenter refuse. The kit reaches all three
+    through PATH and starts its outer anchor with setsid, so without the opt-in no anchor,
+    namespace, backend or CLI can start, even if a refusal the test expects regresses."""
+    if not _GUARD:
+        import atexit
+        import tempfile
+        guard = Path(tempfile.mkdtemp(prefix="kit-launch-guard-"))
+        for tool in ("setsid", "unshare", "nsenter"):
+            path = guard / tool
+            path.write_text("#!/bin/sh\necho \"kit runtime tests are opt-in: $0 refused\" >&2\nexit 97\n")
+            path.chmod(0o755)
+        atexit.register(shutil.rmtree, guard, True)
+        _GUARD.append(guard)
+    return _GUARD[0]
 
 
 def _identity(pid: int) -> dict:
@@ -1196,8 +1218,10 @@ def test_every_runtime_test_reaches_the_opt_in_gate_first():
     for name, node in functions.items():
         if not name.startswith("test_"):
             continue
-        if name in ("test_every_runtime_test_reaches_the_opt_in_gate_first",
-                    "test_kit_fixture_teardown_runs_nothing_without_the_opt_in"):  # this audit; _kit mocked
+        if name in ("test_every_runtime_test_reaches_the_opt_in_gate_first",  # this audit
+                    "test_kit_fixture_teardown_runs_nothing_without_the_opt_in",  # _kit mocked
+                    "test_kit_without_the_opt_in_runs_behind_a_boundary_that_cannot_launch",  # subprocess.run mocked
+                    "test_launch_guard_control_is_caught"):  # runs the mocked test above
             continue
         uses = reaches(name, set()) | called(node)
         starts = any(isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -1324,3 +1348,47 @@ def test_opencode_partial_restore_write_is_incomplete_and_leaves_no_temporary_fi
     assert path.read_bytes() == config_before
     for directory in (path.parent, root / "state"):
         assert not [p for p in directory.iterdir() if p.name.startswith(".opencode")]
+
+
+# Leader 13723: an unset flag must prevent runtime even if a refusal regresses. Without the
+# flag, every kit command runs behind a PATH boundary whose setsid, unshare and nsenter only
+# record the attempt and fail, so no anchor, namespace, backend or CLI can start.
+def test_kit_without_the_opt_in_runs_behind_a_boundary_that_cannot_launch(tmp_path, monkeypatch):
+    seen = []
+    def fake_run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return subprocess.CompletedProcess(argv, 2, "", "refused")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv(KIT_RUNTIME_FLAG, raising=False)
+    _kit("up", "--root", str(tmp_path / "kit"), "--provider", "claude-code", "--cli", str(FAKE_CLI))
+    _kit("status", "--root", str(tmp_path / "kit"), env=_env(EXTRA="1"))
+    for env in seen:
+        guard = Path(env["PATH"].split(os.pathsep)[0])
+        for tool in ("setsid", "unshare", "nsenter"):
+            script = guard / tool
+            assert script.is_file() and os.access(script, os.X_OK)
+            text = script.read_text()
+            assert "exit 97" in text and "kit runtime tests are opt-in" in text
+    assert len(seen) == 2
+    monkeypatch.setenv(KIT_RUNTIME_FLAG, "1")  # opted in: the caller's PATH, unchanged
+    _kit("up", "--root", str(tmp_path / "kit2"))
+    assert seen[-1]["PATH"] == os.environ["PATH"]
+
+
+def test_kit_starts_every_namespace_through_path_resolved_tools():
+    """The boundary works only if the kit reaches setsid, unshare and nsenter through PATH:
+    no absolute path to them, and setsid (resolved from the caller's PATH) starts the outer anchor."""
+    import re
+    script = KIT.read_text()
+    code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+    assert not re.search(r"/(?:usr/)?s?bin/(?:setsid|unshare|nsenter)\b", code)
+    assert re.search(r"\n\s*setsid env -i [^\n]*\\\n\s*unshare --user --map-root-user --net", code)
+
+
+def test_launch_guard_control_is_caught(tmp_path, monkeypatch):
+    # In-memory control: a guard that doesn't refuse makes the boundary test fail.
+    empty = tmp_path / "no-guard"
+    empty.mkdir()
+    monkeypatch.setitem(globals(), "_launch_guard", lambda: empty)
+    with pytest.raises(AssertionError):
+        test_kit_without_the_opt_in_runs_behind_a_boundary_that_cannot_launch(tmp_path, monkeypatch)
