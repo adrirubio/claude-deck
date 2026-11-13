@@ -577,3 +577,95 @@ def test_status_publishes_nothing_when_its_summary_fails(kit_root):
 def test_model_capability_skip_gate():
     assert _namespace_skip_reason(1) == "capability unavailable: uid_map"
     assert _namespace_skip_reason(0) is None
+
+
+# Status publication (V1 review 5898109183): one commit point (os.replace of a link this run
+# created), no deletion of anything but this run's own attempt and link before commit, and
+# no deletion at all through a published link. Disposable filesystems only; no kit, no signal.
+def _publication(tmp_path, old_target="evidence.d/0000000000000000"):
+    root = tmp_path / "kit"
+    evd = root / "evidence.d"
+    old = evd / "0000000000000000"
+    old.mkdir(parents=True)
+    (old / "MANIFEST.sha256").write_text("old manifest\n")
+    (root / "evidence").symlink_to(old_target)
+    new = evd / "1111111111111111"
+    new.mkdir()
+    (new / "summary.json").write_text('{"summary": "new"}\n')
+    (new / "MANIFEST.sha256").write_text("new manifest\n")
+    return root, old, new
+
+
+def _publish(module, root, attempt="1111111111111111"):
+    try:
+        module["publish"](str(root), attempt)
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def test_publish_commits_by_link_swap_and_keeps_previous_attempts(tmp_path, capsys):
+    root, old, new = _publication(tmp_path)
+    assert _publish(_helper_module(), root) == 0
+    assert os.readlink(root / "evidence") == "evidence.d/1111111111111111"
+    assert old.is_dir() and (old / "MANIFEST.sha256").read_text() == "old manifest\n"
+    assert '"new"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("target", ["relative_traversal", "absolute"])
+def test_publish_never_deletes_through_a_published_link(tmp_path, target):
+    canary = tmp_path / "canary"
+    canary.mkdir()
+    (canary / "keep").write_text("keep")
+    link = "evidence.d/../../canary" if target == "relative_traversal" else str(canary)
+    root, old, new = _publication(tmp_path, old_target=link)
+    assert _publish(_helper_module(), root) == 0
+    assert (canary / "keep").read_text() == "keep" and old.is_dir() and new.is_dir()
+
+
+@pytest.mark.parametrize("stage", ["symlink", "replace"])
+def test_publish_failure_before_commit_removes_only_this_run(tmp_path, stage):
+    root, old, new = _publication(tmp_path)
+    other = root / "evidence.d" / "2222222222222222"
+    other.mkdir()
+    module = _helper_module()
+    def broken(*args, **kwargs):
+        raise OSError("injected")
+    module["_symlink" if stage == "symlink" else "_replace"] = broken
+    assert _publish(module, root) == 1
+    assert os.readlink(root / "evidence") == "evidence.d/0000000000000000"
+    assert (old / "MANIFEST.sha256").read_text() == "old manifest\n"
+    assert not new.exists() and other.is_dir()
+    assert not [p for p in root.iterdir() if p.name.startswith(".evidence-")]
+
+
+@pytest.mark.parametrize("which", ["evidence_dir", "attempt"])
+def test_publish_refuses_symlinked_paths_and_deletes_nothing(tmp_path, which):
+    root, old, new = _publication(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_text("keep")
+    if which == "attempt":
+        target = root / "evidence.d" / "3333333333333333"
+        target.symlink_to(elsewhere)
+        attempt = "3333333333333333"
+    else:
+        moved = tmp_path / "real-evidence.d"
+        (root / "evidence.d").rename(moved)
+        (root / "evidence.d").symlink_to(moved)
+        attempt = "1111111111111111"
+    assert _publish(_helper_module(), root, attempt) == 2
+    assert (elsewhere / "keep").read_text() == "keep"
+    assert os.readlink(root / "evidence") == "evidence.d/0000000000000000"
+
+
+def test_publish_output_failure_after_commit_keeps_both_and_says_so(tmp_path, capsys):
+    root, old, new = _publication(tmp_path)
+    module = _helper_module()
+    def broken(text):
+        raise OSError("injected output failure")
+    module["_write_out"] = broken
+    assert _publish(module, root) == 1
+    assert os.readlink(root / "evidence") == "evidence.d/1111111111111111"
+    assert old.is_dir() and new.is_dir()
+    assert "published, but the summary could not be printed" in capsys.readouterr().err

@@ -23,7 +23,7 @@ scripts/isolated-runtime-kit.sh down   --root /tmp/kit [--keep]
 | Command | Deadline | What it does |
 |---|---|---|
 | `up` | 90 s (`RUNTIME_KIT_UP_DEADLINE`) | Preflight (10 s), stub (5 s), backend health (30 s), launch and registration (30 s). A failure stops every process and keeps the root for its logs. |
-| `status` | 15 s | Checks the instance, every recorded process, the backend's health and the registration before it writes anything. It then builds the evidence and the summary in a new attempt directory and publishes them by one atomic link swap. If anything fails, the published evidence is left unchanged. |
+| `status` | 15 s | Checks the instance, every recorded process, the backend's health and the registration before it writes anything. It then builds the evidence and the summary in a new attempt directory and publishes them; see [Evidence](#evidence) for the commit point and exit codes. |
 | `exec` | 120 s by default, at most 600 s | Runs a command inside the namespaces with the kit's environment. |
 | `down` | 30 s | Stops every process of the instance, including ones started later inside its namespace, proves none remains, checks the evidence manifest, and removes the root (`--keep` keeps it). If it can't prove cleanup, it fails as incomplete and keeps the root. |
 
@@ -63,6 +63,12 @@ A process counts as the kit's only when every recorded field matches and its par
 - `summary.json`
 
 `down` refuses to finish if the manifest no longer matches.
+
+**Publication.** `status` builds each attempt in a new `evidence.d/<16 hex>` directory and then replaces the `ROOT/evidence` link with one atomic rename. That rename is the commit point.
+- **Before the commit point,** a failure removes only this run's own attempt directory and temporary link, after checking that each is its own direct, non-symlink entry. The published link and every earlier attempt stay unchanged; `status` exits 1 ("incomplete … the published evidence is unchanged").
+- **After the commit point,** the new evidence is published and stays published. `status` then prints the summary. If printing fails, it exits 1 with "published, but the summary could not be printed". Exit 0 means published and printed.
+- **Earlier attempts are kept.** `status` never deletes them and never follows a link to delete anything; `down` removes them with the whole root.
+- `status` refuses (exit 2), writing nothing, if `evidence.d` or an attempt is a symlink or isn't a direct child of the root.
 
 ## Safety rules
 

@@ -353,6 +353,60 @@ def refresh(root, name):
         json.dump(procs, out)
     os.replace(path + ".tmp", path)
 
+_symlink = os.symlink
+_replace = os.replace
+def _write_out(text):
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+def _own_attempt(root, attempt):
+    """The real path of this run attempt directory, or None: a direct, non-symlink child of evidence.d."""
+    base = os.path.realpath(root)
+    evd = os.path.join(base, "evidence.d")
+    if not re.fullmatch(r"[0-9a-f]{16}", attempt):
+        return None
+    try:
+        if not stat.S_ISDIR(os.lstat(evd).st_mode) or os.path.realpath(evd) != evd:
+            return None
+        path = os.path.join(evd, attempt)
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or os.path.realpath(path) != path:
+        return None
+    return path
+
+def _discard_own(root, attempt, link):
+    """Before commit only: remove this run own link (never followed) and its own attempt."""
+    try:
+        if stat.S_ISLNK(os.lstat(link).st_mode) and os.readlink(link) == "evidence.d/" + attempt:
+            os.unlink(link)
+    except OSError:
+        pass
+    path = _own_attempt(root, attempt)
+    if path is not None:
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
+
+def publish(root, attempt):
+    """Commit point: os.replace of a link this run created. Previous attempts are never deleted."""
+    path = _own_attempt(root, attempt)
+    if path is None:
+        die(2, "the attempt is not a private direct child of this root evidence.d; nothing was published or deleted")
+    base = os.path.realpath(root)
+    link = os.path.join(base, ".evidence-" + attempt)
+    try:
+        _symlink("evidence.d/" + attempt, link)
+        _replace(link, os.path.join(base, "evidence"))
+    except OSError as exc:
+        _discard_own(root, attempt, link)
+        die(1, f"incomplete: the evidence could not be published ({exc}); the published evidence is unchanged")
+    # Committed. Output is reported separately: a failure here keeps every attempt.
+    try:
+        _write_out(open(os.path.join(path, "summary.json")).read())
+    except OSError:
+        die(1, f"published, but the summary could not be printed; evidence at {os.path.join(base, "evidence")}")
+
 def set_instance(root, ident, net, user):
     path = os.path.join(root, "state", "instance.json")
     here = os.stat(root)
@@ -382,6 +436,10 @@ def main():
         entry = entry_of(processes(root), rest[0])
         now = None if entry is None else proc_stat(entry["pid"])
         sys.exit(0 if entry is not None and (now is None or now[0] != entry["start"]) else 1)
+    elif command == "publish":
+        publish(root, rest[0])
+    elif command == "discard":
+        _discard_own(root, rest[0], os.path.join(os.path.realpath(root), ".evidence-" + rest[0]))
     elif command == "refresh":
         refresh(root, rest[0])
     elif command == "record":
@@ -833,19 +891,20 @@ status() {
   local id att
   id="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   mkdir -p "$ROOT/evidence.d"
+  # The attempt must be a direct, non-symlink child of this root's own evidence.d.
+  [[ ! -L "$ROOT/evidence.d" && "$(realpath "$ROOT/evidence.d")" == "$(realpath "$ROOT")/evidence.d" ]] \
+    || refuse "evidence.d is not a plain directory of this root; nothing was written"
   att="$ROOT/evidence.d/$id"
   mkdir "$att"
   if ! capture_evidence "$att"; then
-    rm -rf "$att"
+    kitpy discard "$ROOT" "$id"
     incomplete "the evidence could not be captured; the published evidence is unchanged"
   fi
-  local old=""
-  [[ -L "$ROOT/evidence" ]] && old="$(readlink "$ROOT/evidence")"
-  ln -s "evidence.d/$id" "$ROOT/.evidence-$id"
-  mv -T "$ROOT/.evidence-$id" "$ROOT/evidence"
-  [[ -n "$old" && "$old" == evidence.d/* && "$old" != "evidence.d/$id" ]] && rm -rf "${ROOT:?}/$old"
-  note "evidence written to $ROOT/evidence"
-  cat "$att/summary.json"
+  # Commit point: one atomic link replacement. Previous attempts are kept; only down removes them.
+  local code=0
+  kitpy publish "$ROOT" "$id" || code=$?
+  ((code == 0)) || exit "$code"
+  note "evidence published at $ROOT/evidence"
 }
 
 capture_evidence() { # dir: every evidence file and the summary; fails without publishing anything
