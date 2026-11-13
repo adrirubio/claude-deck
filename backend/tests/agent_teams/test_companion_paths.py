@@ -368,3 +368,84 @@ async def test_an_old_record_replays_exactly_even_though_it_carries_the_reserved
     await make_legacy(db, a, legacy)
     same = await github_approval_service.initial_plan_metadata(db, a.item, "Initial closed scope", dict(legacy))
     assert same == legacy
+
+
+# --- Review batch 2 (PR 907, amendment revision 3): legacy replay, malformed shapes, invalid lookup -----------
+
+LEGACY_NOTE = f"Old summary that mentions {companion_paths.TRAILER_HEADER} in prose."
+
+
+async def as_legacy_amendment(db, a, state, companion_map):
+    """Create an amendment, then rewrite it as an old-format record whose plain summary contains the header text.
+
+    An old record predates the map, so it is created while the map is empty and carries no trailer.
+    """
+    saved, companion_map["map"] = companion_map["map"], {}
+    revision, request, _ = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **{**amendment(a), "summary": "Placeholder summary"})
+    companion_map["map"] = saved
+    revision.summary = LEGACY_NOTE
+    payload = github_approval_service.canonical_continuation_payload(phase=revision.phase,
+        execution_target=revision.execution_target, summary=revision.summary, allowed_paths=revision.allowed_paths,
+        allowed_actions=revision.allowed_actions, allowed_commands=revision.allowed_commands,
+        prohibited_actions=revision.prohibited_actions, max_failed_heads=revision.max_failed_heads,
+        tool_fallbacks=revision.tool_fallbacks, baseline_head_sha=revision.baseline_head_sha,
+        baseline_tree_sha=revision.baseline_tree_sha, expected_workspace_id=revision.expected_workspace_id,
+        originating_escalation_reason="")
+    payload.update(origin_kind=revision.origin_kind, amendment_base_paths=revision.amendment_base_paths,
+        amendment_added_paths=revision.amendment_added_paths, previous_scope_revision=revision.previous_scope_revision)
+    request.request_fingerprint = github_approval_service.fingerprint_payload(payload)
+    revision.status = state
+    request.status = "pending" if state == "proposed" else ("approved" if state == "active" else state)
+    await db.commit()
+    return revision, request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["proposed", "approved", "rejected", "active"])
+async def test_an_old_plain_summary_that_mentions_the_reserved_text_replays_exactly(db, companion_map, healthy_attempt, state):
+    a = healthy_attempt
+    revision, request = await as_legacy_amendment(db, a, state, companion_map)
+    replay = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **{**amendment(a), "summary": LEGACY_NOTE})
+    assert not replay[2] and replay[0].id == revision.id and replay[1].id == request.id
+
+
+@pytest.mark.asyncio
+async def test_the_reserved_text_is_still_refused_for_a_changed_or_new_request(db, companion_map, healthy_attempt):
+    a = healthy_attempt
+    await as_legacy_amendment(db, a, "rejected", companion_map)
+    with pytest.raises(GithubApprovalError, match="continuation_summary_reserved"):
+        await github_approval_service.create_scope_amendment_request(
+            db, a.item, a.scope, **{**amendment(a), "summary": LEGACY_NOTE + " Changed."})
+    with pytest.raises(GithubApprovalError, match="continuation_summary_reserved"):
+        await github_approval_service.create_scope_amendment_request(
+            db, a.item, a.scope, **{**amendment(a, ["src/base.py", "src/other.py"]), "summary": LEGACY_NOTE})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opaque", [[{}], [["nested"]], ["tests/test_base.py", 1], ["tests/test_base.py", None]])
+async def test_unsupported_legacy_companion_shapes_keep_only_the_named_authority(db, companion_map, healthy_attempt, opaque):
+    a = healthy_attempt
+    await make_legacy(db, a, {"allowed_paths": ["src/base.py"], "companion_provenance": "checked-in-map-v1",
+                              "companion_paths": opaque})
+    base = await github_approval_service.amendment_base_paths(db, a.item, a.owner, a.leader)
+    assert base == ["src/base.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [["src/base.py", "../x"], ["src/base.py", "src/*.py"], ["src/base.py", ""]])
+async def test_a_path_list_that_fails_validation_gets_no_companions(db, companion_map, healthy_attempt, invalid):
+    a = healthy_attempt
+    item_id, nonce, owner_id, approval_id = a.item.id, a.item.dispatch_nonce, a.owner.id, a.approval.id
+    a.approval.status = "superseded"
+    await db.commit()
+    direct = await github_approval_service.initial_plan_metadata(db, a.item, "A new plan", {"allowed_paths": invalid})
+    assert "companion_paths" not in direct and "companion_provenance" not in direct
+    session = await db.scalar(select(MailAgentSession).where(MailAgentSession.member_id == owner_id))
+    response = await agent_mail.request_work_item_approval(MailApprovalRequestCreate(
+        work_item_id=item_id, dispatch_nonce=nonce, summary="A new plan",
+        plan_metadata={"allowed_paths": invalid}), session, db)
+    assert response.id != approval_id
+    message = await db.get(MailMessage, (await db.get(GithubApprovalRequest, response.id)).request_message_id)
+    assert "companion_paths" not in message.payload["plan_metadata"] and "ompanion" not in message.body_markdown

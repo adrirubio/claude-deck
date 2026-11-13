@@ -642,8 +642,6 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_path_limit_exceeded")
         if not proposal["summary"].strip():
             raise GithubApprovalError("continuation_summary_required", status_code=400)
-        if companion_paths.TRAILER_HEADER in proposal["summary"]:
-            raise GithubApprovalError("continuation_summary_reserved", status_code=400)
         max_failures = proposal["max_failed_heads"]
         if type(max_failures) is not int or max_failures < 1 or max_failures > scope.max_failed_heads_per_revision:
             raise GithubApprovalError("continuation_failed_head_limit_exceeded")
@@ -692,8 +690,12 @@ class GithubApprovalService:
                     self.verify_amendment_binding(pending, existing)
                     return existing, pending, False
             raise GithubApprovalError("approval_request_already_pending")
-        # A new request: the proposal shows the companions of every path it names, so the Leader approves
-        # them with it. The expansion is recorded in the stored summary, bound by a digest.
+        # A new request. The reserved trailer line is refused here and not earlier, so an exact retry of an
+        # older plain summary that mentions it still recovers its own revision above.
+        if companion_paths.TRAILER_HEADER in owner_summary:
+            raise GithubApprovalError("continuation_summary_reserved", status_code=400)
+        # The proposal shows the companions of every path it names, so the Leader approves them with it. The
+        # expansion is recorded in the stored summary, bound by a digest.
         extras = [path for path in companion_paths.companions_for(named) if path not in named]
         if extras:
             paths = self._canonical_paths([*named, *extras])

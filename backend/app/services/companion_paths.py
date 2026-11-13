@@ -77,13 +77,19 @@ def companions_for(paths, mapping=None):
     return sorted(found - named)
 
 
-def with_companions(plan_metadata, mapping=None, lookup_paths=None):
+_NOT_SUPPLIED = object()
+
+
+def with_companions(plan_metadata, mapping=None, lookup_paths=_NOT_SUPPLIED):
     """A copy of ``plan_metadata`` with the server-owned companion keys when it names mapped source paths.
 
-    ``lookup_paths`` is the canonical form of ``allowed_paths``; without it the raw list is used.
+    ``lookup_paths`` is the canonical form of ``allowed_paths``. When it is left out the raw list is used; an
+    explicit ``None`` means canonical validation failed, so nothing is added.
     """
     metadata = dict(plan_metadata or {})
-    paths = lookup_paths if lookup_paths is not None else metadata.get("allowed_paths")
+    if lookup_paths is None:
+        return metadata
+    paths = metadata.get("allowed_paths") if lookup_paths is _NOT_SUPPLIED else lookup_paths
     if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
         return metadata
     companions = companions_for(paths, mapping)
@@ -111,8 +117,9 @@ def verified_companions(plan_metadata, summary, body):
     if not isinstance(plan_metadata, dict) or plan_metadata.get(PROVENANCE_KEY) != PROVENANCE_VALUE:
         return None
     companions = plan_metadata.get(COMPANION_KEY)
-    if (not isinstance(companions, list) or not companions or companions != sorted(set(companions))
-            or any(not isinstance(path, str) for path in companions)):
+    # Shape and element types first: an old opaque list may hold anything and must not be hashed or sorted.
+    if (not isinstance(companions, list) or not companions
+            or any(not isinstance(path, str) for path in companions) or companions != sorted(set(companions))):
         return None
     return companions if body == plan_body(summary, plan_metadata) else None
 
