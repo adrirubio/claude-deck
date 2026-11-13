@@ -41,10 +41,6 @@ REASON_PRIORITY = ("candidate_limit", "native_unknown", "ambiguous_legacy_reques
                    "entry_limit")
 
 
-class _BudgetExhausted(Exception):
-    pass
-
-
 class _IncoherentRead(ValueError):
     """A native observation that could not be shown to come from one unchanged database state."""
 
@@ -179,54 +175,50 @@ class MailRequestStallService:
                    MailTeamMember.updated_at).where(MailTeamMember.id.in_(member_ids)))).all()
         return {row.id: tuple(row)[1:] for row in rows}
 
-    async def _canonical_root(self, db, message_id, cache, counter):
-        """Canonical root id of a message, or None when its ancestry is missing, cyclic or too deep."""
-        path, seen, current, root = [], set(), message_id, None
-        for _hop in range(MAX_ANCESTRY_HOPS + 1):
-            if current in cache:
-                root = cache[current]
-                break
-            counter[0] += 1
-            if counter[0] > ANCESTRY_READ_BUDGET:
-                raise _BudgetExhausted
-            row = (await db.execute(select(MailMessage.thread_root_id).where(MailMessage.id == current))).first()
-            if row is None or current in seen:
-                break
-            seen.add(current)
-            path.append(current)
-            if row.thread_root_id is None:
-                root = current
-                break
-            current = row.thread_root_id
-        for node in path:
-            cache[node] = root
-        return root
+    @staticmethod
+    def _reply_probe(parent_id, request_id, limit):
+        """One probe of a thread: the children of ``parent_id`` after the request, in id order.
+
+        A single range of the thread_root_id index in rowid order: no sort, no scan of the table.
+        """
+        return (select(MailMessage.id, MailMessage.kind, MailMessage.sender_member_id,
+                       func.json_extract(MailMessage.payload, "$.resolves_request_id").label("resolves"))
+                .where(MailMessage.thread_root_id == parent_id, MailMessage.id > request_id)
+                .order_by(MailMessage.id.asc()).limit(limit))
 
     async def _legacy_reply_clears(self, db, candidate, rows_left, cache, counter):
-        """(cleared, proven). Proven means the absence of a reply was established inside the bounds."""
-        limit = min(REPLY_QUERY_LIMIT, rows_left)
-        if limit <= 0:
-            return False, False, 0
-        replies = (await db.execute(
-            select(MailMessage.id, MailMessage.thread_root_id,
-                   func.json_extract(MailMessage.payload, "$.resolves_request_id").label("resolves"))
-            .where(MailMessage.sender_member_id == candidate.recipient_member_id,
-                   MailMessage.id > candidate.id, MailMessage.thread_root_id.is_not(None),
-                   MailMessage.kind.in_(("message", "answer")))
-            .order_by(MailMessage.id.asc()).limit(limit))).all()
-        broken = False
-        try:
-            for reply in replies:
-                if reply.resolves is not None:      # it answers another request: it never clears this one
-                    continue
-                root = await self._canonical_root(db, reply.thread_root_id, cache, counter)
-                if root == candidate.id:
-                    return True, True, len(replies)
-                broken = broken or root is None
-        except _BudgetExhausted:
-            return False, False, len(replies)
-        capped = len(replies) >= limit
-        return False, not (capped or broken), len(replies)
+        """(cleared, proven, rows used) for a reply by the addressee anywhere in the request's own thread.
+
+        The thread is descended breadth first through the thread_root_id index, one probe per parent, up
+        to MAX_ANCESTRY_HOPS levels, so the work depends on the thread and not on the sender's other
+        rows. Every probe is charged BEFORE it runs: one read against ANCESTRY_READ_BUDGET (``counter``)
+        and its rows against REPLY_ROW_BUDGET (``rows_left``); its LIMIT never exceeds the remaining row
+        capacity, and a probe that returns its whole limit (the per-probe cap, or the capacity) is not a
+        proof of absence. Proven means the absence of a reply was established inside every bound.
+        """
+        used, frontier = 0, [candidate.id]
+        for _level in range(MAX_ANCESTRY_HOPS):
+            following = []
+            for parent in frontier:
+                capacity = rows_left - used
+                if capacity <= 0 or counter[0] + 1 > ANCESTRY_READ_BUDGET:
+                    return False, False, used
+                counter[0] += 1
+                limit = min(REPLY_QUERY_LIMIT, capacity)
+                rows = (await db.execute(self._reply_probe(parent, candidate.id, limit))).all()
+                used += len(rows)
+                for row in rows:
+                    # A keyed answer resolves another request: it never clears this one (F1).
+                    if (row.sender_member_id == candidate.recipient_member_id and row.resolves is None
+                            and row.kind in ("message", "answer")):
+                        return True, True, used
+                    following.append(row.id)
+                if len(rows) >= limit:        # the per-probe cap or the remaining capacity: not a proof
+                    return False, False, used
+            frontier = following
+            if not frontier:
+                return False, True, used
+        return False, False, used             # still descending after MAX_ANCESTRY_HOPS levels
 
     async def _names(self, db, candidates):
         member_ids = {row.sender_member_id for row in candidates if row.sender_member_id is not None}

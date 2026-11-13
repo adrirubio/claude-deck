@@ -290,64 +290,15 @@ async def test_a_legacy_nested_reply_by_the_recipient_clears_the_root_request(db
 
 
 @pytest.mark.asyncio
-async def test_a_reply_with_broken_ancestry_does_not_clear_and_is_not_proven(db):
+async def test_a_reply_that_is_not_part_of_the_requests_thread_neither_clears_nor_blocks_the_proof(db):
+    # Adapted for the indexed descent: a reply by the addressee under a missing parent cannot belong to
+    # the request's thread, so the request is provably unanswered (it used to be unprovable).
     team, people = await make_team(db)
     request = await add_request(db, people[0], people[1])
     await add_reply(db, people[1], 999999)       # thread id of a message that does not exist
     await db.commit()
     view = await observe(db, team, states(people))
-    assert view.items == [] and view.reason == "reply_scan_limit" and not view.complete
-    assert request.id
-
-
-# --- exact-target answers never clear another request (#752, V1 finding 1) ---------------------
-
-@pytest.mark.asyncio
-async def test_an_answer_to_a_nested_request_does_not_clear_the_root_request(db):
-    team, people = await make_team(db)
-    root = await add_request(db, people[0], people[1])
-    nested = await add_request(db, people[2], people[1], thread=root.id)
-    await db.commit()
-    # The real service stores the answer under the canonical root and records the exact target.
-    answer = await agent_mail_service.send_message(db, MailMessageCreate(
-        kind="answer", sender_member_id=people[1].id, thread_root_id=nested.id, body_markdown="Done."),
-        auto_nudge=False)
-    stored = await db.get(MailMessage, answer.id)
-    assert stored.thread_root_id == root.id and stored.payload == {"resolves_request_id": nested.id}
-    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
-    assert (await db.get(MailMessage, root.id)).request_status == "pending"
-    view = await observe(db, team, states(people))
-    assert ids(view) == [root.id] and view.complete is True and view.reason is None
-
-
-@pytest.mark.asyncio
-async def test_a_legacy_row_that_resolves_another_request_does_not_clear_but_the_same_row_without_it_does(db):
-    team, people = await make_team(db)
-    keyed, plain = (await add_request(db, people[0], people[1]), await add_request(db, people[0], people[1]))
-    await db.flush()
-    for root, payload in ((keyed, {"resolves_request_id": 999}), (plain, None)):
-        # A requester's reply under the request, then the recipient's answer stored under that reply.
-        intermediate = await add_reply(db, people[0], root.id)
-        db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=intermediate.id,
-                           payload=payload, body_markdown="reply", audience_type="member",
-                           audience_id=str(people[1].id)))
-    await db.commit()
-    view = await observe(db, team, states(people))
-    assert ids(view) == [keyed.id] and view.complete is True
-
-
-@pytest.mark.asyncio
-async def test_plain_and_unkeyed_canonical_replies_still_clear_and_a_keyed_one_does_not(db):
-    team, people = await make_team(db)
-    plain, unkeyed, keyed = [await add_request(db, people[0], people[1]) for _ in range(3)]
-    await db.flush()
-    await add_reply(db, people[1], plain.id)
-    await add_reply(db, people[1], unkeyed.id, kind="answer")
-    db.add(MailMessage(kind="answer", sender_member_id=people[1].id, thread_root_id=keyed.id,
-                       payload={"resolves_request_id": 999}, body_markdown="reply", audience_type="member",
-                       audience_id=str(people[1].id)))
-    await db.commit()
-    assert ids(await observe(db, team, states(people))) == [keyed.id]
+    assert ids(view) == [request.id] and view.complete is True and view.reason is None
 
 
 # --- legacy nested requests -------------------------------------------------------------------
@@ -433,28 +384,30 @@ async def test_old_plain_answered_requests_never_hide_a_newer_unanswered_one(db)
 
 
 @pytest.mark.asyncio
-async def test_legacy_reply_scan_cap_is_a_sentinel_not_a_no_reply(db):
+async def test_a_parent_with_the_probe_cap_of_children_is_unproven_not_a_no_reply(db):
+    # Adapted: the sentinel is now the 33-row cap of one probe of the request's own thread.
     team, people = await make_team(db)
     request = await add_request(db, people[0], people[1])
-    unrelated = await add_reply(db, people[2], None)
     await db.flush()
-    for _ in range(33):
-        await add_reply(db, people[1], unrelated.id)       # by the recipient, in another thread
+    first = await add_reply(db, people[0], request.id)
+    for _ in range(32):
+        await add_reply(db, people[0], request.id)         # 33 children by the requester under the request
+    await add_reply(db, people[1], first.id)               # the addressee's reply sits one level deeper
     await db.commit()
     view = await observe(db, team, states(people))
     assert view.items == [] and view.reason == "reply_scan_limit" and not view.complete
-    assert request.id
 
 
 @pytest.mark.asyncio
 async def test_total_reply_budget_stops_before_claiming_no_reply(db):
+    # Adapted: the shared 256 rows / 512 reads are spent by descents of the requests' own threads.
     team, people = await make_team(db)
-    unrelated = await add_reply(db, people[2], None)
-    await db.flush()
-    for index in range(60):
-        await add_request(db, people[0], people[1], age=THRESHOLD + 1000 - index)
-    for _ in range(5):
-        await add_reply(db, people[1], unrelated.id)
+    for index in range(30):
+        request = await add_request(db, people[0], people[1], age=THRESHOLD + 1000 - index)
+        await db.flush()
+        parent = request.id
+        for _ in range(20):
+            parent = (await add_reply(db, people[0], parent)).id
     await db.commit()
     view = await observe(db, team, states(people))
     assert view.reason == "reply_scan_limit" and not view.complete
@@ -1104,6 +1057,178 @@ async def test_a_failed_early_capture_leaves_the_summarys_other_data_in_place(db
     incomplete = [item for item in summary.attention if item.code == "unanswered_request_incomplete"]
     assert len(incomplete) == 1 and incomplete[0].coverage_reason == "native_unknown"
     assert summary.supervisor_observation.unanswered_requests.reason == "native_unknown"
+
+
+# --- the reply proof descends the request's own thread through an index (F4, revision D) -------------
+
+async def reply_chain(db, request, people, depth, *, bottom=None, keyed=False):
+    """``depth`` replies by the requester, each under the previous one, then optionally a reply by ``bottom``."""
+    parent = request.id
+    for _ in range(depth):
+        parent = (await add_reply(db, people[0], parent)).id
+    if bottom is None:
+        return parent
+    row = MailMessage(kind="answer" if keyed else "message", sender_member_id=bottom.id, thread_root_id=parent,
+                      payload={"resolves_request_id": 999} if keyed else None, body_markdown="reply",
+                      audience_type="member", audience_id=str(bottom.id))
+    db.add(row)
+    await db.flush()
+    return row
+
+
+def candidate_of(request, person):
+    return SimpleNamespace(id=request.id, recipient_member_id=person.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", [2, 5, 20])
+async def test_a_legacy_reply_at_any_depth_clears_even_when_the_sender_has_many_other_replies(db, depth):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    unrelated = await add_reply(db, people[2], None)
+    await db.flush()
+    for _ in range(40):
+        await add_reply(db, people[1], unrelated.id)       # the addressee's unrelated replies, older than the chain
+    await reply_chain(db, request, people, depth, bottom=people[1])
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.items == [] and view.complete is True and view.reason is None
+
+
+@pytest.mark.asyncio
+async def test_the_proof_does_not_spend_the_row_budget_on_unrelated_replies(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    unrelated = await add_reply(db, people[2], None)
+    await db.flush()
+    for _ in range(200):
+        await add_reply(db, people[1], unrelated.id)
+    await db.commit()
+    cleared, proven, used = await MailRequestStallService()._legacy_reply_clears(
+        db, candidate_of(request, people[1]), 256, {}, [0])
+    assert (cleared, proven) == (False, True) and used <= 2
+
+
+@pytest.mark.asyncio
+async def test_the_proof_work_does_not_grow_with_unrelated_rows(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    other = await add_reply(db, people[2], None)
+    await db.flush()
+    service = MailRequestStallService()
+    candidate = candidate_of(request, people[1])
+    await _bulk_unrelated(db, other.id, people[2], 600)
+    small = await _vm_operations(db, lambda: service._legacy_reply_clears(db, candidate, 256, {}, [0]))
+    await _bulk_unrelated(db, other.id, people[2], 5400)
+    large = await _vm_operations(db, lambda: service._legacy_reply_clears(db, candidate, 256, {}, [0]))
+    assert large <= small * 1.25 + 200, (small, large)
+
+
+async def _bulk_unrelated(db, parent, sender, count):
+    rows = [{"kind": "message", "sender_member_id": sender.id, "thread_root_id": parent, "body_markdown": "r",
+             "audience_type": "member", "audience_id": str(sender.id)} for _ in range(count)]
+    await db.execute(MailMessage.__table__.insert(), rows)
+    await db.commit()
+
+
+async def _vm_operations(db, read):
+    connection = await (await db.connection()).get_raw_connection()
+    driver, ticks = connection.driver_connection, [0]
+
+    def tick():
+        ticks[0] += 1
+        return 0
+
+    await driver.set_progress_handler(tick, 10)
+    try:
+        await read()
+    finally:
+        await driver.set_progress_handler(None, 0)
+    return ticks[0] * 10
+
+
+@pytest.mark.asyncio
+async def test_the_reply_probe_uses_the_thread_root_index_without_sorting(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.commit()
+    query = MailRequestStallService._reply_probe(request.id, request.id, 33)
+    sql = str(query.compile(compile_kwargs={"literal_binds": True}))
+    detail = " ".join(row[3] for row in (await db.execute(text("EXPLAIN QUERY PLAN " + sql))).all())
+    assert "SEARCH" in detail and "ix_mail_messages_thread_root_id" in detail
+    assert "TEMP B-TREE" not in detail and "SCAN" not in detail
+
+
+@pytest.mark.asyncio
+async def test_a_descent_deeper_than_the_hop_bound_is_unproven(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.flush()
+    await reply_chain(db, request, people, 34, bottom=people[1])
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.items == [] and view.reason == "reply_scan_limit" and not view.complete
+
+
+@pytest.mark.asyncio
+async def test_thirty_two_children_are_below_the_probe_cap_and_the_deeper_reply_clears(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.flush()
+    first = await add_reply(db, people[0], request.id)
+    for _ in range(31):
+        await add_reply(db, people[0], request.id)         # 32 children: one below the probe cap
+    await add_reply(db, people[1], first.id)               # the addressee's reply, one level deeper
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.items == [] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_a_probe_never_reads_past_the_remaining_row_capacity(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.flush()
+    for _ in range(10):
+        await add_reply(db, people[0], request.id)
+    await db.commit()
+    service = MailRequestStallService()
+    limits = []
+    original = MailRequestStallService._reply_probe
+
+    def spy(parent, request_id, limit):
+        limits.append(limit)
+        return original(parent, request_id, limit)
+
+    service._reply_probe = spy
+    result = await service._legacy_reply_clears(db, candidate_of(request, people[1]), 5, {}, [0])
+    assert result == (False, False, 5) and limits == [5]        # capacity 5: limit 5, five rows charged, unproven
+    limits.clear()
+    result = await service._legacy_reply_clears(db, candidate_of(request, people[1]), 256, {}, [512])
+    assert result == (False, False, 0) and limits == []         # no read capacity: fail closed BEFORE any query
+
+
+@pytest.mark.asyncio
+async def test_every_probe_is_charged_one_read_and_the_last_read_is_the_last(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.flush()
+    await reply_chain(db, request, people, 3)
+    await db.commit()
+    counter = [510]
+    result = await MailRequestStallService()._legacy_reply_clears(db, candidate_of(request, people[1]), 256, {}, counter)
+    assert result == (False, False, 2) and counter[0] == 512      # reads 511 and 512 ran; a third is refused
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_answer_at_depth_never_clears(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.flush()
+    await reply_chain(db, request, people, 6, bottom=people[1], keyed=True)
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert ids(view) == [request.id] and view.complete is True
 
 
 # --- privacy, order, repetition ---------------------------------------------------------------
