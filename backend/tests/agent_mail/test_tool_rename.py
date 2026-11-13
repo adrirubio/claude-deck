@@ -13,7 +13,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 # Independent golden list: compatibility.md section 4.3 plus its v4.1 additive note.
 PUBLIC_SUFFIXES = {
     "request_scope_amendment", "record_revision_review", "withdraw_revision_review", "end_submitted_revision",
-    "ack_continuation", "ack_message", "approve_work_item", "attach_image_to_bridge_session",
+    "settle_accepted_revision", "ack_continuation", "ack_message", "approve_work_item", "attach_image_to_bridge_session",
     "check_inbox", "create_handoff", "create_team", "decide_continuation",
     "get_backlog_coordination", "get_operator_action_contexts", "get_team_summary",
     "get_work_item_context", "launch_team", "list_bridge_attachments", "list_scope_revisions",
@@ -52,7 +52,7 @@ def test_t_t1_exact_public_and_pi_private_surface(monkeypatch, provider):
     shim = load_shim(monkeypatch, provider)
     tools = asyncio.run(shim.mcp.list_tools())
     expected = PUBLIC_NAMES | ({PRIVATE_NAME} if provider == "pi-cli" else set())
-    assert len(PUBLIC_NAMES) == 41
+    assert len(PUBLIC_NAMES) == 42
     assert {tool.name for tool in tools} == expected
     assert len(tools) == len(expected)
     for tool in tools:

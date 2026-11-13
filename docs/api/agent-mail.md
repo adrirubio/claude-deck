@@ -217,8 +217,8 @@ for the exact attempt/revision/head through `synth_city_watch_required_checks`. 
 identifies the reviewer; CI success alone is never review authority. The assigned reviewer calls
 `synth_city_record_revision_review`, or `POST /github-work-items/{id}/revision-reviews`, with
 `dispatch_nonce`, `revision`, a full `head_sha`, `summary`, and a GitHub `evidence_url` linking the
-source review. This records only CHANGES REQUIRED. Reviewer identity comes from the authenticated
-session. A superseding disposition retains history; the reviewer may explicitly withdraw through
+source review. The optional `verdict` is `changes_required` (the default) or `accepted`. Reviewer
+identity comes from the authenticated session. A superseding disposition retains history; the reviewer may explicitly withdraw through
 `synth_city_withdraw_revision_review` / `POST /github-work-items/{id}/revision-reviews/{review_id}/withdraw`.
 
 The current Leader settles an active negative fact through `synth_city_end_submitted_revision`
@@ -228,6 +228,17 @@ Leader, policy, lease and pause/HOLD fences after external reads. It supersedes 
 revision and clears owner acknowledgement without escalating or splitting the issue. Source work
 is stopped until a fresh bounded amendment, approval and owner activation. This action does not
 approve the source or satisfy independent acceptance, CI, human review or merge policy.
+
+An independent `accepted` fact for the exact submitted head is settled by the current Leader, who must
+differ from the owner, through `synth_city_settle_accepted_revision` or
+`POST /github-work-items/{id}/submitted-revision/settle-accepted`, supplying `review_id`,
+`dispatch_nonce` and `reason`. The server rereads every required job of the delivery policy for that
+head and refuses unless each is successful with GitHub Actions provenance. It also rechecks the open
+PR head, reviewer assignment, owner, Leader, lease, nonce and pause/HOLD fences after that read, and
+refuses while a negative fact or a pending approval exists. It consumes the fact and marks the revision
+completed. The item status, counters, budgets, approval rounds and lease do not change. This action does
+not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition, change policy or budgets,
+release a lease or approve source.
 
 Operator cancellation also accepts submitted revisions, and exhausted diagnostics after exact
 baseline-tree restoration. A restoration commit may have a different SHA. An already charged

@@ -1108,3 +1108,252 @@ async def test_monitor_repairs_post_commit_cancellation_notice_before_new_propos
     await db.refresh(item)
     assert item.continuation_nudged_at is None
     assert preset.autonomy_enabled is True
+
+
+async def _escalate_plan_blocked(db, item, revision, reason="plan_blocked"):
+    """Revision stays active while the item is escalated, as on work item 153."""
+    item.dispatch_status = "escalated"
+    item.escalation_reason = reason
+    revision.originating_escalation_reason = reason
+    await db.commit()
+
+
+async def _counters(db, item, revision, workspace):
+    for row in (item, revision, workspace):
+        await db.refresh(row)
+    return (item.retry_count, item.diagnostic_retry_count, item.last_verified_sha,
+            item.diagnostic_last_verified_sha, revision.failed_head_count, revision.last_failed_head_sha,
+            workspace.leased_item_id, workspace.lease_token, workspace.leased_at)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pushed_head", [False, True])
+async def test_operator_cancels_an_active_revision_on_a_plan_blocked_item_without_a_head_charge(
+    client, db, tmp_path, monkeypatch, pushed_head
+):
+    from app.models.database import FactoryAuditEvent
+    _preset, _slots, scope, item, workspace, revision, approval, owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    if pushed_head:
+        async def pushed_pull(owner_name, repo, _pr_number, *, token=None):
+            return {"state": "open", "head": {"sha": "b" * 40, "ref": item.dispatch_head_ref,
+                                              "repo": {"full_name": f"{owner_name}/{repo}"}}}
+
+        monkeypatch.setattr(github_client, "get_pull", pushed_pull)
+    before = await _counters(db, item, revision, workspace)
+
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    replay = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+
+    assert response.status_code == 200, response.text
+    assert replay.status_code == 200, replay.text
+    assert await _counters(db, item, revision, workspace) == before
+    await db.refresh(approval)
+    assert item.dispatch_status == "escalated" and item.escalation_reason == "plan_blocked"
+    assert item.active_scope_revision == 0 and item.attempt_phase == "implementation"
+    assert revision.status == "superseded" and revision.cancelled_at is not None
+    assert approval.status == "approved"
+    assert "failed-head" not in (item.status_note or "")
+    facts = list((await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "recovery_cancellation", FactoryAuditEvent.revision_id == revision.id,
+        FactoryAuditEvent.action_outcome == "applied"))).all())
+    assert len(facts) == 1 and facts[0].before_values["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_a_plan_blocked_item_takes_a_new_bounded_proposal_after_the_cancellation(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, scope, item, workspace, revision, _approval, owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    before = await _counters(db, item, revision, workspace)
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    assert response.status_code == 200, response.text
+    await db.refresh(item)
+
+    async def read_token(_scope):
+        return "token"
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "a" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    async def get_recursive_tree(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(github_approval_service, "github_read_token", read_token)
+    monkeypatch.setattr("app.services.github_approval_service.github_client.get_pull", get_pull)
+    monkeypatch.setattr("app.services.github_approval_service.github_client.get_commit_snapshot", get_commit_snapshot)
+    monkeypatch.setattr("app.services.github_approval_service.github_client.get_recursive_tree", get_recursive_tree)
+    next_revision, _next_approval, created = await github_approval_service.create_continuation_request(
+        db, item, scope, authenticated_owner_member_id=owner.id, authenticated_owner_slot_id=item.owner_slot_id,
+        dispatch_nonce=item.dispatch_nonce, phase="implementation", execution_target="hosted_ci",
+        summary="A fresh bounded attempt", allowed_paths=["tests/playback_smoke.py.in"],
+        allowed_actions=["edit_tests", "push_pr_head", "request_verification"], allowed_commands=[],
+        prohibited_actions=[], max_failed_heads=1, tool_fallbacks={}, lease_token="lease-secret")
+    assert created is True and next_revision.revision == 2 and next_revision.status == "proposed"
+    assert await _counters(db, item, revision, workspace) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("case", "status_code", "detail"), [
+    ("other_reason", 409, "active_continuation_not_cancellable"),
+    ("no_reason", 409, "active_continuation_not_cancellable"),
+    ("owner", 409, "active_continuation_not_cancellable"),
+    ("no_pr", 409, "active_continuation_not_cancellable"),
+    ("approval", 409, "active_continuation_not_cancellable"),
+    ("pending_handoff", 409, "active_continuation_not_cancellable"),
+    ("unknown_handoff", 409, "active_continuation_not_cancellable"),
+    ("lease", 409, "workspace_lease_changed"),
+    ("autonomy_off", 409, "amendment_context_unavailable"),
+    ("hold", 409, "amendment_context_unavailable"),
+])
+async def test_active_revision_on_an_escalated_item_keeps_every_other_refusal(
+    client, db, tmp_path, monkeypatch, case, status_code, detail
+):
+    preset, slots, _scope, item, workspace, revision, approval, _owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    if case == "other_reason":
+        item.escalation_reason = "owner_idle_timeout"
+    elif case == "no_reason":
+        item.escalation_reason = None
+    elif case == "owner":
+        item.owner_slot_id = slots[0].id
+    elif case == "no_pr":
+        item.pr_number = None
+    elif case == "approval":
+        approval.status = "superseded"
+    elif case == "pending_handoff":
+        item.handoff_state = "pending"
+        item.handoff_target_slot_id = slots[0].id
+    elif case == "unknown_handoff":
+        item.handoff_state = "declined"
+    elif case == "lease":
+        workspace.lease_token = "replacement-lease-secret"
+    elif case == "autonomy_off":
+        preset.autonomy_enabled = False
+    else:
+        marker = tmp_path / "hold.json"
+        marker.write_text("{}")
+        monkeypatch.setattr(settings, "github_coordination_hold_paths", [str(marker)])
+        monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
+    await db.commit()
+    before = await _counters(db, item, revision, workspace)
+
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+
+    assert response.status_code == status_code and response.json()["detail"] == detail
+    assert await _counters(db, item, revision, workspace) == before
+    assert item.dispatch_status == "escalated" and item.active_scope_revision == revision.revision
+    assert revision.status == "active" and revision.cancelled_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_nonce_is_refused_for_an_escalated_active_revision(client, db, tmp_path):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    body = _cancel_body(item) | {"dispatch_nonce": "another-nonce"}
+    response = await client.post(_cancel_url(item), json=body, headers=OPERATOR_HEADERS)
+    assert response.status_code == 409 and response.json()["detail"] == "stale_nonce"
+    await db.refresh(revision)
+    assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("item_status", ["dispatched", "escalated"])
+async def test_an_accepted_handoff_is_a_settled_owner_binding_for_the_cancellation(
+    client, db, tmp_path, item_status
+):
+    _preset, _slots, _scope, item, workspace, revision, _approval, _owner = await _active_continuation(db, tmp_path)
+    if item_status == "escalated":
+        await _escalate_plan_blocked(db, item, revision)
+    item.handoff_state = "accepted"
+    await db.commit()
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    assert response.status_code == 200, response.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert revision.status == "superseded" and item.active_scope_revision == 0
+    assert item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_the_item_stays_plan_blocked_even_when_the_revision_started_from_another_reason(client, db, tmp_path):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    revision.originating_escalation_reason = "retry_count_exhausted"
+    await db.commit()
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+    assert response.status_code == 200, response.text
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated" and item.escalation_reason == "plan_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["before_context", "head_read", "final_write"])
+@pytest.mark.parametrize("changed_reason", ["owner_idle_timeout", None])
+async def test_a_late_escalation_reason_change_refuses_the_cancellation_before_any_mutation(
+    client, db, tmp_path, monkeypatch, boundary, changed_reason
+):
+    from app.models.database import FactoryAuditEvent
+    _preset, _slots, _scope, item, workspace, revision, approval, _owner = await _active_continuation(db, tmp_path)
+    await _escalate_plan_blocked(db, item, revision)
+    before = await _counters(db, item, revision, workspace)
+    item_id = item.id
+    changed = []
+
+    async def change_reason():
+        if changed:
+            return
+        changed.append(True)
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id)
+                         .values(escalation_reason=changed_reason))
+        await db.commit()
+
+    if boundary == "before_context":
+        original_context = github_approval_service.healthy_scope_context
+
+        async def changing_context(*args, **kwargs):
+            await change_reason()
+            return await original_context(*args, **kwargs)
+
+        monkeypatch.setattr(github_approval_service, "healthy_scope_context", changing_context)
+    elif boundary == "head_read":
+        original_get_pull = github_client.get_pull
+
+        async def changing_pull(*args, **kwargs):
+            await change_reason()
+            return await original_get_pull(*args, **kwargs)
+
+        monkeypatch.setattr(github_client, "get_pull", changing_pull)
+    else:
+        original_usage = github_approval_service.continuation_budget_usage
+
+        async def changing_usage(*args, **kwargs):
+            await change_reason()
+            return await original_usage(*args, **kwargs)
+
+        monkeypatch.setattr(github_approval_service, "continuation_budget_usage", changing_usage)
+
+    response = await client.post(_cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS)
+
+    assert changed, "the late change must have run"
+    assert response.status_code == 409, response.text
+    # Each boundary is refused by its own guard, so removing any one fence fails a test.
+    assert response.json()["detail"] == {
+        "before_context": "active_continuation_not_cancellable",
+        "head_read": "stale_amendment_context",
+        "final_write": "active_continuation_cancel_conflict",
+    }[boundary]
+    after = await _counters(db, item, revision, workspace)
+    assert after == before
+    await db.refresh(approval)
+    assert item.dispatch_status == "escalated" and item.escalation_reason == changed_reason
+    assert item.active_scope_revision == revision.revision
+    assert revision.status == "active" and revision.cancelled_at is None and approval.status == "approved"
+    applied = list((await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "recovery_cancellation", FactoryAuditEvent.revision_id == revision.id,
+        FactoryAuditEvent.action_outcome == "applied"))).all())
+    assert applied == []
