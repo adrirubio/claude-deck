@@ -89,8 +89,17 @@ The kit refuses, with exit 2, when:
 For `--provider opencode-cli`, `up` pins the member to the kit's stub model before any pane starts:
 - **Stub-only config.** After the Agent Mail install has written the kit HOME's `opencode.json`, `up` adds exactly one provider, `kitstub` (OpenAI-compatible, `baseURL` `http://127.0.0.1:18781/v1`, one model `stub`). It sets `enabled_providers` to `["kitstub"]`, `model` to `kitstub/stub`, and turns autoupdate and sharing off. The install's Agent Mail entry (`mcp.servers.albiex-synth-city-mail`) and its question-deny rule are kept.
 - **The slot model.** The kit's team slot launches with the model `kitstub/stub`, so the product's own per-member config (`OPENCODE_CONFIG_CONTENT`) also limits `enabled_providers` to `kitstub`.
-- **Proof before launch.** `up` reads the config back and refuses (exit 2) before the launch unless the only provider is `kitstub` on `127.0.0.1`, `enabled_providers` is exactly `["kitstub"]`, the model is `kitstub/stub`, and the install's entry and deny rule are present. It also refuses an `opencode.jsonc` (comments can't be merged safely), a missing or non-object config, or a config that already names another provider. A refusal changes nothing.
-- **Evidence.** `status` proves the config again and publishes `opencode-config.json` (the provider ids, `enabled_providers`, the model, the stub's host and port, and whether the install's entry and deny rule are present; nothing else) in the manifest. A config changed after launch makes `status` fail without publishing.
+- **Proof before launch.** `up` reads the config back and refuses (exit 2) before the launch unless all of these hold:
+  - the only provider is `kitstub`, with the adapter `@ai-sdk/openai-compatible` and its `baseURL` on `127.0.0.1`;
+  - `enabled_providers` is exactly `["kitstub"]` and the model is `kitstub/stub`;
+  - autoupdate is off and sharing is disabled;
+  - the install's Mail entry is usable: local, enabled, `codemode` off, its command ending in the Mail shim, provider `opencode-cli` and the kit's own backend URL;
+  - the deny rule is present.
+
+  It also refuses an `opencode.jsonc` (comments can't be merged safely), a missing or non-object config, a config that already names another provider, and any symlinked or non-directory component of `home/.config/opencode`. A refusal changes nothing, inside or outside the kit.
+- **Any later change is refused.** `up` records the SHA-256 of the config it wrote in `state/`. A config with any other bytes no longer counts as proved.
+- **The provider is proved from records.** `status` uses the OpenCode proof when the provider recorded by `up`, the launched slot's provider and the registered session's provider all agree. If the marker is missing or any of them disagree, `status` refuses before writing anything.
+- **Evidence.** `status` proves the config again and publishes `opencode-config.json` in the manifest. It holds the provider ids, `enabled_providers`, the model, the stub's host and port, and whether the Mail entry is usable and the deny rule present; nothing else. At the end of capture, `status` proves the provider and the config once more. A change during capture fails `status`, and the published evidence stays unchanged.
 
 **Limits.** The fake CLI is not OpenCode, so the product's OpenCode 2 gate refuses its Agent Mail registration and `up` with the fake stops at registration. That the stub-only config holds for a real OpenCode member, and that no hosted fallback happens, is proved only by a run of the real OpenCode CLI inside the kit; that run is a separate, approved phase.
 

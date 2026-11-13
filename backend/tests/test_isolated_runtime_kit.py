@@ -680,14 +680,19 @@ MAIL_SERVER = "albiex-synth-city-mail"
 DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
 
 
+def _mail_entry():  # what the Agent Mail install writes for OpenCode 2 in the kit
+    return {"type": "local", "command": ["/usr/bin/python3", str(REPO / "backend" / "mcp_shim" / "agent_mail_server.py")],
+            "enabled": True, "codemode": False,
+            "environment": {"SYNTH_CITY_URL": "http://127.0.0.1:18780", "SYNTH_CITY_PROVIDER": "opencode-cli"}}
+
+
 def _opencode_home(tmp_path, doc=None):
     root = tmp_path / "kit"
     home = root / "home" / ".config" / "opencode"
     home.mkdir(parents=True)
-    if doc is None:  # what the Agent Mail install writes for OpenCode 2
-        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local", "command": ["python3", "shim.py"], "enabled": True,
-                                                  "codemode": False}}},
-               "permissions": [dict(DENY_RULE)]}
+    (root / "state").mkdir()
+    if doc is None:
+        doc = {"mcp": {"servers": {MAIL_SERVER: _mail_entry()}}, "permissions": [dict(DENY_RULE)]}
     if doc is not False:
         (home / "opencode.json").write_text(json.dumps(doc))
     return root, home / "opencode.json"
@@ -723,7 +728,8 @@ def test_opencode_config_is_stub_only_and_keeps_the_install(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("case", ["no_config", "jsonc", "no_mail_entry", "no_deny_rule", "foreign_provider",
-                                  "not_an_object", "remote_stub", "unwritable"])
+                                  "not_an_object", "remote_stub", "unwritable", "mail_empty", "mail_disabled",
+                                  "mail_remote", "mail_no_command", "mail_codemode", "mail_other_backend"])
 def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
     doc = None
     if case == "no_config":
@@ -731,9 +737,24 @@ def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
     elif case == "no_mail_entry":
         doc = {"mcp": {"servers": {}}, "permissions": [dict(DENY_RULE)]}
     elif case == "no_deny_rule":
-        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": []}
+        doc = {"mcp": {"servers": {MAIL_SERVER: _mail_entry()}}, "permissions": []}
+    elif case.startswith("mail_"):  # V1 review 5899008490 finding 3: an unusable install entry
+        entry = _mail_entry()
+        if case == "mail_empty":
+            entry = {}
+        elif case == "mail_disabled":
+            entry["enabled"] = False
+        elif case == "mail_remote":
+            entry["type"] = "remote"
+        elif case == "mail_no_command":
+            del entry["command"]
+        elif case == "mail_codemode":
+            entry["codemode"] = True
+        elif case == "mail_other_backend":
+            entry["environment"]["SYNTH_CITY_URL"] = "http://127.0.0.1:8011"
+        doc = {"mcp": {"servers": {MAIL_SERVER: entry}}, "permissions": [dict(DENY_RULE)]}
     elif case == "foreign_provider":
-        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": [dict(DENY_RULE)],
+        doc = {"mcp": {"servers": {MAIL_SERVER: _mail_entry()}}, "permissions": [dict(DENY_RULE)],
                "provider": {"openai": {"options": {"baseURL": "https://api.example.invalid/v1"}}}}
     elif case == "not_an_object":
         doc = ["not", "an", "object"]
@@ -754,7 +775,9 @@ def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
 
 
 @pytest.mark.parametrize("tamper", ["extra_provider", "enabled_widened", "enabled_missing", "remote_base_url",
-                                    "model_elsewhere", "mail_entry_removed", "deny_rule_removed"])
+                                    "model_elsewhere", "mail_entry_removed", "deny_rule_removed",
+                                    "mail_emptied", "mail_disabled", "mail_codemode", "adapter_changed",
+                                    "autoupdate_on", "share_on", "unrelated_key_added"])
 def test_opencode_check_refuses_a_config_that_is_not_stub_only(tmp_path, tamper):
     root, path = _opencode_home(tmp_path)
     module = _helper_module()
@@ -772,6 +795,20 @@ def test_opencode_check_refuses_a_config_that_is_not_stub_only(tmp_path, tamper)
         doc["model"] = "opencode/free"
     elif tamper == "mail_entry_removed":
         del doc["mcp"]["servers"][MAIL_SERVER]
+    elif tamper == "mail_emptied":
+        doc["mcp"]["servers"][MAIL_SERVER] = {}
+    elif tamper == "mail_disabled":
+        doc["mcp"]["servers"][MAIL_SERVER]["enabled"] = False
+    elif tamper == "mail_codemode":
+        doc["mcp"]["servers"][MAIL_SERVER]["codemode"] = True
+    elif tamper == "adapter_changed":
+        doc["provider"]["kitstub"]["npm"] = "@ai-sdk/anthropic"
+    elif tamper == "autoupdate_on":
+        doc["autoupdate"] = True
+    elif tamper == "share_on":
+        doc["share"] = "auto"
+    elif tamper == "unrelated_key_added":  # any change after the proved write is refused
+        doc["instructions"] = ["anything"]
     else:
         doc["permissions"] = []
     path.write_text(json.dumps(doc))
@@ -847,32 +884,136 @@ def test_opencode_member_launch_is_pinned_to_the_stub(tmp_path):
     assert not root.exists()
 
 
-def test_opencode_status_evidence_is_checked_and_in_the_manifest(tmp_path):
-    """status re-proves the stub-only config for an OpenCode kit and publishes its summary;
-    a config changed after launch makes status fail before it publishes anything."""
+def test_status_provider_proof_cannot_be_bypassed_by_the_marker(tmp_path):
+    """V1 review 5899008490 finding 2, end to end: another provider keeps its normal status;
+    a missing or changed provider marker is refused before anything is written."""
     _needs_namespaces()
     root = tmp_path / "kit"
-    _up(root)  # a registered fake member; the OpenCode config is then added as up would
+    _up(root)
     try:
-        home = root / "home" / ".config" / "opencode"
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "opencode.json").write_text(json.dumps(
-            {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": [dict(DENY_RULE)]}))
-        assert _opencode(_helper_module(), "opencode_config", root) == 0
-        (root / "state" / "provider").write_text("opencode-cli\n")
         status = _kit("status", "--root", str(root))
         assert status.returncode == 0, status.stderr
-        evidence = json.loads((root / "evidence" / "opencode-config.json").read_text())
-        assert evidence["enabled_providers"] == ["kitstub"] and evidence["base_url"] == "127.0.0.1:18781"
-        assert "opencode-config.json" in (root / "evidence" / "MANIFEST.sha256").read_text()
+        assert not (root / "evidence" / "opencode-config.json").exists()
         published = os.readlink(root / "evidence")
-        doc = json.loads((home / "opencode.json").read_text())
-        doc["enabled_providers"] = ["kitstub", "opencode"]
-        (home / "opencode.json").write_text(json.dumps(doc))
-        again = _kit("status", "--root", str(root))
-        assert again.returncode == 1 and "published evidence is unchanged" in again.stderr, again.stderr
-        assert os.readlink(root / "evidence") == published
+        attempts = sorted(p.name for p in (root / "evidence.d").iterdir())
+        marker = root / "state" / "provider"
+        for change in ("missing", "opencode-cli"):
+            if change == "missing":
+                marker.unlink()
+            else:
+                marker.write_text(change + "\n")
+            again = _kit("status", "--root", str(root))
+            assert again.returncode == 2 and "kit provider cannot be proved" in again.stderr, again.stderr
+            assert os.readlink(root / "evidence") == published
+            assert sorted(p.name for p in (root / "evidence.d").iterdir()) == attempts
     finally:
         down = _kit("down", "--root", str(root))
     assert down.returncode == 0, down.stderr
     assert not root.exists()
+
+
+# V1 review 5899008490 finding 1: no path component of the config may lead out of the kit.
+@pytest.mark.parametrize("component", ["home", ".config", "opencode"])
+def test_opencode_config_refuses_a_symlinked_directory_and_writes_nothing_outside(tmp_path, component):
+    root, path = _opencode_home(tmp_path)
+    outside = tmp_path / "outside"
+    chain = {"home": root / "home", ".config": root / "home" / ".config", "opencode": path.parent}
+    chain[component].rename(outside)
+    chain[component].symlink_to(outside)
+    victim = outside / (path.relative_to(chain[component]))
+    before = victim.read_bytes()
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 2
+    assert victim.read_bytes() == before
+    assert not [p for p in victim.parent.iterdir() if p.name.startswith(".opencode")]
+    assert _opencode(module, "opencode_check", root) == 2
+
+
+def _kit_db(root, slot_provider, session_provider, state_provider):
+    import sqlite3
+    db = sqlite3.connect(root / "kit.db")
+    db.execute("CREATE TABLE agent_team_slots (id INTEGER PRIMARY KEY, provider TEXT)")
+    db.execute("CREATE TABLE mail_agent_sessions (id INTEGER PRIMARY KEY, provider TEXT, team_slot_id INTEGER, closed_at TEXT)")
+    db.execute("INSERT INTO agent_team_slots VALUES (7, ?)", (slot_provider,))
+    if session_provider is not None:
+        db.execute("INSERT INTO mail_agent_sessions VALUES (1, ?, 7, NULL)", (session_provider,))
+    db.commit()
+    db.close()
+    (root / "state" / "launch.json").write_text(json.dumps({"slot_id": 7}))
+    if state_provider is not None:
+        (root / "state" / "provider").write_text(state_provider + "\n")
+
+
+# V1 review 5899008490 finding 2: the provider that decides the OpenCode proof is bound to
+# the launched slot and the registered session; a missing or different marker is refused.
+@pytest.mark.parametrize("slot, session, marker, expected", [
+    ("opencode-cli", "opencode-cli", "opencode-cli", "opencode-cli"),
+    ("claude-code", "claude-code", "claude-code", "claude-code"),
+    ("opencode-cli", "opencode-cli", None, None),
+    ("opencode-cli", "opencode-cli", "claude-code", None),
+    ("claude-code", "opencode-cli", "claude-code", None),
+    ("opencode-cli", None, "opencode-cli", None),
+])
+def test_kit_provider_is_bound_to_the_launch_and_registration(tmp_path, capsys, slot, session, marker, expected):
+    root, _ = _opencode_home(tmp_path)
+    _kit_db(root, slot, session, marker)
+    module = _helper_module()
+    try:
+        module["kit_provider"](str(root))
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    if expected is None:
+        assert code == 2
+    else:
+        assert code == 0 and capsys.readouterr().out.strip() == expected
+
+
+# V1 review 5899008490 finding 4: the config is proved again at the end of capture and must
+# match the captured proof exactly; a change during capture publishes nothing.
+def test_opencode_final_check_refuses_a_config_changed_during_capture(tmp_path, capsys):
+    root, path = _opencode_home(tmp_path)
+    _kit_db(root, "opencode-cli", "opencode-cli", "opencode-cli")
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    capsys.readouterr()
+    captured = tmp_path / "opencode-config.json"
+    assert _opencode(module, "opencode_check", root) == 0
+    captured.write_text(capsys.readouterr().out)
+    def final():
+        try:
+            module["opencode_final"](str(root), STUB_URL, str(captured))
+        except SystemExit as exc:
+            return exc.code
+        return 0
+    assert final() == 0
+    doc = json.loads(path.read_text())
+    doc["enabled_providers"] = ["kitstub", "opencode"]
+    path.write_text(json.dumps(doc))
+    assert final() == 2
+    path.write_text(json.dumps({**doc, "enabled_providers": ["kitstub"]}))  # back to valid, but not byte-identical
+    assert final() == 2
+
+
+# In-memory removal controls for the V1 5899008490 batch: each must make a test above fail.
+@pytest.mark.parametrize("control", ["no_ancestor_check", "marker_only", "mail_presence_only", "final_skipped"])
+def test_opencode_correction_controls_are_caught(tmp_path, monkeypatch, capsys, control):
+    if control == "no_ancestor_check":
+        _opencode_control(tmp_path, monkeypatch, "        if not stat.S_ISDIR(info.st_mode):\n", "        if False:\n")
+        run = lambda: test_opencode_config_refuses_a_symlinked_directory_and_writes_nothing_outside(tmp_path / "t", "home")
+    elif control == "marker_only":
+        _opencode_control(tmp_path, monkeypatch, "not (marker == slot[0] == session[0])", "False")
+        run = lambda: test_kit_provider_is_bound_to_the_launch_and_registration(
+            tmp_path / "t", capsys, "opencode-cli", "opencode-cli", "claude-code", None)
+    elif control == "mail_presence_only":
+        _opencode_control(tmp_path, monkeypatch, "    return (entry.get(\"type\") == \"local\"", "    return True or (entry.get(\"type\") == \"local\"")
+        run = lambda: test_opencode_check_refuses_a_config_that_is_not_stub_only(tmp_path / "t", "mail_entry_removed") or \
+            test_opencode_config_refuses_unsafe_merges(tmp_path / "u", "mail_disabled")
+    else:
+        _opencode_control(tmp_path, monkeypatch, "def opencode_final(root, stub_url, captured):\n",
+                          "def opencode_final(root, stub_url, captured):\n    return\n")
+        run = lambda: test_opencode_final_check_refuses_a_config_changed_during_capture(tmp_path / "t", capsys)
+    (tmp_path / "t").mkdir()
+    (tmp_path / "u").mkdir()
+    with pytest.raises(AssertionError):
+        run()
