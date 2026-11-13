@@ -23,6 +23,9 @@ _active_relays: dict[str, "PtyRelay"] = {}
 # This prevents orphaned tmux attach-session processes on server reload/crash.
 _PR_SET_PDEATHSIG = 1
 
+# The most attach-process error text one relay writes to the log, in characters.
+_ATTACH_STDERR_LOG_LIMIT = 4096
+
 
 def is_target_interactive(target: str) -> bool:
     """Return whether a live relay for target currently accepts input."""
@@ -30,9 +33,25 @@ def is_target_interactive(target: str) -> bool:
     return relay is not None and not relay.read_only
 
 
+def _attach_command(target: str) -> list[str]:
+    """The command that attaches to a tmux target. Tests replace it."""
+    return ["tmux", "attach-session", "-t", target]
+
+
 def _child_preexec() -> None:
-    """Set up the child process: new session + death signal."""
+    """Set up the child process: new session, controlling terminal, death signal.
+
+    The relay pty is the child's stdin. Making it the controlling terminal of the new
+    session lets the kernel send SIGWINCH to the child whenever the relay changes the
+    pty size, as a terminal emulator does. The relay then never has to signal the attach
+    process. That matters when the attach process is `sudo` running tmux as another user,
+    which the controller cannot signal.
+    """
     os.setsid()
+    try:
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    except OSError:
+        pass
     try:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
@@ -55,26 +74,18 @@ def parse_control_message(text: str) -> Optional[dict]:
     return None
 
 
-def resize_pty(
-    fd: int,
-    rows: int,
-    cols: int,
-    process: Optional[subprocess.Popen] = None,
-) -> None:
-    """Resize the pty and signal the tmux attach process."""
+def resize_pty(fd: int, rows: int, cols: int) -> Optional[Exception]:
+    """Set the pty size. Return None, or the error when the size could not be set.
+
+    The attach process learns of the new size from the kernel (see _child_preexec).
+    This function never signals it. The caller decides how to report a failure.
+    """
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
-    except (OSError, ValueError) as e:
-        logger.warning(f"Failed to resize pty: {e}")
-        return
-
-    # Send SIGWINCH so the tmux client notices the terminal size change
-    if process and process.poll() is None:
-        try:
-            os.kill(process.pid, signal.SIGWINCH)
-        except OSError:
-            pass
+    except (OSError, ValueError, TypeError, struct.error) as e:
+        return e
+    return None
 
 
 class PtyRelay:
@@ -87,9 +98,49 @@ class PtyRelay:
         self.master_fd: Optional[int] = None
         self.process: Optional[subprocess.Popen] = None
         self._closed = False
+        self._resize_failure_logged = False
+        self._stderr_fd: Optional[int] = None
+        self._stderr_logged = 0
+        self._stderr_suppressed = False
 
     def set_read_only(self, requested: bool) -> None:
         self.read_only = not (self._interactive_granted and requested is False)
+
+    def resize(self, rows: int, cols: int) -> None:
+        """Resize the relay pty. A failure is logged once per relay."""
+        error = resize_pty(self.master_fd if self.master_fd is not None else -1, rows, cols)
+        if error is not None and not self._resize_failure_logged:
+            self._resize_failure_logged = True
+            logger.warning("Could not resize the terminal for %s: %s", self.target, error)
+
+    def _read_attach_stderr(self) -> bool:
+        """Read what the attach process wrote to stderr into the log. False at end of stream."""
+        if self._stderr_fd is None:
+            return False
+        while True:
+            try:
+                data = os.read(self._stderr_fd, 4096)
+            except BlockingIOError:
+                return True
+            except OSError:
+                return False
+            if not data:
+                return False
+            self._log_attach_stderr(data)
+
+    def _log_attach_stderr(self, data: bytes) -> None:
+        """Write attach errors to the backend log, never to the terminal. The log is bounded."""
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if self._stderr_logged >= _ATTACH_STDERR_LOG_LIMIT:
+                if not self._stderr_suppressed:
+                    self._stderr_suppressed = True
+                    logger.warning("Further tmux attach output for %s suppressed", self.target)
+                return
+            self._stderr_logged += len(line)
+            logger.warning("tmux attach for %s: %s", self.target, line)
 
     async def run(self, websocket: WebSocket, *, subprotocol: str | None = None) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
@@ -101,11 +152,13 @@ class PtyRelay:
         try:
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
+            # stderr is a pipe, not the pty: sudo and wrapper errors go to the log,
+            # not into the terminal the person is looking at.
             self.process = subprocess.Popen(
-                ["tmux", "attach-session", "-t", self.target],
+                _attach_command(self.target),
                 stdin=slave_fd,
                 stdout=slave_fd,
-                stderr=slave_fd,
+                stderr=subprocess.PIPE,
                 preexec_fn=_child_preexec,
                 env=env,
             )
@@ -137,6 +190,17 @@ class PtyRelay:
                 output_queue.put_nowait(b"")
 
         loop.add_reader(master_fd, on_pty_readable)
+
+        stderr_stream = getattr(self.process, "stderr", None)
+        if stderr_stream is not None:
+            self._stderr_fd = stderr_stream.fileno()
+            os.set_blocking(self._stderr_fd, False)
+
+            def on_stderr_readable():
+                if not self._read_attach_stderr() and self._stderr_fd is not None:
+                    loop.remove_reader(self._stderr_fd)
+
+            loop.add_reader(self._stderr_fd, on_stderr_readable)
 
         async def relay_output():
             try:
@@ -170,7 +234,7 @@ class PtyRelay:
                     ctrl = parse_control_message(text)
                     if ctrl:
                         if ctrl["type"] == "resize":
-                            resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80), self.process)
+                            self.resize(ctrl.get("rows", 24), ctrl.get("cols", 80))
                         elif ctrl["type"] == "mode":
                             self.set_read_only(ctrl.get("readOnly", True))
                     elif not self.read_only:
@@ -193,6 +257,9 @@ class PtyRelay:
                     task.cancel()
             await asyncio.gather(output_task, input_task, return_exceptions=True)
             loop.remove_reader(master_fd)
+            if self._stderr_fd is not None:
+                self._read_attach_stderr()  # keep the last lines the process wrote
+                loop.remove_reader(self._stderr_fd)
             if _active_relays.get(self.target) is self:
                 _active_relays.pop(self.target, None)
             await asyncio.to_thread(self.close)
@@ -220,6 +287,13 @@ class PtyRelay:
                     self.process.kill()
                 except ProcessLookupError:
                     pass
+            stderr_stream = getattr(self.process, "stderr", None)
+            if stderr_stream is not None:
+                try:
+                    stderr_stream.close()
+                except OSError:
+                    pass
+            self._stderr_fd = None
 
 
 async def close_all_relays() -> None:

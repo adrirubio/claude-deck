@@ -85,6 +85,26 @@ Claude Code and Codex support a launch-time platform choice:
 
 For Codex Bedrock sessions, Albiex Synth City passes a per-session Codex config override for `model_provider = "amazon-bedrock"`. Optional AWS region and profile values are passed as process environment variables. Synth City does not collect AWS secret keys or Bedrock bearer tokens; Codex resolves credentials from the existing shell environment or AWS SDK credential chain.
 
+## Terminals when agents run as another user
+
+Albiex Synth City can run its controller and the agents as different OS users. Then `tmux` is a wrapper that starts tmux as the agent user, for example with `sudo`. Terminal lanes in Team lanes and Live sessions attach through that wrapper.
+
+How the terminal behaves:
+
+- **Resize.** The relay makes its terminal the controlling terminal of the attach process. When the browser terminal changes size, including full screen and back, the kernel tells the attach process the new size. The relay sends no signal to the attach process, so nothing has to cross the `sudo` boundary.
+- **Errors.** What the attach process or the wrapper writes to stderr goes to the backend log, up to a fixed size. It does not go into the terminal. A failed resize is logged once for each terminal connection.
+- **Setup.** This behaviour needs no change to the `sudoers` file. Albiex Synth City does not change `sudoers`, and this page does not recommend a `use_pty` setting.
+
+What is verified and what is not:
+
+| Check | State |
+|---|---|
+| Same user: real child process on a real pty gets every size change, including full screen and back | Verified by automated tests |
+| A command behind a second pty that copies the size on `SIGWINCH`, as `sudo` with `use_pty` does | Emulated by an automated test. It is not `sudo` and not a second user. |
+| Real cross-user setup, with `sudo` running tmux as another user: before and after | **Pending.** The expected behaviour above rests on how a controlling terminal works. It is not verified on a real cross-user setup. |
+
+The real cross-user trial is a required acceptance step for this fix (issue #749). This page will record its result, and the supported `sudoers` setting if one is needed, once the trial has run.
+
 ## Compatibility
 
 The frontend route `/agent-bridge` is the primary route. `/cc-bridge` remains as a compatibility alias.

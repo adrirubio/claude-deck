@@ -1,8 +1,16 @@
 """Tests for CC Bridge pty relay."""
 import asyncio
+import fcntl
 import json
+import logging
 import os
+import pty
+import struct
+import subprocess
+import sys
+import termios
 import threading
+import time
 
 import pytest
 from starlette.websockets import WebSocketState
@@ -186,3 +194,210 @@ async def test_close_all_relays_waits_off_event_loop():
     assert process.terminate_calls == 1
     assert process.wait_thread_id != threading.get_ident()
     assert relay.target not in pty_relay._active_relays
+
+
+# --- #749: resize and attach errors when the attach process cannot be signalled -------------
+#
+# In production the attach process is `sudo`, which runs tmux as another user. The
+# controller cannot signal it, and sudo's own errors used to be written into the lane.
+# These tests use real ptys and real child processes. Nothing here runs sudo or tmux, and
+# nothing here is a trial on a real cross-user setup. That trial is a separate acceptance gate.
+
+# Prints the pty size each time the shell receives SIGWINCH.
+WINCH_SHELL = 'trap \'echo "WINCH:$(stty size)"\' WINCH; echo ready; while :; do sleep 0.05; done'
+
+# Emulates `sudo` with `use_pty`: it puts the command in a second pty and copies its own
+# terminal size to that pty when it gets SIGWINCH. It is not sudo and does not change user.
+SUDO_LIKE = r"""
+import fcntl, os, pty, signal, sys, termios
+pid, inner = pty.fork()
+if pid == 0:
+    os.execvp("sh", ["sh", "-c", sys.argv[1]])
+def sync(*_):
+    fcntl.ioctl(inner, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
+signal.signal(signal.SIGWINCH, sync)
+sync()
+while True:
+    try:
+        data = os.read(inner, 4096)
+    except InterruptedError:
+        continue
+    except OSError:
+        break
+    if not data:
+        break
+    os.write(1, data)
+"""
+
+
+def set_winsize(fd, rows, cols):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def get_winsize(fd):
+    rows, cols, _, _ = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+    return rows, cols
+
+
+def start_attach_like(argv):
+    """Start argv the way the relay starts `tmux attach-session`, on a fresh pty."""
+    master, slave = pty.openpty()
+    set_winsize(master, 24, 80)
+    process = subprocess.Popen(
+        argv, stdin=slave, stdout=slave, stderr=subprocess.PIPE, preexec_fn=pty_relay._child_preexec
+    )
+    os.close(slave)
+    os.set_blocking(master, False)
+    return master, process
+
+
+def read_until(fd, needle: bytes, timeout=5.0) -> bytes:
+    seen = b""
+    deadline = time.monotonic() + timeout
+    while needle not in seen:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {needle!r}; saw {seen!r}")
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            time.sleep(0.02)
+            continue
+        except OSError:
+            break
+        seen += chunk
+    return seen
+
+
+def stop(process, master):
+    process.kill()
+    process.wait(timeout=5)
+    if process.stderr:
+        process.stderr.close()
+    os.close(master)
+
+
+def never_signal(monkeypatch):
+    def refuse(pid, sig):
+        raise AssertionError(f"the relay signalled pid {pid} with {sig}")
+    monkeypatch.setattr(os, "kill", refuse)
+
+
+def test_resize_pty_only_sets_the_pty_size(monkeypatch):
+    master, slave = pty.openpty()
+    try:
+        never_signal(monkeypatch)
+        assert pty_relay.resize_pty(master, 40, 120) is None
+        assert get_winsize(slave) == (40, 120)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_resize_pty_reports_failure_without_raising():
+    assert isinstance(pty_relay.resize_pty(-1, 24, 80), Exception)
+    master, slave = pty.openpty()
+    try:
+        assert isinstance(pty_relay.resize_pty(master, 70000, 80), Exception)
+        assert isinstance(pty_relay.resize_pty(master, "tall", 80), Exception)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_relay_resize_never_signals_the_attach_process(monkeypatch):
+    master, slave = pty.openpty()
+
+    class AttachProcess:
+        pid = 1  # a pid the controller must not signal, as in a sudo boundary
+
+        def poll(self):
+            return None
+
+    relay = pty_relay.PtyRelay("test:no-signal", read_only=False)
+    relay.master_fd = master
+    relay.process = AttachProcess()
+    try:
+        never_signal(monkeypatch)
+        relay.resize(33, 101)
+        assert get_winsize(slave) == (33, 101)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_attach_child_gets_the_kernel_resize_signal_and_back(monkeypatch):
+    """Same user: the child sees every size change, with no signal sent by the controller."""
+    master, process = start_attach_like(["sh", "-c", WINCH_SHELL])
+    try:
+        read_until(master, b"ready")
+        never_signal(monkeypatch)
+        for rows, cols in ((50, 200), (24, 80)):  # full screen, then back
+            pty_relay.resize_pty(master, rows, cols)
+            read_until(master, f"WINCH:{rows} {cols}".encode())
+    finally:
+        monkeypatch.undo()
+        stop(process, master)
+
+
+def test_resize_reaches_a_command_behind_a_second_pty(monkeypatch):
+    """Emulation of sudo with use_pty. Supporting evidence only, not a cross-user trial."""
+    master, process = start_attach_like([sys.executable, "-c", SUDO_LIKE, WINCH_SHELL])
+    try:
+        read_until(master, b"ready")
+        never_signal(monkeypatch)
+        for rows, cols in ((45, 160), (24, 80)):
+            pty_relay.resize_pty(master, rows, cols)
+            read_until(master, f"WINCH:{rows} {cols}".encode())
+    finally:
+        monkeypatch.undo()
+        stop(process, master)
+
+
+class RecordingWebSocket(FakeWebSocket):
+    def __init__(self):
+        super().__init__(disconnect_first=False)
+        self.sent = b""
+
+    async def send_bytes(self, data):
+        self.sent += data
+
+
+@pytest.mark.asyncio
+async def test_attach_stderr_goes_to_the_log_and_not_the_terminal(monkeypatch, caplog):
+    script = "echo sudo: kill failed >&2; echo visible-output; sleep 0.2"
+    monkeypatch.setattr(pty_relay, "_attach_command", lambda target: ["sh", "-c", script])
+    websocket = RecordingWebSocket()
+    relay = pty_relay.PtyRelay("test:stderr", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        await asyncio.wait_for(relay.run(websocket), timeout=5)
+
+    assert b"visible-output" in websocket.sent
+    assert b"sudo" not in websocket.sent
+    logged = [r.getMessage() for r in caplog.records if "sudo: kill failed" in r.getMessage()]
+    assert len(logged) == 1
+    assert "test:stderr" in logged[0]
+
+
+@pytest.mark.asyncio
+async def test_attach_stderr_log_is_bounded(monkeypatch, caplog):
+    script = "i=0; while [ $i -lt 400 ]; do echo error-line-$i >&2; i=$((i+1)); done; sleep 0.1"
+    monkeypatch.setattr(pty_relay, "_attach_command", lambda target: ["sh", "-c", script])
+    relay = pty_relay.PtyRelay("test:stderr-flood", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        await asyncio.wait_for(relay.run(RecordingWebSocket()), timeout=5)
+
+    lines = [r for r in caplog.records if r.name == pty_relay.logger.name]
+    assert 0 < len(lines) < 400
+    assert any("suppressed" in r.getMessage() for r in lines)
+
+
+def test_a_failed_resize_is_logged_once_per_relay(caplog):
+    relay = pty_relay.PtyRelay("test:log-once", read_only=False)
+    relay.master_fd = -1
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay.resize(24, 80)
+        relay.resize(30, 100)
+        relay.resize(40, 120)
+    failures = [r for r in caplog.records if "resize" in r.getMessage().lower()]
+    assert len(failures) == 1
+    assert "test:log-once" in failures[0].getMessage()
