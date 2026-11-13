@@ -149,6 +149,7 @@ export interface TeamCampaignSummary {
   under_way: CampaignUnderWayItem[]
   queued_count: number
   queued: { title: string }[]
+  dispatch_order?: { title: string; scope_id: number; repository: string; issue_number: number; priority: number | null; dispatch_position: number }[]
   not_started_count: number | null
   not_started_groups: { area: string; count: number }[]
   decisions_ahead: CampaignDecision[]

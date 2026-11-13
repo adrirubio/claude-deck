@@ -380,6 +380,7 @@ class GithubWorkItem(Base):
     issue_type: Mapped[str] = mapped_column(String, default="code", nullable=False)
     dispatch_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     pending_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispatch_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     launch_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_team_launches.id", ondelete="SET NULL"), nullable=True
     )

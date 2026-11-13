@@ -1734,3 +1734,30 @@ async def test_required_check_tables_are_additive_and_restart_preserves_records(
                 assert await _sqlite_columns(conn,table)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_priority_migration_is_additive_and_repeats_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if "dispatch_priority" in await _sqlite_columns(conn, "github_work_items"):
+                await conn.execute(text("ALTER TABLE github_work_items DROP COLUMN dispatch_priority"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
+                "dispatch_status, issue_type, retry_count, approval_round_count, active_scope_revision, "
+                "attempt_phase, diagnostic_retry_count, created_at, updated_at) VALUES "
+                "(1, 1, 5, 'Existing', 'url', CURRENT_TIMESTAMP, 'verifying', 'code', 7, 2, 1, "
+                "'diagnostic', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = dict((await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one())
+            await _run_sqlite_compat_migrations(conn)
+            assert "dispatch_priority" in await _sqlite_columns(conn, "github_work_items")
+            after = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["dispatch_priority"] is None
+            await conn.execute(text("UPDATE github_work_items SET dispatch_priority=3 WHERE id=1"))
+            await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text("SELECT dispatch_priority FROM github_work_items WHERE id=1")) == 3
+    finally:
+        await engine.dispose()
