@@ -43,6 +43,7 @@ export default defineConfig({
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
             { text: 'Factory Audit & Metrics', link: '/guide/factory-audit-and-metrics' },
+            { text: 'Isolated Runtime Kit', link: '/guide/isolated-runtime-kit' },
             { text: 'Contributing', link: '/guide/contributing' },
             { text: 'Changelog', link: '/changelog' },
           ],
