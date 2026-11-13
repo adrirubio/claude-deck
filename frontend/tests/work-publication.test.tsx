@@ -18,27 +18,52 @@ function progress(changes = {}) {
       publication_first_observed_at: new Date(Date.now()).toISOString(),
       publication_time_source: 'github_head_observation', destination_url: 'https://malicious.invalid/' }, ...changes }
 }
+// The panel refuses a required-checks payload whose changed_at is later than its observed_at. A valid
+// fixture therefore takes ONE clock reading for both fields: two separate reads can differ by 1 ms.
+function requiredChecks(changes = {}, now = () => new Date().toISOString()) {
+  const at = now()
+  return { head_sha: 'a'.repeat(40), completed: 2, total: 2, state: 'finished', result: 'success',
+    observed_at: at, changed_at: at, ...changes }
+}
+// A clock that moves forward by 1 ms on every read, so a fixture that reads it twice always disagrees with itself.
+function steppingClock(start = '2026-11-13T12:00:00.000Z') {
+  let reads = 0
+  return () => new Date(Date.parse(start) + reads++).toISOString()
+}
 beforeEach(() => { vi.mocked(apiClient).mockReset(); vi.mocked(apiClient).mockResolvedValue(progress()) })
 afterEach(() => vi.useRealTimers())
 
 describe('Work publication observations', () => {
   it.each(['waiting', 'no_next_actor', 'finished'])('shows required-check state %s with head and bounded counts', async (state) => {
-    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: {
-      head_sha: 'a'.repeat(40), completed: state === 'waiting' ? 1 : 2, total: 2,
-      state, result: state === 'waiting' ? 'pending' : 'success',
-      observed_at: new Date().toISOString(), changed_at: new Date().toISOString(),
-    } }))
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: requiredChecks({
+      completed: state === 'waiting' ? 1 : 2, state, result: state === 'waiting' ? 'pending' : 'success',
+    }) }))
     render(<WorkPublicationPanel item={item} />)
     expect(await screen.findByText(state === 'waiting' ? 'Waiting for required checks (1 of 2 done).'
       : state === 'no_next_actor' ? 'Checks finished, no next actor has a confirmed wake.'
         : 'Required checks finished; the next actor wake is confirmed.')).toBeTruthy()
     expect(screen.getByText(/Check head: aaaaaaaa/)).toBeTruthy()
   })
+  it.each(['waiting', 'no_next_actor', 'finished'])('keeps the %s fixture valid when the clock moves between reads', async (state) => {
+    const checks = requiredChecks({ completed: state === 'waiting' ? 1 : 2, state, result: state === 'waiting' ? 'pending' : 'success' }, steppingClock())
+    expect(checks.changed_at).toBe(checks.observed_at)
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: checks }))
+    render(<WorkPublicationPanel item={item} />)
+    expect(await screen.findByText(/Check head: aaaaaaaa/)).toBeTruthy()
+    expect(screen.queryByText(/Unable to refresh progress/)).toBeNull()
+  })
   it('rejects invalid check counts instead of presenting a false completion', async () => {
-    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: {
-      head_sha: 'a'.repeat(40), completed: 3, total: 2, state: 'finished', result: 'success',
-      observed_at: new Date().toISOString(), changed_at: new Date().toISOString(),
-    } }))
+    // Equal timestamps, so only the counts can make this payload invalid.
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: requiredChecks({ completed: 3 }) }))
+    render(<WorkPublicationPanel item={item} />)
+    expect(await screen.findByText(/Unable to refresh progress/)).toBeTruthy()
+    expect(screen.queryByText(/Required checks finished;/)).toBeNull()
+  })
+  it('still refuses a changed_at that is later than observed_at, even by 1 ms', async () => {
+    // Valid counts and fixed strings, so only the timestamp order can make this payload invalid.
+    vi.mocked(apiClient).mockResolvedValue(progress({ required_checks: requiredChecks({
+      observed_at: '2026-11-13T12:00:00.000Z', changed_at: '2026-11-13T12:00:00.001Z',
+    }) }))
     render(<WorkPublicationPanel item={item} />)
     expect(await screen.findByText(/Unable to refresh progress/)).toBeTruthy()
     expect(screen.queryByText(/Required checks finished;/)).toBeNull()

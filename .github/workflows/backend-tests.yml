@@ -65,7 +65,47 @@ jobs:
       - name: Run the full backend suite
         if: steps.changes.outputs.run_suites != 'false'
         working-directory: backend
-        run: python -m pytest tests -q --tb=short
+        run: python -m pytest tests -q --tb=short --ignore=tests/test_cc_bridge_real_sudo.py
       - name: Check the active factory fixtures
         if: steps.changes.outputs.run_suites != 'false'
         run: python scripts/factory-fixtures.py --check
+
+  real-sudo:
+    # The privileged regression for the cross-user terminal attach (#880). It uses real sudo with a
+    # disposable user, so it runs only here, on an ephemeral hosted runner. This label ships the original
+    # sudo that production uses, and the job attests the exact version before the test. The job is not
+    # allowed to pass without running the test: no continue-on-error, no fallback, no extra condition.
+    name: Hosted real-sudo attach
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}/backend
+      DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect a docs-only change
+        id: changes
+        working-directory: .
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/docs_only.py
+      - uses: actions/setup-python@v6
+        if: steps.changes.outputs.run_suites != 'false'
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r backend/requirements.txt
+        if: steps.changes.outputs.run_suites != 'false'
+      - name: Attest the sudo of this runner
+        if: steps.changes.outputs.run_suites != 'false'
+        working-directory: backend
+        run: python -m tests.real_sudo_support
+      - name: Run the hosted real-sudo attach regression
+        if: steps.changes.outputs.run_suites != 'false'
+        working-directory: backend
+        run: python -m pytest tests/test_cc_bridge_real_sudo.py -q --tb=short -rA
