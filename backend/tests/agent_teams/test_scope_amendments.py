@@ -13,9 +13,9 @@ from app.api.v1 import agent_mail
 from app.config import settings
 from app.models.database import (
     AgentTeamPreset, GithubApprovalRequest, MailAgentSession, TeamGithubScope,
-    GithubWorkspace,
+    GithubWorkspace, MailMessage,
 )
-from app.models.schemas import MailApprovalRequestCreate
+from app.models.schemas import MailApprovalRequestCreate, MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_approval_service import GithubApprovalError, github_approval_service
 from app.services.github_client import GithubCommitSnapshot, github_client
@@ -980,3 +980,166 @@ async def test_amendment_expiry_is_rechecked_after_remote_await(db, healthy_atte
     assert revision.status == ('proposed' if phase == 'decision' else 'approved')
     await db.refresh(a.item)
     assert a.item.active_scope_revision == 0
+
+
+async def acknowledge_initial_root(db, a):
+    """Drive the normal lifecycle: the Leader answers the plan request, then the owner acknowledges it."""
+    root = await db.get(MailMessage, a.approval.request_message_id)
+    answer = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=a.leader.id, thread_root_id=root.id, body_markdown="Plan approved."))
+    await db.refresh(root)
+    assert root.request_status == "answered"
+    await agent_mail_service.ack_message(db, answer.id, a.owner.id)
+    await db.refresh(root)
+    assert root.request_status == "acknowledged"
+    return root
+
+
+async def open_pull(db, a, base):
+    a.item.pr_number = 5
+    a.item.dispatch_base_ref = base
+    a.item.dispatch_status = "verifying"
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_acknowledged_initial_plan_is_a_valid_amendment_baseline(db, healthy_attempt):
+    a = healthy_attempt
+    await acknowledge_initial_root(db, a)
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending" and revision.status == "proposed"
+    assert revision.allowed_paths == ["src/added.py", "src/base.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["superseded", "other_sender", "other_recipient", "other_nonce", "other_round"])
+async def test_acknowledged_root_still_needs_every_existing_baseline_check(db, healthy_attempt, change):
+    a = healthy_attempt
+    root = await acknowledge_initial_root(db, a)
+    if change == "superseded":
+        root.request_status = "superseded"
+    elif change == "other_sender":
+        root.sender_member_id = a.leader.id
+    elif change == "other_recipient":
+        root.recipient_member_id = a.owner.id
+    elif change == "other_nonce":
+        root.payload = {**root.payload, "dispatch_nonce": "0" * 16}
+    else:
+        root.payload = {**root.payload, "approval_round": 9}
+    await db.commit()
+    with pytest.raises(GithubApprovalError, match="amendment_baseline_unverifiable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+
+
+@pytest.mark.asyncio
+async def test_pending_request_still_accepts_only_a_pending_root(db):
+    from app.models.database import GithubApprovalRequest as Request
+    request = Request(status="pending", owner_member_id=2, leader_member_id=1, work_item_id=3,
+        dispatch_nonce="n", approval_round=1,
+        request_fingerprint=github_approval_service.initial_request_fingerprint(summary="", plan_metadata={}))
+    def root(status):
+        return MailMessage(kind="context_request", thread_root_id=None, request_status=status,
+            sender_member_id=2, recipient_member_id=1, delivery_key=None,
+            payload={"work_item_id": 3, "dispatch_nonce": "n", "approval_round": 1}, body_markdown="")
+    assert github_approval_service.matches_linked_request_message(request, root("pending"), delivery_key="k")
+    for status in ("answered", "acknowledged", "superseded"):
+        assert not github_approval_service.matches_linked_request_message(request, root(status), delivery_key="k")
+    request.status = "approved"
+    for status in ("pending", "answered", "acknowledged"):
+        assert github_approval_service.matches_linked_request_message(request, root(status), delivery_key="k")
+    assert not github_approval_service.matches_linked_request_message(request, root("superseded"), delivery_key="k")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", ["origin/release/v4.1", "release/v4.1"])
+async def test_amendment_on_an_open_pr_accepts_the_stored_base_with_or_without_the_remote_prefix(
+        db, healthy_attempt, base):
+    a = healthy_attempt
+    await open_pull(db, a, base)
+    _revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_amendment_keeps_an_empty_stored_base_unchecked(db, healthy_attempt):
+    a = healthy_attempt
+    await open_pull(db, a, None)
+    a.pull["base"]["ref"] = "anything"
+    _revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", ["origin/other", "other", "origin/origin/release/v4.1", "origin/"])
+async def test_amendment_refuses_a_different_base_branch(db, healthy_attempt, base):
+    a = healthy_attempt
+    await open_pull(db, a, base)
+    with pytest.raises(GithubApprovalError, match="amendment_head_changed"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["head", "number", "closed", "merged"])
+async def test_prefixed_base_does_not_relax_the_other_pull_checks(db, healthy_attempt, change):
+    a = healthy_attempt
+    await open_pull(db, a, "origin/release/v4.1")
+    if change == "head":
+        a.pull["head"]["sha"] = "b" * 40
+    elif change == "number":
+        a.pull["number"] = 6
+    elif change == "closed":
+        a.pull["state"] = "closed"
+    else:
+        a.pull["merged_at"] = "2026-11-13T00:00:00Z"
+    with pytest.raises(GithubApprovalError, match="amendment_head_changed"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+
+
+@pytest.mark.asyncio
+async def test_prefixed_base_does_not_relax_the_owner_check(db, healthy_attempt):
+    a = healthy_attempt
+    await open_pull(db, a, "origin/release/v4.1")
+    wrong = amendment(a) | {"authenticated_owner_member_id": a.leader.id}
+    with pytest.raises(GithubApprovalError, match="not_item_owner"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **wrong)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("github_ref, stored, expected", [
+    ("release/v4.1", "origin/release/v4.1", True),
+    ("release/v4.1", "release/v4.1", True),
+    ("origin/x", "origin/x", True),
+    ("origin/x", "origin/origin/x", True),
+    ("x", "origin/origin/x", False),
+    ("release/v4.1", "origin/release/v4.2", False),
+    ("release/v4.1", "origin/", False),
+    ("release/v4.1", "xorigin/release/v4.1", False),
+    ("origin/release/v4.1", "release/v4.1", False),
+    ("", "origin/release/v4.1", False),
+    ("anything", None, True),
+    ("anything", "", True),
+])
+async def test_base_ref_matches_is_exact_with_at_most_one_origin_prefix(github_ref, stored, expected):
+    assert github_approval_service.base_ref_matches(github_ref, stored) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base, error", [
+    ("origin/release/v4.1", None),
+    ("release/v4.1", None),
+    ("origin/other", "revision_review_head_changed"),
+    ("origin/origin/release/v4.1", "revision_review_head_changed"),
+])
+async def test_review_head_check_uses_the_same_base_comparison(db, submitted_attempt, base, error):
+    a = submitted_attempt
+    a.item.dispatch_base_ref = base
+    await db.commit()
+    if error:
+        with pytest.raises(GithubApprovalError, match=error):
+            await record_changes(db, a)
+    else:
+        review = await record_changes(db, a)
+        assert review.id and a.revision.status == "submitted"

@@ -520,6 +520,13 @@ class GithubApprovalService:
             raise GithubApprovalError("amendment_closed_file_paths_required")
         return paths
 
+    @staticmethod
+    def base_ref_matches(github_ref, dispatch_base_ref):
+        """Compare GitHub's base branch with the stored base, which may carry one leading ``origin/``."""
+        if not dispatch_base_ref:
+            return True
+        return bool(github_ref) and github_ref in {dispatch_base_ref, dispatch_base_ref.removeprefix("origin/")}
+
     async def amendment_head(self, scope, item, workspace):
         from app.services.github_workspace_service import github_workspace_service, GithubWorkspaceError
         try:
@@ -534,7 +541,7 @@ class GithubApprovalService:
             if (pull.get("state") != "open" or pull.get("merged_at") is not None
                     or pull.get("number") != item.pr_number or remote.get("sha") != head
                     or remote.get("ref") != item.dispatch_head_ref
-                    or item.dispatch_base_ref and base.get("ref") != item.dispatch_base_ref
+                    or not self.base_ref_matches(base.get("ref"), item.dispatch_base_ref)
                     or (remote.get("repo") or {}).get("full_name") != f"{scope.repo_owner}/{scope.repo_name}"):
                 raise GithubApprovalError("amendment_head_changed")
             if await github_workspace_service.attest_head(workspace, item.dispatch_head_ref) != (head, tree):
@@ -1155,10 +1162,11 @@ class GithubApprovalService:
         *,
         delivery_key: str,
     ) -> bool:
+        # The normal lifecycle moves an answered root to "acknowledged" once the owner acknowledges the answer.
         valid_request_statuses = (
             {"pending"}
             if request.status == "pending"
-            else {"pending", "answered"}
+            else {"pending", "answered", "acknowledged"}
         )
         if (
             message.kind != "context_request"
