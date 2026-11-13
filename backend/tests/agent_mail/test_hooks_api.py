@@ -92,10 +92,30 @@ async def test_copilot_hook_registers_with_copilot_session_key(client, db, tmp_p
     assert team[0].sessions[0].session_key == "copilot:copilot-session"
 
 
+def _opencode_gate(monkeypatch, state):
+    from types import SimpleNamespace
+
+    from app.services import opencode_version
+
+    seen = []
+    monkeypatch.setattr(
+        "app.api.v1.agent_mail.resolve_request_pane_detailed",
+        lambda _request: SimpleNamespace(pane=None, walked_pids=(41, 40)),
+    )
+
+    def gate(pane, walked):
+        seen.append(tuple(walked))
+        return opencode_version.VersionGate(state, "2.0.29" if state == "ok" else None, None if state == "ok" else "fixture")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", gate)
+    return seen
+
+
 @pytest.mark.asyncio
-async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp_path):
+async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp_path, monkeypatch):
     cwd = tmp_path / "myrepo"
     cwd.mkdir()
+    seen = _opencode_gate(monkeypatch, "ok")
 
     resp = await client.post(
         "/api/v1/agent-mail/hooks/post-tool-use",
@@ -111,6 +131,53 @@ async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp
     team = await agent_mail_service.list_team(db)
     assert team[0].sessions[0].provider == "opencode-cli"
     assert team[0].sessions[0].session_key == "opencode:opencode-session"
+    assert seen == [(41, 40)]  # the kernel-derived chain, not the claimed pid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown", "ok"])
+@pytest.mark.parametrize("route", ["session-start", "user-prompt-submit", "post-tool-use"])
+async def test_opencode_hook_registration_is_refused_below_2(client, db, tmp_path, monkeypatch, state, route):
+    from app.config import settings
+
+    # Test-only: without capability tokens every hook route reaches the version
+    # gate instead of stopping at authentication first.
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    cwd = tmp_path / "myrepo"
+    cwd.mkdir()
+    seen = _opencode_gate(monkeypatch, state)
+
+    resp = await client.post(
+        f"/api/v1/agent-mail/hooks/{route}",
+        json={"provider": "opencode-cli", "session_id": "opencode-v1", "cwd": str(cwd), "pid": 123},
+    )
+
+    assert resp.status_code == 200
+    assert seen == [(41, 40)]  # the gate was reached, on the kernel-derived chain
+    sessions = (await db.execute(select(MailAgentSession))).scalars().all()
+    if state == "ok":
+        assert [session.provider for session in sessions] == ["opencode-cli"]
+    else:
+        assert sessions == []
+
+
+@pytest.mark.asyncio
+async def test_hook_gate_applies_only_to_opencode(client, db, tmp_path, monkeypatch):
+    from app.services import opencode_version
+
+    cwd = tmp_path / "myrepo"
+    cwd.mkdir()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("the OpenCode gate ran for another provider")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", forbidden)
+    resp = await client.post(
+        "/api/v1/agent-mail/hooks/post-tool-use",
+        json={"provider": "copilot-cli", "session_id": "copilot-other", "cwd": str(cwd), "pid": 123},
+    )
+    assert resp.status_code == 200
+    assert len((await db.execute(select(MailAgentSession))).scalars().all()) == 1
 
 
 @pytest.mark.asyncio

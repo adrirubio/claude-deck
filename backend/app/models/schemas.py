@@ -2255,6 +2255,9 @@ class AgentMailInstallStatus(BaseModel):
     opencode_mcp_installed: bool = False
     opencode_plugin_events: List[str] = Field(default_factory=list)
     opencode_plugin_events_missing: List[str] = Field(default_factory=list)
+    opencode_version: Optional[str] = None
+    opencode_version_ready: bool = False
+    opencode_version_reason: Optional[str] = None
     curl_available: bool
     shim_path: str
     python_path: str
@@ -2290,6 +2293,7 @@ AgentTeamLaunchStatus = Literal[
     "failed",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "blocked_opencode_version_unsupported",
 ]
 
 

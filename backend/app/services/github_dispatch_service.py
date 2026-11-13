@@ -65,6 +65,7 @@ _LAUNCH_FAILED_STATUSES = {
     "blocked",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "blocked_opencode_version_unsupported",
     "skipped_disabled",
 }
 _ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref")

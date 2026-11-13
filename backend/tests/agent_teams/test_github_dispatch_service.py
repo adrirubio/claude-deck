@@ -7108,6 +7108,7 @@ async def test_disabled_prepared_owner_keeps_attempt_and_lease(db):
         "blocked",
         "blocked_provider_unavailable",
         "blocked_agent_mail_not_configured",
+        "blocked_opencode_version_unsupported",
         "skipped_disabled",
     ],
 )

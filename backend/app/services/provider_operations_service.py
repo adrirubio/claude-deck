@@ -140,6 +140,7 @@ INSTALL_FIELDS = {
     "codex_cli_available": bool, "codex_mcp_installed": bool, "codex_hooks_missing": list,
     "copilot_cli_available": bool, "copilot_mcp_installed": bool, "copilot_hooks_missing": list,
     "opencode_cli_available": bool, "opencode_mcp_installed": bool, "opencode_plugin_events_missing": list,
+    "opencode_version_ready": bool,
     "pi_mail_ready": bool,
 }
 

@@ -21,6 +21,7 @@ from app.api.v1.deps import (
     require_mail_session,
     require_operator,
     resolve_request_pane,
+    resolve_request_pane_detailed,
 )
 from app.config import settings
 from app.database import get_db
@@ -54,7 +55,7 @@ from app.models.schemas import (
     MailThreadResponse,
     TeamListResponse,
 )
-from app.services import agent_mail_install_service
+from app.services import agent_mail_install_service, opencode_version
 from app.services import factory_audit_service
 from app.services.agent_mail_service import (
     MailAuthorityError,
@@ -1047,7 +1048,10 @@ async def register_agent(
             raise HTTPException(status_code=401, detail="session_token_invalid")
 
     claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
-    pane = resolve_request_pane(http_request)
+    # OpenCode registrations resolve the peer once, so the identity gate below
+    # checks the same pane that is bound and stored.
+    resolution = resolve_request_pane_detailed(http_request) if request.provider == "opencode-cli" else None
+    pane = resolution.pane if resolution is not None else resolve_request_pane(http_request)
     if (
         existing is not None
         and existing.team_slot_id is not None
@@ -1078,6 +1082,12 @@ async def register_agent(
         and request.team_slot_id != derived_slot_id
     ):
         raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+
+    if request.provider == "opencode-cli":
+        # OpenCode 2 or later only. Identity comes from the kernel-owned peer of
+        # this socket and its ancestors, never from the claimed pid.
+        if not opencode_version.member_gate_for_peer(resolution.pane, resolution.walked_pids).ready:
+            raise HTTPException(status_code=409, detail=opencode_version.BLOCK_CODE)
 
     request = request.model_copy(
         update={
@@ -1201,11 +1211,20 @@ def _payload_int(payload: dict, key: str) -> Optional[int]:
         return None
 
 
-async def _register_from_hook(db: AsyncSession, payload: dict):
+async def _register_from_hook(db: AsyncSession, payload: dict, http_request: Optional[Request] = None):
     session_key = _hook_session_key(payload)
     cwd = payload.get("cwd")
     if not session_key or not cwd:
         return None, None
+    if _hook_provider(payload) == "opencode-cli":
+        # OpenCode 2 or later only. The identity comes from the kernel-owned
+        # peer of this request socket, never from the payload's pid.
+        if http_request is None:
+            return None, None
+        resolution = resolve_request_pane_detailed(http_request)
+        if not opencode_version.member_gate_for_peer(resolution.pane, resolution.walked_pids).ready:
+            logger.warning("hook registration refused: %s", opencode_version.BLOCK_CODE)
+            return None, None
     return await agent_mail_service.register_session(
         db,
         MailAgentRegisterRequest(
@@ -1233,6 +1252,7 @@ def _hook_inbox_reminder(event):
 
 @router.post("/hooks/session-start")
 async def hook_session_start(
+    http_request: Request,
     payload: dict[str, Any] = Body(...),
     x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1245,7 +1265,7 @@ async def hook_session_start(
         if session is not None:
             member_id = session.member_id
         else:
-            member, session = await _register_from_hook(db, payload)
+            member, session = await _register_from_hook(db, payload, http_request)
             if member is None:
                 return {}
             member_id = member.id
@@ -1262,6 +1282,7 @@ async def hook_session_start(
 
 @router.post("/hooks/user-prompt-submit")
 async def hook_user_prompt_submit(
+    http_request: Request,
     payload: dict[str, Any] = Body(...),
     x_synth_city_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
@@ -1279,7 +1300,7 @@ async def hook_user_prompt_submit(
                 return {}
             session = await agent_mail_service.heartbeat_session(db, session_key)
             if session is None:
-                _, session = await _register_from_hook(db, payload)
+                _, session = await _register_from_hook(db, payload, http_request)
         if session is None:
             return {}
         context = await agent_mail_service.build_prompt_submit_context(db, session.member_id)
@@ -1307,6 +1328,7 @@ async def hook_session_end(
 
 @router.post("/hooks/post-tool-use")
 async def hook_post_tool_use(
+    http_request: Request,
     payload: dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1321,7 +1343,7 @@ async def hook_post_tool_use(
             activity = f"edited {os.path.basename(str(file_path))}"
         session = await agent_mail_service.heartbeat_session(db, session_key, activity=activity)
         if session is None:
-            await _register_from_hook(db, payload)
+            await _register_from_hook(db, payload, http_request)
             if activity:
                 await agent_mail_service.heartbeat_session(db, session_key, activity=activity)
     except Exception as exc:

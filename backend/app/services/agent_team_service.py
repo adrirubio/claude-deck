@@ -43,7 +43,7 @@ from app.models.schemas import (
     AgentTeamSlotResponse,
     AgentTeamSlotUpdate,
 )
-from app.services import agent_mail_install_service
+from app.services import agent_mail_install_service, opencode_version
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
 from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service
@@ -1198,8 +1198,18 @@ class AgentTeamService:
             reasons.append(f"Unknown provider: {slot.provider}")
             block_code = "provider_unknown"
 
+        if (
+            block_code is None
+            and slot.provider == "opencode-cli"
+            and getattr(install_status, "opencode_version_ready", False) is not True
+        ):
+            # OpenCode 2 or later only: v1 and an unknown version are refused
+            # before any reuse, adoption or spawn.
+            reasons.append(opencode_version.REASON_REQUIRED)
+            block_code = opencode_version.BLOCK_CODE
+
         mail_reason = self._agent_mail_ready_reason(slot.provider, install_status)
-        if mail_reason:
+        if mail_reason and mail_reason not in reasons:
             reasons.append(mail_reason)
             block_code = block_code or "agent_mail_not_configured"
 
@@ -1238,6 +1248,23 @@ class AgentTeamService:
                     block_code="unbound_pane_unverifiable",
                     warnings=warnings,
                 )
+            if slot.provider == "opencode-cli":
+                refusal = self._opencode_pane_refusal(matching_session)
+                if refusal is not None:
+                    return AgentTeamLaunchPlanItem(
+                        slot_id=slot.id,
+                        slot_name=slot.display_name,
+                        provider=slot.provider,
+                        repo_id=slot.repo_id,
+                        repo_path=slot.repo_path,
+                        repo_name=slot.repo_name,
+                        action="blocked",
+                        status="blocked",
+                        reasons=[refusal],
+                        matching_session=matching_session,
+                        block_code=opencode_version.BLOCK_CODE,
+                        warnings=warnings,
+                    )
             if unbound and not adopt_unbound_sessions:
                 return AgentTeamLaunchPlanItem(
                     slot_id=slot.id,
@@ -1372,11 +1399,22 @@ class AgentTeamService:
             pass
         raise ValueError("No default agent provider is available; choose a provider manually")
 
+    def _opencode_pane_refusal(self, matching_session: dict[str, Any]) -> str | None:
+        """Refuse reuse or adoption unless the pane runs the trusted OpenCode 2 binary."""
+        pid = matching_session.get("pid")
+        start = matching_session.get("pane_proc_start")
+        if not isinstance(start, str) or not str(pid or "").isdigit():
+            return opencode_version.REASON_UNKNOWN
+        gate = opencode_version.member_gate_for_pane(int(pid), start)
+        return None if gate.ready else gate.reason or opencode_version.REASON_UNKNOWN
+
     def _blocked_result_status(self, block_code: str | None) -> str:
         if block_code == "provider_unavailable":
             return "blocked_provider_unavailable"
         if block_code == "agent_mail_not_configured":
             return "blocked_agent_mail_not_configured"
+        if block_code == opencode_version.BLOCK_CODE:
+            return "blocked_opencode_version_unsupported"
         return "failed"
 
     def _reuse_group_counts(self, slots: list[AgentTeamSlot]) -> dict[tuple[str, str], int]:

@@ -13,6 +13,7 @@ export type AgentTeamLaunchStatus =
   | 'failed'
   | 'blocked_provider_unavailable'
   | 'blocked_agent_mail_not_configured'
+  | 'blocked_opencode_version_unsupported'
 
 export interface SlotLaunchOptions {
   model?: string

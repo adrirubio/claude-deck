@@ -240,3 +240,30 @@ async def test_input_wait_display_does_not_change_wake_or_owner_authority(db, mo
     assert result.agent_status.wake_state == "cannot_wake"
     await db.refresh(item); await db.refresh(workspace)
     assert before == (item.dispatch_status, item.ack_received_at, workspace.lease_last_owner_contact_at)
+
+
+@pytest.mark.parametrize("check_opencode", [True, False])
+def test_opencode_member_below_2_shows_its_refusal_only_where_probes_are_allowed(monkeypatch, check_opencode):
+    from types import SimpleNamespace
+
+    from app.services import agent_mail_service as mail
+    from app.services.agent_status_service import agent_status_service
+    from app.services.opencode_version import BLOCK_CODE
+
+    calls = []
+
+    def refuse(session):
+        calls.append(session)
+        raise MailWakeError(BLOCK_CODE)
+
+    monkeypatch.setattr(agent_mail_service, "_nudge_from_sessions", lambda *_a: SimpleNamespace(provider="opencode-cli"))
+    monkeypatch.setattr(mail.AgentMailService, "_require_opencode_2_pane", staticmethod(refuse))
+    member = SimpleNamespace(id=7, team_slot_id=None, team_preset_id=None, participant_kind="repo")
+    status = agent_status_service._project([member], {}, [], {}, datetime.now(timezone.utc), check_opencode=check_opencode)[7]
+    if check_opencode:
+        assert (status.wake_state, status.wake_reason) == ("cannot_wake", BLOCK_CODE)
+        assert len(calls) == 1
+    else:
+        # Factory reads never run the OpenCode check (no version probe).
+        assert status.wake_state == "can_wake"
+        assert calls == []

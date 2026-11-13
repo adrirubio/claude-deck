@@ -20,6 +20,7 @@ def configured(**changes):
         codex_cli_available=True, codex_mcp_installed=True, codex_hooks_missing=[],
         copilot_cli_available=True, copilot_mcp_installed=True, copilot_hooks_missing=[],
         opencode_cli_available=True, opencode_mcp_installed=True, opencode_plugin_events_missing=[],
+        opencode_version_ready=True,
         pi_mail_ready=True, pi_mail_reason=None,
         muse_cli_available=True, muse_mcp_installed=True, muse_hooks_missing=[],
     )
@@ -131,7 +132,12 @@ def test_shared_reason_preserves_all_original_decisions():
     assert reviewed < {p.id for p in get_providers()}
     for provider in sorted(reviewed) + ["unknown"]:
         for status in cases:
-            assert agent_mail_ready_reason(provider, status) == original(None, provider, status)
+            expected = original(None, provider, status)
+            # #730 adds exactly one decision: an available OpenCode CLI whose
+            # version is not 2 or later. Every other reviewed decision is kept.
+            if provider == "opencode-cli" and status.opencode_cli_available and not status.opencode_version_ready:
+                expected = "OpenCode 2 or later is required"
+            assert agent_mail_ready_reason(provider, status) == expected
 
 
 @pytest.mark.parametrize("key,value", [("codex_mcp_installed", "true"), ("codex_cli_available", 1), ("codex_hooks_missing", None)])
@@ -258,3 +264,45 @@ def test_real_launch_plan_configuration_agrees_for_same_snapshot(monkeypatch, pr
         assert launch.block_code == "provider_unavailable"
     elif not mail:
         assert launch.block_code == "agent_mail_not_configured"
+
+
+def test_opencode_v1_or_unknown_blocks_configuration_with_the_required_reason():
+    from app.services.opencode_version import BLOCK_CODE, REASON_REQUIRED
+
+    status = configured(opencode_version_ready=False)
+    assert agent_mail_ready_reason("opencode-cli", status) == REASON_REQUIRED
+    readiness = configuration_readiness("opencode-cli", "OpenCode CLI", True, status)
+    assert readiness.state == "blocked"
+    version = readiness.checks[-1]
+    assert (version.state, version.code, version.reason) == ("blocked", BLOCK_CODE, REASON_REQUIRED)
+    # The Mail check does not repeat the version reason.
+    assert REASON_REQUIRED not in readiness.checks[1].reason
+
+
+def test_opencode_2_adds_no_check_so_the_ready_catalog_is_unchanged():
+    readiness = configuration_readiness("opencode-cli", "OpenCode CLI", True, configured())
+    assert readiness.state == "ready"
+    assert [check.code for check in readiness.checks] == ["binary_installed", "agent_mail_configured"]
+
+
+def test_opencode_version_evidence_of_the_wrong_type_is_unobserved():
+    readiness = configuration_readiness("opencode-cli", "OpenCode CLI", True, configured(opencode_version_ready=None))
+    assert readiness.checks[1].code == "mail_check_unavailable"
+    assert readiness.state == "unknown"
+
+
+def test_launch_plan_refuses_opencode_v1_with_its_own_block_code(monkeypatch):
+    from app.services import agent_team_service as teams
+    from app.services.opencode_version import BLOCK_CODE, REASON_REQUIRED
+
+    service = teams.AgentTeamService()
+    fake = SimpleNamespace(display_name="OpenCode CLI", get_status=lambda: {"installed": True})
+    monkeypatch.setattr(teams, "get_provider", lambda _: fake)
+    monkeypatch.setattr(service, "_slot_launch_warnings", lambda *_: [])
+    monkeypatch.setattr(service, "_validate_spawn_options", lambda *_: None)
+    slot = SimpleNamespace(id=2, display_name="Synthetic slot", provider="opencode-cli", enabled=True, repo_id="fixture", repo_path="/synthetic", repo_name="fixture", launch_options={})
+    launch = service._plan_slot(slot, None, configured(opencode_version_ready=False))
+    assert launch.status != "ready"
+    assert launch.block_code == BLOCK_CODE
+    assert launch.reasons.count(REASON_REQUIRED) == 1
+    assert service._blocked_result_status(BLOCK_CODE) == "blocked_opencode_version_unsupported"

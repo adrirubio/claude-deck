@@ -358,8 +358,12 @@ def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
         calls.append(args)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    from app.services import opencode_version
+
     monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
     monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    trusted = opencode_version.BinaryIdentity("/opt/trusted/bin/opencode", 1, 2, 3, 4)
+    monkeypatch.setattr(opencode_version, "opencode_version_gate", lambda: opencode_version.VersionGate("ok", "2.0.29", None, trusted))
     spawn.get_spawned_sessions().clear()
 
     spawn.spawn_session(
@@ -375,7 +379,8 @@ def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
     )
 
     command_parts = shlex.split(calls[0][-1])
-    assert command_parts[:2] == ["opencode", str(tmp_path)]
+    # The tmux command launches the exact binary that was probed, not a PATH lookup.
+    assert command_parts[:2] == ["/opt/trusted/bin/opencode", str(tmp_path)]
     assert "--continue" in command_parts
     assert command_parts[command_parts.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
     assert command_parts[command_parts.index("--agent") + 1] == "planner"
@@ -603,3 +608,40 @@ def test_failed_spawn_reports_completed_trust_change(monkeypatch, tmp_path):
         spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
                             extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"})
     assert error.value.workspace_trust_changed is True
+
+
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+def test_opencode_spawn_refuses_below_2_before_tmux(monkeypatch, tmp_path, state):
+    from app.services import opencode_version
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+
+    calls = []
+    monkeypatch.setattr(spawn.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        opencode_version,
+        "opencode_version_gate",
+        lambda: opencode_version.VersionGate(state, "1.17.11" if state == "unsupported" else None, "fixture"),
+    )
+    with pytest.raises(ProviderLaunchError) as raised:
+        spawn.spawn_session("opencode-cli", SpawnCommandOptions(directory=str(tmp_path)))
+    assert raised.value.block_code == opencode_version.BLOCK_CODE
+    assert opencode_version.REASON_REQUIRED in str(raised.value)
+    assert calls == []  # no tmux command ran
+
+
+def test_bridge_new_session_returns_the_opencode_block_code(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from app.api.v1.agent_bridge import router
+    from app.services import opencode_version
+    from app.services.providers.base import ProviderLaunchError
+
+    def refused(*_args, **_kwargs):
+        raise ProviderLaunchError(f"{opencode_version.BLOCK_CODE}: {opencode_version.REASON_REQUIRED}", opencode_version.BLOCK_CODE)
+
+    monkeypatch.setattr(router, "spawn_session", refused)
+    with pytest.raises(HTTPException) as raised:
+        router.spawn_session_endpoint(router.SpawnRequest(provider="opencode-cli", directory=str(tmp_path)), principal=None)
+    assert raised.value.status_code == 400
+    assert raised.value.detail["block_code"] == opencode_version.BLOCK_CODE
