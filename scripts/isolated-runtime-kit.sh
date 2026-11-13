@@ -63,26 +63,31 @@ note() { echo "isolated-runtime-kit: $*" >&2; }
 # --- Instance and process identity (one Python helper, run isolated) ---------------
 
 KITPY='
-import json, os, re, stat, sys
+import hashlib, json, os, re, signal, stat, sys
+
+ROLES_ORDER = ["cli", "stub", "backend", "tmux", "inner", "outer"]
+SERVICES = {"cli", "stub", "backend", "tmux"}
 
 def die(code, message):
     print(message, file=sys.stderr)
     sys.exit(code)
 
-def start_time(pid):
+def proc_stat(pid):
+    """(start time, ppid) from /proc/<pid>/stat, or None when the process is gone."""
     try:
-        return open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[19]
+        fields = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
     except (OSError, IndexError):
+        return None
+    return fields[19], int(fields[1])
+
+def argv_hash(pid):
+    try:
+        return hashlib.sha256(open(f"/proc/{pid}/cmdline", "rb").read()).hexdigest()
+    except OSError:
         return None
 
 def link(pid, kind):
     return os.readlink(f"/proc/{pid}/ns/{kind}")
-
-def argv(pid):
-    try:
-        return open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
-    except OSError:
-        return []
 
 HOST = {kind: link("self", kind) for kind in ("net", "user")}
 
@@ -114,98 +119,138 @@ def processes(root):
         return {}
     except ValueError:
         die(2, "the process record is malformed")
-    return data if isinstance(data, dict) else die(2, "the process record is malformed")
+    if not isinstance(data, dict):
+        die(2, "the process record is malformed")
+    return data
 
-def member(inst, name, pid):
-    """Whether pid is a process of this instance for the given role (start time checked by the caller)."""
-    tag = inst["id"].encode()
-    args = argv(pid)
-    try:
-        if name in ("launcher", "outer"):
-            return b"_outer" in args and tag in args and (name == "launcher" or inst["net"] is None
-                                                            or link(pid, "net") == inst["net"])
-        if name == "inner":
-            return args[:1] == [b"runtime-kit-inner-" + tag] and (inst["user"] is None or link(pid, "user") == inst["user"])
-        return inst["net"] is not None and link(pid, "net") == inst["net"]
-    except OSError:
-        return False
+KEYS = {"pid": int, "start": str, "argv": str, "ppid": int, "pstart": str}
+
+def entry_of(procs, name):
+    entry = procs.get(name)
+    if not isinstance(entry, dict) or any(not isinstance(entry.get(key), kind) for key, kind in KEYS.items()):
+        return None
+    return entry
+
+def check(inst, procs, name, entry):
+    """The word gone, the word ok, or a reason: compares the full recorded identity of one role, field by field."""
+    now = proc_stat(entry["pid"])
+    if now is None:
+        return "gone"
+    start, ppid = now
+    if start != entry["start"]:
+        return "gone"  # the recorded process has exited; this pid now names another process
+    if argv_hash(entry["pid"]) != entry["argv"]:
+        return f"{name} pid {entry["pid"]} has another command line"
+    parent = proc_stat(entry["ppid"])
+    if ppid != entry["ppid"] or parent is None or parent[0] != entry["pstart"]:
+        return f"{name} pid {entry["pid"]} no longer has its recorded parent"
+    if name in SERVICES:
+        try:
+            if inst["net"] is None or link(entry["pid"], "net") != inst["net"]:
+                return f"{name} pid {entry["pid"]} is outside the kit network namespace"
+        except OSError:
+            return f"{name} pid {entry["pid"]} cannot be inspected"
+    return "ok"
 
 def verify(root, name):
-    inst = instance(root)
-    entry = processes(root).get(name)
-    if not isinstance(entry, dict) or not isinstance(entry.get("pid"), int):
+    inst, procs = instance(root), processes(root)
+    entry = entry_of(procs, name)
+    if entry is None:
         die(2, f"no recorded {name} process")
-    pid = entry["pid"]
-    now = start_time(pid)
-    if now is None:
-        die(3, f"{name} (pid {pid}) is not running")
-    if now != entry.get("start"):
-        die(2, f"{name} pid {pid} has another start time; it is not the recorded process")
-    if not member(inst, name, pid):
-        die(2, f"{name} pid {pid} is not a process of this kit instance")
-    print(pid)
+    result = check(inst, procs, name, entry)
+    if result == "gone":
+        die(3, f"{name} (pid {entry["pid"]}) is not running")
+    if result != "ok":
+        die(2, result)
+    print(entry["pid"])
 
-def members(root):
-    """Own processes of this instance: in its network namespace, or carrying its id in argv.
-
-    Membership of the recorded network namespace counts only while this instance own
-    outer anchor (its id and root in argv) is alive inside that namespace. Otherwise the
-    recorded namespace id is unproved, and any process in it is reported, never signalled.
-    """
-    inst = instance(root)
-    tag, me = inst["id"].encode(), {os.getpid(), os.getppid()}
-    anchored = inst["net"] is None
-    for entry in os.listdir("/proc"):
-        if entry.isdigit() and not anchored:
-            args = argv(int(entry))
-            try:
-                anchored = (b"_outer" in args and tag in args and root.encode() in args
-                            and link(int(entry), "net") == inst["net"])
-            except OSError:
-                pass
-    found, unproved, unreadable = [], [], []
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit() or int(entry) in me:
+def unrecorded(inst, procs):
+    """Own processes inside the kit network namespace that are not recorded roles."""
+    if inst["net"] is None:
+        return [], []
+    known = {entry["pid"] for entry in (entry_of(procs, n) for n in procs) if entry}
+    found, unreadable = [], []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) in (os.getpid(), os.getppid()) or int(name) in known:
             continue
-        pid = int(entry)
         try:
-            if os.stat(f"/proc/{pid}").st_uid != os.getuid():
+            if os.stat(f"/proc/{name}").st_uid != os.getuid():
                 continue
-        except OSError:
-            continue
-        try:
-            inside = inst["net"] is not None and link(pid, "net") == inst["net"]
+            if link(name, "net") == inst["net"]:
+                found.append(int(name))
         except FileNotFoundError:
             continue
         except OSError:
-            unreadable.append(pid)
+            unreadable.append(int(name))
+    return found, unreadable
+
+def plan(root):
+    """Read-only teardown plan: every proof first, then the ordered targets; never signals."""
+    inst, procs = instance(root), processes(root)
+    targets, problems = [], []
+    for name in ROLES_ORDER:
+        if name not in procs:
             continue
-        start = start_time(pid)
-        if start is None:
+        entry = entry_of(procs, name)
+        if entry is None:
+            problems.append(f"{name} record is malformed")
             continue
-        if tag in argv(pid) or (inside and anchored):
-            found.append(f"{pid}:{start}")
-        elif inside:
-            unproved.append(f"{pid}:{start}")
-    print(" ".join(found))
-    if unproved:
-        print("unproved " + " ".join(unproved), file=sys.stderr)
-        sys.exit(5)
+        result = check(inst, procs, name, entry)
+        if result == "ok":
+            targets.append(name)
+        elif result != "gone":
+            problems.append(result)
+    found, unreadable = unrecorded(inst, procs)
+    if found:
+        problems.append("unrecorded processes in the kit namespace: " + " ".join(map(str, found)))
     if unreadable:
-        print("unreadable " + " ".join(map(str, unreadable)), file=sys.stderr)
-        sys.exit(4)
+        problems.append("processes that cannot be inspected: " + " ".join(map(str, unreadable)))
+    return {"targets": targets, "problems": problems}
+
+def send(root, name, signame, dry):
+    """Open a pidfd first, then prove the full recorded identity, then signal through that pidfd."""
+    inst, procs = instance(root), processes(root)
+    entry = entry_of(procs, name)
+    if entry is None:
+        die(2, f"no recorded {name} process")
+    if os.environ.get("RUNTIME_KIT_TEST_NO_PIDFD") or not hasattr(os, "pidfd_open") \
+            or not hasattr(signal, "pidfd_send_signal"):
+        die(4, "pidfd support is unavailable; nothing was signalled")
+    try:
+        fd = os.pidfd_open(entry["pid"])
+    except ProcessLookupError:
+        die(3, f"{name} is gone")
+    except OSError as exc:
+        die(4, f"cannot open a pidfd for {name}: {exc}")
+    try:
+        result = check(inst, procs, name, entry)
+        if result == "gone":
+            die(3, f"{name} is gone")
+        if result != "ok":
+            die(2, result + "; nothing was signalled")
+        if not dry:
+            signal.pidfd_send_signal(fd, getattr(signal, "SIG" + signame))
+        print("checked" if dry else "signalled")
+    finally:
+        os.close(fd)
 
 def record(root, name, pid):
-    start = start_time(pid)
-    if start is None:
+    pid = int(pid)
+    now = proc_stat(pid)
+    if now is None:
         die(2, f"{name} (pid {pid}) is gone before it could be recorded")
+    parent = proc_stat(now[1])
+    digest = argv_hash(pid)
+    if parent is None or digest is None:
+        die(2, f"{name} (pid {pid}) cannot be recorded")
     path = os.path.join(root, "state", "processes.json")
     data = processes(root)
-    data[name] = {"pid": int(pid), "start": start}
+    data[name] = {"pid": pid, "start": now[0], "argv": digest, "ppid": now[1], "pstart": parent[0]}
     tmp = path + ".tmp"
     with open(tmp, "w") as out:
         json.dump(data, out)
     os.replace(tmp, path)
+    print(now[1])
 
 def set_instance(root, ident, net, user):
     path = os.path.join(root, "state", "instance.json")
@@ -223,10 +268,16 @@ if command == "instance":
     print(data["id"], data["net"] or "-", data["user"] or "-")
 elif command == "verify":
     verify(root, rest[0])
-elif command == "members":
-    members(root)
+elif command == "plan-teardown":
+    result = plan(root)
+    print(json.dumps(result))
+    sys.exit(0 if not result["problems"] else 5)
+elif command == "check-signal":
+    send(root, rest[0], rest[1] if len(rest) > 1 else "TERM", dry=True)
+elif command == "signal":
+    send(root, rest[0], rest[1], dry=False)
 elif command == "record":
-    record(root, rest[0], int(rest[1]))
+    record(root, rest[0], rest[1])
 elif command == "set-instance":
     set_instance(root, *rest)
 else:
@@ -243,7 +294,7 @@ verify() { # name -> pid of this instance's live process for that role; refuses 
   fi
   echo "$out"
 }
-record() { kitpy record "$ROOT" "$1" "$2" || refuse "could not record $1"; }
+record() { kitpy record "$ROOT" "$1" "$2" >/dev/null || refuse "could not record $1"; }
 
 # --- Namespace entry -----------------------------------------------------------------
 
@@ -256,16 +307,24 @@ in_ns() { # run a command inside the kit namespaces, with the allowlisted enviro
     env -i "${CLEAN_ENV[@]}" "$@"
 }
 
-spawn() { # name log command... : start a long-running process inside the namespaces and record it.
-  # nsenter, the nested nsenter and env all exec, so $! is the process itself.
-  local name="$1" log="$2" outer inner
+spawn() { # name log argv... : the inner anchor starts it as its own child; it is recorded with that parent.
+  local name="$1" log="$2" ready="$ROOT/state/run-$INSTANCE_ID" req pid inner i
   shift 2
-  outer="$(verify outer)"
   inner="$(verify inner)"
-  setsid nsenter --preserve-credentials -U -n -t "$outer" \
-    nsenter --preserve-credentials -U -t "$inner" \
-    env -i "${CLEAN_ENV[@]}" "$@" </dev/null >"$log" 2>&1 &
-  record "$name" "$!"
+  req="$(mktemp -d "$ready/req-XXXXXX")"
+  printf '%s\0' "$@" >"$req/argv"
+  printf '%s' "$log" >"$req/log"
+  printf '%s\n' "$req" >"$ready/spawn.fifo"
+  for i in $(seq 1 50); do [[ -s "$req/pid" ]] && break; sleep 0.1; done
+  [[ -s "$req/pid" ]] || fail "the inner anchor did not start $name"
+  pid="$(cat "$req/pid")"
+  # Record only after exec: until then the child still shows the anchor's command line.
+  for i in $(seq 1 50); do
+    cmp -s "/proc/$pid/cmdline" "/proc/$inner/cmdline" || break
+    sleep 0.05
+  done
+  record "$name" "$pid"
+  [[ "$(kitpy verify "$ROOT" "$name" 2>/dev/null)" == "$pid" ]] || refuse "$name was not started by the recorded inner anchor"
 }
 
 load_env() {
@@ -295,9 +354,27 @@ if [[ "$COMMAND" == _outer ]]; then
   exit 0
 fi
 if [[ "$COMMAND" == _inner ]]; then
+  # The inner anchor maps back to the caller and starts every kit service as its own
+  # child (requests arrive on a private FIFO), so no recorded process is ever reparented.
   ROOT="$1" INSTANCE="$2"
-  echo "$$ $(id -u) $(id -g) $(readlink /proc/self/ns/net) $(readlink /proc/self/ns/user)" >"$ROOT/state/run-$INSTANCE/inner.id"
-  exec -a "runtime-kit-inner-$INSTANCE" sleep infinity
+  ready="$ROOT/state/run-$INSTANCE"
+  mkfifo -m 600 "$ready/spawn.fifo"
+  trap 'exit 0' TERM INT
+  exec 3<>"$ready/spawn.fifo"
+  echo "$$ $(id -u) $(id -g) $(readlink /proc/self/ns/net) $(readlink /proc/self/ns/user)" >"$ready/inner.id"
+  while read -r req <&3; do
+    [[ "$req" == "$ready"/req-* && -f "$req/argv" && -f "$ROOT/state/env" ]] || continue
+    mapfile -d '' -t argv <"$req/argv"
+    mapfile -t envl <"$ROOT/state/env"
+    env -i "${envl[@]}" "${argv[@]}" </dev/null >"$(cat "$req/log")" 2>&1 &
+    echo "$!" >"$req/pid.tmp"
+    mv "$req/pid.tmp" "$req/pid"
+  done
+  exit 0
+fi
+if [[ "$COMMAND" == _kitpy ]]; then  # the helper, for the kit's own tests
+  kitpy "$@"
+  exit $?
 fi
 
 ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT"
@@ -382,6 +459,7 @@ up() {
   chmod 700 "$ROOT/t" "$ROOT/state"
   local instance
   instance="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  INSTANCE_ID="$instance"
   kitpy set-instance "$ROOT" "$instance" "" ""
   local ready="$ROOT/state/run-$instance"
   mkdir -p "$ready"
@@ -421,7 +499,6 @@ up() {
     unshare --user --map-root-user --net --kill-child "$SELF" _outer "$ROOT" "$(id -u)" "$(id -g)" "$instance" \
     </dev/null >"$ROOT/logs/anchor.log" 2>&1 &
   record launcher "$!"
-  [[ "${RUNTIME_KIT_TEST_FAULT:-}" != after_anchor_spawn ]] || { sleep 0.3; fail "injected fault after the anchor spawn"; }
   until [[ -s "$ready/inner.id" || -f "$ready/outer.refused" ]]; do
     ((SECONDS < preflight)) || fail "preflight deadline: the namespace anchors did not start"
     sleep 0.1
@@ -431,6 +508,7 @@ up() {
   local inner_pid inner_uid inner_gid inner_net inner_user
   read -r inner_pid inner_uid inner_gid inner_net inner_user <"$ready/inner.id"
   record inner "$inner_pid"
+  [[ "${RUNTIME_KIT_TEST_FAULT:-}" != after_anchor_spawn ]] || fail "injected fault after the anchor spawn"
   if [[ "${RUNTIME_KIT_TEST_FAULT:-}" == uid_mismatch ]]; then inner_uid=$((inner_uid + 1)); fi
   [[ "$inner_uid" == "$(id -u)" && "$inner_gid" == "$(id -g)" ]] \
     || refuse "the inner namespace maps uid/gid $inner_uid/$inner_gid, not the caller's $(id -u)/$(id -g)"
@@ -446,17 +524,27 @@ up() {
   kitpy instance "$ROOT" >/dev/null || refuse "the instance record did not validate"
   printf '%s\n' "${CLEAN_ENV[@]}" >"$ROOT/state/env"
 
-  # --- Private tmux server, proved inside the root ------------------------------------
-  in_ns "$ROOT/bin/tmux" -f /dev/null new-session -d -s kit-probe "sleep 600" </dev/null >/dev/null 2>&1
+  # --- Private tmux server: a foreground child of the inner anchor, on the kit's socket --
+  spawn tmux "$ROOT/logs/tmux.log" "$tmux_bin" -D -f /dev/null -S "$ROOT/t/s"
+  local i
+  for i in $(seq 1 50); do [[ -S "$ROOT/t/s" ]] && break; sleep 0.1; done
+  in_ns "$ROOT/bin/tmux" new-session -d -s kit-probe "sleep 600" </dev/null >/dev/null 2>&1
   [[ "$(in_ns "$ROOT/bin/tmux" display-message -p -t '=kit-probe' '#{socket_path}')" == "$ROOT/t/s" ]] \
     || refuse "tmux used a socket outside the kit root"
   [[ "$(in_ns "$ROOT/bin/tmux" list-sessions -F '#{session_name}')" == kit-probe ]] || refuse "the tmux server is not private"
-  record tmux "$(in_ns "$ROOT/bin/tmux" display-message -p '#{pid}')"
-  in_ns "$ROOT/bin/tmux" set-option -g exit-empty off \; kill-session -t '=kit-probe'
+  [[ "$(in_ns "$ROOT/bin/tmux" display-message -p '#{pid}')" == "$(verify tmux)" ]] \
+    || refuse "the tmux server is not the recorded one"
+  in_ns "$ROOT/bin/tmux" kill-session -t '=kit-probe'
 
   # --- Stub model provider -------------------------------------------------------------
-  spawn stub "$ROOT/logs/stub.log" \
-    python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+  if [[ "${RUNTIME_KIT_TEST_FAULT:-}" == stub_ignores_term ]]; then  # a recorded child that ignores TERM
+    spawn stub "$ROOT/logs/stub.log" python3 -c \
+      "import runpy, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name=chr(95) * 2 + chr(109) + chr(97) + chr(105) + chr(110) + chr(95) * 2)" \
+      "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+  else
+    spawn stub "$ROOT/logs/stub.log" \
+      python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+  fi
   local stub_ready=$((SECONDS + STUB_DEADLINE))
   until in_ns python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$stub_port/health', timeout=1)" 2>/dev/null; do
     ((SECONDS < stub_ready && SECONDS < deadline)) || fail "deadline: the stub provider did not start"
@@ -485,6 +573,9 @@ up() {
     ((SECONDS < health && SECONDS < deadline)) || fail "deadline: the isolated backend did not report healthy"
     sleep 0.5
   done
+  # The launcher script has exec'd into the server by now: record its final command line.
+  record backend "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["backend"]["pid"])' "$ROOT/state/processes.json")"
+  verify backend >/dev/null
 
   # --- Team slot, real launch, Agent Mail registration --------------------------------
   git -C "$ROOT/home/work" init -q 2>/dev/null || true
@@ -520,12 +611,41 @@ PY
   )" || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"
   echo "$launch" >"$ROOT/state/launch.json"
 
+  # The launched pane is the CLI: record it at once (parent = the recorded tmux server),
+  # so any later failure can still stop it with a proved identity.
+  local pane_pid="" i
+  for i in $(seq 1 50); do
+    pane_pid="$(in_ns "$ROOT/bin/tmux" list-panes -a -F '#{pane_pid}' 2>/dev/null | head -1)"
+    [[ -n "$pane_pid" ]] && break
+    sleep 0.1
+  done
+  [[ "$pane_pid" =~ ^[0-9]+$ ]] || fail "the launch started no pane"
+  # Wait until the pane's command line is stable (a CLI may exec once at start).
+  local last="" now stable=0
+  for i in $(seq 1 50); do
+    now="$(sha256sum "/proc/$pane_pid/cmdline" 2>/dev/null | cut -c1-64)"
+    if [[ -n "$now" && "$now" == "$last" ]]; then stable=$((stable + 1)); else stable=0; fi
+    last="$now"
+    ((stable >= 5)) && break
+    sleep 0.1
+  done
+  record cli "$pane_pid"
+  verify cli >/dev/null
+  python3 -I - "$ROOT/state/processes.json" <<'PY' || refuse "the CLI pane is not a child of the recorded tmux server"
+import json, sys
+procs = json.load(open(sys.argv[1]))
+sys.exit(0 if procs["cli"]["ppid"] == procs["tmux"]["pid"] and procs["cli"]["pstart"] == procs["tmux"]["start"] else 1)
+PY
+
   local registered=$((SECONDS + REGISTRATION_DEADLINE))
   until registration_row >/dev/null 2>&1; do
     ((SECONDS < registered && SECONDS < deadline)) || fail "deadline: the CLI did not register through Agent Mail"
     sleep 0.5
   done
-  record cli "$(registration_row | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["bound_pane_pid"])')"
+  [[ "$(registration_row | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["bound_pane_pid"])')" == "$pane_pid" ]] \
+    || refuse "the registration is bound to another pane than the recorded CLI"
+  # The fake CLI exec'd into its idle loop after registering: record its final command line.
+  record cli "$pane_pid"
   verify cli >/dev/null
 
   trap - EXIT
@@ -657,35 +777,29 @@ down() {
   [[ -f "$ROOT/$MARKER" ]] || refuse "$ROOT is not a kit root (no $MARKER)"
   # Ownership first: nothing is signalled or deleted unless this root holds a valid
   # instance of the caller's own (not copied, not forged, no host namespace).
-  local inst
-  inst="$(kitpy instance "$ROOT")" || refuse "this root has no valid kit instance; nothing was signalled or removed"
-  # Stop the private tmux server through the namespaces while the anchors live.
-  if [[ -f "$ROOT/state/env" ]] && kitpy verify "$ROOT" outer >/dev/null 2>&1 && kitpy verify "$ROOT" inner >/dev/null 2>&1; then
-    load_env
-    in_ns "$ROOT/bin/tmux" kill-server 2>/dev/null || true
+  kitpy instance "$ROOT" >/dev/null || refuse "this root has no valid kit instance; nothing was signalled or removed"
+  # Every proof before any signal: recorded identities with their parents, and no
+  # unrecorded or unreadable process in the kit namespace.
+  local plan code=0 name
+  plan="$(kitpy plan-teardown "$ROOT")" || code=$?
+  ((code == 0 || code == 5)) || refuse "the teardown plan could not be computed; nothing was signalled"
+  if ((code == 5)); then
+    incomplete "teardown refused before any signal: $(python3 -I -c 'import json,sys; print("; ".join(json.loads(sys.argv[1])["problems"]))' "$plan"); the root and anchors are kept"
   fi
-  # Every process of this instance: inside its network namespace, or carrying its
-  # id in argv (the launcher and anchors, also before the namespace was recorded).
-  local targets code=0 until=$((SECONDS + DOWN_TERM_WAIT)) item
-  targets="$(kitpy members "$ROOT")" || code=$?
-  ((code != 5)) || incomplete "processes run in the recorded namespace, but no live anchor of this instance proves it is the kit's; nothing was signalled and the root is kept"
-  ((code == 0)) || incomplete "some processes of the caller could not be inspected; the root is kept"
-  for item in $targets; do kill -TERM "${item%%:*}" 2>/dev/null || true; done
-  while ((SECONDS < until)); do
-    targets="$(kitpy members "$ROOT" 2>/dev/null)" || true
-    [[ -n "$targets" ]] || break
-    sleep 0.2
+  # Children before parents: cli, stub, backend, tmux, then inner and outer last.
+  for name in $(python3 -I -c 'import json,sys; print(" ".join(json.loads(sys.argv[1])["targets"]))' "$plan"); do
+    stop_role "$name" || incomplete "$name could not be stopped with a proved identity; teardown stopped and the root is kept"
   done
-  for item in $targets; do
-    # KILL only a process that is still the same one (pid and start time).
-    [[ "$(kitpy members "$ROOT" 2>/dev/null)" == *"$item"* ]] && kill -KILL "${item%%:*}" 2>/dev/null || true
+  # The launcher (host side of the anchors) is never signalled: it exits with its child.
+  local i
+  for i in $(seq 1 30); do
+    [[ "$(kitpy verify "$ROOT" launcher >/dev/null 2>&1; echo $?)" == 3 ]] && break
+    sleep 0.1
   done
-  sleep 0.3
-  # Prove containment: no process of this instance remains, and none could not be read.
   code=0
-  targets="$(kitpy members "$ROOT")" || code=$?
-  ((code == 0)) || incomplete "containment could not be proved (unreadable or unproved processes); the root is kept"
-  [[ -z "$targets" ]] || incomplete "processes of this kit instance are still running: $targets; the root is kept"
+  plan="$(kitpy plan-teardown "$ROOT")" || code=$?
+  [[ $code -eq 0 && "$plan" == *'"targets": []'* ]] || incomplete "processes of this kit instance are still running; the root is kept"
+  [[ "$(kitpy verify "$ROOT" launcher >/dev/null 2>&1; echo $?)" == 3 ]] || incomplete "the anchor launcher has not exited; the root is kept"
   if [[ -f "$ROOT/evidence/MANIFEST.sha256" ]]; then
     (cd "$ROOT/evidence" && sha256sum -c --quiet MANIFEST.sha256) || fail "the evidence manifest does not match; the root is kept"
   fi
@@ -696,6 +810,26 @@ down() {
     rm -rf "$ROOT"
     note "stopped and removed $ROOT"
   fi
+}
+
+stop_role() { # name: TERM through a proved pidfd, a bounded wait, then KILL after a fresh proof
+  local code=0 i
+  kitpy signal "$ROOT" "$1" TERM >/dev/null 2>&1 || code=$?
+  ((code == 3)) && return 0
+  ((code == 0)) || return 1
+  for i in $(seq 1 30); do
+    [[ "$(kitpy verify "$ROOT" "$1" >/dev/null 2>&1; echo $?)" == 3 ]] && return 0
+    sleep 0.1
+  done
+  code=0
+  kitpy signal "$ROOT" "$1" KILL >/dev/null 2>&1 || code=$?
+  ((code == 3)) && return 0
+  ((code == 0)) || return 1
+  for i in $(seq 1 20); do
+    [[ "$(kitpy verify "$ROOT" "$1" >/dev/null 2>&1; echo $?)" == 3 ]] && return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 # Every command runs under a finite deadline: the public command re-runs itself

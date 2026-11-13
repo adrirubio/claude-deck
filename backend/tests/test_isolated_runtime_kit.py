@@ -37,6 +37,26 @@ def _kit(*args: str, env: dict[str, str] | None = None, timeout: float = 150) ->
                           env=env or _env(), timeout=timeout)
 
 
+def _identity(pid: int) -> dict:
+    """The full identity of a process, as the kit records it: start, argv hash and parent."""
+    import hashlib
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    parent = Path(f"/proc/{fields[1]}/stat").read_text().rsplit(")", 1)[1].split()
+    return {"pid": pid, "start": fields[19], "argv": hashlib.sha256(Path(f"/proc/{pid}/cmdline").read_bytes()).hexdigest(),
+            "ppid": int(fields[1]), "pstart": parent[19]}
+
+
+def _pidfd_kill(entry: dict) -> None:
+    """Stop a recorded process: pidfd first, then the full identity and parent proof, then the signal."""
+    import signal
+    fd = os.pidfd_open(entry["pid"])
+    try:
+        assert _identity(entry["pid"]) == entry, "identity changed; not signalled"
+        signal.pidfd_send_signal(fd, signal.SIGKILL)
+    finally:
+        os.close(fd)
+
+
 def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -164,8 +184,11 @@ def test_kit_refuses_to_enter_or_signal_a_reused_pid(kit_root):
     real = dict(processes["inner"])
     processes["inner"]["start"] = str(int(real["start"]) + 1)  # as if the pid had been reused
     state.write_text(json.dumps(processes))
-    refused = _kit("exec", "--root", str(kit_root), "--", "true")
-    assert refused.returncode == 2 and "refused" in refused.stderr
+    refused = _kit("exec", "--root", str(kit_root), "--", "sh", "-c", "echo entered")
+    # A changed start time means the recorded process is gone and its pid names another one:
+    # the kit refuses to enter (fail closed), whichever word it reports.
+    assert refused.returncode in (1, 2) and ("refused" in refused.stderr or "not running" in refused.stderr)
+    assert "entered" not in refused.stdout
     processes["inner"] = real
     state.write_text(json.dumps(processes))
 
@@ -224,16 +247,24 @@ def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state)
         victim.wait()
 
 
-def test_down_stops_a_detached_process_inside_the_kit_namespace(kit_root):
-    _up(kit_root)
+def test_down_refuses_an_unrecorded_process_before_any_signal(kit_root):
+    summary = _up(kit_root)
     started = _kit("exec", "--root", str(kit_root), "--", "sh", "-c",
                    'cd / && setsid env -i sleep 300 </dev/null >/dev/null 2>&1 & echo $!')
     assert started.returncode == 0, started.stderr
     child = int(started.stdout.split()[-1])
-    assert _alive(child)
+    time.sleep(0.2)
+    recorded_child = _identity(child)
     down = _kit("down", "--root", str(kit_root))
-    assert down.returncode == 0, down.stderr
-    assert not _alive(child) and not kit_root.exists()
+    assert down.returncode == 1 and "unrecorded" in down.stderr and str(child) in down.stderr, down.stderr
+    # Nothing was signalled: the child and every kit process still run, and the root is kept.
+    assert _alive(child) and kit_root.exists()
+    assert all(_alive(pid) for pid in summary["pids"].values())
+    _pidfd_kill(recorded_child)
+    time.sleep(0.3)
+    again = _kit("down", "--root", str(kit_root))
+    assert again.returncode == 0, again.stderr
+    assert not kit_root.exists() and not [pid for pid in summary["pids"].values() if _alive(pid)]
 
 
 def test_up_refuses_a_retained_root_before_starting_anything(kit_root):
@@ -285,15 +316,14 @@ def test_no_credential_ever_appears_in_a_process_argv(kit_root):
 
 @pytest.mark.parametrize("fault", ["dead_backend", "unhealthy_backend", "dead_cli", "reused_cli", "missing_registration"])
 def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
-    import signal
     import sqlite3
     _up(kit_root)
     state = kit_root / "state" / "processes.json"
     processes = json.loads(state.read_text())
     if fault == "dead_backend":
-        os.kill(processes["backend"]["pid"], signal.SIGKILL)
+        _pidfd_kill(processes["backend"])
     elif fault == "dead_cli":
-        os.kill(processes["cli"]["pid"], signal.SIGKILL)
+        _pidfd_kill(processes["cli"])
     elif fault == "reused_cli":
         processes["cli"]["start"] = str(int(processes["cli"]["start"]) + 1)
         state.write_text(json.dumps(processes))
@@ -307,3 +337,85 @@ def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
     result = _kit("status", "--root", str(kit_root))
     assert result.returncode != 0 and ("incomplete" in result.stderr or "refused" in result.stderr), result.stderr
     assert not (kit_root / "evidence" / "MANIFEST.sha256").exists()
+
+
+# Synthetic, signal-free checks of the teardown planner and the pidfd identity check. They
+# run everywhere: plain processes spawned and recorded by the test, no namespace, no signal.
+@pytest.fixture
+def synthetic(tmp_path):
+    root = tmp_path / "kit"
+    (root / "state").mkdir(parents=True)
+    (root / ".deck-runtime-kit").write_text("")
+    here = root.stat()
+    record = root / "state" / "instance.json"
+    record.write_text(json.dumps({"id": "ab" * 16, "root_dev": here.st_dev, "root_ino": here.st_ino,
+                                  "uid": os.getuid(), "net": None, "user": None}))
+    record.chmod(0o600)
+    procs = [subprocess.Popen(["sleep", "300"]) for _ in range(2)]
+    time.sleep(0.1)
+    entries = {"inner": _identity(procs[0].pid), "outer": _identity(procs[1].pid)}
+    yield root, entries, procs
+    for proc in procs:
+        proc.kill()
+        proc.wait()
+
+
+def _write(root, entries):
+    (root / "state" / "processes.json").write_text(json.dumps(entries))
+
+
+def _helper(*args, env=None):
+    return subprocess.run(["bash", str(KIT), "_kitpy", *args], capture_output=True, text=True,
+                          env=env or _env(), timeout=30)
+
+
+def test_synthetic_plan_targets_only_proved_records_in_order(synthetic):
+    root, entries, procs = synthetic
+    _write(root, entries)
+    stranger = subprocess.Popen(["python3", "-c", "import time; time.sleep(300)", "ab" * 16])  # carries the id
+    try:
+        result = _helper("plan-teardown", str(root))
+        assert result.returncode == 0, result.stderr
+        plan = json.loads(result.stdout)
+        assert plan == {"targets": ["inner", "outer"], "problems": []}
+        checked = _helper("check-signal", str(root), "outer")
+        assert (checked.returncode, checked.stdout.strip()) == (0, "checked")
+        assert all(proc.poll() is None for proc in procs) and stranger.poll() is None
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+@pytest.mark.parametrize("fault", ["start_mismatch", "start_prefix", "argv_mismatch", "parent_gone", "no_pidfd"])
+def test_synthetic_identity_mismatch_is_never_signalled(synthetic, fault):
+    root, entries, procs = synthetic
+    env = None
+    if fault == "start_mismatch":
+        entries["outer"]["start"] = str(int(entries["outer"]["start"]) + 1)
+    elif fault == "start_prefix":  # a near-match: the recorded value is a prefix of the real one
+        entries["outer"]["start"] = entries["outer"]["start"][:-1]
+    elif fault == "argv_mismatch":
+        entries["outer"]["argv"] = "0" * 64
+    elif fault == "parent_gone":
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        entries["outer"]["ppid"] = gone.pid
+    else:
+        env = _env(RUNTIME_KIT_TEST_NO_PIDFD="1")
+    _write(root, entries)
+    checked = _helper("check-signal", str(root), "outer", env=env)
+    assert checked.returncode != 0 and checked.stdout.strip() != "checked"
+    plan = _helper("plan-teardown", str(root))
+    targets = json.loads(plan.stdout)["targets"]
+    assert "outer" not in targets or fault == "no_pidfd"
+    if fault in ("argv_mismatch", "parent_gone"):
+        assert plan.returncode == 5  # a live process that fails its proof refuses the whole teardown
+    assert all(proc.poll() is None for proc in procs)
+
+
+def test_down_kills_a_recorded_child_that_ignores_term(kit_root):
+    summary = _up(kit_root, RUNTIME_KIT_TEST_FAULT="stub_ignores_term")
+    stub = summary["pids"]["stub"]
+    down = _kit("down", "--root", str(kit_root))
+    assert down.returncode == 0, down.stderr
+    assert not _alive(stub) and not kit_root.exists()
