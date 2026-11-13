@@ -84,6 +84,16 @@ The kit refuses, with exit 2, when:
 
 **Namespace entry is two-step.** The kit enters through the outer anchor, which owns the network namespace, and then the inner one. A single `nsenter` into the inner anchor is refused by the kernel. Before it enters a namespace, the kit proves both anchors as described in [Ownership and cleanup](#ownership-and-cleanup).
 
+## OpenCode members
+
+For `--provider opencode-cli`, `up` pins the member to the kit's stub model before any pane starts:
+- **Stub-only config.** After the Agent Mail install has written the kit HOME's `opencode.json`, `up` adds exactly one provider, `kitstub` (OpenAI-compatible, `baseURL` `http://127.0.0.1:18781/v1`, one model `stub`). It sets `enabled_providers` to `["kitstub"]`, `model` to `kitstub/stub`, and turns autoupdate and sharing off. The install's Agent Mail entry (`mcp.servers.albiex-synth-city-mail`) and its question-deny rule are kept.
+- **The slot model.** The kit's team slot launches with the model `kitstub/stub`, so the product's own per-member config (`OPENCODE_CONFIG_CONTENT`) also limits `enabled_providers` to `kitstub`.
+- **Proof before launch.** `up` reads the config back and refuses (exit 2) before the launch unless the only provider is `kitstub` on `127.0.0.1`, `enabled_providers` is exactly `["kitstub"]`, the model is `kitstub/stub`, and the install's entry and deny rule are present. It also refuses an `opencode.jsonc` (comments can't be merged safely), a missing or non-object config, or a config that already names another provider. A refusal changes nothing.
+- **Evidence.** `status` proves the config again and publishes `opencode-config.json` (the provider ids, `enabled_providers`, the model, the stub's host and port, and whether the install's entry and deny rule are present; nothing else) in the manifest. A config changed after launch makes `status` fail without publishing.
+
+**Limits.** The fake CLI is not OpenCode, so the product's OpenCode 2 gate refuses its Agent Mail registration and `up` with the fake stops at registration. That the stub-only config holds for a real OpenCode member, and that no hosted fallback happens, is proved only by a run of the real OpenCode CLI inside the kit; that run is a separate, approved phase.
+
 ## Using it for a live check
 
 1. Write the check as commands run with `exec`, or let the CLI under test act from its pane.

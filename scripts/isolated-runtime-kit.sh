@@ -417,6 +417,94 @@ def set_instance(root, ident, net, user):
         json.dump(data, out)
     os.replace(path + ".tmp", path)
 
+# --- OpenCode stub-only configuration (#912) -------------------------------------------
+# An OpenCode member in the kit must reach only the kit stub. Before launch the kit adds
+# one stub provider to the config the Agent Mail install wrote in the kit HOME, keeping
+# the install entries, and proves the result before any pane starts.
+KIT_PROVIDER = "kitstub"
+KIT_MODEL = "stub"
+MAIL_SERVER = "albiex-synth-city-mail"
+DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
+
+def _opencode_path(root):
+    home = os.path.join(root, "home", ".config", "opencode")
+    if os.path.lexists(os.path.join(home, "opencode.jsonc")):
+        die(2, "refused: an opencode.jsonc config cannot be merged safely")
+    path = os.path.join(home, "opencode.json")
+    if os.path.islink(path) or not os.path.isfile(path):
+        die(2, "refused: the Agent Mail install wrote no plain OpenCode config")
+    return path
+
+def _stub_hostport(stub_url):
+    match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})", stub_url)
+    if not match:
+        die(2, "refused: the stub URL must be http://127.0.0.1:<port>")
+    return "127.0.0.1:" + match.group(1)
+
+def _opencode_load(path):
+    try:
+        with open(path) as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError):
+        die(2, "refused: the OpenCode config is not readable JSON")
+    if not isinstance(doc, dict):
+        die(2, "refused: the OpenCode config is not a JSON object")
+    return doc
+
+def _opencode_install_ok(doc):
+    servers = (doc.get("mcp") or {}).get("servers") if isinstance(doc.get("mcp"), dict) else None
+    mail = isinstance(servers, dict) and isinstance(servers.get(MAIL_SERVER), dict)
+    denied = isinstance(doc.get("permissions"), list) and DENY_RULE in doc["permissions"]
+    return mail, denied
+
+def opencode_config(root, stub_url):
+    hostport = _stub_hostport(stub_url)
+    path = _opencode_path(root)
+    doc = _opencode_load(path)
+    mail, denied = _opencode_install_ok(doc)
+    if not (mail and denied):
+        die(2, "refused: the OpenCode config lacks the Agent Mail entry or the question-deny rule")
+    if set(doc.get("provider") or {}) - {KIT_PROVIDER}:
+        die(2, "refused: the OpenCode config already names another provider")
+    doc["provider"] = {KIT_PROVIDER: {
+        "npm": "@ai-sdk/openai-compatible", "name": "isolated runtime kit stub",
+        "options": {"baseURL": "http://" + hostport + "/v1"},
+        "models": {KIT_MODEL: {"name": "kit stub model"}}}}
+    doc["enabled_providers"] = [KIT_PROVIDER]
+    doc["model"] = KIT_PROVIDER + "/" + KIT_MODEL
+    doc["autoupdate"] = False
+    doc["share"] = "disabled"
+    temp = os.path.join(os.path.dirname(path), ".opencode-" + os.urandom(8).hex())
+    try:
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+        os.replace(temp, path)
+    except OSError:
+        if os.path.lexists(temp):
+            os.unlink(temp)
+        die(2, "refused: the OpenCode config could not be written")
+    return opencode_check(root, stub_url)
+
+def opencode_check(root, stub_url):
+    hostport = _stub_hostport(stub_url)
+    doc = _opencode_load(_opencode_path(root))
+    mail, denied = _opencode_install_ok(doc)
+    providers = doc.get("provider")
+    stub = providers.get(KIT_PROVIDER) if isinstance(providers, dict) else None
+    options = stub.get("options") if isinstance(stub, dict) else None
+    models = stub.get("models") if isinstance(stub, dict) else None
+    summary = {"providers": sorted(providers) if isinstance(providers, dict) else [],
+               "enabled_providers": doc.get("enabled_providers"), "model": doc.get("model"),
+               "base_url": hostport if isinstance(options, dict) and options.get("baseURL") == "http://" + hostport + "/v1" else None,
+               "mail_entry": mail, "question_denied": denied}
+    if (summary["providers"] != [KIT_PROVIDER] or summary["enabled_providers"] != [KIT_PROVIDER]
+            or summary["model"] != KIT_PROVIDER + "/" + KIT_MODEL or summary["base_url"] is None
+            or not isinstance(models, dict) or sorted(models) != [KIT_MODEL] or not (mail and denied)):
+        die(2, "refused: the OpenCode config is not stub-only: " + json.dumps(summary))
+    _write_out(json.dumps(summary, sort_keys=True) + "\n")
+    return summary
+
 def main():
     command, root, *rest = sys.argv[1:]
     if command == "instance":
@@ -446,6 +534,10 @@ def main():
         record(root, rest[0], rest[1])
     elif command == "set-instance":
         set_instance(root, *rest)
+    elif command == "opencode-config":
+        opencode_config(root, rest[0])
+    elif command == "opencode-check":
+        opencode_check(root, rest[0])
     else:
         die(2, "unknown helper command")
 
@@ -547,6 +639,7 @@ if [[ "$COMMAND" == _kitpy ]]; then  # the helper, for the kit's own tests
 fi
 
 ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT"
+KIT_STUB_PORT=18781 KIT_STUB_URL="http://127.0.0.1:18781"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root) ROOT_ARG="$2"; shift 2 ;;
@@ -645,7 +738,7 @@ up() {
   printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$tmux_bin" "$ROOT/t/s" >"$ROOT/bin/tmux"
   chmod 755 "$ROOT/bin/gh" "$ROOT/bin/tmux"
 
-  local port=18780 stub_port=18781
+  local port=18780 stub_port="$KIT_STUB_PORT"
   CLEAN_ENV=(
     "PATH=$ROOT/bin:/usr/local/bin:/usr/bin:/bin"
     "HOME=$ROOT/home" "USER=${USER:-kit}" "LOGNAME=${USER:-kit}"
@@ -748,10 +841,10 @@ up() {
 
   # --- Team slot, real launch, Agent Mail registration --------------------------------
   git -C "$ROOT/home/work" init -q 2>/dev/null || true
-  local launch
-  launch="$(in_ns "$python" -I - "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" <<'PY'
+  local launch launch_py
+  launch_py="$(cat <<'PY'
 import json, sys, urllib.error, urllib.request
-port, token_file, provider, work = sys.argv[1:5]
+port, token_file, provider, work, phase = sys.argv[1:6]
 token = open(token_file).read().strip()
 def call(method, path, body=None):
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1{path}", method=method,
@@ -764,10 +857,14 @@ def call(method, path, body=None):
         sys.exit(f"{method} {path}: HTTP {exc.code}: {exc.read()[:400].decode(errors='replace')}")
 install = {"claude-code": "claude-code", "codex-cli": "codex", "copilot-cli": "copilot",
            "opencode-cli": "opencode", "muse-cli": "muse"}.get(provider)
-if install:  # the provider's normal Agent Mail install, written into the kit HOME
-    call("POST", f"/agent-mail/install/{install}/apply", {"confirmed": True})
-preset = call("POST", "/agent-teams/presets", {"name": "runtime-kit", "slots": [
-    {"display_name": "kit member", "provider": provider, "repo_path": work}]})
+if phase == "install":
+    if install:  # the provider's normal Agent Mail install, written into the kit HOME
+        call("POST", f"/agent-mail/install/{install}/apply", {"confirmed": True})
+    sys.exit(0)
+slot = {"display_name": "kit member", "provider": provider, "repo_path": work}
+if provider == "opencode-cli":  # the product's own per-member config then pins the stub provider too
+    slot["launch_options"] = {"model": "kitstub/stub"}
+preset = call("POST", "/agent-teams/presets", {"name": "runtime-kit", "slots": [slot]})
 slot_id = preset["slots"][0]["id"]
 plan = call("POST", f"/agent-teams/presets/{preset['id']}/plan-launch", {"skip_plan_confirmation": True})
 blocked = [item for item in plan.get("items", []) if item.get("blocked") or item.get("block_code")]
@@ -777,7 +874,16 @@ if blocked:
 result = call("POST", f"/agent-teams/presets/{preset['id']}/launch", {"skip_plan_confirmation": True})
 print(json.dumps({"preset_id": preset["id"], "slot_id": slot_id, "launch": result.get("status")}))
 PY
-  )" || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"
+  )"
+  printf '%s\n' "$PROVIDER" >"$ROOT/state/provider"
+  in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" install \
+    || fail "the Agent Mail install through the isolated backend failed (see $ROOT/logs/backend.log)"
+  # #912: an OpenCode member reaches only the kit stub. Proved before any pane starts.
+  if [[ "$PROVIDER" == opencode-cli ]]; then
+    kitpy opencode-config "$ROOT" "$KIT_STUB_URL" >/dev/null || refuse "the OpenCode config could not be proved stub-only"
+  fi
+  launch="$(in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" launch)" \
+    || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"
   echo "$launch" >"$ROOT/state/launch.json"
 
   # The launched pane is the CLI: record it at once (parent = the recorded tmux server),
@@ -912,6 +1018,11 @@ capture_evidence() { # dir: every evidence file and the summary; fails without p
   in_ns sh -c 'printf "{\"net\": \"%s\", \"user\": \"%s\"}\n" "$(readlink /proc/self/ns/net)" "$(readlink /proc/self/ns/user)"' \
     | python3 -I -c 'import json,sys,os; d=json.load(sys.stdin); d["host_net"]=os.readlink("/proc/self/ns/net"); d["host_user"]=os.readlink("/proc/self/ns/user"); print(json.dumps(d))' >"$ev/namespaces.json" || return 1
   in_ns ip -o link | awk -F': ' '{print $2}' >"$ev/links.txt" || return 1
+  local opencode=()
+  if [[ "$(cat "$ROOT/state/provider" 2>/dev/null)" == opencode-cli ]]; then  # #912: still stub-only
+    kitpy opencode-check "$ROOT" "$KIT_STUB_URL" >"$ev/opencode-config.json" || return 1
+    opencode=(opencode-config.json)
+  fi
   python3 -I - "$ROOT/state/processes.json" >"$ev/processes.txt" <<'PY' || return 1
 import json, sys
 for name, entry in json.load(open(sys.argv[1])).items():
@@ -944,7 +1055,7 @@ PY
     kitpy verify "$ROOT" "$name" >/dev/null 2>&1 || return 1
   done
   (cd "$ev" && sha256sum namespaces.json links.txt processes.txt pane.json registration.json \
-    environment-names.json stub-requests.jsonl summary.json >MANIFEST.sha256) || return 1
+    environment-names.json stub-requests.jsonl summary.json "${opencode[@]}" >MANIFEST.sha256) || return 1
 }
 
 # --- exec --------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -669,3 +670,209 @@ def test_publish_output_failure_after_commit_keeps_both_and_says_so(tmp_path, ca
     assert os.readlink(root / "evidence") == "evidence.d/1111111111111111"
     assert old.is_dir() and new.is_dir()
     assert "published, but the summary could not be printed" in capsys.readouterr().err
+
+
+# #912: an OpenCode member in the kit must be pinned to the kit's stub model. The kit
+# writes a stub-only provider config into its own HOME before launch, keeps the Agent
+# Mail install's entries, and refuses to launch when that config can't be proved.
+STUB_URL = "http://127.0.0.1:18781"
+MAIL_SERVER = "albiex-synth-city-mail"
+DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
+
+
+def _opencode_home(tmp_path, doc=None):
+    root = tmp_path / "kit"
+    home = root / "home" / ".config" / "opencode"
+    home.mkdir(parents=True)
+    if doc is None:  # what the Agent Mail install writes for OpenCode 2
+        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local", "command": ["python3", "shim.py"], "enabled": True,
+                                                  "codemode": False}}},
+               "permissions": [dict(DENY_RULE)]}
+    if doc is not False:
+        (home / "opencode.json").write_text(json.dumps(doc))
+    return root, home / "opencode.json"
+
+
+def _opencode(module, command, root, url=STUB_URL):
+    try:
+        module[command](str(root), url)
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def test_opencode_config_is_stub_only_and_keeps_the_install(tmp_path, capsys):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    doc = json.loads(path.read_text())
+    assert doc["enabled_providers"] == ["kitstub"]
+    assert doc["model"] == "kitstub/stub"
+    assert list(doc["provider"]) == ["kitstub"]
+    assert doc["provider"]["kitstub"]["options"]["baseURL"] == STUB_URL + "/v1"
+    assert list(doc["provider"]["kitstub"]["models"]) == ["stub"]
+    assert doc["autoupdate"] is False and doc["share"] == "disabled"
+    # The install's Mail entry and question-deny rule are kept unchanged.
+    assert doc["mcp"]["servers"][MAIL_SERVER]["codemode"] is False
+    assert DENY_RULE in doc["permissions"]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary == {"providers": ["kitstub"], "enabled_providers": ["kitstub"], "model": "kitstub/stub",
+                       "base_url": "127.0.0.1:18781", "mail_entry": True, "question_denied": True}
+    assert _opencode(module, "opencode_check", root) == 0
+
+
+@pytest.mark.parametrize("case", ["no_config", "jsonc", "no_mail_entry", "no_deny_rule", "foreign_provider",
+                                  "not_an_object", "remote_stub", "unwritable"])
+def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
+    doc = None
+    if case == "no_config":
+        doc = False
+    elif case == "no_mail_entry":
+        doc = {"mcp": {"servers": {}}, "permissions": [dict(DENY_RULE)]}
+    elif case == "no_deny_rule":
+        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": []}
+    elif case == "foreign_provider":
+        doc = {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": [dict(DENY_RULE)],
+               "provider": {"openai": {"options": {"baseURL": "https://api.example.invalid/v1"}}}}
+    elif case == "not_an_object":
+        doc = ["not", "an", "object"]
+    root, path = _opencode_home(tmp_path, doc)
+    if case == "jsonc":
+        path.with_suffix(".jsonc").write_text("{ // comments can't be merged safely\n}")
+    before = path.read_bytes() if path.exists() else None
+    url = "http://10.0.0.1:18781" if case == "remote_stub" else STUB_URL
+    if case == "unwritable":
+        path.parent.chmod(0o500)
+    try:
+        assert _opencode(_helper_module(), "opencode_config", root, url) == 2
+    finally:
+        path.parent.chmod(0o700)
+    # A refusal changes nothing.
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert not [p for p in path.parent.iterdir() if p.name.startswith(".opencode")]
+
+
+@pytest.mark.parametrize("tamper", ["extra_provider", "enabled_widened", "enabled_missing", "remote_base_url",
+                                    "model_elsewhere", "mail_entry_removed", "deny_rule_removed"])
+def test_opencode_check_refuses_a_config_that_is_not_stub_only(tmp_path, tamper):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    doc = json.loads(path.read_text())
+    if tamper == "extra_provider":
+        doc["provider"]["openai"] = {"options": {"baseURL": "https://api.example.invalid/v1"}}
+    elif tamper == "enabled_widened":
+        doc["enabled_providers"] = ["kitstub", "opencode"]
+    elif tamper == "enabled_missing":
+        del doc["enabled_providers"]
+    elif tamper == "remote_base_url":
+        doc["provider"]["kitstub"]["options"]["baseURL"] = "http://10.0.0.1:18781/v1"
+    elif tamper == "model_elsewhere":
+        doc["model"] = "opencode/free"
+    elif tamper == "mail_entry_removed":
+        del doc["mcp"]["servers"][MAIL_SERVER]
+    else:
+        doc["permissions"] = []
+    path.write_text(json.dumps(doc))
+    assert _opencode(module, "opencode_check", root) == 2
+
+
+def _opencode_control(tmp_path, monkeypatch, old, new):
+    script = KIT.read_text()
+    assert script.count(old) == 1, old
+    mutated = tmp_path / "mutated-kit.sh"
+    mutated.write_text(script.replace(old, new))
+    monkeypatch.setenv("RUNTIME_KIT_SCRIPT_UNDER_TEST", str(mutated))
+
+
+# In-memory removal controls: each mutation of the helper must make a test above fail.
+@pytest.mark.parametrize("control", ["no_enabled_providers", "no_validation", "overwrite_not_merge"])
+def test_opencode_controls_are_caught(tmp_path, monkeypatch, control):
+    if control == "no_enabled_providers":
+        _opencode_control(tmp_path, monkeypatch, "doc[\"enabled_providers\"] = [KIT_PROVIDER]", "pass")
+    elif control == "no_validation":
+        _opencode_control(tmp_path, monkeypatch, "def opencode_check(root, stub_url):\n",
+                          "def opencode_check(root, stub_url):\n    return {}\n")
+    else:
+        _opencode_control(tmp_path, monkeypatch, "doc = _opencode_load(path)", "doc = {}")
+    failed = []
+    for name, test in (("written", lambda: test_opencode_config_is_stub_only_and_keeps_the_install(
+                            tmp_path / "a", _NullCapsys())),
+                       ("tamper", lambda: test_opencode_check_refuses_a_config_that_is_not_stub_only(
+                            tmp_path / "b", "enabled_missing"))):
+        (tmp_path / ("a" if name == "written" else "b")).mkdir()
+        try:
+            test()
+        except (AssertionError, KeyError, json.JSONDecodeError):
+            failed.append(name)
+    assert failed, f"control {control} was not caught"
+
+
+class _NullCapsys:
+    def readouterr(self):
+        class Out:
+            out = json.dumps({"providers": ["kitstub"], "enabled_providers": ["kitstub"], "model": "kitstub/stub",
+                              "base_url": "127.0.0.1:18781", "mail_entry": True, "question_denied": True})
+            err = ""
+        return Out()
+
+
+def test_opencode_member_launch_is_pinned_to_the_stub(tmp_path):
+    """End to end with the fake CLI: the stub-only config is proved before launch, and the
+    slot launches with the stub model, so the product's own per-member config pins it too.
+    The fake is not OpenCode, so the product's OpenCode 2 gate refuses its registration:
+    a real member's registration is proved only by a real OpenCode run (a later phase)."""
+    _needs_namespaces()
+    import sqlite3
+    from app.services.opencode_process_identity import config_content
+    root = tmp_path / "kit"
+    up = _kit("up", "--root", str(root), "--provider", "opencode-cli", "--cli", str(FAKE_CLI))
+    try:
+        assert up.returncode == 1 and "did not register" in up.stderr, up.stderr
+        assert _opencode(_helper_module(), "opencode_check", root) == 0
+        doc = json.loads((root / "home" / ".config" / "opencode" / "opencode.json").read_text())
+        assert doc["enabled_providers"] == ["kitstub"] and MAIL_SERVER in doc["mcp"]["servers"]
+        db = sqlite3.connect(f"file:{root / 'kit.db'}?mode=ro", uri=True)
+        try:
+            rows = db.execute("select provider, launch_options from agent_team_slots").fetchall()
+        finally:
+            db.close()
+        assert [(provider, json.loads(options)["model"]) for provider, options in rows] == [("opencode-cli", "kitstub/stub")]
+        member = json.loads(config_content(model="kitstub/stub", agent=None))
+        assert member["enabled_providers"] == ["kitstub"] and member["model"] == "kitstub/stub"
+    finally:
+        down = _kit("down", "--root", str(root))
+    assert down.returncode == 0, down.stderr
+    assert not root.exists()
+
+
+def test_opencode_status_evidence_is_checked_and_in_the_manifest(tmp_path):
+    """status re-proves the stub-only config for an OpenCode kit and publishes its summary;
+    a config changed after launch makes status fail before it publishes anything."""
+    _needs_namespaces()
+    root = tmp_path / "kit"
+    _up(root)  # a registered fake member; the OpenCode config is then added as up would
+    try:
+        home = root / "home" / ".config" / "opencode"
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "opencode.json").write_text(json.dumps(
+            {"mcp": {"servers": {MAIL_SERVER: {"type": "local"}}}, "permissions": [dict(DENY_RULE)]}))
+        assert _opencode(_helper_module(), "opencode_config", root) == 0
+        (root / "state" / "provider").write_text("opencode-cli\n")
+        status = _kit("status", "--root", str(root))
+        assert status.returncode == 0, status.stderr
+        evidence = json.loads((root / "evidence" / "opencode-config.json").read_text())
+        assert evidence["enabled_providers"] == ["kitstub"] and evidence["base_url"] == "127.0.0.1:18781"
+        assert "opencode-config.json" in (root / "evidence" / "MANIFEST.sha256").read_text()
+        published = os.readlink(root / "evidence")
+        doc = json.loads((home / "opencode.json").read_text())
+        doc["enabled_providers"] = ["kitstub", "opencode"]
+        (home / "opencode.json").write_text(json.dumps(doc))
+        again = _kit("status", "--root", str(root))
+        assert again.returncode == 1 and "published evidence is unchanged" in again.stderr, again.stderr
+        assert os.readlink(root / "evidence") == published
+    finally:
+        down = _kit("down", "--root", str(root))
+    assert down.returncode == 0, down.stderr
+    assert not root.exists()
