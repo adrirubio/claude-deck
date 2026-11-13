@@ -108,7 +108,8 @@ export function AgentMailPage() {
 
   const loadOperationalData = useCallback(async (showLoading = true) => {
     if (protectedReadsBlocked.current || (!getOperatorToken() && requiresDirectorKey())) {
-      if (showLoading) setLoading(false)
+      // A background poll returns here too. No read starts, so nothing is loading.
+      setLoading(false)
       return
     }
     if (showLoading) {

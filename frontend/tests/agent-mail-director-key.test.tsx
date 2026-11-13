@@ -1,5 +1,5 @@
 import { MemoryRouter } from 'react-router-dom'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentMailPage } from '@/features/agent-mail/AgentMailPage'
 import { clearOperatorToken, setOperatorToken } from '@/features/agent-teams/operatorAuth'
@@ -128,5 +128,23 @@ describe('Agent Mail loading state after an early return', () => {
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled()
     expect(fetchAgentMailTeam).not.toHaveBeenCalled()
     expect(fetchAgentMailInstallStatus).not.toHaveBeenCalled()
+  })
+
+  it('leaves loading false when a background poll returns early because the key is gone', async () => {
+    // The first read is still in flight when the key vanishes and the 5-second poll runs.
+    setOperatorToken('director-key-for-the-first-read')
+    vi.mocked(fetchAgentMailTeam).mockReturnValue(new Promise(() => undefined))
+    const interval = vi.spyOn(window, 'setInterval')
+    renderPage()
+    await waitFor(() => expect(fetchAgentMailTeam).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(LOADING_LABEL)).toBeInTheDocument()
+
+    clearOperatorToken()
+    for (const [callback] of interval.mock.calls) {
+      if (typeof callback === 'function') await act(async () => { callback() })
+    }
+    expect(fetchAgentMailTeam).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(LOADING_LABEL)).not.toBeInTheDocument()
+    interval.mockRestore()
   })
 })
