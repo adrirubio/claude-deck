@@ -219,10 +219,38 @@ class GithubApprovalService:
             }
         )
 
+    @classmethod
+    def initial_plan_paths(cls, metadata) -> list | None:
+        """The approved file list of an initial plan, or ``None`` when it is missing, malformed or ambiguous.
+
+        ``allowed_paths`` is the canonical field and ``paths`` is accepted as an alias. Each field that is present
+        must be a non-empty list of strings. When both are present they must name the same files.
+        """
+        if not isinstance(metadata, dict):
+            return None
+        lists = []
+        for key in ("allowed_paths", "paths"):
+            if key not in metadata:
+                continue
+            value = metadata[key]
+            if not isinstance(value, list) or not value or any(not isinstance(path, str) for path in value):
+                return None
+            lists.append(value)
+        if not lists:
+            return None
+        if len(lists) == 2:
+            try:
+                same = cls._canonical_paths(lists[0]) == cls._canonical_paths(lists[1])
+            except GithubApprovalError:
+                return None
+            if not same:
+                return None
+        return lists[0]
+
     def _lookup_paths(self, given: dict):
-        """The canonical form of ``allowed_paths`` for the companion lookup, or ``None`` when malformed."""
-        paths = given.get("allowed_paths")
-        if not isinstance(paths, list) or not paths:
+        """The canonical form of the plan's file list for the companion lookup, or ``None`` when unusable."""
+        paths = self.initial_plan_paths(given)
+        if paths is None:
             return None
         try:
             return self._canonical_paths(paths)
@@ -566,11 +594,11 @@ class GithubApprovalService:
                     or item.ack_received_at is None and not history):
                 raise GithubApprovalError("amendment_baseline_unverifiable")
             metadata = (root.payload or {}).get("plan_metadata") or {}
-            paths = metadata.get("allowed_paths")
+            paths = self.initial_plan_paths(metadata)
             # Only companions the server presented to the Leader are approved. The fingerprint, checked above,
             # covers the metadata, and the server-rendered Mail body must show the same list. Old opaque
             # metadata under the same key keeps the authority it always had.
-            if not isinstance(paths, list):
+            if paths is None:
                 raise GithubApprovalError("amendment_baseline_unverifiable")
             companions = companion_paths.verified_companions(
                 metadata, (root.payload or {}).get("summary"), root.body_markdown)

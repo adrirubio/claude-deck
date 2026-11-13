@@ -449,3 +449,113 @@ async def test_a_path_list_that_fails_validation_gets_no_companions(db, companio
     assert response.id != approval_id
     message = await db.get(MailMessage, (await db.get(GithubApprovalRequest, response.id)).request_message_id)
     assert "companion_paths" not in message.payload["plan_metadata"] and "ompanion" not in message.body_markdown
+
+
+# --- Issue 908: the approved file list may be filed as allowed_paths (canonical) or as the alias paths -------
+
+
+async def server_written(db, a, given):
+    """Rewrite the approved plan as the server writes a new one: companions, marker and rendered body."""
+    lookup = github_approval_service._lookup_paths(given)
+    metadata = companion_paths.with_companions(given, lookup_paths=lookup)
+    message = await db.get(MailMessage, a.approval.request_message_id)
+    summary = message.payload["summary"]
+    message.payload = {**message.payload, "plan_metadata": metadata}
+    message.body_markdown = companion_paths.plan_body(summary, metadata)
+    a.approval.request_fingerprint = github_approval_service.initial_request_fingerprint(
+        summary=summary, plan_metadata=metadata)
+    await db.commit()
+    return metadata
+
+
+@pytest.mark.asyncio
+async def test_an_approved_plan_filed_with_paths_gets_an_amendment_request(db, companion_map, healthy_attempt):
+    a = healthy_attempt
+    companion_map["map"] = {}
+    await make_legacy(db, a, {"paths": ["src/base.py"]})
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending"
+    assert revision.amendment_base_paths == ["src/base.py"] and revision.amendment_added_paths == ["src/added.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [
+    {"allowed_paths": ["src/base.py"]},
+    {"paths": ["src/base.py"]},
+    {"paths": [" src/base.py "]},
+    {"allowed_paths": ["src/base.py"], "paths": ["src/base.py", "src/base.py"]},
+    {"allowed_paths": ["src/base.py"], "paths": [" src/base.py "]},
+])
+async def test_both_stored_shapes_give_the_same_baseline(db, companion_map, healthy_attempt, stored):
+    a = healthy_attempt
+    await make_legacy(db, a, stored)
+    assert await github_approval_service.amendment_base_paths(db, a.item, a.owner, a.leader) == ["src/base.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [
+    {"note": "no file list"},
+    {},
+    {"paths": []},
+    {"allowed_paths": []},
+    {"paths": "src/base.py"},
+    {"paths": [1]},
+    {"paths": ["src/base.py", None]},
+    {"allowed_paths": ["src/base.py"], "paths": ["src/other.py"]},
+    {"allowed_paths": ["src/base.py"], "paths": 5},
+    {"allowed_paths": ["src/base.py"], "paths": []},
+    {"allowed_paths": [], "paths": ["src/base.py"]},
+])
+async def test_a_plan_without_a_usable_or_with_a_conflicting_file_list_stays_unverifiable(
+        db, companion_map, healthy_attempt, stored):
+    a = healthy_attempt
+    await make_legacy(db, a, stored)
+    with pytest.raises(GithubApprovalError, match="amendment_baseline_unverifiable"):
+        await github_approval_service.amendment_base_paths(db, a.item, a.owner, a.leader)
+    with pytest.raises(GithubApprovalError, match="amendment_baseline_unverifiable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_path_in_either_field_keeps_the_existing_path_refusal(db, companion_map, healthy_attempt):
+    a = healthy_attempt
+    for stored in ({"paths": ["../x"]}, {"allowed_paths": ["src/*.py"]}):
+        await make_legacy(db, a, stored)
+        with pytest.raises(GithubApprovalError, match="allowed_paths_invalid"):
+            await github_approval_service.amendment_base_paths(db, a.item, a.owner, a.leader)
+
+
+@pytest.mark.asyncio
+async def test_the_baseline_of_a_server_written_paths_plan_includes_its_presented_companions(db, companion_map, healthy_attempt):
+    a = healthy_attempt
+    metadata = await server_written(db, a, {"paths": ["src/base.py"]})
+    assert metadata["companion_paths"] == ["tests/test_base.py"]
+    base = await github_approval_service.amendment_base_paths(db, a.item, a.owner, a.leader)
+    assert base == ["src/base.py", "tests/test_base.py"]
+
+
+@pytest.mark.asyncio
+async def test_a_new_plan_filed_with_paths_is_shown_its_companions(db, companion_map, healthy_attempt):
+    a = healthy_attempt
+    a.approval.status = "superseded"
+    await db.commit()
+    shown = await github_approval_service.initial_plan_metadata(db, a.item, "A new plan", {"paths": [" src/base.py "]})
+    assert shown["companion_paths"] == ["tests/test_base.py"] and shown["paths"] == [" src/base.py "]
+    for ambiguous in ({"paths": ["src/base.py"], "allowed_paths": ["src/other.py"]}, {"paths": "src/base.py"},
+                      {"paths": ["src/base.py", "../x"]}):
+        again = await github_approval_service.initial_plan_metadata(db, a.item, "A new plan", ambiguous)
+        assert "companion_paths" not in again
+
+
+@pytest.mark.parametrize("stored,expected", [
+    ({"allowed_paths": ["a.py"]}, ["a.py"]),
+    ({"paths": ["a.py"]}, ["a.py"]),
+    ({"allowed_paths": ["a.py"], "paths": [" a.py "]}, ["a.py"]),
+    ({}, None), ({"note": 1}, None), (None, None), ([], None),
+    ({"paths": []}, None), ({"paths": "a.py"}, None), ({"paths": [1]}, None), ({"paths": ["a.py", None]}, None),
+    ({"allowed_paths": ["a.py"], "paths": []}, None), ({"allowed_paths": ["a.py"], "paths": ["b.py"]}, None),
+    ({"allowed_paths": ["a.py"], "paths": ["../x"]}, None),
+])
+def test_the_plan_path_helper_returns_one_unambiguous_list_or_nothing(stored, expected):
+    assert github_approval_service.initial_plan_paths(stored) == expected
