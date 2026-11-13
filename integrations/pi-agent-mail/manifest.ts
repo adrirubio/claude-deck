@@ -663,7 +663,7 @@ export const manifest = [
   },
   {
     "name": "synth_city_record_revision_review",
-    "description": "Assigned independent reviewer records CHANGES REQUIRED for this exact submitted head.\n\n    This negative fact grants no source or merge authority. Link the source review;\n    a separate current-Leader settlement must end the revision.\n    ",
+    "description": "Assigned independent reviewer records CHANGES REQUIRED (default) or ACCEPTED for this exact submitted head.\n\n    This fact grants no source, readiness or merge authority. Link the source review;\n    a separate current-Leader settlement must act on it.\n    ",
     "inputSchema": {
       "properties": {
         "work_item_id": {
@@ -688,6 +688,11 @@ export const manifest = [
         },
         "evidence_url": {
           "title": "Evidence Url",
+          "type": "string"
+        },
+        "verdict": {
+          "default": "changes_required",
+          "title": "Verdict",
           "type": "string"
         }
       },
@@ -1327,6 +1332,38 @@ export const manifest = [
         }
       },
       "title": "synth_city_send_messageArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_settle_accepted_revision",
+    "description": "Current Leader completes a submitted revision from a current independent ACCEPTED review.\n\n    Every required job must be successful at the exact head with GitHub Actions provenance.\n    This does not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition,\n    change policy or budgets, release a lease or approve source.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce",
+        "reason"
+      ],
+      "title": "synth_city_settle_accepted_revisionArguments",
       "type": "object"
     }
   },

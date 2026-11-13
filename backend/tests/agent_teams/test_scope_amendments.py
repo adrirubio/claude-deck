@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.v1 import agent_mail
 from app.config import settings
@@ -1143,3 +1143,411 @@ async def test_review_head_check_uses_the_same_base_comparison(db, submitted_att
     else:
         review = await record_changes(db, a)
         assert review.id and a.revision.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_healthy_amendment_accepts_a_settled_accepted_handoff(db, healthy_attempt):
+    a = healthy_attempt
+    a.item.handoff_state = "accepted"
+    await db.commit()
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending" and revision.status == "proposed"
+    assert revision.owner_member_id == a.owner.id and revision.owner_slot_id == a.item.owner_slot_id
+    assert a.item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["pending", "declined", "cancelled", ""])
+async def test_healthy_amendment_still_refuses_an_unsettled_or_unknown_handoff(db, healthy_attempt, state):
+    a = healthy_attempt
+    a.item.handoff_state = state
+    if state == "pending":
+        a.item.handoff_target_slot_id = a.item.owner_slot_id
+    await db.commit()
+    with pytest.raises(GithubApprovalError, match="amendment_context_unavailable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+    await db.refresh(a.item)
+    assert a.item.active_scope_revision == 0 and a.item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_amendment_after_a_handoff_to_a_new_owner_needs_the_new_owners_fresh_approval(
+    db, healthy_attempt
+):
+    from app.models.database import AgentTeamSlot, MailTeamMember
+    a = healthy_attempt
+    old_owner_slot_id, old_owner_id, old_round = a.item.owner_slot_id, a.owner.id, a.item.approval_round_count
+    new_slot = AgentTeamSlot(preset_id=a.preset.id, position=5, display_name="New owner", provider="codex-cli",
+        repo_id="approval", repo_path="/tmp/approval", repo_name="approval", launch_mode="plain",
+        launch_options={}, enabled=True)
+    db.add(new_slot)
+    await db.flush()
+    new_owner = MailTeamMember(identity_key=f"slot:approval:{new_slot.id}", repo_id="approval",
+        repo_path="/tmp/approval", repo_name="approval", display_name="New owner",
+        participant_kind="team_slot", team_preset_id=a.preset.id, team_slot_id=new_slot.id)
+    db.add(new_owner)
+    await db.flush()
+    new_session = MailAgentSession(member_id=new_owner.id, provider="codex-cli", source="mcp",
+        session_key="mcp:approval:new-owner", cwd="/tmp/approval", team_preset_id=a.preset.id,
+        team_slot_id=new_slot.id, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token("token-new-owner"),
+        bound_pane_pid=1999, bound_pane_proc_start="start-new-owner")
+    db.add(new_session)
+    # The state accept_handoff leaves behind: new owner, accepted handoff, cleared acknowledgement.
+    a.item.owner_slot_id = new_slot.id
+    a.item.handoff_state, a.item.handoff_target_slot_id, a.item.routing_method = "accepted", None, "reassigned"
+    a.item.ack_received_at = a.item.ack_approver_member_id = a.item.ack_evidence_message_id = None
+    a.item.ack_enforcement_epoch = a.item.ack_approval_round = None
+    await db.commit()
+
+    def as_new_owner(**overrides):
+        return amendment(a) | dict(authenticated_owner_member_id=new_owner.id,
+                                   authenticated_owner_slot_id=new_slot.id) | overrides
+
+    # Only the former owner's approved plan exists, so the new owner cannot amend yet.
+    with pytest.raises(GithubApprovalError, match="amendment_baseline_unverifiable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **as_new_owner())
+    await db.refresh(a.item)
+    assert a.item.owner_slot_id == new_slot.id and a.item.active_scope_revision == 0
+    assert a.item.approval_round_count == old_round
+
+    # The new owner gets a fresh approval and acknowledgement from the Leader.
+    response = await agent_mail.request_work_item_approval(MailApprovalRequestCreate(
+        work_item_id=a.item.id, dispatch_nonce=a.item.dispatch_nonce, summary="New owner closed scope",
+        plan_metadata={"allowed_paths": ["src/base.py"]}), new_session, db)
+    fresh = await db.get(GithubApprovalRequest, response.id)
+    assert fresh.owner_member_id == new_owner.id and fresh.owner_member_id != old_owner_id
+    await github_approval_service.decide(db, a.item, authenticated_leader_member_id=a.leader.id,
+        decision="approved", reason="Fresh decision for the new owner", request_id=fresh.id)
+    await db.refresh(a.item)
+    a.item.ack_received_at, a.item.ack_approver_member_id = datetime.utcnow(), a.leader.id
+    a.item.ack_enforcement_epoch = a.item.ack_approval_round = fresh.approval_round
+    await db.commit()
+
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **as_new_owner())
+    assert created and request.status == "pending" and revision.status == "proposed"
+    assert revision.owner_member_id == new_owner.id and revision.owner_slot_id == new_slot.id
+    assert request.owner_member_id == new_owner.id and request.approval_round == fresh.approval_round + 1
+    assert a.item.approval_round_count == request.approval_round > old_round
+    assert request.owner_member_id != old_owner_id and revision.owner_slot_id != old_owner_slot_id
+
+
+REQUIRED_JOBS = ["Full backend regression tests", "e2e"]
+
+
+def green_runs(head, names=REQUIRED_JOBS, **overrides):
+    return [{"name": name, "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"},
+             "head_sha": head, **overrides} for name in names]
+
+
+async def require_jobs(db, a, monkeypatch, runs=None):
+    """Give the attempt a delivery policy with required jobs and serve current check runs."""
+    from app.services.factory_delivery_policy import effective_policy
+    from app.services.github_ci_watch_service import _digest
+    a.item.delivery_policy = {"required_checks": [{"name": name, "app_slug": "github-actions"} for name in REQUIRED_JOBS]}
+    await db.commit()
+    a.watch.policy_digest = _digest(effective_policy(a.item, a.scope))
+    await db.commit()
+    served = AsyncMock(return_value=green_runs(a.head) if runs is None else runs)
+    monkeypatch.setattr(github_client, "list_check_runs_for_ref", served)
+    return served
+
+
+async def record_accepted(db, a, **overrides):
+    from app.services.github_terminal_revision_service import record_revision_review
+    args = dict(revision_number=a.revision.revision, dispatch_nonce=a.item.dispatch_nonce, head_sha=a.head,
+        reviewer_member_id=a.reviewer.id, verdict="accepted", summary="Independent review accepts the exact head",
+        evidence_url="https://github.com/o/approval/pull/5#pullrequestreview-456")
+    args.update(overrides)
+    return await record_revision_review(db, a.item, **args)
+
+
+async def settle_accepted(db, a, review, **overrides):
+    from app.services.github_terminal_revision_service import settle_accepted_revision
+    args = dict(review_id=review.id, leader_member_id=a.leader.id, dispatch_nonce=a.item.dispatch_nonce,
+        reason="Accepted at the exact head")
+    args.update(overrides)
+    return await settle_accepted_revision(db, a.item, **args)
+
+
+async def attempt_facts(db, a):
+    for row in (a.item, a.revision, a.workspace):
+        await db.refresh(row)
+    return (a.item.dispatch_status, a.item.active_scope_revision, a.item.retry_count, a.item.diagnostic_retry_count,
+            a.item.approval_round_count, a.item.last_verified_sha, a.revision.failed_head_count,
+            a.workspace.leased_item_id, a.workspace.lease_token, a.workspace.leased_at)
+
+
+@pytest.mark.asyncio
+async def test_the_bound_independent_reviewer_records_an_accepted_fact(db, submitted_attempt):
+    a = submitted_attempt
+    before = await attempt_facts(db, a)
+    fact = await record_accepted(db, a)
+    assert fact.verdict == "accepted" and fact.status == "active" and fact.head_sha == a.head
+    assert fact.reviewer_member_id == a.reviewer.id and fact.revision_id == a.revision.id
+    assert await attempt_facts(db, a) == before and a.revision.status == "submitted"
+    assert (await record_accepted(db, a)).id == fact.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["owner", "leader", "old_head", "bad_verdict", "bad_evidence", "empty_summary"])
+async def test_an_accepted_fact_needs_the_same_binding_and_evidence_as_a_negative_one(db, submitted_attempt, invalid):
+    a = submitted_attempt
+    kwargs = {"owner": {"reviewer_member_id": a.owner.id}, "leader": {"reviewer_member_id": a.leader.id},
+        "old_head": {"head_sha": "a" * 40}, "bad_verdict": {"verdict": "approved"},
+        "bad_evidence": {"evidence_url": "https://example.com/o/approval/pull/5#pullrequestreview-1"},
+        "empty_summary": {"summary": "  "}}[invalid]
+    with pytest.raises(GithubApprovalError):
+        await record_accepted(db, a, **kwargs)
+    assert a.revision.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_the_leader_settles_an_accepted_fact_when_every_required_job_succeeded(db, submitted_attempt, monkeypatch):
+    from app.models.database import FactoryAuditEvent, GithubRevisionReview
+    a = submitted_attempt
+    served = await require_jobs(db, a, monkeypatch)
+    fact = await record_accepted(db, a)
+    before = await attempt_facts(db, a)
+    revision = await settle_accepted(db, a, fact)
+    assert revision.id == a.revision.id and revision.status == "completed" and revision.completed_at is not None
+    assert revision.cancelled_at is None and revision.submitted_head_sha == a.head
+    await db.refresh(fact)
+    assert fact.status == "consumed" and fact.settled_by_member_id == a.leader.id
+    assert fact.settlement_reason == "Accepted at the exact head"
+    assert await attempt_facts(db, a) == before, "settlement must not change the item, counters, rounds or lease"
+    assert a.item.dispatch_status == "verifying"
+    served.assert_awaited()
+    assert served.await_args.args[2] == a.head
+    audit = list((await db.scalars(select(FactoryAuditEvent).where(
+        FactoryAuditEvent.event_kind == "revision_review", FactoryAuditEvent.revision_id == a.revision.id))).all())
+    assert any(row.after_values.get("outcome") == "settled" and row.after_values.get("verdict") == "accepted"
+               for row in audit)
+    assert (await settle_accepted(db, a, fact)).id == revision.id
+    with pytest.raises(GithubApprovalError):
+        await settle_accepted(db, a, fact, reason="A different settlement is not a replay")
+    assert (await db.get(GithubRevisionReview, fact.id)).settlement_reason == "Accepted at the exact head"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", [
+    "missing_job", "pending_job", "failed_job", "skipped_job", "wrong_app", "wrong_head", "duplicate_run", "no_required_jobs",
+])
+async def test_settlement_needs_every_required_job_successful_with_github_actions_provenance(
+        db, submitted_attempt, monkeypatch, problem):
+    a = submitted_attempt
+    runs = green_runs(a.head)
+    if problem == "missing_job":
+        runs = runs[:1]
+    elif problem == "pending_job":
+        runs[1].update(status="in_progress", conclusion=None)
+    elif problem == "failed_job":
+        runs[1]["conclusion"] = "failure"
+    elif problem == "skipped_job":
+        runs[1]["conclusion"] = "skipped"
+    elif problem == "wrong_app":
+        runs[1]["app"] = {"slug": "some-other-app"}
+    elif problem == "wrong_head":
+        runs[1]["head_sha"] = "b" * 40
+    elif problem == "duplicate_run":
+        runs.append(dict(runs[1]))
+    await require_jobs(db, a, monkeypatch, runs=runs)
+    if problem == "no_required_jobs":
+        a.item.delivery_policy = {"required_checks": []}
+        from app.services.factory_delivery_policy import effective_policy
+        from app.services.github_ci_watch_service import _digest
+        await db.commit()
+        a.watch.policy_digest = _digest(effective_policy(a.item, a.scope))
+        await db.commit()
+    fact = await record_accepted(db, a)
+    before = await attempt_facts(db, a)
+    with pytest.raises(GithubApprovalError, match="required_checks_not_successful"):
+        await settle_accepted(db, a, fact)
+    await db.refresh(fact)
+    assert fact.status == "active" and a.revision.status == "submitted" and a.revision.completed_at is None
+    assert await attempt_facts(db, a) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", [
+    "owner_as_leader", "other_member", "pending_approval", "newer_negative", "withdrawn", "negative_fact_given",
+    "pr_head_moved", "hold", "autonomy_off", "lease", "wrong_nonce", "revision_not_submitted", "reviewer_replaced",
+])
+async def test_settlement_refuses_stale_or_unbound_authority_before_any_mutation(
+        db, submitted_attempt, monkeypatch, tmp_path, problem):
+    from app.models.database import GithubApprovalRequest, MailTeamMember
+    from app.services.github_terminal_revision_service import withdraw_revision_review
+    a = submitted_attempt
+    await require_jobs(db, a, monkeypatch)
+    fact = await record_accepted(db, a)
+    kwargs = {}
+    if problem == "owner_as_leader":
+        kwargs["leader_member_id"] = a.owner.id
+    elif problem == "other_member":
+        kwargs["leader_member_id"] = a.reviewer.id
+    elif problem == "pending_approval":
+        db.add(GithubApprovalRequest(work_item_id=a.item.id, request_kind="continuation",
+            dispatch_nonce=a.item.dispatch_nonce, approval_round=9, owner_member_id=a.owner.id,
+            leader_member_id=a.leader.id, request_fingerprint="f" * 64, status="pending"))
+        await db.commit()
+    elif problem == "newer_negative":
+        await record_changes(db, a)
+    elif problem == "withdrawn":
+        await withdraw_revision_review(db, a.item, review_id=fact.id, reviewer_member_id=a.reviewer.id,
+            dispatch_nonce=a.item.dispatch_nonce)
+    elif problem == "negative_fact_given":
+        fact = await record_changes(db, a)
+    elif problem == "pr_head_moved":
+        a.pull["head"] = {**a.pull["head"], "sha": "c" * 40}
+    elif problem == "hold":
+        marker = tmp_path / "hold.json"
+        marker.write_text("{}")
+        monkeypatch.setattr(settings, "github_coordination_hold_paths", [str(marker)])
+        monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
+    elif problem == "autonomy_off":
+        a.preset.autonomy_enabled = False
+        await db.commit()
+    elif problem == "lease":
+        a.workspace.lease_token = "replacement-lease"
+        await db.commit()
+    elif problem == "wrong_nonce":
+        kwargs["dispatch_nonce"] = "another-nonce"
+    elif problem == "revision_not_submitted":
+        a.revision.status = "active"
+        await db.commit()
+    else:
+        newer = await db.get(MailTeamMember, a.reviewer.id)
+        newer.updated_at = datetime.utcnow().replace(year=2099)
+        db.add(MailTeamMember(identity_key=f"newer:{a.reviewer.id}", repo_id="approval", repo_path=str(a.repo),
+            repo_name="approval", display_name="Replacement reviewer", participant_kind="team_slot",
+            team_preset_id=a.preset.id, team_slot_id=a.reviewer.team_slot_id, updated_at=datetime.utcnow().replace(year=2100)))
+        await db.commit()
+    status_before = a.revision.status
+    with pytest.raises(GithubApprovalError):
+        await settle_accepted(db, a, fact, **kwargs)
+    await db.refresh(a.revision)
+    assert a.revision.status == status_before and a.revision.completed_at is None
+    assert a.item.dispatch_status == "verifying" and a.item.active_scope_revision == a.revision.revision
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["check_read", "final_write"])
+async def test_a_head_or_authority_change_during_settlement_refuses_before_the_revision_changes(
+        db, submitted_attempt, monkeypatch, boundary):
+    from app.services.github_terminal_revision_service import settle_accepted_revision  # noqa: F401
+    a = submitted_attempt
+    await require_jobs(db, a, monkeypatch)
+    fact = await record_accepted(db, a)
+    moved = []
+
+    async def move_head():
+        if not moved:
+            moved.append(True)
+            a.pull["head"] = {**a.pull["head"], "sha": "d" * 40}
+
+    if boundary == "check_read":
+        runs = green_runs(a.head)
+
+        async def checks(*_args, **_kwargs):
+            await move_head()
+            return runs
+
+        monkeypatch.setattr(github_client, "list_check_runs_for_ref", AsyncMock(side_effect=checks))
+    else:
+        from app.services import github_terminal_revision_service as terminal
+        original = terminal._review_audit
+
+        async def audited(*args, **kwargs):
+            await move_head()
+            # An uncommitted conflicting write: the final claim must see it and the rollback must undo the settlement.
+            await db.execute(update(GithubWorkspace).where(GithubWorkspace.id == a.workspace.id)
+                .values(lease_token="replacement-lease"))
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(terminal, "_review_audit", audited)
+    with pytest.raises(GithubApprovalError):
+        await settle_accepted(db, a, fact)
+    await db.refresh(a.revision)
+    await db.refresh(fact)
+    assert a.revision.status == "submitted" and a.revision.completed_at is None and fact.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_accepted_review_http_routes_derive_identity_and_settle(db, submitted_attempt, monkeypatch):
+    from fastapi import HTTPException
+    from app.api.v1 import agent_teams
+    from app.models.schemas import GithubRevisionReviewCreate, GithubSubmittedRevisionEnd
+    from app.models.database import GithubAttemptScopeRevision, MailAgentSession
+    a = submitted_attempt
+    await require_jobs(db, a, monkeypatch)
+    reviewer_session = MailAgentSession(member_id=a.reviewer.id, provider="codex-cli", source="mcp",
+        session_key="synthetic-accepted-reviewer", cwd=str(a.repo), team_preset_id=a.preset.id,
+        team_slot_id=a.reviewer.team_slot_id, mailbox_status="connected",
+        capability_token_hash="synthetic-accepted-token", bound_pane_pid=1004, bound_pane_proc_start="start-4")
+    db.add(reviewer_session)
+    await db.commit()
+    created = GithubRevisionReviewCreate(dispatch_nonce=a.item.dispatch_nonce, revision=a.revision.revision,
+        head_sha=a.head, summary="Accepted at the exact head", verdict="accepted",
+        evidence_url="https://github.com/o/approval/pull/5#pullrequestreview-789")
+    response = await agent_teams.record_github_revision_review(a.item.id, created, reviewer_session, db)
+    assert response.verdict == "accepted" and response.reviewer_member_id == a.reviewer.id
+    assert GithubRevisionReviewCreate(dispatch_nonce="n", revision=1, head_sha="a" * 40, summary="s",
+        evidence_url="https://github.com/o/approval/pull/5#pullrequestreview-1").verdict == "changes_required"
+    body = GithubSubmittedRevisionEnd(review_id=response.id, dispatch_nonce=a.item.dispatch_nonce,
+        reason="Settle accepted review")
+    item_id, revision_id, leader_id = a.item.id, a.revision.id, a.leader.id
+    with pytest.raises(HTTPException) as refused:
+        await agent_teams.settle_github_accepted_revision(item_id, body, reviewer_session, db)
+    assert refused.value.status_code in {403, 409}
+    assert (await db.get(GithubAttemptScopeRevision, revision_id, populate_existing=True)).status == "submitted"
+    leader_session = await db.scalar(select(MailAgentSession).where(MailAgentSession.member_id == leader_id))
+    settled = await agent_teams.settle_github_accepted_revision(item_id, body, leader_session, db)
+    assert settled.status == "completed" and settled.origin_kind == "scope_amendment"
+
+
+async def require_jobs_from_apps(db, a, monkeypatch, apps):
+    """A delivery policy whose required checks name the given apps, with matching successful exact-head runs."""
+    from app.services.factory_delivery_policy import effective_policy
+    from app.services.github_ci_watch_service import _digest
+    a.item.delivery_policy = {"required_checks": [
+        {"name": name, "app_slug": app} for name, app in zip(REQUIRED_JOBS, apps)]}
+    await db.commit()
+    a.watch.policy_digest = _digest(effective_policy(a.item, a.scope))
+    await db.commit()
+    runs = [{"name": name, "status": "completed", "conclusion": "success", "app": {"slug": app},
+             "head_sha": a.head} for name, app in zip(REQUIRED_JOBS, apps)]
+    served = AsyncMock(return_value=runs)
+    monkeypatch.setattr(github_client, "list_check_runs_for_ref", served)
+    return served
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apps", [
+    ("another-app", "another-app"), ("github-actions", "another-app"), ("another-app", "github-actions"),
+    ("github-actions-lookalike", "github-actions"),
+])
+async def test_settlement_requires_github_actions_for_every_required_check_even_with_a_matching_policy_and_runs(
+        db, submitted_attempt, monkeypatch, apps):
+    a = submitted_attempt
+    served = await require_jobs_from_apps(db, a, monkeypatch, apps)
+    fact = await record_accepted(db, a)
+    before = await attempt_facts(db, a)
+    with pytest.raises(GithubApprovalError, match="required_checks_not_successful"):
+        await settle_accepted(db, a, fact)
+    await db.refresh(fact)
+    assert fact.status == "active" and a.revision.status == "submitted" and a.revision.completed_at is None
+    assert await attempt_facts(db, a) == before
+    served.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_settlement_still_completes_when_every_required_check_is_from_github_actions(
+        db, submitted_attempt, monkeypatch):
+    a = submitted_attempt
+    served = await require_jobs_from_apps(db, a, monkeypatch, ("github-actions", "github-actions"))
+    fact = await record_accepted(db, a)
+    revision = await settle_accepted(db, a, fact)
+    assert revision.status == "completed" and revision.completed_at is not None
+    served.assert_awaited()

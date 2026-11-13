@@ -1221,7 +1221,7 @@ def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monke
             types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
                 name=name, arguments=arguments)))
         assert wire.root.structuredContent == denied
-        assert len(tools) == 41
+        assert len(tools) == 42
         # Every published tool is refused before validation or execution.
         for tool in tools:
             assert await shim.mcp.call_tool(tool.name, {}) == denied
@@ -1251,7 +1251,7 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     spec.loader.exec_module(shim)
     calls = []
     monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert len(asyncio.run(shim.mcp.list_tools())) == 41
+    assert len(asyncio.run(shim.mcp.list_tools())) == 42
     assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     assert shim._state["member_id"] is None and shim._state["capability_token"] is None
     assert calls == []
@@ -1298,9 +1298,14 @@ def test_scope_amendment_and_negative_review_tools_bind_server_identity(monkeypa
         "https://github.com/o/r/pull/5#pullrequestreview-1")
     shim.synth_city_withdraw_revision_review(19, 3, "attempt")
     shim.synth_city_end_submitted_revision(19, 3, "attempt", "Current negative review settled")
+    shim.synth_city_record_revision_review(19, 2, "attempt", "a" * 40, "Accepted at the exact head",
+        "https://github.com/o/r/pull/5#pullrequestreview-2", verdict="accepted")
+    shim.synth_city_settle_accepted_revision(19, 4, "attempt", "Accepted review settled")
     assert [row[1] for row in calls] == ["/github-work-items/19/scope-amendments",
         "/github-work-items/19/revision-reviews", "/github-work-items/19/revision-reviews/3/withdraw",
-        "/github-work-items/19/submitted-revision/end"]
+        "/github-work-items/19/submitted-revision/end", "/github-work-items/19/revision-reviews",
+        "/github-work-items/19/submitted-revision/settle-accepted"]
+    assert calls[1][2]["json"]["verdict"] == "changes_required" and calls[4][2]["json"]["verdict"] == "accepted"
     assert calls[0][2]["json"]["phase"] == "implementation"
     for _, _, kwargs in calls:
         assert not {"owner_member_id", "reviewer_member_id", "leader_member_id", "origin_kind"} & kwargs["json"].keys()
