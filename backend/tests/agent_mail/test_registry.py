@@ -2171,3 +2171,50 @@ async def test_guarded_wake_rechecks_opencode_version_before_each_submission(mon
     assert seen  # the version is read inside the guarded transport itself
     assert any("-l" in command for command in sent) == (flip != "lookup")
     assert any(command[-1] == "Enter" for command in sent) == (flip is None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flip", [None, "lookup", "text"])
+async def test_plain_wake_rechecks_opencode_version_before_each_submission(db, svc, tmp_path, monkeypatch, flip):
+    from app.services import agent_mail_service as mail_module
+    from app.services import opencode_version
+
+    cwd = tmp_path / "plain-opencode-wake"
+    cwd.mkdir()
+    observed = [{
+        "provider": "opencode-cli", "tmux_target": "w:0.2", "pane_id": "%8",
+        "cwd": str(cwd), "pid": "4343", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    state, seen, sent = ["ok"], [], []
+    _flipping_opencode_gate(monkeypatch, state, seen)
+
+    def run(command, **kwargs):
+        # The real plain transport runs; only tmux itself is faked.
+        sent.append(command)
+        if command[1] == "display-message":
+            if flip == "lookup":
+                state[0] = "unsupported"
+            return SimpleNamespace(stdout="%8|4343\n")
+        if "-l" in command and flip == "text":
+            state[0] = "unsupported"
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(mail_module.subprocess, "run", run)
+    monkeypatch.setattr(mail_module, "TMUX_ENTER_DELAY_SECONDS", 0)
+
+    wake = svc.queue_inbox_check(db, member.id, actor_type="operator", force=True, reason_code="operator_maintenance")
+    if flip is None:
+        await wake
+    else:
+        with pytest.raises(MailWakeError, match=opencode_version.BLOCK_CODE):
+            await wake
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert seen[0] == "ok"  # the checks before transport passed
+    assert any("-l" in command for command in sent) == (flip != "lookup")
+    assert any(command[-1] == "Enter" for command in sent) == (flip is None)
+    if flip is None:
+        assert (attempt.result, attempt.failure_code) == ("delivered", None)
+    else:
+        assert (attempt.result, attempt.failure_code) == ("refused", opencode_version.BLOCK_CODE)

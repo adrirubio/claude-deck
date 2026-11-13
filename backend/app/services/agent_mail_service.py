@@ -2215,6 +2215,9 @@ class AgentMailService:
             )
             if current.stdout.strip() != f"{session.pane_id}|{session.pid}":
                 raise MailWakeError("wake_target_stale")
+            if session.provider == "opencode-cli":
+                # Before the text and before the Enter: the member's OpenCode may have changed.
+                self._require_opencode_2_pane(session)
 
         try:
             require_current_pane()
