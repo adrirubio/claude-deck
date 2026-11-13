@@ -161,6 +161,10 @@ async def test_a_clear_before_its_open_is_a_no_op_and_the_late_open_is_retained(
 async def test_a_stale_clear_cannot_erase_a_newer_wait_across_workers(maker, team):
     old, new = _gen(), _gen(5000)
     await _post("open", old)
+    # Record the newer generation first. If the old clear could run before the new open, the
+    # old wait would end legitimately and the new open would correctly raise a second notice;
+    # racing them only tested request order. From here on the old clear is stale in every order.
+    await _post("open", new)
     for _ in range(5):
         # Two concurrent requests, each with its own database session (as two workers would have).
         await asyncio.gather(_post("open", new), _post("clear", old))

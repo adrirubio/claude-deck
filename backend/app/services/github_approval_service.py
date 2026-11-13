@@ -31,6 +31,7 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.models.schemas import MailMessageCreate
+from app.services import companion_paths
 from app.services import factory_audit_service as audit
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_app_auth_service import (
@@ -67,6 +68,12 @@ _CONTINUATION_ACTIONS = frozenset(
 IMPLEMENTATION_COMPLETION_ACTIONS = frozenset(
     {"push_pr_head", "request_verification"}
 )
+# A handoff the new owner has accepted leaves a settled owner binding. A pending or unknown one does not.
+_SETTLED_HANDOFF_STATES = (None, "accepted")
+
+
+def _settled_handoff_condition():
+    return or_(GithubWorkItem.handoff_state.is_(None), GithubWorkItem.handoff_state == "accepted")
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
 # Frozen v1 hash domain: persisted lease hashes depend on these exact bytes.
 # Matching a hash does not renew a lease or bypass its HOLD/approval checks.
@@ -211,6 +218,50 @@ class GithubApprovalService:
                 "summary": summary.strip(),
             }
         )
+
+    def _lookup_paths(self, given: dict):
+        """The canonical form of ``allowed_paths`` for the companion lookup, or ``None`` when malformed."""
+        paths = given.get("allowed_paths")
+        if not isinstance(paths, list) or not paths:
+            return None
+        try:
+            return self._canonical_paths(paths)
+        except GithubApprovalError:
+            return None
+
+    async def initial_plan_metadata(self, db, item, summary: str, plan_metadata: dict | None) -> dict:
+        """Plan metadata with the companions the Leader is shown.
+
+        A request that already exists for this attempt keeps the metadata it was filed with, so a later map
+        edit never changes a pending or decided plan, its fingerprint or its replay.
+        """
+        given = dict(plan_metadata or {})
+        existing = await db.scalar(select(GithubApprovalRequest).where(
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.request_kind == "initial_plan",
+            GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+            GithubApprovalRequest.approval_round == item.approval_round_count,
+            GithubApprovalRequest.status.in_({"pending", "approved", "rejected"}),
+        ).order_by(GithubApprovalRequest.id.desc()).limit(1))
+        if existing is not None:
+            if existing.request_message_id is None:
+                # A durable request whose Mail is missing or unlinked: repair under its original fingerprint.
+                if existing.request_fingerprint == self.initial_request_fingerprint(summary=summary, plan_metadata=given):
+                    return given
+            else:
+                root = await db.get(MailMessage, existing.request_message_id)
+                payload = (root.payload or {}) if root is not None else {}
+                stored = payload.get("plan_metadata")
+                if isinstance(stored, dict) and payload.get("summary") == summary.strip():
+                    if stored == given:
+                        return given
+                    if companion_paths.verified_companions(stored, payload.get("summary"), root.body_markdown) is not None:
+                        if {key: value for key, value in stored.items()
+                                if key not in companion_paths.RESERVED_KEYS} == given:
+                            return dict(stored)
+        if companion_paths.RESERVED_KEYS & set(given):
+            raise GithubApprovalError("plan_metadata_reserved_key", status_code=400)
+        return companion_paths.with_companions(given, lookup_paths=self._lookup_paths(given))
 
     @staticmethod
     def lease_token_hash(lease_token: str) -> str:
@@ -390,7 +441,7 @@ class GithubApprovalService:
         await db.refresh(scope)
         team = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
         if (hold_code() or not scope.enabled or not team or not team.autonomy_enabled
-                or item.scope_id != scope.id or item.handoff_state is not None
+                or item.scope_id != scope.id or item.handoff_state not in _SETTLED_HANDOFF_STATES
                 or item.dispatch_status not in ({"dispatched", "verifying", "ready_for_review", "awaiting_human_review"}
                     | ({"escalated"} if allow_recovery else set()))
                 or not item.dispatch_nonce or not item.dispatch_head_ref):
@@ -442,6 +493,9 @@ class GithubApprovalService:
             ~exists(select(GithubOwnerObservationPause.id).where(
                 GithubOwnerObservationPause.work_item_id == c["id"],
                 GithubOwnerObservationPause.status.in_(("waiting", "paused"))))]
+        if "escalation_reason" in c:
+            # Only a caller that admitted a state through the reason fences it; None compares as IS NULL.
+            clauses.append(GithubWorkItem.escalation_reason == c["escalation_reason"])
         for member_id, slot_id in ((c["owner_member_id"], c["owner_slot_id"]),
                                    (c["leader_member_id"], c["leader_slot_id"])):
             member, newer = aliased(MailTeamMember), aliased(MailTeamMember)
@@ -513,6 +567,14 @@ class GithubApprovalService:
                 raise GithubApprovalError("amendment_baseline_unverifiable")
             metadata = (root.payload or {}).get("plan_metadata") or {}
             paths = metadata.get("allowed_paths")
+            # Only companions the server presented to the Leader are approved. The fingerprint, checked above,
+            # covers the metadata, and the server-rendered Mail body must show the same list. Old opaque
+            # metadata under the same key keeps the authority it always had.
+            if not isinstance(paths, list):
+                raise GithubApprovalError("amendment_baseline_unverifiable")
+            companions = companion_paths.verified_companions(
+                metadata, (root.payload or {}).get("summary"), root.body_markdown)
+            paths = [*paths, *(companions or [])]
         if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
             raise GithubApprovalError("amendment_baseline_unverifiable")
         paths = self._canonical_paths(paths)
@@ -584,17 +646,26 @@ class GithubApprovalService:
         if type(max_failures) is not int or max_failures < 1 or max_failures > scope.max_failed_heads_per_revision:
             raise GithubApprovalError("continuation_failed_head_limit_exceeded")
         base_paths = await self.amendment_base_paths(db, item, owner, leader)
+        named = paths
+        owner_summary = proposal["summary"].strip()
+        identity = (item.id, item.dispatch_nonce, item.active_scope_revision)
         head, tree = await self.amendment_head(scope, item, workspace)
-        payload = self.canonical_continuation_payload(phase="implementation",
-            execution_target=proposal["execution_target"], summary=proposal["summary"].strip(),
-            allowed_paths=paths, allowed_actions=actions, allowed_commands=commands,
-            prohibited_actions=prohibitions, max_failed_heads=max_failures, tool_fallbacks=fallbacks,
-            baseline_head_sha=head, baseline_tree_sha=tree, expected_workspace_id=workspace.id,
-            originating_escalation_reason="")
-        added = sorted(set(paths) - set(base_paths))
-        payload.update(origin_kind="scope_amendment", amendment_base_paths=base_paths,
-            amendment_added_paths=added, previous_scope_revision=item.active_scope_revision)
-        fingerprint = self.fingerprint_payload(payload)
+
+        def same_request(existing):
+            """The same request as ``existing``, judged on what the owner named and not on today's map."""
+            stored_summary, stored_named, _extras = companion_paths.split_summary(
+                existing.summary, (item.id, item.dispatch_nonce, existing.previous_scope_revision),
+                existing.allowed_paths)
+            return (existing.origin_kind == "scope_amendment"
+                    and existing.baseline_head_sha == head and existing.baseline_tree_sha == tree
+                    and existing.expected_workspace_id == workspace.id
+                    and stored_summary == owner_summary and stored_named == named
+                    and all(getattr(existing, key) == value for key, value in (
+                        ("phase", "implementation"), ("execution_target", proposal["execution_target"]),
+                        ("allowed_actions", actions), ("allowed_commands", commands),
+                        ("prohibited_actions", prohibitions), ("tool_fallbacks", fallbacks),
+                        ("max_failed_heads", max_failures))))
+
         await self.claim_healthy_scope_context(db, context)
         latest = await db.scalar(select(GithubApprovalRequest).where(
             GithubApprovalRequest.work_item_id == item.id,
@@ -605,23 +676,42 @@ class GithubApprovalService:
             GithubApprovalRequest.leader_member_id == leader.id))
         if latest and latest.scope_revision_id:
             existing = await db.get(GithubAttemptScopeRevision, latest.scope_revision_id)
-            if (existing and existing.origin_kind == "scope_amendment"
-                    and existing.status in {"proposed", "approved", "rejected", "active"}
-                    and existing.baseline_head_sha == head and existing.baseline_tree_sha == tree
-                    and all(getattr(existing, key) == payload[key] for key in (
-                        "phase", "execution_target", "summary", "allowed_paths", "allowed_actions",
-                        "allowed_commands", "prohibited_actions", "tool_fallbacks", "max_failed_heads"))):
+            if (existing and existing.status in {"proposed", "approved", "rejected", "active"}
+                    and same_request(existing)):
                 self.verify_amendment_binding(latest, existing)
                 return existing, latest, False
         pending = await self.current_pending(db, item.id)
         if pending:
             if (pending.request_kind == "continuation" and pending.dispatch_nonce == item.dispatch_nonce
                     and pending.owner_member_id == owner.id and pending.leader_member_id == leader.id
-                    and pending.request_fingerprint == fingerprint and pending.scope_revision_id):
+                    and pending.scope_revision_id):
                 existing = await db.get(GithubAttemptScopeRevision, pending.scope_revision_id)
-                if existing and existing.origin_kind == "scope_amendment":
+                if existing and same_request(existing):
+                    self.verify_amendment_binding(pending, existing)
                     return existing, pending, False
             raise GithubApprovalError("approval_request_already_pending")
+        # A new request. The reserved trailer line is refused here and not earlier, so an exact retry of an
+        # older plain summary that mentions it still recovers its own revision above.
+        if companion_paths.TRAILER_HEADER in owner_summary:
+            raise GithubApprovalError("continuation_summary_reserved", status_code=400)
+        # The proposal shows the companions of every path it names, so the Leader approves them with it. The
+        # expansion is recorded in the stored summary, bound by a digest.
+        extras = [path for path in companion_paths.companions_for(named) if path not in named]
+        if extras:
+            paths = self._canonical_paths([*named, *extras])
+            if len(paths) > scope.max_scope_paths:
+                raise GithubApprovalError("continuation_path_limit_exceeded")
+        stored_summary = companion_paths.summary_with_trailer(owner_summary, identity, named, extras)
+        payload = self.canonical_continuation_payload(phase="implementation",
+            execution_target=proposal["execution_target"], summary=stored_summary,
+            allowed_paths=paths, allowed_actions=actions, allowed_commands=commands,
+            prohibited_actions=prohibitions, max_failed_heads=max_failures, tool_fallbacks=fallbacks,
+            baseline_head_sha=head, baseline_tree_sha=tree, expected_workspace_id=workspace.id,
+            originating_escalation_reason="")
+        added = sorted(set(paths) - set(base_paths))
+        payload.update(origin_kind="scope_amendment", amendment_base_paths=base_paths,
+            amendment_added_paths=added, previous_scope_revision=item.active_scope_revision)
+        fingerprint = self.fingerprint_payload(payload)
         prior = list((await db.scalars(select(GithubAttemptScopeRevision).where(
             GithubAttemptScopeRevision.work_item_id == item.id,
             GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
@@ -3028,8 +3118,14 @@ class GithubApprovalService:
         revision_guards = self.amendment_revision_conditions(revision)
         baseline_tree = revision.baseline_tree_sha
         revision_phase = revision.phase
+        # An active revision on a plan_blocked item has no healthy route, so the operator may cancel it.
+        escalated_active = (
+            revision_status == "active" and item_status == "escalated"
+            and item.escalation_reason == "plan_blocked"
+        )
         cancellable_state = (
             (revision_status == "active" and item_status == "dispatched")
+            or escalated_active
             or (revision_status == "submitted" and item_status in {
                 "dispatched", "verifying", "ready_for_review", "awaiting_human_review", "escalated"})
             or (revision_status == "exhausted" and revision.phase == "diagnostic"
@@ -3039,7 +3135,7 @@ class GithubApprovalService:
             not cancellable_state
             or item.active_scope_revision != revision.revision
             or item.owner_slot_id != revision.owner_slot_id
-            or item.handoff_state is not None
+            or item.handoff_state not in _SETTLED_HANDOFF_STATES
             or item.pr_number is None
             or approval is None
             or approval.status != "approved"
@@ -3070,8 +3166,15 @@ class GithubApprovalService:
         if scope is None:
             raise GithubApprovalError("scope_not_found")
         cancellation_context = None
-        if revision_status in {"submitted", "exhausted"} or revision.origin_kind == "scope_amendment":
+        if (revision_status in {"submitted", "exhausted"} or revision.origin_kind == "scope_amendment"
+                or escalated_active):
             cancellation_context, _, _, _ = await self.healthy_scope_context(db, item, scope, allow_recovery=True)
+            if escalated_active and item.escalation_reason != "plan_blocked":
+                await db.rollback()
+                raise GithubApprovalError("active_continuation_not_cancellable")
+            # The admitted reason stays fenced through the PR read, the claim and the final writes.
+            cancellation_context["escalation_reason"] = item.escalation_reason
+        admitted_reason = item.escalation_reason
         head_sha = await self._active_cancellation_head_sha(scope, item)
         if revision_phase == "diagnostic":
             # Restoring the immutable baseline tree is mandatory even when this
@@ -3090,6 +3193,7 @@ class GithubApprovalService:
             await self.claim_healthy_scope_context(db, cancellation_context)
         charge_head = (
             revision.phase == "implementation"
+            and not escalated_active
             and head_sha != revision.baseline_head_sha
             and not (
                 revision.failed_head_count > 0
@@ -3115,6 +3219,12 @@ class GithubApprovalService:
             else "The preserved attempt requires a fresh bounded proposal."
         )
 
+        new_escalation_reason = (
+            "continuation_budget_exhausted"
+            if attempt_exhausted
+            else (item.escalation_reason if escalated_active else None)
+            or revision.originating_escalation_reason or "plan_blocked"
+        )
         now = datetime.utcnow()
         revision_result = await db.execute(
             update(GithubAttemptScopeRevision)
@@ -3144,10 +3254,11 @@ class GithubApprovalService:
                     select(GithubWorkItem.id).where(
                         GithubWorkItem.id == item.id,
                         GithubWorkItem.dispatch_status == item_status,
+                        GithubWorkItem.escalation_reason == admitted_reason,
                         GithubWorkItem.dispatch_nonce == dispatch_nonce,
                         GithubWorkItem.active_scope_revision == revision_number,
                         GithubWorkItem.owner_slot_id == revision.owner_slot_id,
-                        GithubWorkItem.handoff_state.is_(None),
+                        _settled_handoff_condition(),
                         GithubWorkItem.scope_id == item.scope_id,
                         GithubWorkItem.pr_number == item.pr_number,
                         GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
@@ -3178,10 +3289,11 @@ class GithubApprovalService:
             .where(
                 GithubWorkItem.id == item.id,
                 GithubWorkItem.dispatch_status == item_status,
+                GithubWorkItem.escalation_reason == admitted_reason,
                 GithubWorkItem.dispatch_nonce == dispatch_nonce,
                 GithubWorkItem.active_scope_revision == revision_number,
                 GithubWorkItem.owner_slot_id == revision.owner_slot_id,
-                GithubWorkItem.handoff_state.is_(None),
+                _settled_handoff_condition(),
                 GithubWorkItem.scope_id == item.scope_id,
                 GithubWorkItem.pr_number == item.pr_number,
                 GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
@@ -3214,11 +3326,7 @@ class GithubApprovalService:
             )
             .values(
                 dispatch_status="escalated",
-                escalation_reason=(
-                    "continuation_budget_exhausted"
-                    if attempt_exhausted
-                    else revision.originating_escalation_reason or "plan_blocked"
-                ),
+                escalation_reason=new_escalation_reason,
                 status_note=(
                     f"Continuation revision {revision.revision} was cancelled by "
                     f"the operator. {next_step_note} Reason: {canonical_reason}"
@@ -3308,6 +3416,7 @@ class GithubApprovalService:
             )
         if cancellation_context is not None:
             cancellation_context.update(dispatch_status="escalated", active_scope_revision=0,
+                escalation_reason=new_escalation_reason,
                 attempt_phase="implementation", retry_count=cancellation_context["retry_count"] + int(charge_head),
                 last_verified_sha=head_sha if charge_head else cancellation_context["last_verified_sha"])
             await self.claim_healthy_scope_context(db, cancellation_context)

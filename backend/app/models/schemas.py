@@ -2049,6 +2049,7 @@ class GithubRevisionReviewCreate(BaseModel):
     head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     summary: str = Field(min_length=1, max_length=12000)
     evidence_url: str = Field(min_length=1, max_length=2000)
+    verdict: str = Field(default="changes_required", pattern=r"^(changes_required|accepted)$")
 
 
 class GithubRevisionReviewWithdraw(BaseModel):
