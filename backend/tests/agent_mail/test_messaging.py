@@ -838,3 +838,327 @@ async def test_thread_reply_preserves_all_original_participant_receipts(db, svc)
     assert reply.audience_type == "member"
     assert reply.audience_id == f"thread:{root.id}"
     assert await svc.recipient_ids_for_message(db, reply.id) == {first.id, second.id}
+
+
+# --- #752: canonical thread roots, delivery and retrieval -------------------------------------
+# A reply may pass ANY message id of a thread. Everything that follows (permission, audience,
+# receipts, the stored thread id, the delivery key and the thread view) must use the canonical
+# root, while an explicit answer still resolves only the request row it names.
+
+async def _mail_count(db):
+    return (
+        await db.scalar(select(func.count()).select_from(MailMessage)),
+        await db.scalar(select(func.count()).select_from(MailReceipt)),
+    )
+
+
+async def _raw_row(db, sender, recipient, thread, *, kind="message", status=None, holders=()):
+    """A row written directly, as an older release stored it (thread id may be a non-root)."""
+    row = MailMessage(
+        kind=kind, sender_member_id=sender.id if sender else None,
+        recipient_member_id=recipient.id if recipient else None, thread_root_id=thread,
+        body_markdown="legacy", request_status=status, audience_type="member",
+        audience_id=str(recipient.id) if recipient else None,
+    )
+    db.add(row)
+    await db.flush()
+    for member in holders:
+        db.add(MailReceipt(message_id=row.id, member_id=member.id))
+    await db.flush()
+    return row
+
+
+async def _pair(db, svc, tag):
+    first = await _member(db, f"{tag}-a", f"{tag}-a")
+    second = await _member(db, f"{tag}-b", f"{tag}-b")
+    root = await svc.send_message(
+        db, MailMessageCreate(sender_member_id=first.id, recipient_member_id=second.id, body_markdown="root"))
+    return first, second, root
+
+
+async def _reply(svc, db, sender, thread, **kwargs):
+    return await svc.send_message(
+        db, MailMessageCreate(sender_member_id=sender.id, thread_root_id=thread, body_markdown="reply", **kwargs))
+
+
+@pytest.mark.asyncio
+async def test_reply_by_root_id_reaches_the_other_participant(db, svc):
+    first, second, root = await _pair(db, svc, "root")
+    by_second = await _reply(svc, db, second, root.id)
+    by_first = await _reply(svc, db, first, root.id)
+    assert await svc.recipient_ids_for_message(db, by_second.id) == {first.id}
+    assert await svc.recipient_ids_for_message(db, by_first.id) == {second.id}
+    assert by_second.thread_root_id == by_first.thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+async def test_reply_by_reply_id_reaches_the_same_participants(db, svc):
+    first, second, root = await _pair(db, svc, "byreply")
+    reply = await _reply(svc, db, first, root.id)
+    nested = await _reply(svc, db, second, reply.id)
+    assert await svc.recipient_ids_for_message(db, nested.id) == {first.id}
+    assert nested.thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+async def test_reply_with_own_earlier_reply_id_reaches_the_other_participant(db, svc):
+    first, second, root = await _pair(db, svc, "own")
+    reply = await _reply(svc, db, first, root.id)
+    again = await _reply(svc, db, first, reply.id)
+    assert await svc.recipient_ids_for_message(db, again.id) == {second.id}
+    assert again.thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", [2, 3, 5, 32])
+async def test_deep_chains_resolve_to_the_canonical_root(db, svc, depth):
+    first, second, root = await _pair(db, svc, f"deep{depth}")
+    parent = root.id
+    for index in range(depth):
+        sender = second if index % 2 == 0 else first
+        row = await _raw_row(db, sender, None, parent, holders=(first, second))
+        parent = row.id
+    sent = await _reply(svc, db, first, parent)
+    assert sent.thread_root_id == root.id
+    assert await svc.recipient_ids_for_message(db, sent.id) == {second.id}
+    assert (await svc.resolve_canonical_root(db, parent)).id == root.id
+
+
+@pytest.mark.asyncio
+async def test_stored_thread_root_is_canonical_and_get_thread_lists_every_reply(db, svc):
+    first, second, root = await _pair(db, svc, "view")
+    one = await _reply(svc, db, first, root.id)
+    two = await _reply(svc, db, second, one.id)
+    three = await _reply(svc, db, first, two.id)
+    thread = await svc.get_thread(db, root.id)
+    assert [reply.id for reply in thread.replies] == [one.id, two.id, three.id]
+    assert {reply.thread_root_id for reply in thread.replies} == {root.id}
+    assert thread.replies_complete is True and thread.replies_incomplete_reason is None
+
+
+@pytest.mark.asyncio
+async def test_missing_ancestor_cycle_and_33_hops_refuse_without_rows(db, svc):
+    first, second, root = await _pair(db, svc, "refuse")
+    # A missing ancestor two hops up (the one-hop check still passes, the resolver refuses).
+    orphan_parent = await _raw_row(db, second, None, 987654, holders=(first, second))
+    orphan_child = await _raw_row(db, second, None, orphan_parent.id, holders=(first, second))
+    # A two-row cycle and a self loop.
+    loop_a = await _raw_row(db, second, None, None, holders=(first, second))
+    loop_b = await _raw_row(db, second, None, loop_a.id, holders=(first, second))
+    loop_a.thread_root_id = loop_b.id
+    self_loop = await _raw_row(db, second, None, None, holders=(first, second))
+    self_loop.thread_root_id = self_loop.id
+    # 32 hops resolve, 33 refuse.
+    parent = root.id
+    hops = {}
+    for index in range(1, 34):
+        row = await _raw_row(db, second, None, parent, holders=(first, second))
+        hops[index] = row.id
+        parent = row.id
+    await db.commit()
+    before = await _mail_count(db)
+    for bad in (orphan_child.id, loop_b.id, loop_a.id, self_loop.id, hops[33]):
+        with pytest.raises(ValueError):
+            await svc.resolve_canonical_root(db, bad)
+    for bad in (orphan_child.id, loop_b.id, hops[33]):
+        with pytest.raises(ValueError):
+            await _reply(svc, db, first, bad)
+    assert await _mail_count(db) == before
+    assert (await svc.resolve_canonical_root(db, hops[32])).id == root.id
+    assert (await _reply(svc, db, first, hops[32])).thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commit", [True, False])
+async def test_reply_reaching_nobody_refuses_without_rows(db, svc, commit):
+    first = await _member(db, f"nobody-{commit}", f"nobody-{commit}")
+    lonely = await _raw_row(db, first, None, None, holders=(first,))
+    await db.commit()
+    before = await _mail_count(db)
+    with pytest.raises(ValueError):
+        await svc.send_message(
+            db, MailMessageCreate(sender_member_id=first.id, thread_root_id=lonely.id, body_markdown="to nobody"),
+            commit=commit)
+    assert await _mail_count(db) == before
+    await db.rollback()
+    assert await _mail_count(db) == before
+
+
+@pytest.mark.asyncio
+async def test_explicit_recipient_in_the_canonical_set_is_normalized(db, svc):
+    first, second, root = await _pair(db, svc, "explicit")
+    reply = await _reply(svc, db, first, root.id, recipient_member_id=second.id)
+    assert await svc.recipient_ids_for_message(db, reply.id) == {second.id}
+    assert reply.thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+async def test_foreign_explicit_recipient_refuses_before_any_mutation(db, svc):
+    first, second, root = await _pair(db, svc, "foreign")
+    stranger = await _member(db, "foreign-x", "foreign-x")
+    before = await _mail_count(db)
+    with pytest.raises(ValueError):
+        await _reply(svc, db, first, root.id, recipient_member_id=stranger.id)
+    assert await _mail_count(db) == before
+
+
+@pytest.mark.asyncio
+async def test_direct_message_behavior_is_unchanged(db, svc):
+    first = await _member(db, "direct-a", "direct-a")
+    second = await _member(db, "direct-b", "direct-b")
+    message = await svc.send_message(
+        db, MailMessageCreate(sender_member_id=first.id, recipient_member_id=second.id, body_markdown="hi"))
+    assert message.thread_root_id is None
+    assert message.audience_id == str(second.id)
+    assert await svc.recipient_ids_for_message(db, message.id) == {second.id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["context_request", "handoff"])
+async def test_request_with_a_thread_id_is_stored_under_the_canonical_root(db, svc, kind):
+    """Existing contract (test_api): a participant may send a request inside a thread. It is stored
+    under the canonical root; its stall signal is only ever an ambiguity, never an entry."""
+    first, second, root = await _pair(db, svc, f"nested-{kind}")
+    reply = await _reply(svc, db, second, root.id)
+    sent = await svc.send_message(db, MailMessageCreate(
+        kind=kind, sender_member_id=first.id, recipient_member_id=second.id,
+        thread_root_id=reply.id, body_markdown="a request inside a thread"))
+    assert sent.thread_root_id == root.id
+    assert sent.request_status == "pending"
+    assert await svc.recipient_ids_for_message(db, sent.id) == {second.id}
+
+
+@pytest.mark.asyncio
+async def test_a_thread_member_may_address_itself_but_a_stranger_stays_refused(db, svc):
+    first, second, root = await _pair(db, svc, "selfaddr")
+    stranger = await _member(db, "selfaddr-x", "selfaddr-x")
+    ok = await _reply(svc, db, first, root.id, recipient_member_id=first.id)
+    assert ok.thread_root_id == root.id
+    assert await svc.recipient_ids_for_message(db, ok.id) == {second.id}
+    with pytest.raises(ValueError):
+        await _reply(svc, db, first, root.id, recipient_member_id=stranger.id)
+
+
+@pytest.mark.asyncio
+async def test_answer_resolves_only_the_supplied_pending_request_never_an_ancestor(db, svc):
+    first = await _member(db, "answer-a", "answer-a")
+    second = await _member(db, "answer-b", "answer-b")
+    ancestor = await svc.send_message(db, MailMessageCreate(
+        kind="context_request", sender_member_id=first.id, recipient_member_id=second.id, body_markdown="root ask"))
+    legacy = await _raw_row(db, first, second, ancestor.id, kind="context_request", status="pending",
+                            holders=(first, second))
+    await db.commit()
+    answer = await svc.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=second.id, thread_root_id=legacy.id, body_markdown="answers the nested one"))
+    assert answer.thread_root_id == ancestor.id
+    assert (await db.get(MailMessage, legacy.id)).request_status == "answered"
+    assert (await db.get(MailMessage, ancestor.id)).request_status == "pending"
+    assert first.id in await svc.recipient_ids_for_message(db, answer.id)
+    root_answer = await svc.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=second.id, thread_root_id=ancestor.id, body_markdown="answers the root"))
+    assert (await db.get(MailMessage, ancestor.id)).request_status == "answered"
+    assert root_answer.thread_root_id == ancestor.id
+
+
+@pytest.mark.asyncio
+async def test_answer_through_an_ordinary_reply_id_resolves_the_canonical_root_request(db, svc):
+    first = await _member(db, "viaord-a", "viaord-a")
+    second = await _member(db, "viaord-b", "viaord-b")
+    ask = await svc.send_message(db, MailMessageCreate(
+        kind="context_request", sender_member_id=first.id, recipient_member_id=second.id, body_markdown="ask"))
+    follow = await _reply(svc, db, first, ask.id)
+    answer = await svc.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=second.id, thread_root_id=follow.id, body_markdown="answered"))
+    assert answer.thread_root_id == ask.id
+    assert (await db.get(MailMessage, ask.id)).request_status == "answered"
+    # An ordinary reply id under a root that is NOT addressed to the answerer resolves nothing.
+    third = await _member(db, "viaord-c", "viaord-c")
+    other_ask = await svc.send_message(db, MailMessageCreate(
+        kind="context_request", sender_member_id=first.id, recipient_member_id=third.id, body_markdown="other"))
+    other_follow = await _reply(svc, db, first, other_ask.id)
+    with pytest.raises(PermissionError):
+        await svc.send_message(db, MailMessageCreate(
+            kind="answer", sender_member_id=second.id, thread_root_id=other_follow.id, body_markdown="no"))
+    assert (await db.get(MailMessage, other_ask.id)).request_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_third_member_with_intermediate_only_access_is_refused_on_get_thread_reply_and_answer(db, svc):
+    """The third member can read the supplied row's PARENT (one hop), so the existing check passes.
+    Only the canonical-root check refuses: the member has no access to the thread's real root."""
+    first, second, root = await _pair(db, svc, "third")
+    third = await _member(db, "third-x", "third-x")
+    parent = await _raw_row(db, first, second, root.id, holders=(first, second, third))
+    intermediate = await _raw_row(db, first, third, parent.id, kind="context_request", status="pending",
+                                  holders=(first, third))
+    await db.commit()
+    before = await _mail_count(db)
+    with pytest.raises(PermissionError):
+        await svc.get_thread(db, intermediate.id, for_member_id=third.id)
+    with pytest.raises(PermissionError):
+        await _reply(svc, db, third, intermediate.id)
+    with pytest.raises(PermissionError):
+        await svc.send_message(db, MailMessageCreate(
+            kind="answer", sender_member_id=third.id, thread_root_id=intermediate.id, body_markdown="no"))
+    assert await _mail_count(db) == before
+    assert (await db.get(MailMessage, intermediate.id)).request_status == "pending"
+    # A member of the real root can still read and reply through the same intermediate id.
+    assert (await svc.get_thread(db, intermediate.id, for_member_id=second.id)).root.id == root.id
+    assert (await _reply(svc, db, second, intermediate.id)).thread_root_id == root.id
+
+
+@pytest.mark.asyncio
+async def test_delivery_key_replay_with_a_nested_id_is_idempotent(db, svc):
+    first, second, root = await _pair(db, svc, "replay")
+    reply = await _reply(svc, db, first, root.id)
+    sent = await svc.send_message(db, MailMessageCreate(
+        sender_member_id=second.id, thread_root_id=reply.id, body_markdown="once"), delivery_key="k-752")
+    same = await svc.send_message(db, MailMessageCreate(
+        sender_member_id=second.id, thread_root_id=reply.id, body_markdown="once"), delivery_key="k-752")
+    by_root = await svc.send_message(db, MailMessageCreate(
+        sender_member_id=second.id, thread_root_id=root.id, body_markdown="once"), delivery_key="k-752")
+    assert sent.id == same.id == by_root.id
+    assert sent.thread_root_id == root.id
+    assert await db.scalar(select(func.count()).select_from(MailMessage)
+                           .where(MailMessage.delivery_key == "k-752")) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_thread_returns_the_canonical_root_with_both_authorizations(db, svc):
+    first, second, root = await _pair(db, svc, "canon")
+    stranger = await _member(db, "canon-x", "canon-x")
+    reply = await _reply(svc, db, first, root.id)
+    nested = await _reply(svc, db, second, reply.id)
+    thread = await svc.get_thread(db, nested.id, for_member_id=second.id)
+    assert thread.root.id == root.id
+    assert [item.id for item in thread.replies] == [reply.id, nested.id]
+    with pytest.raises(PermissionError):
+        await svc.get_thread(db, nested.id, for_member_id=stranger.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,complete,reason", [(500, True, None), (501, False, "reply_limit")])
+async def test_get_thread_reply_limit_sentinel(db, svc, count, complete, reason):
+    first, second, root = await _pair(db, svc, f"limit{count}")
+    db.add_all([MailMessage(kind="message", sender_member_id=second.id, thread_root_id=root.id,
+                            body_markdown=f"r{index}", audience_type="member", audience_id=str(first.id))
+                for index in range(count)])
+    await db.commit()
+    thread = await svc.get_thread(db, root.id)
+    assert len(thread.replies) == min(count, 500)
+    assert thread.replies_complete is complete
+    assert thread.replies_incomplete_reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth,complete,reason", [(32, True, None), (33, False, "depth_limit")])
+async def test_get_thread_depth_limit_sentinel(db, svc, depth, complete, reason):
+    first, second, root = await _pair(db, svc, f"depth{depth}")
+    parent = root.id
+    for _ in range(depth):
+        parent = (await _raw_row(db, second, None, parent, holders=(first, second))).id
+    await db.commit()
+    thread = await svc.get_thread(db, root.id)
+    assert thread.replies_complete is complete
+    assert thread.replies_incomplete_reason == reason
+    assert len(thread.replies) == depth

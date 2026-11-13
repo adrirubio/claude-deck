@@ -495,3 +495,57 @@ async def test_external_message_rate_limit_returns_429(client, db, monkeypatch):
     assert second.status_code == 429
     assert second.json()["detail"]["code"] == "external_agent_mail_rate_limited"
     assert int(second.headers["retry-after"]) >= 1
+
+
+# --- #752: external actors and canonical thread roots ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_external_actor_reply_with_a_nested_id_is_stored_under_the_canonical_root(client, db):
+    recipient = await _member(db, "repo-nested-ext", "nested-ext")
+    token, _ = await _actor_token(client)
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests", headers=_auth(token),
+        json={"recipient_member_id": recipient.id, "subject": "Thread", "body_markdown": "Initial request."})
+    root_id = created.json()["message"]["id"]
+    first = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root_id}/replies", headers=_auth(token),
+        json={"body_markdown": "First follow-up."})
+    first_id = first.json()["message"]["id"]
+    nested = await client.post(
+        f"/api/v1/external/agent-mail/threads/{first_id}/replies", headers=_auth(token),
+        json={"body_markdown": "Follow-up by a reply id."})
+    assert nested.status_code == 200, nested.text
+    assert nested.json()["message"]["thread_root_id"] == root_id
+    assert [item["member_id"] for item in nested.json()["recipients"]] == [recipient.id]
+    thread = await client.get(f"/api/v1/external/agent-mail/threads/{root_id}", headers=_auth(token))
+    assert len(thread.json()["replies"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_external_actor_cannot_reach_a_foreign_thread_through_a_nested_id(client, db):
+    from app.models.database import MailMessage
+
+    member = await _member(db, "repo-foreign-ext", "foreign-ext")
+    other = await _member(db, "repo-foreign-ext-2", "foreign-ext-2")
+    owner_token, _ = await _actor_token(client)
+    other_token, other_actor = await _actor_token(client, key="runner", name="Runner")
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests", headers=_auth(owner_token),
+        json={"recipient_member_id": member.id, "subject": "Thread", "body_markdown": "Owner request."})
+    root_id = created.json()["message"]["id"]
+    # An older release could leave another actor's own row inside this thread.
+    planted = MailMessage(kind="message", thread_root_id=root_id, sender_actor_id=other_actor["id"],
+                          body_markdown="planted", audience_type="member", audience_id=str(member.id))
+    db.add(planted)
+    await db.commit()
+    before = (await client.get(f"/api/v1/external/agent-mail/threads/{root_id}",
+                               headers=_auth(owner_token))).json()["replies"]
+    for target in (root_id, planted.id):
+        refused = await client.post(
+            f"/api/v1/external/agent-mail/threads/{target}/replies", headers=_auth(other_token),
+            json={"body_markdown": "Not mine."})
+        assert refused.status_code in {403, 404}, (target, refused.status_code, refused.text)
+    after = (await client.get(f"/api/v1/external/agent-mail/threads/{root_id}",
+                              headers=_auth(owner_token))).json()["replies"]
+    assert [item["id"] for item in after] == [item["id"] for item in before]
+    assert other.id != member.id

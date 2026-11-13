@@ -2186,6 +2186,9 @@ class MailMessageResponse(BaseModel):
 class MailThreadResponse(BaseModel):
     root: MailMessageResponse
     replies: List[MailMessageResponse] = Field(default_factory=list)
+    # False when the bounded read stopped early; never a complete-looking truncated thread.
+    replies_complete: bool = True
+    replies_incomplete_reason: Optional[Literal["reply_limit", "depth_limit"]] = None
 
 
 class MailInboxResponse(BaseModel):

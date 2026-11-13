@@ -63,7 +63,12 @@ Do not use a comment as the only summary. Do not claim completion without eviden
 The summary does not replace approval, independent review, or the configured merge policy.""" + "\n\n" + WORK_REMAINING_GUIDANCE + "\n\n" + OPERATOR_ACTION_CONTEXT_GUIDANCE
 
 
+REQUEST_ROUTING_GUIDANCE = """Requests and thread replies
+Send a request that needs an answer as a context request addressed directly to the member who must answer it. Do not send it as a thread reply.
+Use a thread reply only inside a thread you belong to. Use the canonical root id of the thread, which is the first message of the thread."""
+
+
 def team_communication_guidance(controlled_language_enabled: bool = True) -> str:
     """Keep human summaries required when a member opts out of controlled language."""
     writing_style = CONTROLLED_LANGUAGE_GUIDANCE if controlled_language_enabled else OWN_WRITING_STYLE_GUIDANCE
-    return f"{writing_style}\n\n{HUMAN_REVIEW_SUMMARY_GUIDANCE}"
+    return f"{writing_style}\n\n{REQUEST_ROUTING_GUIDANCE}\n\n{HUMAN_REVIEW_SUMMARY_GUIDANCE}"

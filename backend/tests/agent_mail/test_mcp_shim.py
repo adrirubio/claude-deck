@@ -1304,3 +1304,134 @@ def test_scope_amendment_and_negative_review_tools_bind_server_identity(monkeypa
     assert calls[0][2]["json"]["phase"] == "implementation"
     for _, _, kwargs in calls:
         assert not {"owner_member_id", "reviewer_member_id", "leader_member_id", "origin_kind"} & kwargs["json"].keys()
+
+
+# --- #752: the reply tool with canonical thread roots and the request-routing guidance ----------
+
+def test_request_routing_guidance_applies_to_each_member_writing_style():
+    from app.services.team_communication_policy import team_communication_guidance
+    for controlled in (True, False):
+        text = team_communication_guidance(controlled)
+        assert "Send a request that needs an answer as a context request addressed directly" in text
+        assert "Do not send it as a thread reply" in text
+        assert "canonical root id of the thread" in text
+        assert "three short lines: Remaining, Estimate, Next" in text  # the existing guidance stays
+
+
+def _bridge_shim_to_the_service(shim, db, member_id, monkeypatch, seen):
+    """Route the shim's HTTP calls to the same service calls the routes make (not the HTTP layer)."""
+    import asyncio
+
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    loop = asyncio.get_running_loop()
+
+    def bridge(method, path, **kwargs):
+        async def call():
+            if method == "GET" and path.endswith("/thread"):
+                thread = await agent_mail_service.get_thread(db, int(path.split("/")[2]), for_member_id=member_id)
+                data = thread.model_dump(mode="json")
+                seen.append(data)
+                return {"ok": True, "data": data}
+            if method == "POST" and path == "/messages":
+                message = await agent_mail_service.send_message(
+                    db, MailMessageCreate(**kwargs["json"]),
+                    authenticated_sender_member_id=member_id, auto_nudge=False)
+                return {"ok": True, "data": message.model_dump(mode="json")}
+            if path.startswith("/agent/inbox"):
+                return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+            raise AssertionError((method, path, kwargs))
+        return asyncio.run_coroutine_threadsafe(call(), loop).result(timeout=20)
+
+    monkeypatch.setattr(shim, "_request", bridge)
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    shim._state["member_id"] = member_id
+
+
+async def _shim_members_and_root(db, tag, *, root_kind="context_request"):
+    from app.models.database import MailTeamMember
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    asker = MailTeamMember(identity_key=f"repo:{tag}-a", repo_id=f"{tag}-a", repo_path="/tmp/a",
+                           repo_name=f"{tag}-a", display_name=f"{tag}-a")
+    asked = MailTeamMember(identity_key=f"repo:{tag}-b", repo_id=f"{tag}-b", repo_path="/tmp/b",
+                           repo_name=f"{tag}-b", display_name=f"{tag}-b")
+    db.add_all([asker, asked])
+    await db.commit()
+    root = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind=root_kind, sender_member_id=asker.id, recipient_member_id=asked.id, body_markdown="root"),
+        auto_nudge=False)
+    return asker, asked, root
+
+
+@pytest.mark.asyncio
+async def test_shim_reply_with_a_nested_id_answers_the_root_context_request(db, monkeypatch):
+    """Service-backed shim sequence (the HTTP routes are not exercised): GET returns the canonical
+    root, so a nested ORDINARY reply id still resolves the root context request."""
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    asker, asked, root = await _shim_members_and_root(db, "shimnest")
+    follow_up = await agent_mail_service.send_message(db, MailMessageCreate(
+        sender_member_id=asker.id, thread_root_id=root.id, body_markdown="follow-up"), auto_nudge=False)
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    import asyncio
+    result = await asyncio.to_thread(shim.synth_city_reply, follow_up.id, "Done.")
+    assert result["ok"] is True and result["resolved_request"] is True, result
+    assert seen[0]["root"]["id"] == root.id
+    assert (await db.get(MailMessage, root.id)).request_status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_shim_reply_in_a_thread_past_500_replies_keeps_a_canonical_root(db, monkeypatch):
+    import asyncio
+
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage
+
+    asker, asked, root = await _shim_members_and_root(db, "shimlimit")
+    db.add_all([MailMessage(kind="message", sender_member_id=asker.id, thread_root_id=root.id,
+                            body_markdown=f"r{index}", audience_type="member", audience_id=str(asked.id))
+                for index in range(501)])
+    await db.commit()
+    first_reply = (await db.scalars(MailMessage.__table__.select().with_only_columns(MailMessage.id)
+                                    .where(MailMessage.thread_root_id == root.id).limit(1))).first()
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    result = await asyncio.to_thread(shim.synth_city_reply, first_reply, "Done.")
+    assert result["ok"] is True and result["resolved_request"] is True, result
+    assert seen[0]["root"]["id"] == root.id
+    assert seen[0]["replies_complete"] is False
+    assert seen[0]["replies_incomplete_reason"] == "reply_limit"
+    assert len(seen[0]["replies"]) == 500
+
+
+@pytest.mark.asyncio
+async def test_shim_does_not_resolve_a_legacy_nested_pending_request(db, monkeypatch):
+    """Disclosed limitation: the shim only looks at the canonical root, so a legacy nested pending
+    request stays pending when answered through the shim. Only an exact API answer resolves it."""
+    import asyncio
+
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage, MailReceipt
+
+    asker, asked, root = await _shim_members_and_root(db, "shimlegacy", root_kind="message")
+    nested = MailMessage(kind="context_request", sender_member_id=asker.id, recipient_member_id=asked.id,
+                         thread_root_id=root.id, request_status="pending", body_markdown="nested ask",
+                         audience_type="member", audience_id=str(asked.id))
+    db.add(nested)
+    await db.flush()
+    db.add_all([MailReceipt(message_id=nested.id, member_id=asker.id),
+                MailReceipt(message_id=nested.id, member_id=asked.id)])
+    await db.commit()
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    result = await asyncio.to_thread(shim.synth_city_reply, nested.id, "Plain reply.")
+    assert result["ok"] is True and result["resolved_request"] is False, result
+    assert seen[0]["root"]["id"] == root.id
+    assert (await db.get(MailMessage, nested.id)).request_status == "pending"
