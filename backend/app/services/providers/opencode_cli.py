@@ -47,13 +47,18 @@ class OpenCodeCliProvider(AgentProvider):
         return paths
 
     def is_process_match(self, command: str, pid: str) -> bool:
-        """Positive evidence only: the readable argv of an ``opencode`` process that is
-        not a server. OpenCode 2 is a compiled binary, so a node or bun wrapper is
-        never a member, and an unreadable or oversized cmdline is no match."""
+        """Positive evidence only: the readable argv of a process whose argv[0] is
+        ``opencode`` and that is not a server. OpenCode 2 is a compiled binary, so a
+        node or bun wrapper is never a member, and an unreadable or oversized
+        cmdline is no match."""
         if argv0_name(command) != "opencode" or not pid.isdigit():
             return False
         argv = opencode_process_identity.read_argv(int(pid))
-        return bool(argv) and not opencode_process_identity.is_server_argv(argv)
+        return (
+            bool(argv)
+            and Path(argv[0]).name == "opencode"
+            and not opencode_process_identity.is_server_argv(argv)
+        )
 
     def _validate(self, options: SpawnCommandOptions) -> None:
         if options.mode not in {"plain", "resume"}:
