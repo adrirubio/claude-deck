@@ -407,6 +407,7 @@ def test_opencode_spawn_builds_the_v2_member_command_and_env(monkeypatch, tmp_pa
         "default_agent": "planner",
         "update": "disable",
         "enabled_providers": ["anthropic"],
+        "permissions": [{"action": "question", "resource": "*", "effect": "deny"}],
     }
     assert result["session_id"] == "ses_e2e111c0dffe5XAqhRWBFFBZDf"
 
@@ -427,6 +428,7 @@ def test_opencode_plain_spawn_chooses_an_exact_session_id(monkeypatch, tmp_path)
     assert result["session_id"] == parts[4]
     assert json.loads(_tmux_env(calls[0])["OPENCODE_CONFIG_CONTENT"]) == {
         "update": "disable", "disabled_providers": ["opencode"],
+        "permissions": [{"action": "question", "resource": "*", "effect": "deny"}],
     }
 
 

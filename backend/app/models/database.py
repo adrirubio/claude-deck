@@ -1,6 +1,7 @@
 """SQLAlchemy database models."""
 from datetime import datetime
 from sqlalchemy import (
+    BigInteger,
     ForeignKey,
     String,
     Integer,
@@ -622,6 +623,12 @@ class AgentPaneBinding(Base):
     waiting_input_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     waiting_input_notice_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # OpenCode wait fence (#732): the highest plugin generation (epoch ms) seen for this pane, kept
+    # after a clear, and whether the current wait's report order could not be proven.
+    opencode_wait_generation: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    opencode_wait_uncertain: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

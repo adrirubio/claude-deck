@@ -1690,6 +1690,38 @@ async def test_input_wait_latch_migrates_without_changing_pane_identity():
 
 
 @pytest.mark.asyncio
+async def test_opencode_wait_fence_columns_are_additive_and_keep_existing_waits():
+    # #732: the OpenCode wait fence adds two columns; legacy rows and existing waits are untouched.
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP TABLE agent_pane_bindings"))
+            await conn.execute(text("CREATE TABLE agent_pane_bindings (id INTEGER PRIMARY KEY, pane_pid INTEGER NOT NULL, "
+                "pane_proc_start VARCHAR NOT NULL, slot_id INTEGER, preset_id INTEGER, tmux_target VARCHAR, "
+                "created_at DATETIME NOT NULL, waiting_input_reason VARCHAR, waiting_input_started_at DATETIME, "
+                "waiting_input_observed_at DATETIME, waiting_input_notice_id INTEGER, UNIQUE(pane_pid, pane_proc_start))"))
+            await conn.execute(text("INSERT INTO agent_pane_bindings (id, pane_pid, pane_proc_start, slot_id, preset_id, created_at, "
+                "waiting_input_reason, waiting_input_started_at, waiting_input_observed_at) VALUES (1, 41000, '27', 3, 7, "
+                "CURRENT_TIMESTAMP, 'question', '2026-11-13 08:00:00.000000', '2026-11-13 08:00:01.000000')"))
+            before = (await conn.execute(text("SELECT * FROM agent_pane_bindings WHERE id = 1"))).mappings().one()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                assert {"opencode_wait_generation", "opencode_wait_uncertain"} <= await _sqlite_columns(conn, "agent_pane_bindings")
+                after = (await conn.execute(text("SELECT * FROM agent_pane_bindings WHERE id = 1"))).mappings().one()
+                assert all(after[key] == value for key, value in before.items())
+                assert (after["opencode_wait_generation"], after["opencode_wait_uncertain"]) == (None, 0)
+            await conn.execute(text("UPDATE agent_pane_bindings SET opencode_wait_generation = 1763020800000, "
+                                    "opencode_wait_uncertain = 1 WHERE id = 1"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT opencode_wait_generation, opencode_wait_uncertain "
+                                           "FROM agent_pane_bindings WHERE id = 1"))).one()
+            assert tuple(row) == (1763020800000, 1)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
