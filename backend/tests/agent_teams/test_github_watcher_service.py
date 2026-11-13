@@ -986,3 +986,29 @@ async def test_sweep_makes_no_request_when_all_stalled_items_are_labeled(db):
     await db.refresh(failed)
     assert escalated.dispatch_status == "escalated"
     assert failed.dispatch_status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("labels,expected", [
+    (["priority:1"], 1), (["priority:9999"], 9999),
+    (["priority:8", "priority:2", "priority:01"], 2),
+    ([], None), (["Priority:1", "priority:0", "priority:-1", "priority:01", "priority:10000", "priority:1x"], None),
+])
+async def test_priority_watcher_observes_labels_and_clears_removed_values(db, labels, expected):
+    scope = await _make_scope(db)
+    await github_watcher_service._upsert_item(db, scope, _issue(795, [scope.dispatch_label, *labels]))
+    await db.commit()
+    item = await db.scalar(select(GithubWorkItem).where(GithubWorkItem.issue_number == 795))
+    assert hasattr(type(item), "dispatch_priority")
+    assert item.dispatch_priority == expected
+    await github_watcher_service._upsert_item(db, scope,
+        _issue(795, [scope.dispatch_label, "priority:7"], updated="2026-07-05T00:00:00Z"))
+    await db.commit()
+    await db.refresh(item)
+    assert item.dispatch_priority == 7
+    await github_watcher_service._upsert_item(db, scope,
+        _issue(795, [scope.dispatch_label], updated="2026-07-06T00:00:00Z"))
+    await db.commit()
+    await db.refresh(item)
+    assert item.dispatch_priority is None and item.dispatch_status == "pending"
+    assert item.dispatch_nonce is None and item.retry_count == 0

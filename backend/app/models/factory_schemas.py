@@ -331,6 +331,14 @@ class CampaignQueuedItem(FactoryModel):
     title: str
 
 
+class CampaignDispatchItem(CampaignQueuedItem):
+    scope_id: PositiveId
+    repository: str
+    issue_number: PositiveId
+    priority: int | None = Field(default=None, ge=1, le=9999)
+    dispatch_position: PositiveId
+
+
 class CampaignAreaGroup(FactoryModel):
     area: str
     count: int = Field(ge=0)
@@ -349,6 +357,7 @@ class TeamCampaignSummary(FactoryModel):
     under_way: list[CampaignUnderWayItem]
     queued_count: int = Field(ge=0)
     queued: list[CampaignQueuedItem]
+    dispatch_order: list[CampaignDispatchItem] = Field(default_factory=list)
     not_started_count: int | None = Field(ge=0)
     not_started_groups: list[CampaignAreaGroup]
     decisions_ahead: list[CampaignDecision]

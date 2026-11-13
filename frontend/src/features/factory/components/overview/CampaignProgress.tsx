@@ -126,6 +126,24 @@ function CampaignCard({ preset, summary }: { preset: AgentTeamPreset; summary: A
           )}
         </div>
       </div>
+      {(c.dispatch_order?.length ?? 0) > 0 && (
+        <div className="space-y-2 border-t border-dashed pt-3 text-sm">
+          <h5 className="font-semibold">Dispatch order</h5>
+          <p className="text-muted-foreground">
+            Last-polled order per repository; routing and capacity gates can skip queued items.
+          </p>
+          <ol className="space-y-2" aria-label="Observed dispatch order">
+            {c.dispatch_order!.map((item) => (
+              <li key={`${item.scope_id}:${item.issue_number}`}>
+                <span>{item.title}</span>
+                <span className="block text-xs text-muted-foreground">
+                  Dispatch order in {item.repository}: {item.dispatch_position} · #{item.issue_number} · {item.priority === null ? 'oldest first' : `priority ${item.priority}`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-dashed pt-3 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-muted-foreground">Your decisions ahead:</span>
@@ -163,7 +181,8 @@ export function CampaignProgress({
 }) {
   const cards = presets.flatMap((preset, index) => {
     const summary = summaries[index];
-    return summary && campaignHasContent(summary.campaign) ? [{ preset, summary }] : [];
+    return summary && (campaignHasContent(summary.campaign) || (summary.campaign?.dispatch_order?.length ?? 0) > 0)
+      ? [{ preset, summary }] : [];
   });
   if (cards.length === 0) return null;
   return (

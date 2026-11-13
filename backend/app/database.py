@@ -911,6 +911,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}
+    if work_item_columns and "dispatch_priority" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_priority INTEGER"))
     if work_item_columns and "status_note" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
     if work_item_columns and "checks_unavailable_since" not in work_item_columns:

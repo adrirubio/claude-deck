@@ -12,6 +12,37 @@ This guide is for the operator of a Albiex Synth City team. Autonomy is off unti
 
 Synth City polls GitHub every 60 seconds by default. The Activity table refreshes every five seconds while open; it does not trigger another GitHub poll. Issues move through queued, dispatched, verifying, and ready for human review or merged. An escalated issue has stopped and needs attention.
 
+### Dispatch priority and queue order
+
+The Director can order ready issues with GitHub labels `priority:1` through
+`priority:9999`. Lower numbers run first. The syntax is exact: lowercase,
+positive decimal, no leading zero. If an issue has several valid priority
+labels, the lowest number wins. Invalid labels are ignored. Explicit priorities
+come before issues without a valid priority; ties and unprioritized work use
+ascending issue number (oldest first), then work-item ID. GitHub poll order and
+work-item creation time do not decide priority.
+
+Each poll observes priority labels and clears removed values. Pending issues
+are refreshed again before the dispatch batch is ranked. Existing databases
+start with no explicit priority until labels are observed. Priority only orders
+attempts within one watched repository scope. It does not admit dependencies,
+preempt active work or order different repository scopes. The Leader still
+handles dependencies written in prose. Keep dependent issues unready until
+their prerequisites are satisfied.
+
+All label, autonomy, pause/HOLD, routing/area, Leader, memory, reservation,
+workspace and concurrency gates still apply. A high-priority item waiting for
+its owner does not block eligible work for another free owner. Priority grants
+no approval, retry, lease, release or merge authority.
+
+The team summary's `campaign.dispatch_order` and the Progress card show the
+complete observed pending attempt order, with repository, issue, effective
+priority and position within that scope. This includes ready work outside a
+selected campaign milestone; existing campaign counts remain milestone-scoped.
+The list works when milestone backlog data is unavailable. It reflects the last
+observed labels, not a guaranteed next launch: routing and capacity gates may
+skip queued entries. Label changes appear after the next successful poll.
+
 ### CI polling permissions
 
 The polling credential needs Checks:read and Actions:read for private repositories.

@@ -47,6 +47,7 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_client import github_client
+from app.services.github_dispatch_priority import dispatch_order_key, priority_from_labels
 from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
@@ -1192,9 +1193,17 @@ class GithubDispatchService:
                 select(GithubWorkItem).where(
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status == "pending",
-                ).order_by(GithubWorkItem.created_at, GithubWorkItem.id)
+                ).order_by(GithubWorkItem.issue_number, GithubWorkItem.id)
             )
         ).scalars().all()
+
+        # The scheduler re-reads pending issues after the watcher poll. Use those
+        # labels when present, including removal, before ranking this batch.
+        for item in pending:
+            if item.issue_number in issue_labels_by_number:
+                item.dispatch_priority = priority_from_labels(issue_labels_by_number[item.issue_number])
+        pending.sort(key=dispatch_order_key)
+        await db.commit()
 
         for item in pending:
             pending_identity = _item_identity(item)

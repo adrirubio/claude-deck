@@ -7980,3 +7980,130 @@ async def test_acknowledged_owner_contact_monitor_survives_unavailable_leader(db
     assert workspace.lease_last_owner_contact_at > old
     assert item.dispatch_status == 'dispatched' and item.escalation_reason is None
     assert item.ack_received_at == old and item.last_nudge_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("priorities,expected", [
+    ({}, 788),
+    ({790: ["priority:8"], 789: ["priority:1"]}, 789),
+    ({790: ["priority:2"], 789: ["priority:2"]}, 789),
+    ({790: ["priority:0", "priority:01", "priority:-1", "priority:10000", "Priority:1"]}, 788),
+    ({790: ["priority:3", "priority:1"], 789: ["priority:2"]}, 790),
+])
+async def test_priority_selects_actual_launch_over_newest_first_creation(db, priorities, expected):
+    _, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    items = []
+    for index, number in enumerate((790, 789, 788)):
+        item = GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title=f"Work {number}",
+            issue_url=f"https://github.com/o/r/issues/{number}", github_updated_at=datetime.utcnow(),
+            dispatch_status="pending", created_at=datetime(2026, 11, 1) + timedelta(seconds=index))
+        db.add(item)
+        items.append(item)
+    await db.commit()
+    launched = []
+
+    async def launcher(_db, _preset_id, request):
+        launched.append(request.slot_ids)
+        return SimpleNamespace(launch_id=101)
+
+    labels = {number: [scope.dispatch_label, "area:backend", *priorities.get(number, [])]
+              for number in (790, 789, 788)}
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number=labels,
+        issue_details_by_number={number: {"body": "Approved ready work"} for number in labels})
+    for item in items:
+        await db.refresh(item)
+    assert [item.issue_number for item in items if item.dispatch_status == "dispatched"] == [expected]
+    assert len(launched) == 1
+    assert all(item.pending_reason == "queued_slot_busy" for item in items if item.issue_number != expected)
+
+
+@pytest.mark.asyncio
+async def test_priority_busy_top_candidate_preserves_other_area_progress(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    frontend = AgentTeamSlot(preset_id=preset.id, position=2, display_name="Frontend", provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", enabled=True, area_labels=["area:frontend"])
+    db.add(frontend)
+    await db.flush()
+    slots.append(frontend)
+    busy = GithubWorkItem(scope_id=scope.id, issue_number=780, issue_title="Busy backend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="dispatched", owner_slot_id=slots[1].id)
+    lower = GithubWorkItem(scope_id=scope.id, issue_number=790, issue_title="Free frontend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    higher = GithubWorkItem(scope_id=scope.id, issue_number=788, issue_title="Queued backend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    db.add_all([busy, lower, higher])
+    await db.commit()
+    launches, routing_order = [], []
+    original_route = github_dispatch_service.route_item
+
+    async def route(*args, **kwargs):
+        routing_order.append(args[1].issue_number)
+        return await original_route(*args, **kwargs)
+
+    monkeypatch.setattr(github_dispatch_service, "route_item", route)
+
+    async def launcher(_db, _preset_id, request):
+        launches.extend(request.slot_ids)
+        return SimpleNamespace(launch_id=102)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={788: ["area:backend", "priority:1"], 790: ["area:frontend", "priority:2"]})
+    await db.refresh(higher)
+    await db.refresh(lower)
+    assert higher.dispatch_status == "pending" and higher.pending_reason == "queued_slot_busy"
+    assert lower.dispatch_status == "dispatched" and launches == [frontend.id]
+    assert routing_order == [788, 790]
+    assert busy.dispatch_status == "dispatched" and busy.owner_slot_id == slots[1].id
+
+
+@pytest.mark.asyncio
+async def test_priority_current_poll_removes_stale_stored_priority_before_launch(db):
+    _, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    items = []
+    for number, priority in ((790, 1), (788, None)):
+        item = GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title="Work", issue_url="u",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending")
+        item.dispatch_priority = priority
+        db.add(item)
+        items.append(item)
+    await db.commit()
+
+    async def launcher(*_args):
+        return SimpleNamespace(launch_id=103)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={790: ["area:backend"], 788: ["area:backend"]})
+    for item in items:
+        await db.refresh(item)
+    assert [item.issue_number for item in items if item.dispatch_status == "dispatched"] == [788]
+    assert items[0].dispatch_priority is None
+
+
+@pytest.mark.asyncio
+async def test_priority_selects_owner_before_repository_capacity_is_consumed(db):
+    preset, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    frontend = AgentTeamSlot(preset_id=preset.id, position=2, display_name="Frontend", provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", enabled=True, area_labels=["area:frontend"])
+    db.add(frontend)
+    await db.flush()
+    slots.append(frontend)
+    for number in (790, 788):
+        db.add(GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title="Ready", issue_url="u",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending"))
+    await db.commit()
+    launches = []
+
+    async def launcher(_db, _preset_id, request):
+        launches.extend(request.slot_ids)
+        return SimpleNamespace(launch_id=104)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={790: ["area:frontend", "priority:2"], 788: ["area:backend", "priority:1"]})
+    items = (await db.scalars(select(GithubWorkItem).order_by(GithubWorkItem.issue_number))).all()
+    assert launches == [slots[1].id]
+    assert items[0].dispatch_status == "dispatched"
+    assert items[1].dispatch_status == "pending" and items[1].pending_reason == "queued_repo_cap"
