@@ -89,21 +89,46 @@ For Codex Bedrock sessions, Albiex Synth City passes a per-session Codex config 
 
 Albiex Synth City can run its controller and the agents as different OS users. Then `tmux` is a wrapper that starts tmux as the agent user, for example with `sudo`. Terminal lanes in Team lanes and Live sessions attach through that wrapper.
 
-How the terminal behaves:
+### What the relay does
 
-- **Resize.** The relay makes its terminal the controlling terminal of the attach process. When the browser terminal changes size, including full screen and back, the kernel tells the attach process the new size. The relay sends no signal to the attach process, so nothing has to cross the `sudo` boundary.
-- **Errors.** What the attach process or the wrapper writes to stderr goes to the backend log, up to a fixed size. It does not go into the terminal. A failed resize is logged once for each terminal connection.
-- **Setup.** This behaviour needs no change to the `sudoers` file. Albiex Synth City does not change `sudoers`, and this page does not recommend a `use_pty` setting.
+- **Resize.** The relay makes its terminal the controlling terminal of the attach process. When the browser terminal changes size, including full screen and back, the kernel tells the attach process the new size. The relay sends no signal to the attach process.
+- **Errors.** What the attach process or the wrapper writes to stderr goes to the backend log, up to a fixed size. It does not go into the terminal and it does not go to the browser. A failed resize is logged once for each terminal connection.
+- **A failed attach.** If the attach process ends with a failure before it showed anything, the lane shows one fixed message, "Could not attach to the terminal. See the backend log.", and the connection closes. The cause is in the backend log. The same message is used when the attach program cannot be started.
 
-What is verified and what is not:
+### What you must set up: a command-scoped `!use_pty`
+
+The attach command must run without a second pty. In the `sudoers` file, turn `use_pty` off for the agent `tmux` command only, and leave it on for everything else:
+
+```
+Defaults!<the agent tmux command> !use_pty
+```
+
+Use the full path of the command that the controller runs through `sudo`. Do not turn `use_pty` off for all commands. Albiex Synth City does not change `sudoers`. The operator does.
+
+Why. The relay terminal is the controlling terminal of the attach process. With `use_pty`, `sudo` then allocates its own pty and must hand it to the agent user, which needs the `CAP_CHOWN` capability. A service that runs with a limited capability set, as the product factory does (no `CAP_CHOWN` and no `CAP_KILL`), cannot do that. `sudo` stops with `unable to allocate pty: Operation not permitted`, and the lane shows the fixed message above. Without `use_pty` there is no second pty. The command runs on the relay terminal directly, and the kernel resize reaches it without a signal that `sudo` would have to relay.
+
+### What is verified and what is not
 
 | Check | State |
 |---|---|
-| Same user: real child process on a real pty gets every size change, including full screen and back | Verified by automated tests |
-| A command behind a second pty that copies the size on `SIGWINCH`, as `sudo` with `use_pty` does | Emulated by an automated test. It is not `sudo` and not a second user. |
-| Real cross-user setup, with `sudo` running tmux as another user: before and after | **Pending.** The expected behaviour above rests on how a controlling terminal works. It is not verified on a real cross-user setup. |
+| Real cross-user trial of the first version of this change under the production capability limits, with `use_pty` left on | **Failed.** The lane did not attach: `sudo: unable to allocate pty: Operation not permitted`. The original bug (no resize, and a `sudo: kill(...): Operation not permitted` error in the lane) reproduced on the version before the change. Without the limits, or with `CAP_CHOWN` added, the change resized correctly. |
+| The same change with `!use_pty` for the attach command, under the production capability limits | **Not verified.** It is what this page requires. The real trial for it is pending. |
+| Same user: a real child on a real pty gets every size change, including full screen and back | Verified by automated tests. |
+| A failed attach shows the fixed message, with no raw `sudo` or exception text in the lane or the browser | Verified by automated tests with a stand-in attach program. |
+| Real `sudo` with a disposable agent user and the production capability limits, once with `use_pty` and once with `!use_pty` | An automated test. It runs only on ephemeral GitHub-hosted runners, because it creates a temporary user and a temporary `sudoers.d` file. Its results belong to the pull request that adds it. It does not replace the real cross-user trial. |
 
-The real cross-user trial is a required acceptance step for this fix (issue #749). This page will record its result, and the supported `sudoers` setting if one is needed, once the trial has run.
+This page will record the result of the real trial for `!use_pty`.
+
+### Checking a setup
+
+Run this only in an isolated environment that you can throw away, never on a live installation. It starts a command with the same capability limits as the product factory service:
+
+```
+setpriv --bounding-set=-all,+dac_override,+dac_read_search,+setgid,+setuid,+sys_ptrace \
+  --reuid=<controller uid> --regid=<controller gid> --init-groups <command>
+```
+
+Attach through the wrapper with a private `tmux` socket, change the size of the terminal (full screen and back), and check two things: the size follows, and no `sudo:` text appears in the lane. A failed attach shows the fixed message, and the cause is in the backend log.
 
 ## Compatibility
 

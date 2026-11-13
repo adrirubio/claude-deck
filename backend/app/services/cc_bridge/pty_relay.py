@@ -30,6 +30,13 @@ TMUX_BINARY = "tmux"
 # The most attach-process error text one relay writes to the log, in characters.
 _ATTACH_STDERR_LOG_LIMIT = 4096
 
+# What the browser is told when the attach fails. It is fixed: the cause is in the backend log,
+# and no text from sudo, the wrapper or the exception ever goes to the client.
+ATTACH_FAILED_MESSAGE = "Could not attach to the terminal. See the backend log."
+
+# How long the relay waits for an attach process whose output has ended to report its status.
+_ATTACH_EXIT_WAIT_SECONDS = 2
+
 # The most stderr bytes one loop callback reads. The reader is level-triggered, so the
 # rest is read on the next loop turn. A process that never stops writing cannot hold the loop.
 _STDERR_READ_CHUNK = 4096
@@ -106,6 +113,7 @@ class PtyRelay:
         self._stderr_fd: Optional[int] = None
         self._stderr_logged = 0
         self._stderr_suppressed = False
+        self._output_seen = False
 
     def set_read_only(self, requested: bool) -> None:
         self.read_only = not (self._interactive_granted and requested is False)
@@ -185,7 +193,8 @@ class PtyRelay:
         except Exception as e:
             os.close(master_fd)
             os.close(slave_fd)
-            await websocket.send_json({"type": "error", "message": f"Failed to attach: {e}"})
+            logger.warning("Could not start tmux attach for %s: %s", self.target, e)
+            await websocket.send_json({"type": "error", "message": ATTACH_FAILED_MESSAGE})
             await websocket.close(code=4000)
             return
 
@@ -203,6 +212,7 @@ class PtyRelay:
             try:
                 data = os.read(master_fd, 65536)
                 if data:
+                    self._output_seen = True
                     output_queue.put_nowait(data)
                 else:
                     output_queue.put_nowait(b"")
@@ -267,10 +277,14 @@ class PtyRelay:
 
         output_task = asyncio.create_task(relay_output())
         input_task = asyncio.create_task(relay_input())
+        attach_failed = False
         try:
             await asyncio.wait(
                 {output_task, input_task}, return_when=asyncio.FIRST_COMPLETED
             )
+            if output_task.done() and not self._output_seen:
+                # The stream ended before any output. Did the attach process fail?
+                attach_failed = await asyncio.to_thread(self._attach_failed)
         finally:
             for task in (output_task, input_task):
                 if not task.done():
@@ -284,7 +298,23 @@ class PtyRelay:
                 _active_relays.pop(self.target, None)
             await asyncio.to_thread(self.close)
             if websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.close()
+                if attach_failed:
+                    # The reason is in the log. The client gets one fixed message.
+                    logger.warning("tmux attach for %s ended with a failure before any output", self.target)
+                    await websocket.send_json({"type": "error", "message": ATTACH_FAILED_MESSAGE})
+                    await websocket.close(code=4000)
+                else:
+                    await websocket.close()
+
+    def _attach_failed(self) -> bool:
+        """True when the attach process ended with a failure status. Waits briefly for it to exit."""
+        if self.process is None:
+            return False
+        try:
+            status = self.process.wait(timeout=_ATTACH_EXIT_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return False
+        return bool(status)
 
     def close(self) -> None:
         """Clean up pty and subprocess."""
