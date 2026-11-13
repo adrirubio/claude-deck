@@ -515,7 +515,7 @@ def draining_took_several_turns(seen_at_callback):
 
 def test_stderr_log_allowance_is_never_exceeded(caplog):
     relay = pty_relay.PtyRelay("test:stderr-allowance", read_only=False)
-    limit = pty_relay._ATTACH_STDERR_LOG_LIMIT
+    limit = pty_relay._ATTACH_STDERR_RAW_LIMIT  # the total limit minus the advice line reserved up front
     with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
         relay._log_attach_stderr(b"a" * (limit - 1))
         relay._log_attach_stderr(b"b" * limit)  # a chunk larger than what is left
@@ -645,3 +645,110 @@ async def test_an_attach_that_cannot_start_sends_the_fixed_frame_and_logs_the_re
     assert websocket.frames == [{"type": "error", "message": FIXED_ATTACH_ERROR}]
     assert websocket.close_code == 4000
     assert any("nonexistent-dir" in r.getMessage() for r in caplog.records)
+
+
+# --- #749 (V1 findings F1 and F2): the phrase can be split across reads; the log carries the advice ---
+
+PHRASE = "unable to allocate pty"
+SPLIT_ACROSS_TWO_WRITES = """
+printf 'sudo: unable to allo' >&2
+sleep 0.3
+printf 'cate pty: Operation not permitted\\n' >&2
+exit 1
+"""
+
+
+def advice_records(caplog):
+    return [r for r in caplog.records if pty_relay.ATTACH_PTY_ADVICE in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_a_phrase_split_across_two_separate_writes_still_gets_the_hint(monkeypatch, tmp_path, caplog):
+    stand_in_tmux(monkeypatch, tmp_path, SPLIT_ACROSS_TWO_WRITES)
+    websocket = FrameWebSocket()
+    relay = pty_relay.PtyRelay("test:split-writes", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        await asyncio.wait_for(relay.run(websocket), timeout=10)
+
+    assert websocket.frames == [{"type": "error", "message": PTY_HINT_ERROR}]
+    assert websocket.close_code == 4000
+    assert b"sudo" not in websocket.sent and b"allocate" not in websocket.sent
+    assert len(advice_records(caplog)) == 1
+
+
+@pytest.mark.parametrize("cut", range(1, len(PHRASE)))
+def test_the_phrase_is_found_when_it_is_split_at_any_offset(cut, caplog):
+    relay = pty_relay.PtyRelay("test:any-offset", read_only=False)
+    text = "sudo: " + PHRASE + ": Operation not permitted\n"
+    start = text.index(PHRASE)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay._log_attach_stderr(text[: start + cut].encode())
+        assert not relay._pty_allocation_failed or cut == len(PHRASE)
+        relay._log_attach_stderr(text[start + cut :].encode())
+    assert relay._pty_allocation_failed
+    assert len(advice_records(caplog)) == 1
+
+
+def test_the_phrase_is_found_over_many_tiny_reads(caplog):
+    relay = pty_relay.PtyRelay("test:tiny-reads", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        for byte in ("sudo: " + PHRASE + ": no\n").encode():
+            relay._log_attach_stderr(bytes([byte]))
+    assert relay._pty_allocation_failed
+    assert len(advice_records(caplog)) == 1
+
+
+def test_a_gap_between_two_pieces_does_not_fabricate_the_phrase(caplog):
+    relay = pty_relay.PtyRelay("test:no-fabrication", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay._log_attach_stderr(b"sudo: unable to allo")
+        relay._log_attach_stderr(b"\ncate pty: no\n")  # a newline in between: not the phrase
+        relay._log_attach_stderr(b"unable to allocate\n")
+    assert not relay._pty_allocation_failed
+    assert advice_records(caplog) == []
+
+
+def test_the_tail_is_bounded_by_the_phrase_length():
+    relay = pty_relay.PtyRelay("test:tail-bound", read_only=False)
+    for _ in range(200):
+        relay._log_attach_stderr(b"x" * 1000)
+    assert len(relay._stderr_tail) <= len(PHRASE) - 1
+
+
+def test_a_repeated_marker_logs_the_advice_exactly_once(caplog):
+    relay = pty_relay.PtyRelay("test:repeated", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay._log_attach_stderr((PHRASE + "\n" + PHRASE + "\n").encode())
+        relay._log_attach_stderr(("sudo: " + PHRASE + "\n").encode())
+        relay._log_attach_stderr(b"unable to allo")
+        relay._log_attach_stderr(b"cate pty\n")
+    assert len(advice_records(caplog)) == 1
+
+
+def test_the_advice_is_logged_in_full_even_after_the_raw_log_was_suppressed(caplog):
+    relay = pty_relay.PtyRelay("test:late-marker", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        for i in range(200):
+            relay._log_attach_stderr(("noise line %03d " % i + "n" * 60 + "\n").encode())
+        assert any("suppressed" in r.getMessage() for r in caplog.records)
+        relay._log_attach_stderr(("sudo: " + PHRASE + ": Operation not permitted\n").encode())
+    records = advice_records(caplog)
+    assert len(records) == 1 and pty_relay.ATTACH_PTY_ADVICE in records[0].getMessage()
+    # Raw text and the advice together stay inside the one total limit.
+    assert relay._stderr_logged + len(pty_relay.ATTACH_PTY_ADVICE) <= pty_relay._ATTACH_STDERR_LOG_LIMIT
+    assert pty_relay._ATTACH_STDERR_RAW_LIMIT == pty_relay._ATTACH_STDERR_LOG_LIMIT - len(pty_relay.ATTACH_PTY_ADVICE)
+    assert len([r for r in caplog.records if "suppressed" in r.getMessage()]) == 1
+
+
+def test_the_advice_names_the_rule_and_claims_no_delivery():
+    advice = pty_relay.ATTACH_PTY_ADVICE
+    assert "`!use_pty`" in advice and "setup docs" in advice
+    assert "browser" not in advice.lower() and "lane" not in advice.lower() and "client" not in advice.lower()
+
+
+def test_an_unrelated_failure_logs_no_advice(caplog):
+    relay = pty_relay.PtyRelay("test:unrelated", read_only=False)
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay._log_attach_stderr(b"tmux: no server running on the private socket\n")
+    assert not relay._pty_allocation_failed
+    assert advice_records(caplog) == []

@@ -27,7 +27,8 @@ _PR_SET_PDEATHSIG = 1
 # from a request. Tests replace it with a stand-in script.
 TMUX_BINARY = "tmux"
 
-# The most attach-process error text one relay writes to the log, in characters.
+# The most attach-process text one relay writes to the log, in characters. It covers the raw
+# stderr lines and the one advice line below together.
 _ATTACH_STDERR_LOG_LIMIT = 4096
 
 # What the browser is told when the attach fails. It is fixed: the cause is in the backend log,
@@ -42,6 +43,15 @@ ATTACH_PTY_MESSAGE = (
     "Could not attach to the terminal: sudo needs `!use_pty` for the agent tmux command. "
     "See the setup docs and the backend log."
 )
+
+# The one operator line logged when the phrase is recognized. It says what to set up and claims
+# nothing about what the browser was told. Its length is reserved inside the total limit above, so
+# the raw stderr allowance is the limit minus this text, and a late phrase still gets its full line.
+ATTACH_PTY_ADVICE = (
+    "sudo could not allocate its own pty. Set the command-scoped `!use_pty` for the agent tmux "
+    "wrapper; see the setup docs."
+)
+_ATTACH_STDERR_RAW_LIMIT = _ATTACH_STDERR_LOG_LIMIT - len(ATTACH_PTY_ADVICE)
 
 # How long the relay waits for an attach process whose output has ended to report its status.
 _ATTACH_EXIT_WAIT_SECONDS = 2
@@ -124,6 +134,7 @@ class PtyRelay:
         self._stderr_suppressed = False
         self._output_seen = False
         self._pty_allocation_failed = False
+        self._stderr_tail = ""
 
     def set_read_only(self, requested: bool) -> None:
         self.read_only = not (self._interactive_granted and requested is False)
@@ -161,19 +172,19 @@ class PtyRelay:
     def _log_attach_stderr(self, data: bytes) -> None:
         """Write attach errors to the backend log, never to the terminal.
 
-        The log holds at most _ATTACH_STDERR_LOG_LIMIT characters for one relay. A line that
-        does not fit is cut to what is left, and one notice says the rest is suppressed.
+        The log holds at most _ATTACH_STDERR_LOG_LIMIT characters for one relay: raw lines up to
+        _ATTACH_STDERR_RAW_LIMIT, then the one advice line, which was reserved up front. A raw line
+        that does not fit is cut to what is left, and one notice says the rest is suppressed.
         """
         text = data.decode("utf-8", errors="replace")
-        if _PTY_ALLOCATION_PHRASE in text:
-            self._pty_allocation_failed = True  # remembered even after the log limit is reached
+        self._note_pty_phrase(text)
         if self._stderr_suppressed:
             return
         for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
-            room = _ATTACH_STDERR_LOG_LIMIT - self._stderr_logged
+            room = _ATTACH_STDERR_RAW_LIMIT - self._stderr_logged
             if room > 0:
                 shown = line[:room]
                 self._stderr_logged += len(shown)
@@ -182,6 +193,24 @@ class PtyRelay:
                 self._stderr_suppressed = True
                 logger.warning("Further tmux attach output for %s suppressed", self.target)
                 return
+
+    def _note_pty_phrase(self, text: str) -> None:
+        """Recognize sudo's pty phrase in the stderr stream, even when it arrives in pieces.
+
+        Only the last len(phrase) - 1 characters of the previous read are kept, so nothing grows. The
+        search covers that tail plus the new text, which is exactly the stream with no characters
+        added or removed. It runs before and after the raw log limit. The first recognition logs the
+        one advice line.
+        """
+        if self._pty_allocation_failed:
+            return
+        window = self._stderr_tail + text
+        if _PTY_ALLOCATION_PHRASE in window:
+            self._pty_allocation_failed = True
+            self._stderr_tail = ""
+            logger.warning("tmux attach for %s: %s", self.target, ATTACH_PTY_ADVICE)  # once: later reads return early
+            return
+        self._stderr_tail = window[-(len(_PTY_ALLOCATION_PHRASE) - 1):]
 
     async def run(self, websocket: WebSocket, *, subprotocol: str | None = None) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
