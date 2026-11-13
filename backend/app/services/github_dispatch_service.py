@@ -3650,8 +3650,9 @@ class GithubDispatchService:
 
         if hold_code():
             return
+        await db.refresh(scope)
         preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
-        if preset is None:
+        if preset is None or not preset.autonomy_enabled or not scope.enabled:
             return
         initial = self._ack_deadline_seconds(item, preset)
         maximum = max(initial, self._ack_deadline_seconds(item, preset, maximum=True))
@@ -3679,7 +3680,8 @@ class GithubDispatchService:
         await db.refresh(scope)
         await db.refresh(leader)
         current = await github_approval_service.pending_initial_for_attempt(db, item)
-        if (hold_code() or _item_identity(item) != expected_item
+        if (hold_code() or not preset.autonomy_enabled or not scope.enabled
+                or _item_identity(item) != expected_item
                 or tuple(getattr(preset, field) for field in preset_fields) != expected_preset
                 or (scope.enabled, scope.preset_id) != expected_scope
                 or (leader.enabled, leader.provider, leader.launch_options or {}) != expected_leader
@@ -3694,11 +3696,12 @@ class GithubDispatchService:
             GithubWorkItem.active_scope_revision == 0, GithubWorkItem.pr_number.is_(None),
             GithubWorkItem.ack_received_at == item.ack_received_at,
             GithubWorkItem.last_nudge_at == item.last_nudge_at,
-            exists(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id, *(
+            exists(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id,
+                AgentTeamPreset.autonomy_enabled.is_(True), *(
                 _identity_value_clause(getattr(AgentTeamPreset, field), value)
                 for field, value in zip(preset_fields, expected_preset)))),
             exists(select(TeamGithubScope.id).where(TeamGithubScope.id == scope.id,
-                TeamGithubScope.enabled == expected_scope[0], TeamGithubScope.preset_id == expected_scope[1])),
+                TeamGithubScope.enabled.is_(True), TeamGithubScope.preset_id == expected_scope[1])),
             exists(select(AgentTeamSlot.id).where(AgentTeamSlot.id == leader.id,
                 AgentTeamSlot.preset_id == preset.id, AgentTeamSlot.enabled == expected_leader[0],
                 AgentTeamSlot.provider == expected_leader[1], AgentTeamSlot.launch_options == expected_leader[2])),

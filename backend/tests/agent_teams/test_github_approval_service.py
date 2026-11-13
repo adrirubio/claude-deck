@@ -49,6 +49,9 @@ async def timed_attempt(db, monkeypatch, tmp_path):
     monkeypatch.setattr(importlib.import_module("app.services.native_owner_contact"), "renew_native_owner_contact", AsyncMock())
     item, members, _tokens = await _dispatch_approval_fixture(db)
     scope = await db.get(TeamGithubScope, item.scope_id)
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.autonomy_enabled = True
+    scope.enabled = True
     slots = list((await db.scalars(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id).order_by(AgentTeamSlot.position))).all())
     item.created_at = item.updated_at = item.dispatched_at = START
     workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path), leased_item_id=item.id,
@@ -244,6 +247,63 @@ async def test_soft_wait_notice_and_claim_roll_back_together(db, timed_attempt, 
     assert attempt.item.last_nudge_at is None
     assert not (await db.scalars(select(MailMessage).where(
         MailMessage.subject == f"Ack needed: issue #{attempt.item.issue_number}"))).all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause", ["team", "scope"])
+@pytest.mark.parametrize("minutes", [5, 31])
+async def test_ack_monitor_has_no_effect_when_paused_before_snapshot(db, timed_attempt, monkeypatch, pause, minutes):
+    attempt = timed_attempt
+    approval = await request_plan(db, attempt, minutes=0)
+    preset = await db.get(AgentTeamPreset, attempt.scope.preset_id)
+    assert preset.autonomy_enabled and attempt.scope.enabled
+    if pause == "team":
+        preset.autonomy_enabled = False
+    else:
+        attempt.scope.enabled = False
+    await db.commit()
+    active = AsyncMock(return_value=True)
+    monkeypatch.setattr(github_dispatch_service, "_leader_is_active", active)
+    before = (attempt.workspace.lease_token, attempt.workspace.leased_item_id)
+    await monitor(db, attempt, minutes=minutes)
+    await db.refresh(approval)
+    await db.refresh(attempt.workspace)
+    assert approval.status == "pending"
+    assert approval.leader_ack_reminded_at is None
+    assert approval.leader_activity_extended_at is None
+    assert attempt.item.dispatch_status == "dispatched" and attempt.item.escalation_reason is None
+    assert attempt.item.last_nudge_at is None
+    assert before == (attempt.workspace.lease_token, attempt.workspace.leased_item_id)
+    assert not (await db.scalars(select(MailMessage).where(
+        MailMessage.subject.in_(["Leader approval waiting", f"Ack needed: issue #{attempt.item.issue_number}"])))).all()
+    active.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause", ["team", "scope"])
+async def test_ack_monitor_write_fence_refuses_pause_after_refresh(db, timed_attempt, monkeypatch, pause):
+    from sqlalchemy.sql.dml import Update
+    attempt = timed_attempt
+    approval = await request_plan(db, attempt, minutes=0)
+    monkeypatch.setattr(github_dispatch_service, "_leader_is_active", AsyncMock(return_value=True))
+    original = db.execute
+    paused = False
+
+    async def pause_before_write(statement, *args, **kwargs):
+        nonlocal paused
+        if not paused and isinstance(statement, Update) and statement.table.name == "github_work_items":
+            paused = True
+            model, key, values = ((AgentTeamPreset, attempt.scope.preset_id, {"autonomy_enabled": False})
+                                  if pause == "team" else (TeamGithubScope, attempt.scope.id, {"enabled": False}))
+            await original(update(model).where(model.id == key).values(**values).execution_options(synchronize_session=False))
+        return await original(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", pause_before_write)
+    await monitor(db, attempt, minutes=5)
+    await db.refresh(approval)
+    assert paused
+    assert approval.leader_ack_reminded_at is None and approval.leader_activity_extended_at is None
+    assert approval.status == "pending" and attempt.item.last_nudge_at is None
 
 
 @pytest.mark.asyncio

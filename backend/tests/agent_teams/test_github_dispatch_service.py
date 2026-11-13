@@ -6540,6 +6540,10 @@ async def test_monitor_does_not_escalate_slow_live_owner(db):
 
 
 async def _pending_initial_plan(db, item, slots, created_at):
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.autonomy_enabled = True
+    scope.enabled = True
     members = [await agent_mail_service.get_or_create_slot_member(db, slot) for slot in slots]
     item.dispatch_nonce = "timeout-attempt"
     item.approval_round_count = 1
