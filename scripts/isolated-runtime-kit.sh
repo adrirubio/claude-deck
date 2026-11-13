@@ -489,15 +489,19 @@ def _mail_entry_ok(doc):
             and environment.get("SYNTH_CITY_PROVIDER") == "opencode-cli")
 
 def _mail_command_ok(command):
-    # Exactly [a Python interpreter, the Mail shim installed from this checkout], as the install writes it.
+    # Exactly [the kit backend s interpreter, the Mail shim installed from this checkout]. The
+    # interpreter must resolve to the one the kit backend runs (an alias of it is accepted);
+    # a name alone proves nothing (a python3 link to another program has the same name).
     repo = os.environ.get("RUNTIME_KIT_REPO_ROOT", "")
+    trusted = os.environ.get("RUNTIME_KIT_PYTHON", "")
     shim = os.path.join(repo, "backend", "mcp_shim", "agent_mail_server.py")
-    if not (repo and os.path.isabs(repo) and os.path.isfile(shim)):
+    if not (repo and os.path.isabs(repo) and os.path.isfile(shim) and trusted and os.path.isabs(trusted)):
         return False
     if not (isinstance(command, list) and len(command) == 2 and all(isinstance(item, str) and item for item in command)):
         return False
     interpreter, script = command
-    return (os.path.isabs(interpreter) and PYTHON_NAME.fullmatch(os.path.basename(interpreter)) is not None
+    return (os.path.isabs(interpreter) and os.path.realpath(interpreter) == os.path.realpath(trusted)
+            and PYTHON_NAME.fullmatch(os.path.basename(os.path.realpath(interpreter))) is not None
             and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK)
             and os.path.isabs(script) and os.path.realpath(script) == os.path.realpath(shim))
 
@@ -524,11 +528,21 @@ def _digest_path(root):
         die(2, "refused: the OpenCode config proof is not a plain file")
     return path
 
+_fdopen = os.fdopen
 def _stage(directory, text):
+    # A new private file holding the whole text; a failed write removes it before raising.
     temp = os.path.join(directory, ".opencode-" + os.urandom(8).hex())
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(text)
+    try:
+        with _fdopen(fd, "w") as handle:
+            handle.write(text)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        os.unlink(temp)
+        raise
     return temp
 
 def opencode_config(root, stub_url):
@@ -567,11 +581,23 @@ def opencode_config(root, stub_url):
             _replace(temps[0], path)
             temps.pop()
         except OSError:
-            # The config is unchanged: put the earlier proof back, or remove the new one.
-            if earlier is None:
-                os.unlink(digest)
-            else:
-                _replace(_stage(os.path.dirname(digest), earlier), digest)
+            # The config is unchanged: put the earlier proof back, or remove the new one. If
+            # that fails too, the proof no longer matches what it was: incomplete, not refused.
+            restore = None
+            try:
+                if earlier is None:
+                    os.unlink(digest)
+                else:
+                    restore = _stage(os.path.dirname(digest), earlier)
+                    _replace(restore, digest)
+                    restore = None
+            except OSError:
+                if restore is not None and os.path.lexists(restore):
+                    os.unlink(restore)
+                for temp in temps:
+                    if os.path.lexists(temp):
+                        os.unlink(temp)
+                die(1, "incomplete: the OpenCode config is unchanged, but its earlier proof could not be restored")
             raise
     except OSError:
         for temp in temps:
@@ -694,7 +720,7 @@ def main():
 if __name__ == "__main__":
     main()
 '
-kitpy() { RUNTIME_KIT_REPO_ROOT="$REPO_ROOT" python3 -I -c "$KITPY" "$@"; }
+kitpy() { RUNTIME_KIT_REPO_ROOT="$REPO_ROOT" RUNTIME_KIT_PYTHON="${KIT_PYTHON:-}" python3 -I -c "$KITPY" "$@"; }
 
 verify() { # name -> pid of this instance's live process for that role; refuses otherwise
   local out code=0
@@ -856,6 +882,7 @@ up() {
   if [[ -z "$python" ]]; then
     if [[ -x "$REPO_ROOT/backend/venv/bin/python" ]]; then python="$REPO_ROOT/backend/venv/bin/python"; else python="$(command -v python3)"; fi
   fi
+  KIT_PYTHON="$python"  # the backend's interpreter: the only one the OpenCode Mail entry may name
   # The real tmux executable, never a launcher script (a launcher can force a shared
   # team socket). RUNTIME_KIT_TMUX overrides; otherwise the first ELF tmux on PATH.
   local tmux_bin="" candidate
@@ -1139,6 +1166,7 @@ status() {
   if [[ -z "$python" ]]; then
     if [[ -x "$REPO_ROOT/backend/venv/bin/python" ]]; then python="$REPO_ROOT/backend/venv/bin/python"; else python="$(command -v python3)"; fi
   fi
+  KIT_PYTHON="$python"  # the backend's interpreter: the only one the OpenCode Mail entry may name
   backend_healthy "$python" || incomplete "the isolated backend does not report this run as healthy"
   registration_row >/dev/null || incomplete "no registered session with a pane binding"
   # The provider that decides the OpenCode proof is bound to the launch and the registration.

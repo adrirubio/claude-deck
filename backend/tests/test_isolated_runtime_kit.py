@@ -66,8 +66,21 @@ def _namespace_skip_reason(probe_returncode: int):
     return None if probe_returncode == 0 else "capability unavailable: uid_map"
 
 
+KIT_RUNTIME_FLAG = "SYNTH_CITY_KIT_RUNTIME"
+
+
+def _kit_runtime_skip_reason():
+    """Kit runtime tests are opt-in (Supervisor 13700): a broad -k filter or a full local run
+    must never start a namespace, backend or CLI by accident."""
+    return None if os.environ.get(KIT_RUNTIME_FLAG) == "1" else "kit runtime tests are opt-in: set SYNTH_CITY_KIT_RUNTIME=1"
+
+
 def _needs_namespaces():
-    """Skip one namespace-dependent test (never the module) on hosts that refuse the uid_map write."""
+    """Skip one runtime test (never the module) unless opted in, and on hosts that refuse the
+    uid_map write. The opt-in check comes before the namespace probe."""
+    opt_in = _kit_runtime_skip_reason()
+    if opt_in:
+        pytest.skip(opt_in)
     if not _PROBE:
         _PROBE.append(subprocess.run(["unshare", "--user", "--map-root-user", "--net", "true"],
                                      capture_output=True, timeout=10).returncode)
@@ -102,17 +115,23 @@ def test_host_provides_what_the_kit_needs():
     # Report the missing piece by name instead of failing deep inside the kit.
     for tool in ("bash", "tmux", "unshare", "nsenter", "ip", "timeout", "setsid"):
         assert shutil.which(tool), f"{tool} is required by the isolated runtime kit"
-    # The namespace capability is reported, not asserted: namespace tests skip on their own.
-    probe = subprocess.run(["unshare", "--user", "--map-root-user", "--net", "true"],
-                           capture_output=True, text=True, timeout=10)
-    print("namespace capability:", "available" if probe.returncode == 0 else probe.stderr.strip())
+
+
+def test_namespace_capability_is_reported():
+    _needs_namespaces()  # opt-in first; the probe it runs is reported, not asserted
+    print("namespace capability: available")
 
 
 @pytest.fixture
 def kit_root(tmp_path):
     root = tmp_path / "kit"
     yield root
-    if (root / ".deck-runtime-kit").exists():
+    _teardown_kit(root)
+
+
+def _teardown_kit(root):
+    # Only an opted-in run can have started a kit; without the flag nothing is run.
+    if _kit_runtime_skip_reason() is None and (root / ".deck-runtime-kit").exists():
         _kit("down", "--root", str(root), timeout=60)
 
 
@@ -682,10 +701,12 @@ DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
 
 SHIM = REPO / "backend" / "mcp_shim" / "agent_mail_server.py"
 os.environ.setdefault("RUNTIME_KIT_REPO_ROOT", str(REPO))  # where the kit helper finds the installed shim
+TRUSTED_PYTHON = os.path.realpath(shutil.which("python3"))
+os.environ.setdefault("RUNTIME_KIT_PYTHON", TRUSTED_PYTHON)  # the kit backend's interpreter, as up passes it
 
 
 def _mail_entry():  # what the Agent Mail install writes for OpenCode 2 in the kit
-    return {"type": "local", "command": [os.path.realpath(shutil.which("python3")), str(SHIM)],
+    return {"type": "local", "command": [os.environ["RUNTIME_KIT_PYTHON"], str(SHIM)],
             "enabled": True, "codemode": False,
             "environment": {"SYNTH_CITY_URL": "http://127.0.0.1:18780", "SYNTH_CITY_PROVIDER": "opencode-cli"}}
 
@@ -735,7 +756,7 @@ def test_opencode_config_is_stub_only_and_keeps_the_install(tmp_path, capsys):
                                   "not_an_object", "remote_stub", "unwritable", "mail_empty", "mail_disabled",
                                   "mail_remote", "mail_no_command", "mail_codemode", "mail_other_backend",
                                   "mail_empty_executable", "mail_false_executable", "mail_foreign_shim",
-                                  "mail_other_script"])
+                                  "mail_other_script", "mail_python_named_false", "mail_python_alias"])
 def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
     doc = None
     if case == "no_config":
@@ -766,6 +787,16 @@ def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
             entry["command"][1] = "/nonexistent/elsewhere/mcp_shim/agent_mail_server.py"
         elif case == "mail_other_script":
             entry["command"] = [entry["command"][0], str(REPO / "scripts" / "ci" / "old_names.py"), str(SHIM)]
+        elif case == "mail_python_alias":  # an alias resolving to the trusted interpreter is accepted
+            alias = tmp_path / "alias" / "python3"
+            alias.parent.mkdir()
+            alias.symlink_to(os.environ["RUNTIME_KIT_PYTHON"])
+            entry["command"][0] = str(alias)
+        elif case == "mail_python_named_false":  # V1 review 5899246315 finding 3: a name proves nothing
+            fake = tmp_path / "bin" / "python3"
+            fake.parent.mkdir()
+            fake.symlink_to("/bin/false")
+            entry["command"][0] = str(fake)
         doc = {"mcp": {"servers": {MAIL_SERVER: entry}}, "permissions": [dict(DENY_RULE)]}
     elif case == "foreign_provider":
         doc = {"mcp": {"servers": {MAIL_SERVER: _mail_entry()}}, "permissions": [dict(DENY_RULE)],
@@ -780,6 +811,9 @@ def test_opencode_config_refuses_unsafe_merges(tmp_path, case):
     if case == "unwritable":
         path.parent.chmod(0o500)
     try:
+        if case == "mail_python_alias":
+            assert _opencode(_helper_module(), "opencode_config", root, url) == 0
+            return
         assert _opencode(_helper_module(), "opencode_config", root, url) == 2
     finally:
         path.parent.chmod(0o700)
@@ -1112,9 +1146,181 @@ def test_opencode_proof_controls_are_caught(tmp_path, monkeypatch, control):
                           "def _mail_command_ok(command):\n    return True\n")
         run = lambda: test_opencode_config_refuses_unsafe_merges(tmp_path / "t", "mail_false_executable")
     else:
-        _opencode_control(tmp_path, monkeypatch, "                _replace(_stage(os.path.dirname(digest), earlier), digest)\n",
-                          "                pass\n")
+        _opencode_control(tmp_path, monkeypatch, "                    _replace(restore, digest)\n",
+                          "                    os.unlink(restore)\n")
         run = lambda: test_opencode_config_rename_failure_restores_the_earlier_proof(tmp_path / "t")
     (tmp_path / "t").mkdir()
     with pytest.raises(AssertionError):
         run()
+
+
+# Supervisor 13700: kit tests that start a real namespace, backend or CLI are opt-in, so a
+# broad -k filter or a full local run never starts a runtime by accident.
+REFUSAL_ONLY = {  # run everywhere: each is refused by argument or root checks before any namespace
+    "test_kit_refuses_a_foreign_synth_city_or_mail_credential",
+    "test_kit_refuses_a_root_it_does_not_own",
+    "test_status_on_an_invalid_root_writes_nothing",
+}
+
+
+def test_kit_runtime_tests_are_opt_in(monkeypatch):
+    def no_probe(*args, **kwargs):
+        raise AssertionError("the namespace probe ran without the opt-in flag")
+    monkeypatch.setattr(subprocess, "run", no_probe)
+    for value in (None, "", "0", "yes"):
+        if value is None:
+            monkeypatch.delenv("SYNTH_CITY_KIT_RUNTIME", raising=False)
+        else:
+            monkeypatch.setenv("SYNTH_CITY_KIT_RUNTIME", value)
+        with pytest.raises(pytest.skip.Exception, match="opt-in: set SYNTH_CITY_KIT_RUNTIME=1"):
+            _needs_namespaces()
+
+
+def test_every_runtime_test_reaches_the_opt_in_gate_first():
+    import ast
+    tree = ast.parse(Path(__file__).read_text())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+    def called(node):
+        return {call.func.id for call in ast.walk(node) if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+
+    def reaches(name, seen):
+        found = set()
+        for callee in called(functions[name]):
+            if callee in functions and callee not in seen:
+                seen.add(callee)
+                found |= {callee} | reaches(callee, seen)
+        return found
+
+    ungated = set()
+    for name, node in functions.items():
+        if not name.startswith("test_"):
+            continue
+        if name in ("test_every_runtime_test_reaches_the_opt_in_gate_first",
+                    "test_kit_fixture_teardown_runs_nothing_without_the_opt_in"):  # this audit; _kit mocked
+            continue
+        uses = reaches(name, set()) | called(node)
+        starts = any(isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                     and isinstance(call.func.value, ast.Name) and call.func.value.id == "subprocess"
+                     and call.func.attr in ("run", "Popen", "call", "check_call", "check_output")
+                     for call in ast.walk(node))
+        if not ({"_kit", "_up"} & uses or starts):
+            continue
+        body = [stmt for stmt in node.body if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))]
+        first = body[0]
+        if not (isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+                and getattr(first.value.func, "id", None) == "_needs_namespaces"):
+            ungated.add(name)
+    assert ungated == REFUSAL_ONLY
+
+
+def test_kit_fixture_teardown_runs_nothing_without_the_opt_in(tmp_path, monkeypatch):
+    root = tmp_path / "kit"
+    root.mkdir()
+    (root / ".deck-runtime-kit").write_text("")
+    calls = []
+    monkeypatch.setitem(globals(), "_kit", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.delenv(KIT_RUNTIME_FLAG, raising=False)
+    _teardown_kit(root)
+    assert calls == []
+    monkeypatch.setenv(KIT_RUNTIME_FLAG, "1")
+    _teardown_kit(root)
+    assert calls == [("down", "--root", str(root))]
+
+
+def test_opt_in_gate_control_is_caught(monkeypatch):
+    # In-memory control: without the gate, the opt-in test fails (the probe would run).
+    monkeypatch.setitem(globals(), "_kit_runtime_skip_reason", lambda: None)
+    monkeypatch.setitem(globals(), "_PROBE", [])
+    with pytest.raises((AssertionError, pytest.fail.Exception)):
+        test_kit_runtime_tests_are_opt_in(monkeypatch)
+
+
+# V1 review 5899246315 findings 1 and 2: a failed restore is incomplete, never an unchanged
+# refusal; a partial staging write leaves no temporary file.
+def test_opencode_failed_restore_is_incomplete_and_leaves_no_temporary_file(tmp_path):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    doc = json.loads(path.read_text())
+    doc["instructions"] = ["kept as it is"]
+    path.write_text(json.dumps(doc))
+    config_before = path.read_bytes()
+    real = module["_replace"]
+    calls = []
+    def failing(src, dst):
+        calls.append(os.path.basename(str(dst)))
+        if str(dst).endswith("opencode.json") or len(calls) > 2:
+            raise OSError("injected")
+        return real(src, dst)
+    module["_replace"] = failing
+    assert _opencode(module, "opencode_config", root) == 1
+    assert path.read_bytes() == config_before
+    for directory in (path.parent, root / "state"):
+        assert not [p for p in directory.iterdir() if p.name.startswith(".opencode")]
+
+
+@pytest.mark.parametrize("which", [0, 1])
+def test_opencode_partial_staging_write_leaves_no_temporary_file(tmp_path, which):
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    config_before = path.read_bytes()
+    real = module["_fdopen"]
+    count = []
+    class Broken:
+        def __init__(self, handle):
+            self.handle = handle
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self.handle.close()
+        def write(self, text):
+            self.handle.write(text[:5])
+            raise OSError("injected partial write")
+    def fdopen(fd, mode):
+        count.append(fd)
+        handle = real(fd, mode)
+        return Broken(handle) if len(count) - 1 == which else handle
+    module["_fdopen"] = fdopen
+    assert _opencode(module, "opencode_config", root) == 2
+    assert path.read_bytes() == config_before
+    assert not (root / "state" / "opencode-config.sha256").exists()
+    for directory in (path.parent, root / "state"):
+        assert not [p for p in directory.iterdir() if p.name.startswith(".opencode")]
+
+
+def test_opencode_partial_restore_write_is_incomplete_and_leaves_no_temporary_file(tmp_path):
+    """The restore stage itself fails part-way: exit 1, the config unchanged, no temporary file."""
+    root, path = _opencode_home(tmp_path)
+    module = _helper_module()
+    assert _opencode(module, "opencode_config", root) == 0
+    doc = json.loads(path.read_text())
+    doc["instructions"] = ["kept as it is"]
+    path.write_text(json.dumps(doc))
+    config_before = path.read_bytes()
+    real_replace, real_fdopen = module["_replace"], module["_fdopen"]
+    def replace(src, dst):
+        if str(dst).endswith("opencode.json"):
+            raise OSError("injected config rename failure")
+        return real_replace(src, dst)
+    opened = []
+    class Broken:
+        def __init__(self, handle):
+            self.handle = handle
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self.handle.close()
+        def write(self, text):
+            self.handle.write(text[:3])
+            raise OSError("injected partial restore write")
+    def fdopen(fd, mode):
+        opened.append(fd)
+        handle = real_fdopen(fd, mode)
+        return Broken(handle) if len(opened) == 3 else handle  # config, proof, then the restore stage
+    module["_replace"], module["_fdopen"] = replace, fdopen
+    assert _opencode(module, "opencode_config", root) == 1
+    assert len(opened) == 3
+    assert path.read_bytes() == config_before
+    for directory in (path.parent, root / "state"):
+        assert not [p for p in directory.iterdir() if p.name.startswith(".opencode")]
