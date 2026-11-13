@@ -139,9 +139,11 @@ The Install tab also shows manual Codex snippets and Copilot fallback commands/h
 
 An owner can request a healthy scope amendment before or after opening a PR. The current Leader
 reviews the normalized path/action/command scope, then the owner separately acknowledges the
-delivered approval. Held workspace edits remain intact. Three amendments and sixteen cumulative
-unique added file paths are the attempt limits; any stricter configured limits remain in force.
-Rejected amendments and removed paths retain their history and budget cost.
+delivered approval. Held workspace edits remain intact. Three approved amendments, eight amendment
+requests of any outcome and sixteen cumulative unique added file paths are the attempt limits; any
+stricter configured limits remain in force. A rejected amendment does not count toward the three
+approved ones, but it still counts toward the eight requests and its added paths keep their cost.
+Removed paths retain their history and budget cost.
 
 When independent review requires changes to a submitted implementation revision, the assigned
 reviewer records a structured negative disposition for the exact head, then the current Leader

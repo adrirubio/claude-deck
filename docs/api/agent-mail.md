@@ -203,9 +203,13 @@ A healthy amendment works before a PR exists. It reads the assigned branch's com
 and tree without discarding held edits. Its path baseline must come from structured approved
 initial-plan metadata or the preceding approved implementation revision. Legacy plans without
 verifiable structured paths are refused; prose does not establish authority. Each attempt allows
-at most three amendments and sixteen cumulative normalized unique added file paths. Rejection
-and removal do not refund those limits. Existing stricter path, command, revision and failed-head
-limits still apply. Exact current-round replays consume no additional unit.
+at most three approved amendments (`amendment_count_limit`), eight amendment requests of any
+outcome (`amendment_request_limit`) and sixteen cumulative normalized unique added file paths
+(`amendment_added_path_limit`). Only an amendment the Leader approved counts toward the three, so a
+rejected proposal does not spend the owner's correction budget; it does count toward the eight
+requests, and its added paths and removed paths do not refund the path limit. Existing stricter
+path, command, revision and failed-head limits still apply. Exact current-round replays consume no
+additional unit.
 
 Amendments reuse `synth_city_decide_continuation` and `synth_city_ack_continuation` for the
 current Leader decision and separate delivered owner activation. Requesting an amendment stops

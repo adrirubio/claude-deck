@@ -86,7 +86,10 @@ _HOSTED_ONLY_LOCAL_BUILD = re.compile(
 _TOOL_FALLBACK_KEYS = frozenset(
     {"target", "if_missing", "package", "revert_required"}
 )
+# Only amendments the Leader approved count toward the first limit; a rejected request does not spend the owner's
+# correction budget. The second limit caps requests of any outcome so a flood still stops.
 MAX_SCOPE_AMENDMENTS = 3
+MAX_SCOPE_AMENDMENT_REQUESTS = 8
 MAX_AMENDMENT_ADDED_PATHS = 16
 
 
@@ -746,8 +749,10 @@ class GithubApprovalService:
         ))).all())
         amendments = [row for row in prior if row.origin_kind == "scope_amendment"]
         previous_added = {path for row in amendments for path in row.amendment_added_paths}
-        if len(amendments) >= MAX_SCOPE_AMENDMENTS:
+        if sum(1 for row in amendments if row.approved_at is not None) >= MAX_SCOPE_AMENDMENTS:
             raise GithubApprovalError("amendment_count_limit")
+        if len(amendments) >= MAX_SCOPE_AMENDMENT_REQUESTS:
+            raise GithubApprovalError("amendment_request_limit")
         if len(previous_added | set(added)) > MAX_AMENDMENT_ADDED_PATHS:
             raise GithubApprovalError("amendment_added_path_limit")
         if len(prior) >= scope.max_continuation_revisions or (
@@ -810,8 +815,13 @@ class GithubApprovalService:
             GithubAttemptScopeRevision.work_item_id == item.id,
             GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce))).all())
         amendments = [row for row in rows if row.origin_kind == "scope_amendment"]
-        if len(amendments) > MAX_SCOPE_AMENDMENTS:
+        # Every amendment ever approved counts once, and the revision being decided or activated counts once even
+        # though its own approved_at is already set when it is activated.
+        counted = {row.id for row in amendments if row.approved_at is not None} | {revision.id}
+        if len(counted) > MAX_SCOPE_AMENDMENTS:
             raise GithubApprovalError("amendment_count_limit")
+        if len(amendments) > MAX_SCOPE_AMENDMENT_REQUESTS:
+            raise GithubApprovalError("amendment_request_limit")
         if len({path for row in amendments for path in row.amendment_added_paths}) > MAX_AMENDMENT_ADDED_PATHS:
             raise GithubApprovalError("amendment_added_path_limit")
         if (len(rows) > scope.max_continuation_revisions
