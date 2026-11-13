@@ -33,15 +33,15 @@ When a rule can do a job, the job belongs in the controller, not in an agent pro
 
 ## The factory
 
-[![The factory: the supervisor, the Synth City controller and the team inside the factory boundary; the Director, the grooming helper and GitHub outside it](/images/operating-model/factory.svg)](/images/operating-model/factory.svg)
+[![The factory: the Synth City controller and the team inside the factory boundary; the Director, the supervisor, the grooming helper and GitHub outside it](/images/operating-model/factory.svg)](/images/operating-model/factory.svg)
 
-The **factory** is the supervisor, the Synth City controller and the team, working together on the Director's backlog.
+The **factory** is the Synth City controller and the AI teams, working together on the Director's backlog. The Director, the supervisor, the AI helpers and GitHub work with the factory from outside it.
 
-Test: if the Director must start, stop, upgrade or repair a part, the part is in the factory.
+Test: if the Director must start, stop, upgrade or repair a part, the part is in the factory. The Director starts, stops, upgrades and repairs the Synth City controller and the teams. The supervisor helps the Director do that, from outside.
 
 | Part | In the factory? | Reason |
 |---|---|---|
-| Supervisor (AI agent) | Yes | The Director starts it and gives it delegation. |
+| Supervisor (AI agent) | No | It helps the Director start, stop, upgrade and repair the factory, from outside. Its powers come from the Director's recorded delegation. |
 | Synth City controller (non-agent) | Yes | Maintenance upgrades and repairs it. |
 | Team (AI agents) | Yes | Synth City launches its sessions. The Director chooses the roster. |
 | GitHub (non-agent) | No | It keeps running when the factory stops. It holds the backlog, and the result goes out there. |
@@ -64,7 +64,7 @@ An optional AI agent can help. It drafts or splits issues for the Director, and 
 
 **Normal running.** Synth City code finds problems: stopped attempts, stalled owners, recovery decisions, review or merge requests and HOLD. The Leader acts on backlog work. The Director makes the retained decisions. A supervisor is optional.
 
-**Factory maintenance.** Maintenance is a Synth City feature that the supervisor drives.
+**Factory maintenance.** Maintenance is a Synth City feature that the supervisor drives from outside the factory, helping the Director.
 
 - Synth City supplies `scripts/factory-maintenance.py` and its checks: owner checkpoints through Mail, pause, backup, proof of termination, deploy and retained-state checks.
 - The supervisor decides when to run it, prepares the reviewed fix and the request files, runs the operation and resumes the factory.
@@ -76,7 +76,7 @@ See the [maintenance runbook](https://github.com/albiexai/synth-city/blob/master
 
 ## Why the supervisor runs outside the controller
 
-The supervisor is part of the factory, but it does not run inside the controller process.
+The supervisor works on the factory from outside it, and it does not run inside the controller process either.
 
 - **It cannot upgrade its own host.** An upgrade stops the controller, proves termination and restarts it. An agent inside the controller stops when the controller stops.
 - **A watchdog must not fail with the thing it watches.** If the controller stalls or crashes, an internal supervisor stops too, and nobody sees the failure.
