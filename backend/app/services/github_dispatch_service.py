@@ -2591,8 +2591,6 @@ class GithubDispatchService:
         if not enabled:
             return
         preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
-        if preset is not None and preset.leader_slot_id not in {slot.id for slot in enabled}:
-            return
         leader = next((slot for slot in enabled if preset is not None
                        and slot.id == preset.leader_slot_id), enabled[0])
 
@@ -3652,7 +3650,8 @@ class GithubDispatchService:
             return
         await db.refresh(scope)
         preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
-        if preset is None or not preset.autonomy_enabled or not scope.enabled:
+        if (preset is None or not preset.autonomy_enabled or not scope.enabled
+                or not leader.enabled or preset.leader_slot_id != leader.id):
             return
         initial = self._ack_deadline_seconds(item, preset)
         maximum = max(initial, self._ack_deadline_seconds(item, preset, maximum=True))

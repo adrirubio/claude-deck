@@ -7947,3 +7947,35 @@ def test_default_ack_guidance_explains_busy_leader_wait_without_approval():
     text = github_dispatch_service._leader_ack_instruction(None, None, before='implementation')
     assert 'finite' in text and 'activity' in text
     assert 'does not approve' in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('leader_state', ['unassigned', 'disabled'])
+async def test_acknowledged_owner_contact_monitor_survives_unavailable_leader(db, monkeypatch, leader_state):
+    preset, slots, scope = await _team(db)
+    if leader_state == 'unassigned':
+        preset.leader_slot_id = None
+    else:
+        slots[0].enabled = False
+    old = datetime.utcnow() - timedelta(minutes=16)
+    item = GithubWorkItem(scope_id=scope.id, issue_number=843, issue_title='Owner health',
+        issue_url='u', github_updated_at=old, dispatch_status='dispatched',
+        owner_slot_id=slots[1].id, dispatched_at=old, updated_at=old, ack_received_at=old)
+    db.add(item)
+    await db.commit()
+    workspace = await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    async def renew(_db, _scope, _item, leased):
+        leased.lease_last_owner_contact_at = datetime.utcnow()
+        await _db.flush()
+        return True
+    monkeypatch.setattr('app.services.native_owner_contact.renew_native_owner_contact', renew)
+    monkeypatch.setattr(github_dispatch_service, '_brief_delivered', AsyncMock(return_value=True))
+    monkeypatch.setattr(github_dispatch_service, '_leader_is_active',
+        AsyncMock(side_effect=AssertionError('Acknowledged owner health does not observe Leader activity')))
+    await github_dispatch_service.monitor_dispatched(db, scope, slots,
+        wake_state_by_slot={slot.id: 'wakeable' for slot in slots if slot.enabled})
+    await db.refresh(workspace)
+    await db.refresh(item)
+    assert workspace.lease_last_owner_contact_at > old
+    assert item.dispatch_status == 'dispatched' and item.escalation_reason is None
+    assert item.ack_received_at == old and item.last_nudge_at is None
