@@ -28,11 +28,14 @@ type Progress = {
   checked_at: string
   valid_until: string
   phase: string
-  next_actor: 'owner' | 'leader' | 'operator' | 'controller' | 'none'
+  next_actor: 'owner' | 'leader' | 'operator' | 'controller' | 'reviewer' | 'none'
   next_action: string
   next_poll_expected_at: string | null
   last_check_head: string | null
   publication: Publication
+  required_checks?: { head_sha: string; completed: number; total: number;
+    state: 'waiting' | 'finished' | 'no_next_actor'; result: 'pending' | 'success' | 'failure';
+    observed_at: string; changed_at: string } | null
   remaining_work?: RemainingWork
 }
 
@@ -45,6 +48,8 @@ const phases: Record<string, string> = {
   review: 'Review and merge', diagnostic_review: 'Diagnostic review', ci: 'Automatic checks',
   planning: 'Owner planning or acknowledgement', implementation: 'Approved implementation', unknown: 'Unknown',
   workspace_wait: 'Workspace lease wait',
+  ci_wait: 'Waiting for required checks', ci_finished: 'Required checks finished',
+  ci_no_next_actor: 'Checks finished, no next actor',
 }
 const reasons: Record<string, string> = {
   workspace_not_leased: 'The workspace is no longer leased to this item.',
@@ -77,13 +82,25 @@ function valid(data: Progress, itemId: number, nonce: string | null, owner: numb
     && Number.isFinite(timestamp(data.checked_at)) && Number.isFinite(timestamp(data.valid_until))
     && timestamp(data.valid_until) <= timestamp(data.checked_at) + 30_000
     && typeof data.phase === 'string' && typeof data.next_action === 'string'
-    && ['owner', 'leader', 'operator', 'controller', 'none'].includes(data.next_actor)
+    && ['owner', 'leader', 'operator', 'controller', 'reviewer', 'none'].includes(data.next_actor)
     && publication && ['current', 'historical', 'unavailable'].includes(publication.state)
     && [publication.local_sha, publication.published_sha, data.last_check_head]
       .every((sha) => sha === null || typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha))
     && [publication.unpublished_commits, publication.tracked_changes, publication.untracked_files]
       .every((count) => count === null || Number.isSafeInteger(count) && count >= 0)
+    && (data.required_checks == null || validChecks(data.required_checks))
     && (data.remaining_work === undefined || validRemainingWork(data.remaining_work))
+}
+
+function validChecks(checks: NonNullable<Progress['required_checks']>) {
+  return typeof checks.head_sha === 'string' && /^[0-9a-f]{40}$/.test(checks.head_sha)
+    && Number.isSafeInteger(checks.completed) && Number.isSafeInteger(checks.total)
+    && checks.total > 0 && checks.completed >= 0 && checks.completed <= checks.total
+    && ['waiting', 'finished', 'no_next_actor'].includes(checks.state)
+    && ['pending', 'success', 'failure'].includes(checks.result)
+    && Number.isFinite(timestamp(checks.observed_at)) && Number.isFinite(timestamp(checks.changed_at))
+    && timestamp(checks.changed_at) <= timestamp(checks.observed_at)
+    && (checks.result !== 'success' || checks.completed === checks.total)
 }
 
 type PanelProps = {
@@ -169,7 +186,7 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const current = Boolean(matches && !error && (clock < expiry || (loading && clock < expiry + REFRESH_GRACE_MS)))
   const publication = matches ? data?.publication : null
   const publicationCurrent = current && publication?.state === 'current'
-  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Synth City', none: 'None' }
+  const actors = { owner: ownerName ?? 'Assigned owner', leader: 'Team Leader', operator: 'Director', controller: 'Synth City', reviewer: 'Assigned reviewer', none: 'None' }
   const branchUrl = item.dispatch_head_ref ? `https://github.com/${encodeURIComponent(item.repo_owner)}/${encodeURIComponent(item.repo_name)}/tree/${item.dispatch_head_ref.split('/').map(encodeURIComponent).join('/')}` : null
   let summary = 'Publication status unavailable'
   if (publicationCurrent && publication?.relation === 'synchronized') summary = 'Local HEAD matches the published SHA'
@@ -197,6 +214,16 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
       <p className="text-sm"><span className="font-medium">{current ? 'Phase' : 'Previous phase'}:</span> {phases[data.phase] ?? 'Unknown'}
         {' · '}{current ? 'Next actor' : 'Previous actor'}: {actors[data.next_actor]}</p>
       <p className="text-sm">{current ? data.next_action : `Previous next action: ${data.next_action}`}</p>
+      {data.required_checks && <p className="text-sm" aria-label="Required checks">
+        {!current && 'Previous check state: '}
+        {data.required_checks.state === 'waiting'
+          ? `Waiting for required checks (${data.required_checks.completed} of ${data.required_checks.total} done).`
+          : data.required_checks.state === 'no_next_actor'
+            ? 'Checks finished, no next actor has a confirmed wake.'
+            : 'Required checks finished; the next actor wake is confirmed.'}
+        {data.required_checks.result === 'failure' && <span className="text-destructive"> Required checks failed.</span>}
+        {' '}<span className="text-xs text-muted-foreground">Check head: {data.required_checks.head_sha.slice(0, 8)} · observed {date(data.required_checks.observed_at)}</span>
+      </p>}
       <WorkRemainingSummary report={data.remaining_work} current={current} complete={data.phase === 'complete'}
         nextAction={data.next_action} item={item} />
       <p className="text-sm font-medium">{summary}</p>

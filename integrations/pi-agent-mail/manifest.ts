@@ -1297,6 +1297,50 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_watch_required_checks",
+    "description": "Register or clear the current head's independent reviewer for scheduled CI notices.\n\n    Only the current designated Leader may bind a current enabled team reviewer.\n    Use a full PR head SHA and current attempt revision. Repeat for each new head.\n    Pass null to clear the reviewer. Completion wakes are durable and deduplicated.\n    A watch grants no approval, acceptance, retry, lease or merge authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "scope_revision": {
+          "title": "Scope Revision",
+          "type": "integer"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "reviewer_member_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reviewer Member Id"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "scope_revision",
+        "head_sha",
+        "reviewer_member_id"
+      ],
+      "title": "synth_city_watch_required_checksArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_whoami",
     "description": "Register with Albiex Synth City Agent Mail and return your participant identity, role,\n    charter, repo, live status, and unread/pending inbox counts. Call this once when\n    starting coordinated work.",
     "inputSchema": {

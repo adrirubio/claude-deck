@@ -454,3 +454,13 @@ These are **requirements for the implementation team's tests**, not results. Not
 - **T-O1 Golden bytes, unchanged gates.** For a fixed hostname and lease token, v4.0.0 derives the *same* instance ID and lease hash as the v3.1 code, capability-token hashes verify identically, and `deck_compat_migrations` rows are honoured (no compat migration re-runs destructively). Separately assert the negatives: an expired lease stays expired, existing HOLD/approval checks still refuse what they refused in the fixture, and a still-valid lease passes *because it was still valid*, not because hashing granted it anything.
 - **T-G1 No-old-name guard with a narrow migration exception.** On the implementation branch, the inventory's primary search over executable/configuration paths returns only: history and dated records; the frozen constants of section 4.8 (each with its rationale); negative fixtures; this campaign's planning documents; and a **named, minimal one-time-migration module set** whose old-name literals exist solely to identify old paths, keys, registrations and markers for conversion. Tests must prove the exception is conversion-only: those literals are unreachable as ongoing input (no old env key is read for a value, no old tool/header/server name is accepted) once first-start stages complete. Any other hit fails the check.
 - **T-G2 Idempotence and the honest recovery contract.** A second v4.0.0 start — including with explicit old-default environment/`.env` values still in place (T-D6) — changes no file, reference or config byte and recreates no old-default location. The documented recovery from #791, followed literally — restoring the *complete* pre-upgrade set (database set, home folder, provider configuration, browser state) from a pre-upgrade backup, with post-upgrade state discarded as documented — starts the fixture under v3.1 with its pre-upgrade data intact; and a partial rename-back (files only) is shown to be insufficient, matching the published contract rather than a promise the product does not keep.
+
+## v4.1 additive public surface (#839)
+
+The 36-tool rename inventory above remains the historical v4.0 contract. v4.1 adds
+`synth_city_watch_required_checks`, bringing the current public surface to 37 tools.
+It has no old-prefix alias. The current designated Leader binds or clears a current
+team reviewer to a full PR head and attempt revision. The watch schedules notices;
+it grants no review acceptance, approval, retry, lease or merge authority. Both
+provider surfaces and the generated Pi manifest include this addition. Pi retains
+exactly its existing private close-generation tool.

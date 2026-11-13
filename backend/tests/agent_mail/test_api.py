@@ -3431,3 +3431,31 @@ async def test_public_authentication_status_is_one_live_boolean(auth_client, mon
             response = await auth_client.get("/api/v1/agent-mail/authentication-status", headers=headers)
             assert response.status_code == 200
             assert response.json() == {"director_key_configured": bool(key)}
+
+
+@pytest.mark.asyncio
+async def test_required_check_watch_requires_current_member_auth_and_explicit_context(client,db,monkeypatch):
+    from app.services.github_ci_watch_service import github_ci_watch_service
+    person=await _member(db,'ci-watch','Leader')
+    headers=await _session_headers(db,person,'ci-watch')
+    calls=[]
+    async def register(db,**kwargs):
+        calls.append(kwargs)
+        return {'work_item_id':149,'head_sha':'a'*40,'reviewer_member_id':45}
+    monkeypatch.setattr(github_ci_watch_service,'register',register)
+    path='/api/v1/agent-mail/required-check-watch'
+    payload={'work_item_id':149,'dispatch_nonce':'fixture','scope_revision':0,'head_sha':'a'*40,'reviewer_member_id':45}
+    assert (await client.post(path,json=payload)).status_code==401
+    assert (await client.post(path,json=payload,headers={'X-Synth-City-Operator-Token':'test-director-key'})).status_code==401
+    response=await client.post(path,json=payload,headers=headers)
+    assert response.status_code==200 and response.json()['head_sha']=='a'*40
+    assert calls[0]['actor_member_id']==person.id and calls[0]['session'].member_id==person.id
+    assert (await client.post(path,json={**payload,'head_sha':'short'},headers=headers)).status_code==422
+    assert (await client.post(path,json={**payload,'approval':True},headers=headers)).status_code==422
+    async def refused(db,**kwargs):raise PermissionError('current_leader_required')
+    monkeypatch.setattr(github_ci_watch_service,'register',refused)
+    assert (await client.post(path,json=payload,headers=headers)).status_code==403
+    async def private_failure(db,**kwargs):raise ValueError('token=private-fixture')
+    monkeypatch.setattr(github_ci_watch_service,'register',private_failure)
+    response=await client.post(path,json=payload,headers=headers)
+    assert response.status_code==409 and 'private-fixture' not in response.text

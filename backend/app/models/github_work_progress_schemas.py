@@ -47,6 +47,16 @@ class GithubPublicationObservation(PydanticBaseModel):
     destination_url: str | None = None
 
 
+class GithubRequiredCheckProgress(BaseModel):
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    completed: int = Field(ge=0)
+    total: int = Field(gt=0)
+    state: Literal["waiting", "finished", "no_next_actor"]
+    result: Literal["pending", "success", "failure"]
+    observed_at: datetime
+    changed_at: datetime
+
+
 class GithubWorkProgressResponse(BaseModel):
     work_item_id: int
     dispatch_nonce: str | None
@@ -54,10 +64,11 @@ class GithubWorkProgressResponse(BaseModel):
     checked_at: datetime
     valid_until: datetime
     phase: str
-    next_actor: Literal["owner", "leader", "operator", "controller", "none"]
+    next_actor: Literal["owner", "leader", "operator", "controller", "reviewer", "none"]
     next_action: str
     next_poll_expected_at: datetime | None = None
     last_check_head: str | None = None
+    required_checks: GithubRequiredCheckProgress | None = None
     publication: GithubPublicationObservation
     remaining_work: GithubWorkRemainingView = Field(default_factory=GithubWorkRemainingView)
     remaining_work_context: ReportContext | None = None

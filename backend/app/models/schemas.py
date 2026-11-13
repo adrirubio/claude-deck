@@ -1867,6 +1867,15 @@ class SupervisorAddress(BaseModel):
     display_name: str | None = None
 
 
+class TeamIdleItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: int = Field(gt=0)
+    scope_id: int = Field(gt=0)
+    issue_number: int = Field(gt=0)
+    last_actor: str = Field(max_length=80)
+    last_progress_at: datetime
+
+
 class SupervisorObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["none", "healthy", "late", "absent"]
@@ -1877,6 +1886,7 @@ class SupervisorObservation(BaseModel):
     grace_seconds: int = Field(ge=1)
     note: str | None
     attention: Literal["Supervisor check-in overdue"] | None
+    team_idle: list[TeamIdleItem] = Field(default_factory=list)
 
 
 class SupervisorBindingRequest(BaseModel):
@@ -1960,6 +1970,15 @@ class MailDecisionRequest(BaseModel):
     approval_request_id: int
     decision: Literal["approved", "rejected"]
     reason: str = Field(min_length=1)
+
+
+class MailRequiredCheckWatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: int = Field(gt=0)
+    dispatch_nonce: str = Field(min_length=1, max_length=200)
+    scope_revision: int = Field(ge=0)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    reviewer_member_id: int | None = Field(..., gt=0)
 
 
 class MailApprovalRequestCreate(BaseModel):

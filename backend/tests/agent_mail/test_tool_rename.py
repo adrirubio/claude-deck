@@ -10,7 +10,7 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 
-# Independent golden list transcribed from compatibility.md section 4.3.
+# Independent golden list: compatibility.md section 4.3 plus its v4.1 additive note.
 PUBLIC_SUFFIXES = {
     "ack_continuation", "ack_message", "approve_work_item", "attach_image_to_bridge_session",
     "check_inbox", "create_handoff", "create_team", "decide_continuation",
@@ -20,7 +20,7 @@ PUBLIC_SUFFIXES = {
     "prepare_operator_action_contexts", "prepare_work_remaining_summary", "render_github_summary",
     "reply", "report_backlog_assessment", "report_dispatch_status", "report_owner_followup",
     "request_context", "request_continuation", "request_work_item_approval", "retry_work_item",
-    "send_message", "supervisor_checkin", "update_team_campaign", "update_team_parent_issue", "whoami",
+    "send_message", "supervisor_checkin", "watch_required_checks", "update_team_campaign", "update_team_parent_issue", "whoami",
 }
 PUBLIC_NAMES = {"synth_city_" + suffix for suffix in PUBLIC_SUFFIXES}
 PRIVATE_NAME = "__synth_city_mail_close_generation"
@@ -51,7 +51,7 @@ def test_t_t1_exact_public_and_pi_private_surface(monkeypatch, provider):
     shim = load_shim(monkeypatch, provider)
     tools = asyncio.run(shim.mcp.list_tools())
     expected = PUBLIC_NAMES | ({PRIVATE_NAME} if provider == "pi-cli" else set())
-    assert len(PUBLIC_NAMES) == 36
+    assert len(PUBLIC_NAMES) == 37
     assert {tool.name for tool in tools} == expected
     assert len(tools) == len(expected)
     for tool in tools:

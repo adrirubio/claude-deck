@@ -98,7 +98,7 @@ def test_actual_mcp_tool_list_keeps_close_private_to_pi(monkeypatch, provider):
     names = {tool.name for tool in asyncio.run(module.mcp.list_tools())}
     assert ("__synth_city_mail_close_generation" in names) == (provider == "pi-cli")
     assert "synth_city_decide_continuation" in names
-    assert len({name for name in names if name.startswith("synth_city_")}) == 36
+    assert len({name for name in names if name.startswith("synth_city_")}) == 37
     assert "synth_city_supervisor_checkin" in names
     assert {"synth_city_get_backlog_coordination", "synth_city_report_backlog_assessment",
             "synth_city_report_owner_followup",

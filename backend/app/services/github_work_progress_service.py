@@ -381,6 +381,18 @@ class GithubWorkProgressService:
         ):
             phase, actor, action = ("workspace_wait", "leader",
                 "Reconcile the missing workspace lease before work continues.")
+        from app.services.github_ci_watch_service import github_ci_watch_service
+        required_checks = await github_ci_watch_service.view(db, item)
+        if required_checks and phase in {"ci", "review"} and actor != "operator":
+            if required_checks["state"] == "waiting":
+                phase, actor, action = ("ci_wait", "controller",
+                    f"Waiting for required checks ({required_checks['completed']} of {required_checks['total']} done).")
+            elif required_checks["state"] == "no_next_actor":
+                phase, actor, action = ("ci_no_next_actor", "leader",
+                    "Checks finished, no next actor has a confirmed wake. Reconcile current review or correction ownership.")
+            else:
+                phase, actor, action = ("ci_finished", "leader",
+                    "Required checks finished. Complete the current-head review or correction handoff; merge gates remain.")
         check_head = item.last_verified_sha
         if not isinstance(check_head, str) or not _SHA.fullmatch(check_head):
             check_head = None
@@ -407,7 +419,7 @@ class GithubWorkProgressService:
             phase=phase, next_actor=actor, next_action=action,
             next_poll_expected_at=(_utc(polled_at) + timedelta(
                 seconds=settings.github_dispatch_interval_seconds)) if polled_at else None,
-            last_check_head=check_head, publication=publication,
+            last_check_head=check_head, publication=publication, required_checks=required_checks,
             remaining_work=remaining, remaining_work_context=context,
         )
 

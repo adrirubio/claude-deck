@@ -43,6 +43,7 @@ from app.models.schemas import (
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
     MailApprovalRequestCreate,
+    MailRequiredCheckWatchCreate,
     MailContinuationDecisionRequest,
     MailInboxResponse,
     MailDecisionRequest,
@@ -72,6 +73,25 @@ from app.services.github_approval_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.post("/required-check-watch")
+async def watch_required_checks(request: MailRequiredCheckWatchCreate,
+    session: MailAgentSession = Depends(require_mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_ci_watch_service import github_ci_watch_service
+    require_current_mail_session(session)
+    try:
+        return await github_ci_watch_service.register(db, **request.model_dump(),
+            actor_member_id=session.member_id, session=session)
+    except PermissionError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc) if str(exc) in {
+            "full_head_required", "stale_check_watch_context", "named_required_checks_required",
+            "current_pr_head_required", "check_watch_policy_changed", "reviewer_not_current_team_member"
+        } else "check_watch_unavailable") from None
 
 async def require_mail_director(
     x_synth_city_operator_token: Optional[str] = Header(default=None),

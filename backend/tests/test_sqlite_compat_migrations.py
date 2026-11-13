@@ -1713,3 +1713,24 @@ async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
             assert await conn.scalar(text("SELECT lease_release_reminder_count FROM github_workspaces")) == 4
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_required_check_tables_are_additive_and_restart_preserves_records():
+    engine=create_async_engine('sqlite+aiosqlite:///:memory:')
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("INSERT INTO agent_team_presets (id,name,description,created_at,updated_at,autonomy_enabled) "
+                "VALUES (1,'Existing','Keep original facts',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)"))
+            await conn.execute(text("INSERT INTO github_team_progress (preset_id,fingerprint,last_progress_at,items) "
+                "VALUES (1,'semantic',CURRENT_TIMESTAMP,'{}')"))
+            for _ in range(2):
+                await conn.run_sync(Base.metadata.create_all)
+                await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text('SELECT description FROM agent_team_presets WHERE id=1'))=='Keep original facts'
+            assert await conn.scalar(text('SELECT fingerprint FROM github_team_progress WHERE preset_id=1'))=='semantic'
+            for table in ('github_required_check_watches','github_required_check_recipients','github_team_progress'):
+                assert await _sqlite_columns(conn,table)
+    finally:
+        await engine.dispose()

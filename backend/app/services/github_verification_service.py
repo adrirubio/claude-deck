@@ -38,6 +38,7 @@ from app.services.github_client import (
 )
 from app.services.github_check_observation import GithubCheckObservationError
 from app.services import required_ci_attention
+from app.services.github_ci_watch_service import github_ci_watch_service
 from app.services.github_terminal_revision_service import (
     TerminalRevisionContextChanged, complete_current_revision, lock_terminal_transition,
 )
@@ -1697,6 +1698,7 @@ class GithubVerificationService:
         *,
         revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
+        ci_context = await github_ci_watch_service.capture(db, scope, item)
         policy_guard = policy_context(item)
         policy = effective_policy(item, scope)
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
@@ -1785,6 +1787,12 @@ class GithubVerificationService:
         )
         if not await claim_policy_context(db, item, policy_guard):
             return
+        if ci_context is not None:
+            ci_context["verification_head_sha"] = item.verification_head_sha
+        owner_notice_sent = await github_ci_watch_service.observe(
+            db, scope, item, head_sha, checks, policy, context=ci_context)
+        if owner_notice_sent is None:
+            return  # The observation fence changed or its database snapshot was contended.
         required_ci_attention.note_readable(item)
         blockers = required_check_blockers(policy, checks, head_sha)
         if not checks and not policy.required_checks:
@@ -1824,6 +1832,7 @@ class GithubVerificationService:
                 item,
                 head_sha,
                 self._failed_check_note(failed),
+                owner_notice_sent=owner_notice_sent,
                 subject="GitHub checks failed",
                 body_markdown=(
                     f"GitHub checks failed for issue #{item.issue_number} / "
@@ -1868,6 +1877,7 @@ class GithubVerificationService:
         client: GithubClient,
         pull: dict | None = None,
     ) -> None:
+        ci_context = await github_ci_watch_service.capture(db, scope, item)
         pull = pull or await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         if not await self._validate_polled_pull_identity(
             db,
@@ -1977,6 +1987,12 @@ class GithubVerificationService:
                         },
                     )
                     await db.commit()
+            elif effective_policy(item, scope).required_checks:
+                # Human review can remain open across reruns. Keep its check view
+                # current in the normal monitor, without polling from UI reads.
+                checks = await client.list_check_runs_for_ref(scope.repo_owner, scope.repo_name, current_head)
+                await github_ci_watch_service.observe(db, scope, item, current_head, checks,
+                    effective_policy(item, scope), context=ci_context)
             return
         if item.issue_type == "design" or scope.merge_policy != "auto":
             return
@@ -2236,9 +2252,15 @@ class GithubVerificationService:
         head_sha: str,
     ) -> bool:
         """Wait for head checks without charging implementation retries."""
+        ci_context = await github_ci_watch_service.capture(db, scope, item)
+        policy = effective_policy(item, scope)
         checks = await client.list_check_runs_for_ref(
             scope.repo_owner, scope.repo_name, head_sha,
         )
+        observed = await github_ci_watch_service.observe(
+            db, scope, item, head_sha, checks, policy, context=ci_context)
+        if observed is None:
+            return True
         status = await client.get_combined_status_for_ref(
             scope.repo_owner, scope.repo_name, head_sha,
         )
@@ -2618,6 +2640,13 @@ class GithubVerificationService:
             body = f"{body}\n\nAuto-merge fell back to human merge: {fallback_note}"
             payload["auto_merge_fallback"] = True
             payload["fallback_note"] = fallback_note
+        completion_id = await github_ci_watch_service.completion_id(db, item)
+        if completion_id is not None and fallback_note is None:
+            # The durable completion already notified the Leader and reviewer.
+            # Keep the owner's ready-state notice without another team-wide wake.
+            await github_dispatch_service.notify_owner(db, item, subject="Code PR ready for review",
+                body_markdown=body, payload=payload, delivery_key=f"required-checks:{completion_id}:owner-ready")
+            return
         await github_dispatch_service.notify_team(
             db,
             item=item,
@@ -2675,6 +2704,7 @@ class GithubVerificationService:
         payload: dict,
         retry_status: str,
         revision: GithubAttemptScopeRevision | None,
+        owner_notice_sent: bool = False,
     ) -> None:
         if revision is None:
             await self._record_failed_verification_attempt(
@@ -2683,6 +2713,7 @@ class GithubVerificationService:
                 item,
                 head_sha,
                 note,
+                owner_notice_sent=owner_notice_sent,
                 subject=subject,
                 body_markdown=body_markdown,
                 payload=payload,
@@ -2743,23 +2774,24 @@ class GithubVerificationService:
                 revision.submitted_at = None
                 self._set_failure_note(item, note)
                 await db.commit()
-            await github_dispatch_service.notify_owner(
-                db,
-                item,
-                subject=subject,
-                body_markdown=body_markdown,
-                payload={
-                    **payload,
-                    "retry_count": item.retry_count,
-                    "head_sha": head_sha,
-                    "scope_revision": revision.revision,
-                    "revision_failed_head_count": revision.failed_head_count,
-                },
-                delivery_key=(
-                    f"github-continuation:{revision.id}:verification-failure:"
-                    f"{head_sha or 'no-head'}"
-                ),
-            )
+            if not owner_notice_sent:
+                await github_dispatch_service.notify_owner(
+                    db,
+                    item,
+                    subject=subject,
+                    body_markdown=body_markdown,
+                    payload={
+                        **payload,
+                        "retry_count": item.retry_count,
+                        "head_sha": head_sha,
+                        "scope_revision": revision.revision,
+                        "revision_failed_head_count": revision.failed_head_count,
+                    },
+                    delivery_key=(
+                        f"github-continuation:{revision.id}:verification-failure:"
+                        f"{head_sha or 'no-head'}"
+                    ),
+                )
             return
         revision.failed_head_count += 1
         revision.last_failed_head_sha = head_sha
@@ -2799,23 +2831,24 @@ class GithubVerificationService:
             item.continuation_nudged_at = None
             item.updated_at = now
         await db.commit()
-        await github_dispatch_service.notify_owner(
-            db,
-            item,
-            subject=subject,
-            body_markdown=body_markdown,
-            payload={
-                **payload,
-                "retry_count": item.retry_count,
-                "head_sha": head_sha,
-                "scope_revision": revision.revision,
-                "revision_failed_head_count": revision.failed_head_count,
-            },
-            delivery_key=(
-                f"github-continuation:{revision.id}:verification-failure:"
-                f"{head_sha or 'no-head'}"
-            ),
-        )
+        if not owner_notice_sent:
+            await github_dispatch_service.notify_owner(
+                db,
+                item,
+                subject=subject,
+                body_markdown=body_markdown,
+                payload={
+                    **payload,
+                    "retry_count": item.retry_count,
+                    "head_sha": head_sha,
+                    "scope_revision": revision.revision,
+                    "revision_failed_head_count": revision.failed_head_count,
+                },
+                delivery_key=(
+                    f"github-continuation:{revision.id}:verification-failure:"
+                    f"{head_sha or 'no-head'}"
+                ),
+            )
 
     async def _record_failed_verification_attempt(
         self,
@@ -2829,6 +2862,7 @@ class GithubVerificationService:
         body_markdown: str,
         payload: dict,
         retry_status: str,
+        owner_notice_sent: bool = False,
     ) -> None:
         if head_sha and item.last_verified_sha == head_sha:
             if item.dispatch_status != retry_status:
@@ -2848,17 +2882,18 @@ class GithubVerificationService:
             reason_code="failed_verification_attempt",
             source="github_verification_service._record_failed_verification_attempt")
         self._set_failure_note(item, note)
-        await github_dispatch_service.notify_owner(
-            db,
-            item,
-            subject=subject,
-            body_markdown=body_markdown,
-            payload={
-                **payload,
-                "retry_count": item.retry_count,
-                "head_sha": head_sha,
-            },
-        )
+        if not owner_notice_sent:
+            await github_dispatch_service.notify_owner(
+                db,
+                item,
+                subject=subject,
+                body_markdown=body_markdown,
+                payload={
+                    **payload,
+                    "retry_count": item.retry_count,
+                    "head_sha": head_sha,
+                },
+            )
         if item.retry_count > scope.max_verification_retries:
             await github_dispatch_service.escalate(
                 db,

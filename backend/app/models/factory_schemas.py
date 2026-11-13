@@ -282,13 +282,15 @@ class FactoryErrorResponse(FactoryModel):
 
 class TeamSummaryAttention(FactoryModel):
     code: Literal["attempt_stopped", "recovery_decision", "human_review", "owner_stalled",
-                  "observation_pause", "hold", "recovery_only", "hold_unavailable"]
+                  "observation_pause", "hold", "recovery_only", "hold_unavailable", "team_idle"]
     work_item_id: PositiveId | None = None
     scope_id: PositiveId | None = None
     issue_number: PositiveId | None = None
     pause_id: PositiveId | None = None
     observed_at: Timestamp | None = None
     resume_deadline: Timestamp | None = None
+    last_actor: str | None = Field(default=None, max_length=80)
+    last_progress_at: Timestamp | None = None
 
 
 class TeamSummaryHumanAction(FactoryModel):
@@ -381,6 +383,6 @@ class AgentTeamSummaryResponse(FactoryModel):
     reminder_attention_complete: bool = True
     human_actions: list[TeamSummaryHumanAction]
     remaining_work: TeamRemainingWork
-    next_actors: list[Literal["owner", "leader", "operator", "controller"]]
+    next_actors: list[Literal["owner", "leader", "operator", "controller", "reviewer"]]
     next_actor_coverage_complete: bool
     campaign: TeamCampaignSummary
