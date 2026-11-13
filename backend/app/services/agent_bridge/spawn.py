@@ -86,11 +86,15 @@ def spawn_session(
         from app.services import opencode_version
 
         # OpenCode 2 or later only; v1 and an unknown version never reach tmux.
-        if not opencode_version.opencode_version_gate().ready:
+        gate = opencode_version.opencode_version_gate()
+        if not gate.ready or gate.identity is None:
             raise ProviderLaunchError(
                 f"{opencode_version.BLOCK_CODE}: {opencode_version.REASON_REQUIRED}",
                 opencode_version.BLOCK_CODE,
             )
+        # Launch the exact binary that was probed, not whatever the tmux
+        # server's PATH resolves "opencode" to.
+        command[0] = gate.identity.path
     if provider.id == "pi-cli":
         from app.services.pi_mail_readiness import integration_path, pi_mail_environment, pi_mail_readiness
 

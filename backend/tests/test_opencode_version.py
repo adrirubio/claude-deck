@@ -240,19 +240,23 @@ def test_registration_refuses_when_the_pid_is_reused_during_the_check(proc, trus
     proc.add(10, 1, "bash", start="500", exe=_shell())
     proc.add(20, 10, "opencode", start="700", exe=trusted_v2)
     proc.add(30, 20, "python", exe="/usr/bin/python3")
-    real = peer_process.read_proc_stat
-    calls = {"n": 0}
+    real_stat = peer_process.read_proc_stat
+    real_readlink = os.readlink
+    reused = {"now": False}
 
-    def reused(pid):
-        if pid == 20:
-            calls["n"] += 1
-            if calls["n"] > 1:  # the second (post-read) observation sees a new process
-                return (10, "701")
-        return real(pid)
+    def readlink(path, *args, **kwargs):
+        if str(path).endswith("/20/exe"):
+            reused["now"] = True  # pid 20 is replaced while its exe is being read
+        return real_readlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(peer_process, "read_proc_stat", reused)
+    def stat(pid):
+        if pid == 20 and reused["now"]:
+            return (10, "701")
+        return real_stat(pid)
+
+    monkeypatch.setattr(peer_process, "read_proc_stat", stat)
+    monkeypatch.setattr(ov.os, "readlink", readlink)
     assert ov.member_gate_for_peer(pane, (30, 20, 10)).state == "unknown"
-
 
 def test_registration_refuses_unknown_identity(proc, trusted_v2):
     assert ov.member_gate_for_peer(None, ()).state == "unknown"
@@ -321,3 +325,56 @@ def test_readiness_strings_match_the_gate_module():
 
     assert readiness.OPENCODE_VERSION_REASON == ov.REASON_REQUIRED
     assert readiness.OPENCODE_VERSION_CODE == ov.BLOCK_CODE
+
+
+# ---------------------------------------------------------------- review findings (bounds and parent edges)
+
+def test_probe_output_is_capped_while_reading(fake_path, monkeypatch):
+    monkeypatch.setattr(ov, "PROBE_TIMEOUT_SECONDS", 3.0)
+    _fake_opencode(fake_path, 'echo "opencode v2.0.29"; head -c 2097152 /dev/zero')
+    started = time.monotonic()
+    gate = ov.opencode_version_gate()
+    assert gate.state == "unknown"  # oversized output fails closed
+    assert time.monotonic() - started < 3
+
+
+def test_probe_returns_by_its_deadline_when_a_detached_child_keeps_stdout(fake_path, monkeypatch):
+    monkeypatch.setattr(ov, "PROBE_TIMEOUT_SECONDS", 0.5)
+    # setsid moves the child out of the probe's process group; it keeps stdout open.
+    _fake_opencode(fake_path, 'setsid sleep 5 & echo "opencode v2.0.29"')
+    started = time.monotonic()
+    gate = ov.opencode_version_gate()
+    assert time.monotonic() - started < 2
+    assert gate.state == "unknown"
+
+
+def test_pane_check_refuses_a_listed_child_whose_pid_now_has_another_parent(proc, trusted_v2):
+    # The pane lists 20 as a child, but pid 20 now belongs to an unrelated
+    # trusted-v2 process whose parent is 99 (the pid was reused).
+    proc.add(10, 1, "bash", start="500", exe=_shell(), children=(20,))
+    proc.add(20, 99, "opencode", exe=trusted_v2)
+    assert ov.member_gate_for_pane(10, "500").state == "unknown"
+
+
+def test_registration_refuses_a_stale_peer_chain(proc, trusted_v2):
+    pane = peer_process.PeerPane(pane_pid=10, pane_proc_start="500", tmux_target="%1", peer_pid=30)
+    proc.add(10, 1, "bash", start="500", exe=_shell())
+    proc.add(20, 77, "opencode", exe=trusted_v2)  # 20 no longer descends from the pane
+    proc.add(30, 20, "python", exe="/usr/bin/python3")
+    assert ov.member_gate_for_peer(pane, (30, 20, 10)).state == "unknown"
+
+
+def test_registration_refuses_when_the_shim_no_longer_descends_from_the_trusted_process(proc, trusted_v2):
+    pane = peer_process.PeerPane(pane_pid=10, pane_proc_start="500", tmux_target="%1", peer_pid=30)
+    proc.add(10, 1, "bash", start="500", exe=_shell())
+    proc.add(20, 10, "opencode", exe=trusted_v2)
+    proc.add(30, 55, "python", exe="/usr/bin/python3")  # peer pid reused under another parent
+    assert ov.member_gate_for_peer(pane, (30, 20, 10)).state == "unknown"
+
+
+def test_pane_process_itself_may_be_the_trusted_tui(proc, trusted_v2):
+    proc.add(10, 1, "opencode", start="500", exe=trusted_v2)
+    assert ov.member_gate_for_pane(10, "500").ready
+    pane = peer_process.PeerPane(pane_pid=10, pane_proc_start="500", tmux_target="%1", peer_pid=30)
+    proc.add(30, 10, "python", exe="/usr/bin/python3")
+    assert ov.member_gate_for_peer(pane, (30, 10)).ready

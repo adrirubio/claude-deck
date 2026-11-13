@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import re
+import selectors
 import shutil
 import signal
 import stat as stat_module
@@ -106,7 +107,51 @@ def trusted_binary() -> Optional[BinaryIdentity]:
     return BinaryIdentity(path, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
 
+def _read_bounded(process: subprocess.Popen, deadline: float) -> Optional[bytes]:
+    """Read stdout and stderr until EOF, at most PROBE_OUTPUT_CAP bytes in total,
+    and never past the deadline. None means oversized or late output."""
+    collected = bytearray()
+    with selectors.DefaultSelector() as selector:
+        for stream in (process.stdout, process.stderr):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - _monotonic()
+            if remaining <= 0:
+                return None
+            for key, _events in selector.select(remaining):
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 4096)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                collected += chunk
+                if len(collected) > PROBE_OUTPUT_CAP:
+                    return None
+    return bytes(collected)
+
+
+def _stop(process: subprocess.Popen) -> None:
+    """Kill the probe's process group, close its pipes and reap it without waiting on them."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    for stream in (process.stdout, process.stderr):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _probe(identity: BinaryIdentity) -> VersionGate:
+    deadline = _monotonic() + PROBE_TIMEOUT_SECONDS
     with tempfile.TemporaryDirectory(prefix="synth-city-opencode-probe-") as home:
         env = {
             "HOME": home,
@@ -114,8 +159,7 @@ def _probe(identity: BinaryIdentity) -> VersionGate:
             "LANG": "C",
         }
         try:
-            # A new session lets a timeout kill the whole process group, so a
-            # child that keeps the output pipes open cannot stall the probe.
+            # A new session lets the probe kill its whole process group.
             process = subprocess.Popen(
                 [identity.path, "--version"],
                 stdin=subprocess.DEVNULL,
@@ -128,27 +172,23 @@ def _probe(identity: BinaryIdentity) -> VersionGate:
         except OSError:
             return _unknown(identity)
         try:
-            stdout, stderr = process.communicate(timeout=PROBE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            process.communicate()
-            return _unknown(identity)
-        except (OSError, subprocess.SubprocessError):
-            process.kill()
-            process.communicate()
-            return _unknown(identity)
-    if process.returncode != 0:
+            output = _read_bounded(process, deadline)
+            if output is not None:
+                process.wait(timeout=max(0.0, deadline - _monotonic()))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            output = None
+        finally:
+            if output is None or process.returncode is None:
+                _stop(process)
+            else:
+                for stream in (process.stdout, process.stderr):
+                    stream.close()
+    if output is None or process.returncode != 0:
         return _unknown(identity)
     # The binary must still be the one that was probed (no replacement during the probe).
     if trusted_binary() != identity:
         return _unknown(identity)
-    output = (
-        stdout[:PROBE_OUTPUT_CAP] + b"\n" + stderr[:PROBE_OUTPUT_CAP]
-    ).decode("utf-8", "replace")
-    parsed = parse_opencode_version(output)
+    parsed = parse_opencode_version(output.decode("utf-8", "replace"))
     if parsed is None:
         return _unknown(identity)
     version = ".".join(str(part) for part in parsed)
@@ -183,25 +223,32 @@ def opencode_version_gate() -> VersionGate:
     return gate
 
 
-def _runs_trusted(pid: int, identity: BinaryIdentity) -> bool:
-    """True only when pid's executable is T and its lifetime is stable across the read."""
+def _stat(pid: int) -> Optional[tuple[int, str]]:
     if type(pid) is not int or pid <= 0:
-        return False
-    before = peer_process.read_proc_stat(pid)
-    if before is None:
-        return False
+        return None
+    return peer_process.read_proc_stat(pid)
+
+
+def _runs_trusted(pid: int, identity: BinaryIdentity, parent: Optional[int] = None) -> Optional[str]:
+    """Return pid's start time when its executable is T, its lifetime is stable
+    across the read and, when given, its parent is ``parent``; otherwise None."""
+    before = _stat(pid)
+    if before is None or (parent is not None and before[0] != parent):
+        return None
     exe = f"{peer_process._PROC_ROOT}/{pid}/exe"
     try:
         target = os.readlink(exe)
         if target.endswith(_DELETED_SUFFIX):
-            return False
+            return None
         info = os.stat(exe)
     except OSError:
-        return False
-    after = peer_process.read_proc_stat(pid)
-    if after is None or after[1] != before[1]:
-        return False
-    return (info.st_dev, info.st_ino) == (identity.dev, identity.ino)
+        return None
+    after = _stat(pid)
+    if after is None or after != before:
+        return None
+    if (info.st_dev, info.st_ino) != (identity.dev, identity.ino):
+        return None
+    return before[1]
 
 
 def _member_result(gate: VersionGate, found: bool) -> VersionGate:
@@ -211,6 +258,15 @@ def _member_result(gate: VersionGate, found: bool) -> VersionGate:
     if trusted_binary() != gate.identity:
         return _unknown(gate.identity)
     return gate
+
+
+def _chain_is_current(walked_pids: Sequence[int]) -> bool:
+    """Every edge of the kernel-derived chain still holds: each pid's parent is the next pid."""
+    for child, parent in zip(walked_pids, walked_pids[1:]):
+        stat = _stat(child)
+        if stat is None or stat[0] != parent:
+            return False
+    return True
 
 
 def member_gate_for_peer(
@@ -224,7 +280,18 @@ def member_gate_for_peer(
         return _unknown(gate.identity)
     if peer_process.pane_is_alive_strict(pane.pane_pid, pane.pane_proc_start) is not True:
         return _unknown(gate.identity)
-    found = any(_runs_trusted(pid, gate.identity) for pid in walked_pids)
+    if not _chain_is_current(walked_pids):
+        return _unknown(gate.identity)
+    found = any(
+        _runs_trusted(pid, gate.identity, parent) is not None
+        for pid, parent in zip(walked_pids[:-1], walked_pids[1:])
+    ) or _runs_trusted(pane.pane_pid, gate.identity) == pane.pane_proc_start
+    # Re-check the chain and the pane after the reads, so a pid reused mid-check cannot count.
+    found = (
+        found
+        and _chain_is_current(walked_pids)
+        and peer_process.pane_is_alive_strict(pane.pane_pid, pane.pane_proc_start) is True
+    )
     return _member_result(gate, found)
 
 
@@ -249,30 +316,45 @@ def _children(pid: int) -> Optional[list[int]]:
 
 
 def member_gate_for_pane(pane_pid: int, pane_proc_start: str) -> VersionGate:
-    """Adoption and wake: the bound pane's descendants must contain a process running T."""
+    """Adoption and wake: the bound pane's descendants must contain a process running T.
+
+    Each descendant is checked against the parent it was listed under, and that
+    parent's start time is re-read afterwards, so a reused pid cannot count."""
     gate = opencode_version_gate()
     if not gate.ready:
         return gate
     if peer_process.pane_is_alive_strict(pane_pid, pane_proc_start) is not True:
         return _unknown(gate.identity)
-    frontier = [pane_pid]
-    seen: set[int] = set()
-    found = False
-    for _depth in range(MAX_TREE_DEPTH + 1):
-        next_frontier: list[int] = []
-        for pid in frontier:
-            if pid in seen:
-                continue
-            seen.add(pid)
-            if len(seen) > MAX_TREE_PROCESSES:
-                return _unknown(gate.identity)
-            if _runs_trusted(pid, gate.identity):
-                found = True
-                break
-            children = _children(pid)
+    # (pid, its start time) of processes whose children are still to be listed.
+    frontier: list[tuple[int, str]] = [(pane_pid, pane_proc_start)]
+    seen = {pane_pid}
+    # The pane process itself may be the OpenCode TUI.
+    found = _runs_trusted(pane_pid, gate.identity) == pane_proc_start
+    for _depth in range(0 if found else MAX_TREE_DEPTH):
+        next_frontier: list[tuple[int, str]] = []
+        for parent, parent_start in frontier:
+            children = _children(parent)
             if children is None:
                 return _unknown(gate.identity)
-            next_frontier.extend(children)
+            for child in children:
+                if child in seen:
+                    continue
+                seen.add(child)
+                if len(seen) > MAX_TREE_PROCESSES:
+                    return _unknown(gate.identity)
+                stat = _stat(child)
+                if stat is None or stat[0] != parent:
+                    continue  # exited, or the pid now belongs to another parent
+                start = _runs_trusted(child, gate.identity, parent)
+                parent_now = _stat(parent)
+                if parent_now is None or parent_now[1] != parent_start:
+                    return _unknown(gate.identity)
+                if start is not None:
+                    found = True
+                    break
+                next_frontier.append((child, stat[1]))
+            if found:
+                break
         if found or not next_frontier:
             break
         frontier = next_frontier

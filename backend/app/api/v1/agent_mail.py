@@ -1048,7 +1048,10 @@ async def register_agent(
             raise HTTPException(status_code=401, detail="session_token_invalid")
 
     claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
-    pane = resolve_request_pane(http_request)
+    # OpenCode registrations resolve the peer once, so the identity gate below
+    # checks the same pane that is bound and stored.
+    resolution = resolve_request_pane_detailed(http_request) if request.provider == "opencode-cli" else None
+    pane = resolution.pane if resolution is not None else resolve_request_pane(http_request)
     if (
         existing is not None
         and existing.team_slot_id is not None
@@ -1083,7 +1086,6 @@ async def register_agent(
     if request.provider == "opencode-cli":
         # OpenCode 2 or later only. Identity comes from the kernel-owned peer of
         # this socket and its ancestors, never from the claimed pid.
-        resolution = resolve_request_pane_detailed(http_request)
         if not opencode_version.member_gate_for_peer(resolution.pane, resolution.walked_pids).ready:
             raise HTTPException(status_code=409, detail=opencode_version.BLOCK_CODE)
 

@@ -362,7 +362,8 @@ def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
 
     monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
     monkeypatch.setattr(spawn.subprocess, "run", fake_run)
-    monkeypatch.setattr(opencode_version, "opencode_version_gate", lambda: opencode_version.VersionGate("ok", "2.0.29", None))
+    trusted = opencode_version.BinaryIdentity("/opt/trusted/bin/opencode", 1, 2, 3, 4)
+    monkeypatch.setattr(opencode_version, "opencode_version_gate", lambda: opencode_version.VersionGate("ok", "2.0.29", None, trusted))
     spawn.get_spawned_sessions().clear()
 
     spawn.spawn_session(
@@ -378,7 +379,8 @@ def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
     )
 
     command_parts = shlex.split(calls[0][-1])
-    assert command_parts[:2] == ["opencode", str(tmp_path)]
+    # The tmux command launches the exact binary that was probed, not a PATH lookup.
+    assert command_parts[:2] == ["/opt/trusted/bin/opencode", str(tmp_path)]
     assert "--continue" in command_parts
     assert command_parts[command_parts.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
     assert command_parts[command_parts.index("--agent") + 1] == "planner"

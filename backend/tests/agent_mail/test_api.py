@@ -3486,3 +3486,34 @@ async def test_register_gate_applies_only_to_opencode(client, monkeypatch):
     monkeypatch.setattr(opencode_version, "member_gate_for_peer", forbidden)
     response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body("codex-cli"))
     assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_register_gates_and_binds_the_same_resolved_pane(client, monkeypatch):
+    from app.utils import peer_process
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    pane = peer_process.PeerPane(pane_pid=10, pane_proc_start="500", tmux_target="%1", peer_pid=30)
+    resolutions = []
+
+    def resolve_detailed(_request):
+        resolutions.append("detailed")
+        return SimpleNamespace(pane=pane, walked_pids=(30, 20, 10))
+
+    def resolve_plain(_request):
+        raise AssertionError("OpenCode registration must not resolve the peer a second time")
+
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", resolve_detailed)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", resolve_plain)
+    gated = []
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", lambda p, walked: gated.append(p) or opencode_version.VersionGate("ok", "2.0.29", None))
+
+    async def no_binding(_db, _pane):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_mail.agent_mail_service.resolve_pane_binding", no_binding)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 200, response.text
+    assert resolutions == ["detailed"]
+    assert gated == [pane]
