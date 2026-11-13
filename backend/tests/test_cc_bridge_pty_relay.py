@@ -362,10 +362,17 @@ class RecordingWebSocket(FakeWebSocket):
         self.sent += data
 
 
+def stand_in_tmux(monkeypatch, tmp_path, body):
+    """Replace the attach program with a script that ignores its arguments."""
+    script = tmp_path / "fake-tmux"
+    script.write_text("#!/bin/sh\n" + body + "\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(pty_relay, "TMUX_BINARY", str(script))
+
+
 @pytest.mark.asyncio
-async def test_attach_stderr_goes_to_the_log_and_not_the_terminal(monkeypatch, caplog):
-    script = "echo sudo: kill failed >&2; echo visible-output; sleep 0.2"
-    monkeypatch.setattr(pty_relay, "_attach_command", lambda target: ["sh", "-c", script])
+async def test_attach_stderr_goes_to_the_log_and_not_the_terminal(monkeypatch, tmp_path, caplog):
+    stand_in_tmux(monkeypatch, tmp_path, "echo sudo: kill failed >&2; echo visible-output; sleep 0.2")
     websocket = RecordingWebSocket()
     relay = pty_relay.PtyRelay("test:stderr", read_only=False)
     with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
@@ -379,9 +386,11 @@ async def test_attach_stderr_goes_to_the_log_and_not_the_terminal(monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_attach_stderr_log_is_bounded(monkeypatch, caplog):
-    script = "i=0; while [ $i -lt 400 ]; do echo error-line-$i >&2; i=$((i+1)); done; sleep 0.1"
-    monkeypatch.setattr(pty_relay, "_attach_command", lambda target: ["sh", "-c", script])
+async def test_attach_stderr_log_is_bounded(monkeypatch, tmp_path, caplog):
+    stand_in_tmux(
+        monkeypatch, tmp_path,
+        "i=0; while [ $i -lt 400 ]; do echo error-line-$i >&2; i=$((i+1)); done; sleep 0.1",
+    )
     relay = pty_relay.PtyRelay("test:stderr-flood", read_only=False)
     with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
         await asyncio.wait_for(relay.run(RecordingWebSocket()), timeout=5)
@@ -401,3 +410,120 @@ def test_a_failed_resize_is_logged_once_per_relay(caplog):
     failures = [r for r in caplog.records if "resize" in r.getMessage().lower()]
     assert len(failures) == 1
     assert "test:log-once" in failures[0].getMessage()
+
+
+def test_closing_the_relay_stops_reading_attach_stderr():
+    """After close() nothing reads the old stderr fd, which the process may reuse."""
+    read_end, write_end = os.pipe()
+    relay = pty_relay.PtyRelay("test:stderr-closed", read_only=False)
+    relay._stderr_fd = read_end
+    os.write(write_end, b"before close\n")
+    os.set_blocking(read_end, False)
+
+    class Attach:
+        stderr = os.fdopen(read_end, "rb", buffering=0)
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    relay.process = Attach()
+    relay.close()
+    assert relay._stderr_fd is None
+    assert relay._read_attach_stderr() is False
+    os.close(write_end)
+
+
+def pipe_with_room(megabytes=1):
+    """A non-blocking pipe big enough to hold many reads of queued data."""
+    read_end, write_end = os.pipe()
+    try:
+        fcntl.fcntl(write_end, 1031, megabytes * 1024 * 1024)  # F_SETPIPE_SZ
+    except OSError:
+        pytest.skip("cannot enlarge the pipe on this host")
+    os.set_blocking(read_end, False)
+    return read_end, write_end
+
+
+def queued_bytes(fd):
+    return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+
+
+def test_one_stderr_callback_reads_a_bounded_amount_and_yields():
+    """A producer that never stops must not keep one callback running: it returns, the loop runs."""
+    read_end, write_end = pipe_with_room()
+    relay = pty_relay.PtyRelay("test:stderr-budget", read_only=False)
+    relay._stderr_fd = read_end
+    queued = 256 * 1024
+    os.write(write_end, b"x" * queued)
+    try:
+        more = relay._read_attach_stderr()
+        assert more is True  # not at the end of the stream: the loop will call again
+        read = queued - queued_bytes(read_end)
+        assert 0 < read <= pty_relay._STDERR_READ_BUDGET
+        assert queued_bytes(read_end) > 0  # the rest waits for the next loop turn
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+
+
+@pytest.mark.asyncio
+async def test_event_loop_runs_between_stderr_callbacks():
+    """Draining a flood takes several callbacks, and other tasks run between them."""
+    read_end, write_end = pipe_with_room()
+    relay = pty_relay.PtyRelay("test:stderr-fair", read_only=False)
+    relay._stderr_fd = read_end
+    os.write(write_end, b"x" * (512 * 1024))
+    loop = asyncio.get_running_loop()
+    heartbeats = 0
+    seen_at_callback = []
+    stop = asyncio.Event()
+
+    async def heartbeat():
+        nonlocal heartbeats
+        while not stop.is_set():
+            heartbeats += 1
+            await asyncio.sleep(0)
+
+    def on_readable():
+        seen_at_callback.append(heartbeats)
+        relay._read_attach_stderr()
+
+    task = asyncio.create_task(heartbeat())
+    loop.add_reader(read_end, on_readable)
+    try:
+        for _ in range(500):
+            if queued_bytes(read_end) == 0:
+                break
+            await asyncio.sleep(0.005)
+    finally:
+        stop.set()
+        loop.remove_reader(read_end)
+        await task
+        os.close(read_end)
+        os.close(write_end)
+    assert draining_took_several_turns(seen_at_callback)
+
+
+def draining_took_several_turns(seen_at_callback):
+    # An unbounded drain empties the pipe in one callback. A bounded one needs several,
+    # and the heartbeat task ran between them.
+    return len(seen_at_callback) >= 2 and seen_at_callback[-1] > seen_at_callback[0]
+
+
+def test_stderr_log_allowance_is_never_exceeded(caplog):
+    relay = pty_relay.PtyRelay("test:stderr-allowance", read_only=False)
+    limit = pty_relay._ATTACH_STDERR_LOG_LIMIT
+    with caplog.at_level(logging.WARNING, logger=pty_relay.logger.name):
+        relay._log_attach_stderr(b"a" * (limit - 1))
+        relay._log_attach_stderr(b"b" * limit)  # a chunk larger than what is left
+        relay._log_attach_stderr(b"c" * 100)  # and more after the limit
+    payloads = [
+        r.getMessage().split(": ", 1)[1] for r in caplog.records if r.getMessage().startswith("tmux attach for")
+    ]
+    assert sum(len(p) for p in payloads) <= limit
+    assert len(payloads) == 2 and len(payloads[1]) == 1  # only the one character that was left
+    notices = [r for r in caplog.records if "suppressed" in r.getMessage()]
+    assert len(notices) == 1

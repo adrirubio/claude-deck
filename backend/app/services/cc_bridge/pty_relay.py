@@ -23,19 +23,23 @@ _active_relays: dict[str, "PtyRelay"] = {}
 # This prevents orphaned tmux attach-session processes on server reload/crash.
 _PR_SET_PDEATHSIG = 1
 
+# The program the relay starts to attach to a tmux target. It is a constant, not a value
+# from a request. Tests replace it with a stand-in script.
+TMUX_BINARY = "tmux"
+
 # The most attach-process error text one relay writes to the log, in characters.
 _ATTACH_STDERR_LOG_LIMIT = 4096
+
+# The most stderr bytes one loop callback reads. The reader is level-triggered, so the
+# rest is read on the next loop turn. A process that never stops writing cannot hold the loop.
+_STDERR_READ_CHUNK = 4096
+_STDERR_READ_BUDGET = 16 * _STDERR_READ_CHUNK
 
 
 def is_target_interactive(target: str) -> bool:
     """Return whether a live relay for target currently accepts input."""
     relay = _active_relays.get(target)
     return relay is not None and not relay.read_only
-
-
-def _attach_command(target: str) -> list[str]:
-    """The command that attaches to a tmux target. Tests replace it."""
-    return ["tmux", "attach-session", "-t", target]
 
 
 def _child_preexec() -> None:
@@ -114,33 +118,49 @@ class PtyRelay:
             logger.warning("Could not resize the terminal for %s: %s", self.target, error)
 
     def _read_attach_stderr(self) -> bool:
-        """Read what the attach process wrote to stderr into the log. False at end of stream."""
-        if self._stderr_fd is None:
-            return False
-        while True:
+        """Read what the attach process wrote to stderr into the log.
+
+        Reads at most _STDERR_READ_BUDGET bytes, then returns so the event loop can run.
+        Return False at the end of the stream, True when more may follow.
+        """
+        remaining = _STDERR_READ_BUDGET
+        while remaining > 0:
+            fd = self._stderr_fd  # close() clears it first, so a closed fd is never read
+            if fd is None:
+                return False
             try:
-                data = os.read(self._stderr_fd, 4096)
+                data = os.read(fd, min(_STDERR_READ_CHUNK, remaining))
             except BlockingIOError:
                 return True
             except OSError:
                 return False
             if not data:
                 return False
+            remaining -= len(data)
             self._log_attach_stderr(data)
+        return True
 
     def _log_attach_stderr(self, data: bytes) -> None:
-        """Write attach errors to the backend log, never to the terminal. The log is bounded."""
+        """Write attach errors to the backend log, never to the terminal.
+
+        The log holds at most _ATTACH_STDERR_LOG_LIMIT characters for one relay. A line that
+        does not fit is cut to what is left, and one notice says the rest is suppressed.
+        """
+        if self._stderr_suppressed:
+            return
         for line in data.decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
-            if self._stderr_logged >= _ATTACH_STDERR_LOG_LIMIT:
-                if not self._stderr_suppressed:
-                    self._stderr_suppressed = True
-                    logger.warning("Further tmux attach output for %s suppressed", self.target)
+            room = _ATTACH_STDERR_LOG_LIMIT - self._stderr_logged
+            if room > 0:
+                shown = line[:room]
+                self._stderr_logged += len(shown)
+                logger.warning("tmux attach for %s: %s", self.target, shown)
+            if room <= 0 or len(line) > room:
+                self._stderr_suppressed = True
+                logger.warning("Further tmux attach output for %s suppressed", self.target)
                 return
-            self._stderr_logged += len(line)
-            logger.warning("tmux attach for %s: %s", self.target, line)
 
     async def run(self, websocket: WebSocket, *, subprotocol: str | None = None) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
@@ -155,7 +175,7 @@ class PtyRelay:
             # stderr is a pipe, not the pty: sudo and wrapper errors go to the log,
             # not into the terminal the person is looking at.
             self.process = subprocess.Popen(
-                _attach_command(self.target),
+                [TMUX_BINARY, "attach-session", "-t", self.target],
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=subprocess.PIPE,
@@ -289,11 +309,11 @@ class PtyRelay:
                     pass
             stderr_stream = getattr(self.process, "stderr", None)
             if stderr_stream is not None:
+                self._stderr_fd = None  # before the close, so no reader uses a recycled fd
                 try:
                     stderr_stream.close()
                 except OSError:
                     pass
-            self._stderr_fd = None
 
 
 async def close_all_relays() -> None:
