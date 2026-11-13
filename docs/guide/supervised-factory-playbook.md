@@ -328,6 +328,21 @@ Complete one bounded correction batch before final review. Keep one finding regi
 
 The effective delivery policy belongs to each repository and attempt. New scope defaults do not silently update an active attempt. See the [Factory API](../api/factory.md) and the [delivery practices source](https://github.com/albiexai/synth-city/blob/master/docs/deploy/factory-delivery-practices.md).
 
+### Companion paths
+
+Files travel together: a changed service needs its tests, a changed schema needs its contract fixtures and manifests, and a changed tool list needs its inventory tests and doc page. Synth City keeps these pairs in a checked-in map, `backend/app/services/companion_map.json`. The map is explicit data. It has no globs and no guessing, because plan paths are concrete files.
+
+Each entry names a `source` file and its `companions`, and each companion has a `kind`: `test`, `fixture`, `doc` or `contract` (a generated contract file such as a frozen manifest). The loader refuses a malformed map: a path that is not a concrete repository file, a repeated companion, a source that lists itself, an unknown kind, a duplicate source or an entry with no companions. A test checks that every mapped path exists in the repository, so a rename must update the map in the same change.
+
+How the map is used:
+
+1. **Plan.** When an initial plan lists `allowed_paths`, Synth City adds `companion_paths` to the plan before the Leader sees it. The Leader's request message lists them in their own section, and the request fingerprint covers them. The Leader therefore approves the companions with the plan. A plan whose paths have no map entry is unchanged.
+2. **Replay.** A request that already exists for the attempt keeps the companions it was approved with. Editing the map afterwards never changes a pending or decided plan, and an identical resubmission is still the same request.
+3. **Amendment.** The approved paths and the approved companions form the amendment baseline. Changing a companion the Leader approved needs no amendment and no new revision. A companion that was added to the map after the plan was approved has no authority until an amendment shows it. An amendment that names a new source file also lists that file's companions, so the Leader approves them together.
+4. **Everything else.** A path that is neither named in the plan nor an approved companion still needs a scope amendment. Completion-time path enforcement and the amendment limits are unchanged.
+
+To add a pair, add or extend an entry in the map and run `backend/tests/agent_teams/test_companion_paths.py`. Add a pair only when a real change needed the companion; a long speculative list widens every plan.
+
 ### Lane gates
 
 File the journey item for a lane when you admit the lane, so the journeys exist before its gate. A lane with merged issues and no journeys cannot pass its gate. When an item's journeys are written pending, its implementer activates them in the PR that makes them pass; check at the gate that none was left pending.

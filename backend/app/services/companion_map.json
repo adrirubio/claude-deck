@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "source": "backend/app/models/factory_schemas.py",
+      "companions": [
+        {"path": "backend/tests/factory/fixtures/v1-p04/manifest.json", "kind": "contract"},
+        {"path": "backend/tests/factory/fixtures/v1-p04/schema.json", "kind": "contract"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/manifest.json", "kind": "contract"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/schema.json", "kind": "contract"},
+        {"path": "backend/tests/factory/test_factory_fixtures.py", "kind": "test"}
+      ]
+    },
+    {
+      "source": "backend/app/services/factory_projection_service.py",
+      "companions": [
+        {"path": "backend/tests/factory/fixtures/v1-p04/manifest.json", "kind": "contract"},
+        {"path": "backend/tests/factory/fixtures/v1-p04/overview.json", "kind": "fixture"},
+        {"path": "backend/tests/factory/fixtures/v1-p04/work-item.json", "kind": "fixture"},
+        {"path": "backend/tests/factory/fixtures/v1-p04/work-items.json", "kind": "fixture"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/manifest.json", "kind": "contract"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/overview.json", "kind": "fixture"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/work-item.json", "kind": "fixture"},
+        {"path": "frontend/tests/fixtures/factory/v1-p04/work-items.json", "kind": "fixture"},
+        {"path": "backend/tests/factory/test_factory_fixtures.py", "kind": "test"}
+      ]
+    },
+    {
+      "source": "backend/app/services/github_approval_service.py",
+      "companions": [
+        {"path": "backend/tests/agent_teams/test_github_approval_service.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_scope_amendments.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_active_continuation_cancellation.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_initial_approval_atomicity.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_initial_approval_cancellation.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_initial_approval_diagnostics.py", "kind": "test"}
+      ]
+    },
+    {
+      "source": "backend/app/services/github_terminal_revision_service.py",
+      "companions": [
+        {"path": "backend/tests/agent_teams/test_scope_amendments.py", "kind": "test"},
+        {"path": "backend/tests/agent_teams/test_terminal_revision_reconciliation.py", "kind": "test"}
+      ]
+    },
+    {
+      "source": "backend/app/services/github_dispatch_service.py",
+      "companions": [
+        {"path": "backend/tests/agent_teams/test_github_dispatch_service.py", "kind": "test"}
+      ]
+    },
+    {
+      "source": "backend/mcp_shim/agent_mail_server.py",
+      "companions": [
+        {"path": "backend/tests/agent_mail/test_mcp_shim.py", "kind": "test"},
+        {"path": "backend/tests/agent_mail/test_pi_shim.py", "kind": "test"},
+        {"path": "backend/tests/agent_mail/test_tool_rename.py", "kind": "test"},
+        {"path": "backend/tests/agent_mail/test_pi_manifest.py", "kind": "test"},
+        {"path": "backend/tests/upgrade/test_provider_upgrade_startup.py", "kind": "test"},
+        {"path": "integrations/pi-agent-mail/manifest.ts", "kind": "contract"},
+        {"path": "docs/api/agent-mail.md", "kind": "doc"}
+      ]
+    },
+    {
+      "source": "backend/app/services/provider_upgrade.py",
+      "companions": [
+        {"path": "backend/tests/agent_mail/test_pi_shim.py", "kind": "test"},
+        {"path": "backend/tests/upgrade/test_provider_upgrade_startup.py", "kind": "test"}
+      ]
+    }
+  ]
+}

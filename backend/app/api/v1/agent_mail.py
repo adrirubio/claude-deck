@@ -337,6 +337,15 @@ async def send_operator_global_broadcast(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _plan_body(summary: str, plan_metadata: dict) -> str:
+    """The Leader's view of the plan: the owner's summary and the companion paths the map added."""
+    companions = plan_metadata.get("companion_paths")
+    if not isinstance(companions, list) or not companions:
+        return summary
+    listing = "\n".join(f"- `{path}`" for path in companions)
+    return f"{summary}\n\nCompanion paths added from the checked-in map (approved with this plan):\n{listing}"
+
+
 async def _persist_initial_approval(
     request: MailApprovalRequestCreate,
     session: MailAgentSession,
@@ -349,12 +358,15 @@ async def _persist_initial_approval(
     if item.dispatch_nonce != request.dispatch_nonce:
         raise HTTPException(status_code=409, detail="stale_nonce")
     try:
+        # The Leader sees the companion paths the map adds; an existing request keeps the ones it was shown.
+        plan_metadata = await github_approval_service.initial_plan_metadata(
+            db, item, request.summary, request.plan_metadata)
         approval, _created = await github_approval_service.create_initial_request(
             db,
             item,
             authenticated_owner_member_id=session.member_id,
             summary=request.summary,
-            plan_metadata=request.plan_metadata,
+            plan_metadata=plan_metadata,
             commit=False,
         )
         request_delivery_key = f"github-approval:{approval.id}:request"
@@ -399,12 +411,12 @@ async def _persist_initial_approval(
                     sender_member_id=approval.owner_member_id,
                     recipient_member_id=approval.leader_member_id,
                     subject=f"Approval request for work item {item.id}",
-                    body_markdown=request.summary.strip(),
+                    body_markdown=_plan_body(request.summary.strip(), plan_metadata),
                     payload={
                         "approval_request_id": approval.id,
                         "approval_round": approval.approval_round,
                         "dispatch_nonce": approval.dispatch_nonce,
-                        "plan_metadata": request.plan_metadata,
+                        "plan_metadata": plan_metadata,
                         "request_kind": approval.request_kind,
                         "summary": request.summary.strip(),
                         "work_item_id": approval.work_item_id,
