@@ -360,7 +360,7 @@ async def _protocol(entry, provider):
                     initialized = await session.initialize()
                     tools = await session.list_tools()
                     if initialized.serverInfo.name != a.NEW or {tool.name for tool in tools.tools} != {
-                            "synth_city_" + suffix for suffix in _SUFFIXES} or len(tools.tools) != 41:
+                            "synth_city_" + suffix for suffix in _SUFFIXES} or len(tools.tools) != 42:
                         raise a.Incomplete("protocol_unverified")
 
 
