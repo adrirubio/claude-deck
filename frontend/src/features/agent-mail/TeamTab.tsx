@@ -19,6 +19,9 @@ export type TeamStatusFilter = 'all' | MailMemberStatus
 interface TeamTabProps {
   members: MailMemberResponse[]
   loading: boolean
+  /** The installation requires the Director key and the browser has none. */
+  directorKeyNeeded?: boolean
+  onEnterDirectorKey?: () => void
   repoSearch: string
   statusFilter: TeamStatusFilter
   onRepoSearchChange: (value: string) => void
@@ -32,6 +35,8 @@ interface TeamTabProps {
 export function TeamTab({
   members,
   loading,
+  directorKeyNeeded = false,
+  onEnterDirectorKey,
   repoSearch,
   statusFilter,
   onRepoSearchChange,
@@ -121,7 +126,12 @@ export function TeamTab({
       ) : (
         <Card className="rounded-lg border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            {loading ? 'Loading participants...' : 'No participants match the current filters.'}
+            {directorKeyNeeded ? (
+              <div className="flex flex-col items-center gap-3">
+                <p>Enter the Director key to see participants</p>
+                <Button size="sm" onClick={onEnterDirectorKey}>Enter the Director key</Button>
+              </div>
+            ) : loading ? 'Loading participants...' : 'No participants match the current filters.'}
           </CardContent>
         </Card>
       )}
