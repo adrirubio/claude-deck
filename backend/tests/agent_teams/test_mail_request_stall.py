@@ -18,14 +18,16 @@ from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamPreset,
     AgentTeamSlot,
+    MailAgentSession,
     MailExternalActor,
     MailMessage,
     MailReceipt,
     MailTeamMember,
 )
-from app.models.schemas import MailMessageCreate
+from app.models.schemas import AgentActivityObservation, MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.mail_request_stall_service import MailRequestStallService
 
@@ -492,7 +494,7 @@ def slow_phases(service, states_by_slot, native=0.0, mail=0.0):
     """Only the two phases are slow; everything else is the real projection."""
     async def native_phase(db, preset_id):
         await asyncio.sleep(native)
-        return states_by_slot, True
+        return states_by_slot, True, None
 
     original = service._observe
 
@@ -554,6 +556,157 @@ async def test_an_absolute_deadline_that_has_already_passed_is_the_incomplete_vi
     view = await MailRequestStallService().observe(
         db, team.id, now=datetime.now(timezone.utc), native_states=states(people), native_ok=True, deadline=past)
     assert view.items == [] and view.reason == "native_unknown" and not view.complete
+
+
+# --- native provenance: the idle evidence belongs to the current addressee and is revalidated (F2) ----
+
+async def bind_session(db, team, person, *, pid, cwd, member=None):
+    """A real pane binding and authenticated session row; only the native observation leaf is faked."""
+    owner = member or person.member
+    db.add(AgentPaneBinding(pane_pid=pid, pane_proc_start="fixture-start", slot_id=person.slot.id,
+                            preset_id=team.id))
+    db.add(MailAgentSession(member_id=owner.id, provider="codex-cli", source="mcp", session_key=f"session-{pid}",
+                            cwd=cwd, team_preset_id=team.id, team_slot_id=person.slot.id,
+                            capability_token_hash="synthetic-hash", bound_pane_pid=pid,
+                            bound_pane_proc_start="fixture-start"))
+    await db.commit()
+
+
+def idle_when_bound(monkeypatch):
+    def native(slot_id, provider, session_id, bindings, ambiguous, now, **kwargs):
+        return AgentActivityObservation(slot_id=slot_id, state="idle" if bindings else "unknown",
+                                        reason="synthetic-native-observation", observed_at=now)
+
+    monkeypatch.setattr("app.services.agent_activity_service._observe", native)
+
+
+def after_legacy_scan(monkeypatch, service, action):
+    """Run ``action`` once the mail reads of the view are under way."""
+    original = service._legacy_reply_clears
+
+    async def wrapped(*args):
+        result = await original(*args)
+        await action()
+        return result
+
+    monkeypatch.setattr(service, "_legacy_reply_clears", wrapped)
+
+
+async def replace_member(db, team, person, *, key="replacement"):
+    """A newer member row for the same slot: the slot's current member from now on."""
+    replacement = MailTeamMember(identity_key=f"slot:{key}", repo_id="r", repo_path="/r", repo_name="r",
+                                 display_name=key, participant_kind="team_slot", team_preset_id=team.id,
+                                 team_slot_id=person.slot.id,
+                                 updated_at=person.member.updated_at + timedelta(seconds=10))
+    db.add(replacement)
+    await db.commit()
+    return replacement
+
+
+async def change_slot_session(db, person):
+    person.slot.launch_options = {"session_id": "changed-native-conversation"}
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_stable_bound_addressee_is_listed_and_complete(db, monkeypatch):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.commit()
+    await bind_session(db, team, people[1], pid=19000, cwd="/current-workspace")
+    idle_when_bound(monkeypatch)
+    view = await MailRequestStallService().projection(db, team.id)
+    assert ids(view) == [request.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_native_inputs_that_change_during_the_mail_reads_are_not_idle_evidence(db, monkeypatch):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    await bind_session(db, team, people[1], pid=19002, cwd="/current-workspace")
+    idle_when_bound(monkeypatch)
+    service = MailRequestStallService()
+    after_legacy_scan(monkeypatch, service, lambda: change_slot_session(db, people[1]))
+    view = await service.projection(db, team.id)
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_the_summary_also_revalidates_the_native_inputs_after_the_mail_reads(db, monkeypatch):
+    from app.services.mail_request_stall_service import mail_request_stall_service
+
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await db.commit()
+    await bind_session(db, team, people[1], pid=19003, cwd="/current-workspace")
+    idle_when_bound(monkeypatch)
+    after_legacy_scan(monkeypatch, mail_request_stall_service, lambda: change_slot_session(db, people[1]))
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+    assert not [item for item in summary.attention if item.code == "unanswered_request"]
+
+
+@pytest.mark.asyncio
+async def test_the_summary_lists_a_stable_bound_addressee(db, monkeypatch):
+    team, people = await make_team(db)
+    request_id = (await add_request(db, people[0], people[1])).id
+    await db.commit()
+    await bind_session(db, team, people[1], pid=19004, cwd="/current-workspace")
+    idle_when_bound(monkeypatch)
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)
+    view = summary.supervisor_observation.unanswered_requests
+    assert [item.request_id for item in view.items] == [request_id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_an_old_addressee_does_not_borrow_the_replacement_members_idle_session(db, monkeypatch):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    replacement = await replace_member(db, team, people[1])
+    await bind_session(db, team, people[1], pid=19001, cwd="/replacement-workspace", member=replacement)
+    idle_when_bound(monkeypatch)
+    view = await MailRequestStallService().projection(db, team.id)
+    assert request.id not in ids(view) and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_addressee_is_native_unknown_even_without_a_fence(db):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await replace_member(db, team, people[1])
+    view = await observe(db, team, states(people))
+    assert request.id not in ids(view) and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_addressee_is_not_reply_scanned_as_if_it_were_proven_idle(db, monkeypatch):
+    team, people = await make_team(db)
+    await add_request(db, people[0], people[1])
+    await replace_member(db, team, people[1])
+    service = MailRequestStallService()
+    scans = []
+    original = service._legacy_reply_clears
+
+    async def spy(*args):
+        scans.append(args[1].id)
+        return await original(*args)
+
+    monkeypatch.setattr(service, "_legacy_reply_clears", spy)
+    view = await observe(db, team, states(people), service=service)
+    assert scans == [] and view.reason == "native_unknown" and view.items == []
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_that_appears_during_the_mail_reads_is_caught_by_the_final_recheck(db, monkeypatch):
+    team, people = await make_team(db)
+    request = await add_request(db, people[0], people[1])
+    await db.commit()
+    service = MailRequestStallService()
+    after_legacy_scan(monkeypatch, service, lambda: replace_member(db, team, people[1]))
+    view = await observe(db, team, states(people), service=service)
+    assert request.id not in ids(view) and view.complete is False and view.reason == "native_unknown"
 
 
 # --- privacy, order, repetition ---------------------------------------------------------------

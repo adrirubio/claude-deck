@@ -34,6 +34,7 @@ REPLY_QUERY_LIMIT = 33        # per candidate; reaching it without a match is a 
 REPLY_ROW_BUDGET = 256        # total reply rows read in one observation
 ANCESTRY_READ_BUDGET = 512    # total ancestry reads in one observation
 MAX_ANCESTRY_HOPS = 32
+NATIVE_INPUT_ROWS = 256      # the native input read bound the fence is checked with
 REASON_PRIORITY = ("candidate_limit", "native_unknown", "ambiguous_legacy_request", "reply_scan_limit",
                    "entry_limit")
 
@@ -51,15 +52,19 @@ class MailRequestStallService:
 
     # -- native activity (read only) ---------------------------------------------------------------
 
-    async def _native_states(self, db, preset_id) -> tuple[dict[int, str], bool]:
-        """Slot states from the same bounded, read-only observation the summary uses, with its fence."""
+    async def _native_states(self, db, preset_id) -> tuple[dict[int, str], bool, dict]:
+        """Slot states, whether the inputs were stable, and the fence they were observed against.
+
+        The same bounded, read-only observation the summary uses. The fence is kept so the mail reads
+        can be revalidated against it afterwards.
+        """
         from app.services.agent_activity_service import _team_inputs, observe_team
 
         fence: dict = {}
         native = await observe_team(db, preset_id, include_agent_status=False, persist_identities=False,
                                     max_input_rows=256, input_fence=fence)
         current = {entry[0]: entry for entry in await _team_inputs(db, preset_id, 256)}
-        return {entry.slot_id: entry.state for entry in native.slots}, current == fence
+        return {entry.slot_id: entry.state for entry in native.slots}, current == fence, dict(fence)
 
     async def projection(self, db, preset_id, *, now: datetime | None = None) -> UnansweredRequestView:
         """The view for a caller that holds no observation of its own (the Supervisor check-in)."""
@@ -69,19 +74,24 @@ class MailRequestStallService:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError
-            states, ok = await asyncio.wait_for(self._native_states(db, preset_id), timeout=remaining)
+            states, ok, fence = await asyncio.wait_for(self._native_states(db, preset_id), timeout=remaining)
         except (TimeoutError, OSError, ValueError, OperationalError):
             if db.in_transaction():
                 await db.rollback()
-            states, ok = {}, False
+            states, ok, fence = {}, False, None
         return await self.observe(db, preset_id, now=now or datetime.now(timezone.utc),
-                                  native_states=states, native_ok=ok, deadline=deadline)
+                                  native_states=states, native_ok=ok, deadline=deadline, native_fence=fence)
 
     # -- the view ----------------------------------------------------------------------------------
 
     async def observe(self, db, preset_id, *, now: datetime, native_states: dict[int, str],
-                      native_ok: bool, deadline: float | None = None) -> UnansweredRequestView:
-        """``deadline`` is an absolute monotonic loop time; omitted, the view gets its own full budget."""
+                      native_ok: bool, deadline: float | None = None,
+                      native_fence: dict | None = None) -> UnansweredRequestView:
+        """``deadline`` is an absolute monotonic loop time; omitted, the view gets its own full budget.
+
+        ``native_fence`` is the native input fence the states were observed against. When given, it is
+        compared with the current inputs after all mail reads; a difference is not a stable observation.
+        """
         loop = asyncio.get_running_loop()
         limit = loop.time() + self.deadline_seconds if deadline is None else deadline
         try:
@@ -89,7 +99,8 @@ class MailRequestStallService:
             if remaining <= 0:
                 raise TimeoutError
             return await asyncio.wait_for(
-                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok), timeout=remaining)
+                self._observe(db, preset_id, _naive_utc(now), native_states, native_ok, native_fence),
+                timeout=remaining)
         except (TimeoutError, OSError, ValueError, OperationalError):
             if db.in_transaction():
                 await db.rollback()
@@ -206,7 +217,48 @@ class MailRequestStallService:
         cleaned = sanitize_text(value or "", limit=80).strip()
         return (cleaned or fallback)[:80]
 
-    async def _observe(self, db, preset_id, now, native_states, native_ok) -> UnansweredRequestView:
+    async def _current_members(self, db, preset_id) -> dict:
+        """slot id -> the slot's current member: the newest member row by updated_at, then id.
+
+        The same rule the native inputs use, so a slot's native state describes exactly this member.
+        """
+        rows = (await db.execute(
+            select(MailTeamMember.id, MailTeamMember.team_slot_id)
+            .where(MailTeamMember.team_preset_id == preset_id)
+            .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc())
+            .limit(NATIVE_INPUT_ROWS + 1))).all()
+        if len(rows) > NATIVE_INPUT_ROWS:
+            raise ValueError("activity_context_limit")
+        current: dict = {}
+        for row in rows:
+            current.setdefault(row.team_slot_id, row.id)
+        return current
+
+    async def _revalidate(self, db, preset_id, rows, native_fence):
+        """Entries that are still proven after ALL mail reads, and the reasons for dropping the rest.
+
+        The addressee must still be the current member of its slot, and the native inputs must still
+        equal the fence the states were observed against. Anything else is native_unknown.
+        """
+        from app.services.agent_activity_service import _team_inputs
+
+        reasons: set[str] = set()
+        current = await self._current_members(db, preset_id)
+        kept = []
+        for row in rows:
+            if current.get(row.slot_id) != row.recipient_member_id:
+                reasons.add("native_unknown")
+                continue
+            kept.append(row)
+        if native_fence is not None:
+            inputs = {entry[0]: entry for entry in await _team_inputs(db, preset_id, NATIVE_INPUT_ROWS)}
+            if inputs != native_fence:
+                reasons.add("native_unknown")
+                kept = []
+        return kept, reasons
+
+    async def _observe(self, db, preset_id, now, native_states, native_ok,
+                       native_fence=None) -> UnansweredRequestView:
         threshold = int(settings.mail_request_unanswered_seconds)
         candidates, over_limit = await self._candidates(db, preset_id)
         reasons: set[str] = set()
@@ -215,10 +267,15 @@ class MailRequestStallService:
         if await self._nested_ambiguous(db, preset_id, now, threshold):
             reasons.add("ambiguous_legacy_request")
         before = await self._signatures(db, {row.recipient_member_id for row in candidates})
+        current_members = await self._current_members(db, preset_id)
 
         qualified = []
         for row in candidates:
             if (now - row.created_at).total_seconds() < threshold:
+                continue
+            if current_members.get(row.slot_id) != row.recipient_member_id:
+                # The slot's native state describes its current member, not this addressee.
+                reasons.add("native_unknown")
                 continue
             state = native_states.get(row.slot_id) if native_ok and row.slot_id is not None else None
             if state == "working":
@@ -248,11 +305,14 @@ class MailRequestStallService:
                 continue
             stable.append(row)
 
+        # Names are read first; the revalidation is the last read before the entries are built.
+        members, actors = await self._names(db, stable)
+        stable, dropped = await self._revalidate(db, preset_id, stable, native_fence)
+        reasons |= dropped
         omitted = max(0, len(stable) - ENTRY_LIMIT)
         if omitted:
             reasons.add("entry_limit")
         shown = stable[:ENTRY_LIMIT]
-        members, actors = await self._names(db, shown)
         items = []
         for row in shown:
             seconds = max(0, int((now - row.created_at).total_seconds()))

@@ -246,7 +246,7 @@ class AgentTeamSummaryService:
         # adds a next actor and does not change team_idle.
         stall = await mail_request_stall_service.observe(db, preset_id, now=now, native_states=native_states,
                                                          native_ok=native_ok and not changed,
-                                                         deadline=stall_deadline)
+                                                         deadline=stall_deadline, native_fence=native_fence)
         for entry in stall.items:
             attention.append(TeamSummaryAttention(code="unanswered_request", request_id=entry.request_id,
                 requester=entry.requester, recipient=entry.recipient, unanswered_seconds=entry.unanswered_seconds))
