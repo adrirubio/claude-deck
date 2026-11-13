@@ -151,6 +151,8 @@ OC_MAX_PARTS = 20000
 OC_VM_INTERVAL = 1000         # SQLite progress-handler interval, in VM operations
 OC_VM_MAX = 2000000           # total VM operations per tick
 OC_BUSY_MS = 250
+OC_FD_DIR = '/proc/self/fd'   # Linux: this process's own descriptors, never another process's
+OC_FD_MAX = 1024              # descriptors examined per listing
 OC_DEADLINE = 3.0             # seconds per tick: discovery, connections, SQL, fetch and decoding
 
 
@@ -173,6 +175,26 @@ class OpenCodeBudget:
         elif time.monotonic() > self.deadline:
             self.exceeded = 'opencode_guard_deadline'
         return 1 if self.exceeded else 0
+
+
+def _oc_open_files(budget):
+    """This process's open regular files, as {descriptor: (st_dev, st_ino)}."""
+    files = {}
+    try:
+        with os.scandir(OC_FD_DIR) as entries:
+            for index, entry in enumerate(entries):
+                if index >= OC_FD_MAX:
+                    raise ValueError('opencode_guard_budget')
+                budget.check()
+                try:
+                    info = os.stat(os.path.join(OC_FD_DIR, entry.name))
+                except FileNotFoundError:
+                    continue  # closed meanwhile, e.g. the listing's own descriptor
+                if stat.S_ISREG(info.st_mode):
+                    files[entry.name] = (info.st_dev, info.st_ino)
+    except OSError as exc:
+        raise ValueError('opencode_db_unreadable') from exc
+    return files
 
 
 def _oc_json(raw):
@@ -402,11 +424,24 @@ class Supervisor:
             raise ValueError('opencode_db_unsafe_file')
         return [info.st_dev, info.st_ino, info.st_uid]
 
-    def opencode_connect(self, path, budget):
+    def opencode_connect(self, path, identity, budget):
+        """A read-only connection whose own open database file is the checked file.
+
+        SQLite opens the main database file inside connect and keeps that descriptor for the
+        connection's life. The one regular-file descriptor that appears across connect must be
+        the checked inode: a path match alone could name a file swapped in and back.
+        """
+        before = _oc_open_files(budget)
         # Percent-encode the path: a raw '#' or '?' would end the URI early and open another file.
         db = sqlite3.connect('file:' + urllib.parse.quote(path, safe='/') + '?mode=ro', uri=True,
                              timeout=OC_BUSY_MS / 1000)
         try:
+            new = {fd: file for fd, file in _oc_open_files(budget).items() if before.get(fd) != file}
+            if len(new) != 1:
+                raise ValueError('opencode_db_unreadable')  # missing, reused or ambiguous evidence
+            [(fd, file)] = new.items()
+            if file != tuple(identity[:2]):
+                raise ValueError('opencode_db_replaced')
             db.execute('PRAGMA query_only = ON')
             opened = [row[2] for row in db.execute('PRAGMA database_list') if row[1] == 'main']
             if opened != [os.path.realpath(path)]:
@@ -418,7 +453,16 @@ class Supervisor:
         except Exception:
             db.close()
             raise
-        return db
+        return db, fd
+
+    @staticmethod
+    def opencode_still_open(fd, identity):
+        try:
+            info = os.stat(os.path.join(OC_FD_DIR, fd))
+        except OSError as exc:
+            raise ValueError('opencode_db_unreadable') from exc
+        if (info.st_dev, info.st_ino) != tuple(identity[:2]):
+            raise ValueError('opencode_db_replaced')
 
     @staticmethod
     def opencode_query(db, budget, sql, args=()):
@@ -438,13 +482,17 @@ class Supervisor:
         for path in self.opencode_candidates(budget):
             identity = self.opencode_identity(path)
             budget.check()
-            db = self.opencode_connect(path, budget)
+            db, _ = self.opencode_connect(path, identity, budget)
             try:
                 for table, required in OC_REQUIRED.items():
-                    columns = {row[1] for row in self.opencode_query(db, budget, 'PRAGMA table_info(' + table + ')')}
+                    # Only the required names come back; the agent's schema controls every other name.
+                    names = sorted(required)
+                    columns = {row[0] for row in self.opencode_query(
+                        db, budget, 'SELECT name FROM pragma_table_info(?) WHERE name IN (%s)' % ','.join('?' * len(names)),
+                        (table, *names))}
                     if not required <= columns:
                         raise ValueError('opencode_schema_unsupported')
-                rows = self.opencode_query(db, budget, 'SELECT id FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
+                rows = self.opencode_query(db, budget, 'SELECT 1 FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
                                            (native_id, repo_path))
             finally:
                 db.close()
@@ -465,28 +513,36 @@ class Supervisor:
         known[native_id] = identity
         return self.opencode_scan_session(path, identity, native_id, repo_path, budget)
 
-    def opencode_cell(self, db, budget, size, fetched, sql, args):
+    def opencode_cell(self, db, budget, size, fetched, table, where, args):
         """Fetch one data cell only after its byte size fits the cell and cumulative budgets."""
         if size is None or size > OC_CELL_MAX:
             raise ValueError('opencode_record_too_large')
         fetched += size
         if fetched > OC_FETCH_MAX:
             raise ValueError('opencode_guard_budget')
-        rows = self.opencode_query(db, budget, sql, args)
-        if len(rows) != 1 or not isinstance(rows[0][0], str) or len(rows[0][0].encode('utf-8', 'surrogatepass')) != size:
+        # The column check doesn't prove the pinned keys: require one row before fetching it.
+        count = self.opencode_query(db, budget, 'SELECT count(*) FROM (SELECT 1 FROM %s WHERE %s LIMIT 2)' % (table, where), args)
+        if count != [(1,)]:
+            raise ValueError('opencode_record_malformed')
+        rows = self.opencode_query(
+            db, budget, 'SELECT CASE WHEN length(CAST(data AS BLOB)) = ? THEN data END FROM %s WHERE %s LIMIT 1' % (table, where),
+            (size, *args))
+        if len(rows) != 1 or not isinstance(rows[0][0], str):
             raise ValueError('opencode_record_malformed')
         return rows[0][0], fetched
 
     def opencode_scan_session(self, path, identity, native_id, repo_path, budget):
         fetched = 0
         emitted = 0
-        db = self.opencode_connect(path, budget)
+        db, fd = self.opencode_connect(path, identity, budget)
         try:
             db.execute('BEGIN')  # one read snapshot for the binding, the messages and their parts
             if self.opencode_identity(path) != identity:
                 raise ValueError('opencode_db_replaced')
-            bound = self.opencode_query(db, budget, 'SELECT id FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
+            bound = self.opencode_query(db, budget, 'SELECT 1 FROM session_v2 WHERE id=? AND directory=? LIMIT 2',
                                         (native_id, repo_path))
+            # The snapshot is now open; the descriptor it reads through must still be the checked file.
+            self.opencode_still_open(fd, identity)
             if len(bound) != 1:
                 raise ValueError('opencode_session_missing' if not bound else 'opencode_session_ambiguous')
             # Sizes first, data later: no cell is materialized before its bytes fit the budget.
@@ -501,11 +557,11 @@ class Supervisor:
             for message_id, size in messages:
                 if message_id is None:
                     raise ValueError('opencode_record_too_large')
-                raw, fetched = self.opencode_cell(db, budget, size, fetched,
-                                                  'SELECT data FROM session_message WHERE id=?', (message_id,))
+                raw, fetched = self.opencode_cell(db, budget, size, fetched, 'session_message', 'id=?', (message_id,))
                 parts = self.opencode_query(
                     db, budget,
-                    'SELECT ordinal, CASE WHEN length(CAST(type AS BLOB)) <= ? THEN type END, '
+                    "SELECT CASE WHEN typeof(ordinal)='integer' THEN ordinal END, "
+                    'CASE WHEN length(CAST(type AS BLOB)) <= ? THEN type END, '
                     'length(CAST(data AS BLOB)) FROM session_part WHERE message_id=? ORDER BY ordinal LIMIT ?',
                     (OC_ID_MAX, message_id, OC_MAX_PARTS - parts_seen + 1))
                 parts_seen += len(parts)
@@ -513,13 +569,14 @@ class Supervisor:
                     raise ValueError('opencode_guard_budget')
                 texts = []
                 for ordinal, part_type, part_size in parts:
-                    if part_type is None or not isinstance(ordinal, int):
-                        raise ValueError('opencode_record_too_large' if part_type is None else 'opencode_record_malformed')
+                    if ordinal is None:
+                        raise ValueError('opencode_record_malformed')
+                    if part_type is None:
+                        raise ValueError('opencode_record_too_large')
                     if part_type != 'text':
                         continue
-                    part_raw, fetched = self.opencode_cell(
-                        db, budget, part_size, fetched,
-                        'SELECT data FROM session_part WHERE message_id=? AND ordinal=?', (message_id, ordinal))
+                    part_raw, fetched = self.opencode_cell(db, budget, part_size, fetched, 'session_part',
+                                                           'message_id=? AND ordinal=?', (message_id, ordinal))
                     texts.append(_oc_text(_oc_json(part_raw)))
                 budget.check()
                 content = _oc_json(raw).get('content')
