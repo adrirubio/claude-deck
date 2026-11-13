@@ -158,3 +158,219 @@ async def reconcile_terminal_revision(db, item, revision_id, expected_context, o
         sanitized_reason=audit.sanitize_reason(reason))
     await db.commit()
     return {"status": "reconciled", "revision_id": revision_id, "revision_status": outcome}
+
+
+async def _review_context(db, item, *, revision_number, dispatch_nonce, head_sha, reviewer_member_id, actor=None):
+    """Bind a negative disposition to current independent assignment and source."""
+    import re
+    from app.models.database import GithubRequiredCheckWatch
+    from app.services.github_approval_service import github_approval_service as approval, GithubApprovalError
+    from app.services.github_ci_watch_service import github_ci_watch_service as watches, _digest as policy_digest
+    from app.services.factory_delivery_policy import effective_policy
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    context, owner, leader, workspace = await approval.healthy_scope_context(db, item, scope)
+    await approval.bind_actor_session(db, context, actor)
+    if (dispatch_nonce != context['dispatch_nonce'] or revision_number != context['active_scope_revision']
+            or not isinstance(head_sha, str) or not re.fullmatch(r'[0-9a-f]{40}', head_sha)):
+        raise GithubApprovalError('stale_revision_review')
+    revision = await db.scalar(select(GithubAttemptScopeRevision).where(
+        GithubAttemptScopeRevision.work_item_id == item.id,
+        GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+        GithubAttemptScopeRevision.revision == revision_number))
+    if (not revision or revision.status != 'submitted' or revision.phase != 'implementation'
+            or revision.owner_member_id != owner.id or revision.owner_slot_id != owner.team_slot_id
+            or revision.submitted_head_sha != head_sha or revision.expected_workspace_id != workspace.id
+            or revision.expected_lease_token_hash != approval.lease_token_hash(workspace.lease_token)):
+        raise GithubApprovalError('submitted_revision_required')
+    watch = await db.scalar(select(GithubRequiredCheckWatch).where(
+        GithubRequiredCheckWatch.work_item_id == item.id,
+        GithubRequiredCheckWatch.dispatch_nonce == dispatch_nonce,
+        GithubRequiredCheckWatch.scope_revision == revision_number,
+        GithubRequiredCheckWatch.head_sha == head_sha))
+    if (not watch or watch.pr_number != context['pr_number'] or watch.owner_slot_id != owner.team_slot_id
+            or watch.reviewer_member_id != reviewer_member_id or reviewer_member_id == owner.id
+            or watch.policy_digest != policy_digest(effective_policy(item, scope))):
+        raise GithubApprovalError('current_independent_reviewer_required', status_code=403)
+    try:
+        await watches._reviewer(db, context, reviewer_member_id)
+    except ValueError as exc:
+        raise GithubApprovalError('current_independent_reviewer_required', status_code=403) from exc
+    from app.models.database import MailTeamMember
+    reviewer = await db.get(MailTeamMember, reviewer_member_id)
+    context['reviewer_binding'] = (reviewer.id, reviewer.team_slot_id)
+    context['review_watch'] = _values(watch)
+    context['review_revision'] = _values(revision)
+    await _read_review_head(scope, context, head_sha)
+    await _claim_review_context(db, context)
+    return context, revision, watch, leader
+
+
+async def _read_review_head(scope, context, head_sha):
+    from app.services.github_approval_service import github_approval_service as approval, GithubApprovalError
+    from app.services.github_client import github_client
+    pull = await github_client.get_pull(scope.repo_owner, scope.repo_name, context['pr_number'],
+        token=await approval.github_read_token(scope))
+    head, base = pull.get('head') or {}, pull.get('base') or {}
+    if (pull.get('number') != context['pr_number'] or pull.get('state') != 'open' or pull.get('merged_at')
+            or head.get('sha') != head_sha or head.get('ref') != context['dispatch_head_ref']
+            or (head.get('repo') or {}).get('full_name') != f"{scope.repo_owner}/{scope.repo_name}"
+            or (context['dispatch_base_ref'] and base.get('ref') != context['dispatch_base_ref'])):
+        raise GithubApprovalError('revision_review_head_changed')
+
+
+def _review_conditions(context):
+    from sqlalchemy import and_, or_
+    from sqlalchemy.orm import aliased
+    from app.models.database import AgentTeamSlot, MailTeamMember, GithubRequiredCheckWatch
+    from app.services.github_approval_service import github_approval_service as approval
+    member, newer = aliased(MailTeamMember), aliased(MailTeamMember)
+    reviewer, slot = context['reviewer_binding']
+    return [*approval.healthy_scope_conditions(context),
+        exists(select(member.id).join(AgentTeamSlot, AgentTeamSlot.id == member.team_slot_id).where(
+            member.id == reviewer, member.team_slot_id == slot, member.team_preset_id == context['team_id'],
+            member.participant_kind == 'team_slot', AgentTeamSlot.preset_id == context['team_id'],
+            AgentTeamSlot.enabled.is_(True),
+            ~exists(select(newer.id).where(newer.team_slot_id == slot,
+                or_(newer.updated_at > member.updated_at,
+                    and_(newer.updated_at == member.updated_at, newer.id > member.id)))))),
+        exists(select(GithubRequiredCheckWatch.id).where(*(
+            _same(getattr(GithubRequiredCheckWatch, key), value)
+            for key, value in context['review_watch'].items()))),
+        exists(select(GithubAttemptScopeRevision.id).where(*(
+            _same(getattr(GithubAttemptScopeRevision, key), value)
+            for key, value in context['review_revision'].items())))]
+
+
+async def _claim_review_context(db, context):
+    from app.services.github_approval_service import github_approval_service as approval, GithubApprovalError
+    from app.services.github_coordination_service import hold_code
+    await approval.require_bound_actor_session(db, context)
+    result = await db.execute(update(GithubWorkItem).where(*_review_conditions(context))
+        .values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+    if result.rowcount != 1 or hold_code():
+        await db.rollback()
+        raise GithubApprovalError('stale_revision_review')
+
+
+async def record_revision_review(db, item, *, revision_number, dispatch_nonce, head_sha,
+                                 reviewer_member_id, verdict, summary, evidence_url, actor=None):
+    from urllib.parse import urlsplit
+    from app.models.database import GithubRevisionReview
+    from app.services.github_approval_service import GithubApprovalError, github_approval_service as approval
+    if verdict != 'changes_required' or not summary.strip():
+        raise GithubApprovalError('negative_structured_review_required', status_code=400)
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    url = urlsplit(evidence_url)
+    if (url.scheme != 'https' or url.netloc != 'github.com' or url.username or url.password
+            or url.path != f'/{scope.repo_owner}/{scope.repo_name}/pull/{item.pr_number}'
+            or not url.fragment.startswith('pullrequestreview-')):
+        raise GithubApprovalError('revision_review_evidence_invalid', status_code=400)
+    context, revision, watch, _ = await _review_context(db, item, revision_number=revision_number,
+        dispatch_nonce=dispatch_nonce, head_sha=head_sha, reviewer_member_id=reviewer_member_id, actor=actor)
+    active = list((await db.scalars(select(GithubRevisionReview).where(
+        GithubRevisionReview.revision_id == revision.id, GithubRevisionReview.status == 'active'))).all())
+    for row in active:
+        if (row.reviewer_member_id == reviewer_member_id and row.head_sha == head_sha
+                and row.summary == summary.strip() and row.evidence_url == evidence_url):
+            return row
+        row.status, row.ended_at = 'superseded', datetime.utcnow()
+    fact = GithubRevisionReview(work_item_id=item.id, revision_id=revision.id, watch_id=watch.id,
+        dispatch_nonce=dispatch_nonce, head_sha=head_sha, reviewer_member_id=reviewer_member_id,
+        expected_lease_token_hash=approval.lease_token_hash(context['lease_token']), verdict=verdict,
+        summary=summary.strip(), evidence_url=evidence_url)
+    db.add(fact)
+    await db.flush()
+    await _review_audit(db, item, revision, fact, 'recorded', actor, reviewer_member_id)
+    await _claim_review_context(db, context)
+    await db.commit()
+    return fact
+
+
+async def withdraw_revision_review(db, item, *, review_id, reviewer_member_id, dispatch_nonce, actor=None):
+    from app.models.database import GithubRevisionReview
+    from app.services.github_approval_service import GithubApprovalError
+    fact = await db.get(GithubRevisionReview, review_id, populate_existing=True)
+    if (not fact or fact.work_item_id != item.id or fact.reviewer_member_id != reviewer_member_id
+            or fact.dispatch_nonce != dispatch_nonce or item.dispatch_nonce != dispatch_nonce):
+        raise GithubApprovalError('review_disposition_not_owned', status_code=403)
+    context, revision, _, _ = await _review_context(db, item, revision_number=item.active_scope_revision,
+        dispatch_nonce=dispatch_nonce, head_sha=fact.head_sha, reviewer_member_id=reviewer_member_id, actor=actor)
+    if fact.status == 'withdrawn':
+        return fact
+    result = await db.execute(update(GithubRevisionReview).where(
+        GithubRevisionReview.id == fact.id, GithubRevisionReview.status == 'active')
+        .values(status='withdrawn', ended_at=datetime.utcnow()).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        await db.rollback()
+        raise GithubApprovalError('review_disposition_not_active')
+    await _review_audit(db, item, revision, fact, 'withdrawn', actor, reviewer_member_id)
+    await _claim_review_context(db, context)
+    await db.commit()
+    await db.refresh(fact)
+    return fact
+
+
+async def end_submitted_revision(db, item, *, review_id, leader_member_id, dispatch_nonce, reason, actor=None):
+    from app.models.database import GithubRevisionReview
+    from app.services.github_approval_service import GithubApprovalError, github_approval_service as approval
+    fact = await db.get(GithubRevisionReview, review_id, populate_existing=True)
+    if (not fact or fact.work_item_id != item.id or fact.dispatch_nonce != dispatch_nonce
+            or fact.verdict != 'changes_required' or not reason.strip()):
+        raise GithubApprovalError('current_negative_review_required')
+    if fact.status == 'consumed':
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        context, _, leader, _ = await approval.healthy_scope_context(db, item, scope)
+        await approval.bind_actor_session(db, context, actor)
+        revision = await db.get(GithubAttemptScopeRevision, fact.revision_id, populate_existing=True)
+        if (leader.id != leader_member_id or fact.settled_by_member_id != leader.id
+                or fact.settlement_reason != reason.strip() or item.dispatch_nonce != dispatch_nonce
+                or fact.expected_lease_token_hash != approval.lease_token_hash(context['lease_token'])
+                or not revision or revision.status != 'superseded' or not revision.completed_at):
+            raise GithubApprovalError('current_leader_and_review_required', status_code=403)
+        await approval.claim_healthy_scope_context(db, context)
+        return revision
+    if fact.status != 'active':
+        raise GithubApprovalError('current_negative_review_required')
+    fact_values = _values(fact)
+    context, revision, _, leader = await _review_context(db, item, revision_number=item.active_scope_revision,
+        dispatch_nonce=dispatch_nonce, head_sha=fact.head_sha, reviewer_member_id=fact.reviewer_member_id, actor=actor)
+    if (leader.id != leader_member_id or fact.revision_id != revision.id
+            or fact.watch_id != context['review_watch']['id']
+            or fact.expected_lease_token_hash != approval.lease_token_hash(context['lease_token'])):
+        raise GithubApprovalError('current_leader_and_review_required', status_code=403)
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    await _read_review_head(scope, context, fact.head_sha)
+    await _claim_review_context(db, context)
+    consumed = await db.execute(update(GithubRevisionReview).where(*(
+        _same(getattr(GithubRevisionReview, key), value) for key, value in fact_values.items()))
+        .values(status='consumed', ended_at=datetime.utcnow(), settled_by_member_id=leader_member_id,
+                settlement_reason=reason.strip()).execution_options(synchronize_session=False))
+    if consumed.rowcount != 1:
+        await db.rollback()
+        raise GithubApprovalError('stale_revision_review')
+    await db.execute(update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id)
+        .values(status='superseded', completed_at=datetime.utcnow()).execution_options(synchronize_session=False))
+    await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(
+        dispatch_status='dispatched', escalation_reason=None, ack_received_at=None,
+        status_note='Submitted revision ended after current independent CHANGES REQUIRED and Leader settlement. '
+                    'Source work is stopped. A fresh bounded amendment, approval and owner acknowledgement are required.')
+        .execution_options(synchronize_session=False))
+    context['dispatch_status'], context['ack_received_at'] = 'dispatched', None
+    context['review_revision']['status'] = 'superseded'
+    # The completion timestamp is part of the exact revision fence.
+    await db.refresh(revision)
+    context['review_revision'] = _values(revision)
+    await _review_audit(db, item, revision, fact, 'settled', actor, leader_member_id, reason=reason.strip())
+    await _claim_review_context(db, context)
+    await db.commit()
+    await db.refresh(item)
+    return revision
+
+
+async def _review_audit(db, item, revision, fact, outcome, actor, member_id, reason=None):
+    await audit.record_event(db, event_kind='revision_review', source='github_terminal_revision_service',
+        occurred_at=datetime.utcnow(), actor=actor or audit.derive_actor(actor_kind='member', member_id=member_id),
+        record_kind='action', action_outcome='applied', item_id=item.id, revision_id=revision.id,
+        sanitized_reason=f'Negative review {outcome}' + (f': {reason}' if reason else ''),
+        after_values={'review_id': fact.id, 'head_sha': fact.head_sha, 'verdict': fact.verdict,
+                      'reviewer_member_id': fact.reviewer_member_id, 'outcome': outcome})

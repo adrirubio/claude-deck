@@ -289,15 +289,27 @@ u._write = cut
     assert len(paths) == len(set(paths)) == len(list((install.home / '.albiex-synth-city/backups').glob('provider-upgrade-*.zip')))
 
 
-@pytest.mark.parametrize("defect", ["server_name", "missing_tool"])
+@pytest.mark.parametrize("defect", ["server_name", "missing_tool", "extra_tool", "duplicate_tool"])
 def test_t_i1_protocol_failure_is_incomplete_until_the_actual_shipped_shim_verifies(tmp_path, defect):
     install = provision(tmp_path / "install")
     shim = install.app_dir / "mcp_shim/agent_mail_server.py"
     original = shim.read_text()
     if defect == "server_name":
         broken = original.replace('FastMCP("albiex-synth-city-mail")', 'FastMCP("synthetic-wrong-server")')
-    else:
+    elif defect == "missing_tool":
         broken = original.replace('@mcp.tool()\ndef synth_city_ack_message', 'def synth_city_ack_message')
+    elif defect == "extra_tool":
+        broken = original.replace('if __name__ == "__main__":',
+            '@mcp.tool()\ndef synth_city_unexpected_probe_tool():\n    return {"ok": False}\n\n'
+            'if __name__ == "__main__":')
+    else:
+        # Preserve the exact set while duplicating a wire entry. The count
+        # guard must independently refuse this actual tools/list response.
+        broken = original.replace('class _UpgradeSafeFastMCP(FastMCP):',
+            'class _UpgradeSafeFastMCP(FastMCP):\n'
+            '    async def list_tools(self):\n'
+            '        tools = await super().list_tools()\n'
+            '        return [*tools, tools[0]]\n')
     assert broken != original
     shim.write_text(broken)
     first = run_startup(install)

@@ -277,6 +277,38 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_end_submitted_revision",
+    "description": "Current Leader settles a current independent negative review and stops the revision.\n\n    Further source work needs a fresh bounded amendment, approval and owner acknowledgement.\n    This decision does not approve source, merge, retry or release the workspace.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce",
+        "reason"
+      ],
+      "title": "synth_city_end_submitted_revisionArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_get_backlog_coordination",
     "description": "Current Leader: read the assigned backlog, observations and request version.\n\n    Reconcile reviewed dependency/milestone gates and already-landed fixes even for\n    issues without a dispatch-ready label. While ON, this read returns a short-lived\n    snapshot_token for publishing a current assessment without another notification.\n    Read again immediately before reporting; keep the token private. OFF/HOLD reads\n    grant no publication challenge. This tool grants no implementation authority.\n    ",
     "inputSchema": {
@@ -626,6 +658,48 @@ export const manifest = [
         "next_action"
       ],
       "title": "synth_city_prepare_work_remaining_summaryArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_record_revision_review",
+    "description": "Assigned independent reviewer records CHANGES REQUIRED for this exact submitted head.\n\n    This negative fact grants no source or merge authority. Link the source review;\n    a separate current-Leader settlement must end the revision.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_url": {
+          "title": "Evidence Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "revision",
+        "dispatch_nonce",
+        "head_sha",
+        "summary",
+        "evidence_url"
+      ],
+      "title": "synth_city_record_revision_reviewArguments",
       "type": "object"
     }
   },
@@ -1071,6 +1145,86 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_request_scope_amendment",
+    "description": "Request a bounded healthy scope amendment. Fresh Leader decision and owner activation are required.",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "execution_target": {
+          "title": "Execution Target",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "allowed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "allowed_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Actions",
+          "type": "array"
+        },
+        "allowed_commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "prohibited_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prohibited Actions",
+          "type": "array"
+        },
+        "max_failed_heads": {
+          "title": "Max Failed Heads",
+          "type": "integer"
+        },
+        "tool_fallbacks": {
+          "additionalProperties": true,
+          "title": "Tool Fallbacks",
+          "type": "object"
+        },
+        "lease_token": {
+          "title": "Lease Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "execution_target",
+        "summary",
+        "allowed_paths",
+        "allowed_actions",
+        "allowed_commands",
+        "prohibited_actions",
+        "max_failed_heads",
+        "tool_fallbacks",
+        "lease_token"
+      ],
+      "title": "synth_city_request_scope_amendmentArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_request_work_item_approval",
     "description": "Submit the current work item's initial plan to its designated Leader.\n\n    This creates normalized approval authority and returns its stable request id.\n    Do not use synth_city_request_context for initial-plan approval; ordinary context\n    questions are non-authoritative.\n    ",
     "inputSchema": {
@@ -1346,6 +1500,33 @@ export const manifest = [
     "inputSchema": {
       "properties": {},
       "title": "synth_city_whoamiArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_withdraw_revision_review",
+    "description": "Withdraw your active negative review disposition. History is retained.",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce"
+      ],
+      "title": "synth_city_withdraw_revision_reviewArguments",
       "type": "object"
     }
   }

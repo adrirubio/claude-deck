@@ -19,6 +19,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
+    GithubOwnerObservationPause,
     GithubWorkItem,
     GithubWorkspace,
     TeamGithubScope,
@@ -56,6 +57,7 @@ from app.services.factory_delivery_policy import (
 )
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
+_INCONCLUSIVE_CONCLUSIONS = {"cancelled", "timed_out"}
 _STATUS_SUCCESS_STATES = {"success"}
 _STATUS_FAILURE_STATES = {"failure", "error"}
 _TRANSIENT_MERGE_STATES = {"unstable", "blocked"}
@@ -269,7 +271,8 @@ class GithubVerificationService:
                     )
                 ),
             )
-            .values(dispatch_status="verifying", updated_at=now)
+            .values(dispatch_status="verifying", verification_head_sha=current_head_sha,
+                    verification_started_at=now, updated_at=now)
             .execution_options(synchronize_session=False)
         )
         revision_result = await db.execute(
@@ -1015,6 +1018,14 @@ class GithubVerificationService:
             if item is None or item.dispatch_status not in (
                     "dispatched", "verifying", "ready_for_review", "awaiting_human_review"):
                 continue
+            if item.ack_received_at is None and await db.scalar(select(exists(
+                    select(GithubAttemptScopeRevision.id).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.origin_kind == "scope_amendment")))):
+                # A proposed, rejected or approved-but-unacknowledged amendment
+                # stops the whole round. It cannot advance old source through CI.
+                continue
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
                     revision = await self._active_scope_revision(db, item)
@@ -1207,8 +1218,25 @@ class GithubVerificationService:
                 GithubAttemptScopeRevision.status == "submitted",
                 GithubAttemptScopeRevision.submitted_head_sha == revision.submitted_head_sha,
             )),)
+        workspace = None
+        lease_snapshot = None
+        revision_snapshot = ({column.name: getattr(revision, column.name)
+            for column in revision.__table__.columns} if revision is not None else {})
+        closed_policy_guard = policy_context(item)
+        if revision is not None:
+            workspace = await db.scalar(select(GithubWorkspace).where(
+                GithubWorkspace.id == revision.expected_workspace_id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.scope_id == scope.id,
+            ))
+            if (workspace is not None and workspace.lease_token
+                    and github_approval_service.lease_token_matches(
+                        workspace.lease_token, revision.expected_lease_token_hash)):
+                lease_snapshot = (workspace.id, workspace.lease_token, workspace.leased_at)
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, expected["pr_number"])
-        if self._classify_pull(pull) != "merged" or pull.get("merged") is not True:
+        verdict = self._classify_pull(pull)
+        closed_submitted = verdict == "closed_unmerged" and revision is not None
+        if not closed_submitted and (verdict != "merged" or pull.get("merged") is not True):
             return
         if self._pull_number(pull) != expected["pr_number"]:
             raise ValueError("merged PR number does not match the tracked PR")
@@ -1221,6 +1249,60 @@ class GithubVerificationService:
             scope, client, token=None, base_ref=expected["dispatch_base_ref"]
         )
         self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
+        if closed_submitted:
+            from app.services.github_coordination_service import hold_code
+            if hold_code() or lease_snapshot is None:
+                return
+            lease_id, lease_token, leased_at = lease_snapshot
+            lease_guard = exists(select(GithubWorkspace.id).where(
+                GithubWorkspace.id == lease_id, GithubWorkspace.scope_id == expected["scope_id"],
+                GithubWorkspace.leased_item_id == expected["id"],
+                GithubWorkspace.lease_token == lease_token, GithubWorkspace.leased_at == leased_at,
+                GithubWorkspace.enabled.is_(True),
+            ))
+            no_pause = ~exists(select(GithubOwnerObservationPause.id).where(
+                GithubOwnerObservationPause.work_item_id == expected["id"],
+                GithubOwnerObservationPause.status.in_(("waiting", "paused"))))
+            exact_revision = exists(select(GithubAttemptScopeRevision.id).where(*(
+                getattr(GithubAttemptScopeRevision, key) == value for key, value in revision_snapshot.items())))
+            # The second remote read cannot turn a reopened or replaced head into
+            # a terminal revision. Its await also precedes the final SQL fence.
+            current = await client.get_pull(scope.repo_owner, scope.repo_name, expected["pr_number"])
+            if (hold_code() or self._classify_pull(current) != "closed_unmerged"
+                    or self._pull_number(current) != expected["pr_number"]
+                    or self._head_sha(current) != head_sha):
+                await db.rollback()
+                return
+            self._verify_pull_identity(current, scope, item, expected_base=expected_base)
+            claim = await db.execute(update(GithubWorkItem).where(
+                *(getattr(GithubWorkItem, key) == value for key, value in expected.items()),
+                enabled_scope, ~pending_approval, *revision_guard, lease_guard, no_pause, exact_revision,
+                *policy_context_conditions(closed_policy_guard),
+            ).values(status_note=(
+                f"PR #{expected['pr_number']} closed without merge; submitted revision superseded. "
+                "No retry, approval or workspace release was granted."
+            )).execution_options(synchronize_session=False))
+            if claim.rowcount != 1 or hold_code():
+                await db.rollback()
+                return
+            revision.status = "superseded"
+            await self._record_revision_outcome(db, item, revision, "superseded",
+                source="github_verification_service._reconcile_escalated_merge")
+            await db.flush()
+            revision_snapshot["status"] = "superseded"
+            final = await db.execute(update(GithubWorkItem).where(
+                *(getattr(GithubWorkItem, key) == value for key, value in expected.items()),
+                enabled_scope, ~pending_approval, lease_guard, no_pause,
+                *policy_context_conditions(closed_policy_guard),
+                exists(select(GithubAttemptScopeRevision.id).where(*(
+                    getattr(GithubAttemptScopeRevision, key) == value
+                    for key, value in revision_snapshot.items()))),
+            ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+            if final.rowcount != 1 or hold_code():
+                await db.rollback()
+                return
+            await db.commit()
+            return
         claim = await db.execute(update(GithubWorkItem).where(
             *(getattr(GithubWorkItem, key) == value for key, value in expected.items()),
             enabled_scope, ~pending_approval, *revision_guard,
@@ -1431,10 +1513,12 @@ class GithubVerificationService:
                 check
                 for check in checks
                 if check not in pending
-                and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
+                and check.get("conclusion") not in _SUCCESS_CONCLUSIONS | _INCONCLUSIVE_CONCLUSIONS
             ]
+            inconclusive = [check for check in checks
+                            if check.get("conclusion") in _INCONCLUSIVE_CONCLUSIONS]
             blockers = required_check_blockers(policy, checks, head_sha)
-            state = "red" if failed else "pending" if pending or blockers else "green"
+            state = "red" if failed else "pending" if pending or blockers or inconclusive else "green"
         elif policy.required_checks:
             state = "pending"
             evidence_rows = [{"name": check.name, "state": "missing"}
@@ -1474,7 +1558,12 @@ class GithubVerificationService:
             revision.evidence = envelope
 
         if state == "pending":
-            item.status_note = "Diagnostic checks are still running."
+            inconclusive_rows = [row for row in evidence_rows
+                if row.get("conclusion") in _INCONCLUSIVE_CONCLUSIONS]
+            item.status_note = ("Diagnostic checks inconclusive: " + ", ".join(
+                f"{row.get('name', 'unnamed')} ({row['conclusion']})" for row in inconclusive_rows)
+                + ". No failed-head charge; required CI remains blocked."
+                if inconclusive_rows else "Diagnostic checks are still running.")
             item.updated_at = datetime.utcnow()
             await db.commit()
             return
@@ -1775,7 +1864,7 @@ class GithubVerificationService:
             return
 
         head_sha = self._head_sha(pull)
-        if revision is None and (
+        if (
             item.verification_head_sha != head_sha
             or item.verification_started_at is None
         ):
@@ -1834,7 +1923,8 @@ class GithubVerificationService:
         failed = [
             check
             for check in checks
-            if check not in pending and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
+            if check not in pending
+            and check.get("conclusion") not in _SUCCESS_CONCLUSIONS | _INCONCLUSIVE_CONCLUSIONS
         ]
         if failed:
             await self._record_product_verification_failure(
@@ -1857,6 +1947,18 @@ class GithubVerificationService:
                 retry_status="dispatched",
                 revision=revision,
             )
+            return
+        inconclusive = [check for check in checks
+                        if check.get("conclusion") in _INCONCLUSIVE_CONCLUSIONS]
+        if inconclusive:
+            names = ", ".join(f"{check.get('name') or check.get('id')} ({check['conclusion']})"
+                              for check in inconclusive)
+            item.status_note = (
+                f"GitHub checks inconclusive: {names}. Required CI remains blocked; "
+                "no product failed head was charged."
+            )
+            item.updated_at = datetime.utcnow()
+            await db.commit()
             return
         if pending:
             item.status_note = "GitHub checks are still running."

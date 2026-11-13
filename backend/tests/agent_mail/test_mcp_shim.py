@@ -1221,7 +1221,7 @@ def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monke
             types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
                 name=name, arguments=arguments)))
         assert wire.root.structuredContent == denied
-        assert len(tools) == 37
+        assert len(tools) == 41
         # Every published tool is refused before validation or execution.
         for tool in tools:
             assert await shim.mcp.call_tool(tool.name, {}) == denied
@@ -1251,7 +1251,7 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     spec.loader.exec_module(shim)
     calls = []
     monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert len(asyncio.run(shim.mcp.list_tools())) == 37
+    assert len(asyncio.run(shim.mcp.list_tools())) == 41
     assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     assert shim._state["member_id"] is None and shim._state["capability_token"] is None
     assert calls == []
@@ -1282,3 +1282,25 @@ def test_required_check_watch_passes_explicit_head_reviewer_and_attempt(monkeypa
     assert shim.synth_city_watch_required_checks(149,'fixture',0,'a'*40,45)=={'ok':True}
     assert calls==[(('POST','/required-check-watch'),{'json':{'work_item_id':149,
         'dispatch_nonce':'fixture','scope_revision':0,'head_sha':'a'*40,'reviewer_member_id':45}})]
+
+
+def test_scope_amendment_and_negative_review_tools_bind_server_identity(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    calls = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs:
+        calls.append((method, path, kwargs)) or {"ok": True, "data": {"id": 1}})
+    assert shim.synth_city_request_scope_amendment(19, "attempt", "workspace", "Add tests",
+        ["src/test.py"], ["edit_tests", "push_pr_head", "request_verification"], ["pytest -q"],
+        ["No live factory"], 1, {}, "lease")["ok"]
+    shim.synth_city_record_revision_review(19, 2, "attempt", "a" * 40, "Needs correction",
+        "https://github.com/o/r/pull/5#pullrequestreview-1")
+    shim.synth_city_withdraw_revision_review(19, 3, "attempt")
+    shim.synth_city_end_submitted_revision(19, 3, "attempt", "Current negative review settled")
+    assert [row[1] for row in calls] == ["/github-work-items/19/scope-amendments",
+        "/github-work-items/19/revision-reviews", "/github-work-items/19/revision-reviews/3/withdraw",
+        "/github-work-items/19/submitted-revision/end"]
+    assert calls[0][2]["json"]["phase"] == "implementation"
+    for _, _, kwargs in calls:
+        assert not {"owner_member_id", "reviewer_member_id", "leader_member_id", "origin_kind"} & kwargs["json"].keys()

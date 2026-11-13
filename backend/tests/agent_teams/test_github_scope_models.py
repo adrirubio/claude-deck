@@ -306,3 +306,22 @@ async def test_compat_migration_adds_new_columns_to_legacy_db():
         "continuation_activated_at",
     } <= work_item_cols
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_amendment_origin_upgrade_preserves_legacy_rows_and_is_idempotent():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE github_attempt_scope_revisions (id INTEGER PRIMARY KEY, "
+            "work_item_id INTEGER, dispatch_nonce VARCHAR, revision INTEGER, status VARCHAR)"))
+        await conn.execute(text("INSERT INTO github_attempt_scope_revisions VALUES (1, 7, 'legacy', 2, 'submitted')"))
+    for _ in range(2):
+        async with engine.connect() as conn:
+            await _run_sqlite_compat_migrations(conn)
+    async with engine.connect() as conn:
+        row = (await conn.execute(text("SELECT status, origin_kind, amendment_base_paths, "
+            "amendment_added_paths, previous_scope_revision FROM github_attempt_scope_revisions WHERE id=1"))).one()
+        assert tuple(row) == ('submitted', 'continuation', '[]', '[]', 0)
+        columns = {r[1] for r in (await conn.execute(text('PRAGMA table_info(github_revision_reviews)')))}
+        assert {'revision_id', 'head_sha', 'reviewer_member_id', 'watch_id', 'status'} <= columns
+    await engine.dispose()

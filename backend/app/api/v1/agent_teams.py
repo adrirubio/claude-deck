@@ -42,6 +42,8 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.models.schemas import (
+    GithubScopeAmendmentCreate, GithubRevisionReviewCreate, GithubRevisionReviewWithdraw,
+    GithubSubmittedRevisionEnd, GithubRevisionReviewResponse,
     AgentTeamActivityResponse,
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
@@ -567,6 +569,10 @@ def _scope_revision_response(
         revision=revision.revision,
         owner_slot_id=revision.owner_slot_id,
         owner_member_id=revision.owner_member_id,
+        origin_kind=revision.origin_kind,
+        amendment_base_paths=revision.amendment_base_paths,
+        amendment_added_paths=revision.amendment_added_paths,
+        previous_scope_revision=revision.previous_scope_revision,
         phase=revision.phase,
         execution_target=revision.execution_target,
         summary=revision.summary,
@@ -1504,7 +1510,9 @@ async def request_github_work_item_continuation(
     committed_request: tuple[int, int] | None = None
     try:
         revision, approval, _created = (
-            await github_approval_service.create_continuation_request(
+            await (github_approval_service.create_scope_amendment_request
+                   if isinstance(request, GithubScopeAmendmentCreate)
+                   else github_approval_service.create_continuation_request)(
                 db,
                 item,
                 scope,
@@ -1528,6 +1536,9 @@ async def request_github_work_item_continuation(
             )
         )
         committed_request = (approval.id, revision.id)
+        if isinstance(request, GithubScopeAmendmentCreate) and not _created and approval.status != "pending":
+            return GithubContinuationRequestResponse(
+                approval=_approval_authority_response(approval), revision=_scope_revision_response(revision))
         async with github_approval_service.continuation_transport_lock(approval.id):
             if await github_approval_service.expire_continuation_if_needed(
                 db,
@@ -3679,3 +3690,75 @@ async def launch_preset(
         raise HTTPException(status_code=409, detail=detail) from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+
+@router.post('/github-work-items/{item_id}/scope-amendments', response_model=GithubContinuationRequestResponse)
+async def request_github_scope_amendment(item_id: int, request: GithubScopeAmendmentCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    """Explicit entry point: clients cannot select the persisted authority origin."""
+    return await request_github_work_item_continuation(item_id, request, session, db)
+
+
+def _revision_review_response(fact):
+    return GithubRevisionReviewResponse(**{key: getattr(fact, key)
+        for key in GithubRevisionReviewResponse.model_fields})
+
+
+@router.post('/github-work-items/{item_id}/revision-reviews', response_model=GithubRevisionReviewResponse)
+async def record_github_revision_review(item_id: int, request: GithubRevisionReviewCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import record_revision_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await record_revision_review(db, item, revision_number=request.revision,
+            dispatch_nonce=request.dispatch_nonce, head_sha=request.head_sha,
+            reviewer_member_id=session.member_id, verdict='changes_required', summary=request.summary,
+            evidence_url=request.evidence_url, actor=_session_actor(session))
+        return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/revision-reviews/{review_id}/withdraw', response_model=GithubRevisionReviewResponse)
+async def withdraw_github_revision_review(item_id: int, review_id: int, request: GithubRevisionReviewWithdraw,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import withdraw_revision_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await withdraw_revision_review(db, item, review_id=review_id,
+            reviewer_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce, actor=_session_actor(session))
+        return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/submitted-revision/end', response_model=GithubScopeRevisionResponse)
+async def end_github_submitted_revision(item_id: int, request: GithubSubmittedRevisionEnd,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import end_submitted_revision
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        revision = await end_submitted_revision(db, item, review_id=request.review_id,
+            leader_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason, actor=_session_actor(session))
+        return _scope_revision_response(revision)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
