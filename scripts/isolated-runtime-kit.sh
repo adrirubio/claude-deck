@@ -1083,8 +1083,16 @@ PY
   in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" install \
     || fail "the Agent Mail install through the isolated backend failed (see $ROOT/logs/backend.log)"
   # #912: an OpenCode member reaches only the kit stub. Proved before any pane starts.
+  # The helper's outcome is kept: 1 (incomplete, something is not as it was) stays exit 1.
   if [[ "$PROVIDER" == opencode-cli ]]; then
-    kitpy opencode-config "$ROOT" "$KIT_STUB_URL" >/dev/null || refuse "the OpenCode config could not be proved stub-only"
+    local setup=0
+    kitpy opencode-config "$ROOT" "$KIT_STUB_URL" >/dev/null || setup=$?
+    case "$setup" in
+      0) ;;
+      1) incomplete "the OpenCode config setup did not finish cleanly (see above); the root is kept" ;;
+      2) refuse "the OpenCode config could not be proved stub-only" ;;
+      *) fail "the OpenCode config helper failed (exit $setup)" ;;
+    esac
   fi
   launch="$(in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" launch)" \
     || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"

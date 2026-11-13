@@ -1221,7 +1221,9 @@ def test_every_runtime_test_reaches_the_opt_in_gate_first():
         if name in ("test_every_runtime_test_reaches_the_opt_in_gate_first",  # this audit
                     "test_kit_fixture_teardown_runs_nothing_without_the_opt_in",  # _kit mocked
                     "test_kit_without_the_opt_in_runs_behind_a_boundary_that_cannot_launch",  # subprocess.run mocked
-                    "test_launch_guard_control_is_caught"):  # runs the mocked test above
+                    "test_launch_guard_control_is_caught",  # runs the mocked test above
+                    "test_up_keeps_the_opencode_helper_outcome",  # one extracted step, kitpy mocked
+                    "test_opencode_outcome_control_is_caught"):
             continue
         uses = reaches(name, set()) | called(node)
         starts = any(isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -1476,3 +1478,43 @@ def test_hidden_cleanup_failure_control_is_caught(tmp_path, monkeypatch, capsys)
     with pytest.raises(AssertionError):
         test_opencode_partial_write_with_failed_cleanup_is_incomplete_and_names_the_file(
             tmp_path / "t", monkeypatch, capsys, 0)
+
+
+# V1 review 5899358665: up keeps the helper's outcome. The OpenCode setup step of up is run
+# on its own, with the kit's real refuse/incomplete/fail and a mocked kitpy; no kit starts.
+def _opencode_setup_step(helper_code: int) -> subprocess.CompletedProcess:
+    script = KIT.read_text()
+    reporters = "\n".join(line for line in script.splitlines()
+                          if line.startswith(("refuse() {", "fail() {", "incomplete() {")))
+    start = script.index("  # #912: an OpenCode member reaches only the kit stub.")
+    end = script.index("  launch=\"$(in_ns", start)
+    step = script[start:end]
+    program = "\n".join([
+        reporters,
+        f"kitpy() {{ echo 'helper: details' >&2; return {helper_code}; }}",
+        'ROOT=/nonexistent/kit KIT_STUB_URL=http://127.0.0.1:18781 PROVIDER=opencode-cli',
+        "step() {", step, "}", "step",  # inside a function, as in up
+        "echo continued",
+    ])
+    return subprocess.run(["bash", "-c", program], capture_output=True, text=True, timeout=10,
+                          env={"PATH": "/usr/bin:/bin"})
+
+
+@pytest.mark.parametrize("helper, code, prefix", [(0, 0, None), (1, 1, "incomplete:"), (2, 2, "refused:")])
+def test_up_keeps_the_opencode_helper_outcome(helper, code, prefix):
+    result = _opencode_setup_step(helper)
+    assert result.returncode == code, result.stderr
+    if prefix is None:
+        assert result.stdout.strip() == "continued"
+    else:
+        assert "continued" not in result.stdout
+        assert f"isolated-runtime-kit: {prefix}" in result.stderr and "helper: details" in result.stderr
+
+
+def test_opencode_outcome_control_is_caught(tmp_path, monkeypatch):
+    # In-memory control: routing the helper's incomplete outcome to refuse again is caught.
+    _opencode_control(tmp_path, monkeypatch, '      1) incomplete "the OpenCode config setup did not finish cleanly',
+                      '      1) refuse "the OpenCode config setup did not finish cleanly')
+    monkeypatch.setitem(globals(), "KIT", Path(os.environ["RUNTIME_KIT_SCRIPT_UNDER_TEST"]))
+    with pytest.raises(AssertionError):
+        test_up_keeps_the_opencode_helper_outcome(1, 1, "incomplete:")
