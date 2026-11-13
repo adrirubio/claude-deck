@@ -1015,28 +1015,52 @@ async def test_direct_message_behavior_is_unchanged(db, svc):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["context_request", "handoff"])
-async def test_request_with_a_thread_id_is_stored_under_the_canonical_root(db, svc, kind):
-    """Existing contract (test_api): a participant may send a request inside a thread. It is stored
-    under the canonical root; its stall signal is only ever an ambiguity, never an entry."""
+async def test_request_with_a_thread_id_refuses(db, svc, kind):
+    """A request starts its own thread: it is refused, for a member and for an external actor."""
+    from app.models.database import MailExternalActor
+
     first, second, root = await _pair(db, svc, f"nested-{kind}")
-    reply = await _reply(svc, db, second, root.id)
-    sent = await svc.send_message(db, MailMessageCreate(
-        kind=kind, sender_member_id=first.id, recipient_member_id=second.id,
-        thread_root_id=reply.id, body_markdown="a request inside a thread"))
-    assert sent.thread_root_id == root.id
-    assert sent.request_status == "pending"
-    assert await svc.recipient_ids_for_message(db, sent.id) == {second.id}
+    actor = MailExternalActor(actor_key=f"refuse-{kind}", display_name="Actor", kind="external_tool",
+                              token_hash=f"hash-{kind}")
+    db.add(actor)
+    await db.commit()
+    before = await _mail_count(db)
+    with pytest.raises(ValueError, match="a request starts its own thread"):
+        await svc.send_message(db, MailMessageCreate(
+            kind=kind, sender_member_id=first.id, recipient_member_id=second.id,
+            thread_root_id=root.id, body_markdown="a request inside a thread"))
+    with pytest.raises(ValueError, match="a request starts its own thread"):
+        await svc.send_message(db, MailMessageCreate(
+            kind=kind, recipient_member_id=second.id, thread_root_id=root.id, body_markdown="actor request"),
+            sender_actor_id=actor.id)
+    assert await _mail_count(db) == before
 
 
 @pytest.mark.asyncio
-async def test_a_thread_member_may_address_itself_but_a_stranger_stays_refused(db, svc):
+@pytest.mark.parametrize("kind", ["context_request", "handoff"])
+async def test_an_outsider_gets_the_authorization_refusal_before_the_request_refusal(db, svc, kind):
+    first, second, root = await _pair(db, svc, f"order-{kind}")
+    outsider = await _member(db, f"order-x-{kind}", f"order-x-{kind}")
+    before = await _mail_count(db)
+    with pytest.raises(PermissionError):
+        await svc.send_message(db, MailMessageCreate(
+            kind=kind, sender_member_id=outsider.id, recipient_member_id=first.id,
+            thread_root_id=root.id, body_markdown="not a participant"))
+    assert await _mail_count(db) == before
+
+
+@pytest.mark.asyncio
+async def test_self_and_stranger_recipients_are_refused_but_the_other_participant_is_accepted(db, svc):
     first, second, root = await _pair(db, svc, "selfaddr")
     stranger = await _member(db, "selfaddr-x", "selfaddr-x")
-    ok = await _reply(svc, db, first, root.id, recipient_member_id=first.id)
+    before = await _mail_count(db)
+    for recipient in (first, stranger):
+        with pytest.raises(ValueError, match="not a participant of the thread"):
+            await _reply(svc, db, first, root.id, recipient_member_id=recipient.id)
+    assert await _mail_count(db) == before
+    ok = await _reply(svc, db, first, root.id, recipient_member_id=second.id)
     assert ok.thread_root_id == root.id
     assert await svc.recipient_ids_for_message(db, ok.id) == {second.id}
-    with pytest.raises(ValueError):
-        await _reply(svc, db, first, root.id, recipient_member_id=stranger.id)
 
 
 @pytest.mark.asyncio
@@ -1162,3 +1186,114 @@ async def test_get_thread_depth_limit_sentinel(db, svc, depth, complete, reason)
     assert thread.replies_complete is complete
     assert thread.replies_incomplete_reason == reason
     assert len(thread.replies) == depth
+
+
+# --- #752 correction: canonical audience, exact answer target, replay -----------------------------
+# The audience and receipts of every thread message come from the canonical root. The request row an
+# answer resolves is a separate, exact target, and a replay must not silently change it.
+
+async def _canonical_fixture(db, svc, tag):
+    """Root R (context_request A to B, pending) and a legacy nested request C to B inside it."""
+    a = await _member(db, f"{tag}-a", f"{tag}-a")
+    b = await _member(db, f"{tag}-b", f"{tag}-b")
+    c = await _member(db, f"{tag}-c", f"{tag}-c")
+    root = await svc.send_message(db, MailMessageCreate(
+        kind="context_request", sender_member_id=a.id, recipient_member_id=b.id, body_markdown="root ask"),
+        auto_nudge=False)
+    nested = await _raw_row(db, c, b, root.id, kind="context_request", status="pending", holders=(c, b))
+    await db.commit()
+    return a, b, c, root, nested
+
+
+async def _answer(svc, db, sender, thread, **kwargs):
+    return await svc.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=sender.id, thread_root_id=thread, body_markdown="answer"),
+        auto_nudge=False, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_nested_answer_is_delivered_to_the_canonical_roots_participants_not_the_requester(db, svc):
+    a, b, c, root, nested = await _canonical_fixture(db, svc, "canon-pos")
+    answer = await _answer(svc, db, b, nested.id)
+    assert await svc.recipient_ids_for_message(db, answer.id) == {a.id}   # the root's sender, never C
+    assert answer.thread_root_id == root.id
+    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
+    assert (await db.get(MailMessage, root.id)).request_status == "pending"
+    assert (await db.get(MailMessage, answer.id)).payload == {"resolves_request_id": nested.id}
+
+
+@pytest.mark.asyncio
+async def test_a_nested_answer_cannot_pass_a_root_the_answerer_is_not_part_of(db, svc):
+    a = await _member(db, "canon-neg-a", "canon-neg-a")
+    b = await _member(db, "canon-neg-b", "canon-neg-b")
+    c = await _member(db, "canon-neg-c", "canon-neg-c")
+    root = await svc.send_message(db, MailMessageCreate(
+        sender_member_id=a.id, recipient_member_id=c.id, body_markdown="A and C only"), auto_nudge=False)
+    nested = await _raw_row(db, a, b, root.id, kind="context_request", status="pending", holders=(a, b))
+    await db.commit()
+    before = await _mail_count(db)
+    with pytest.raises(PermissionError):
+        await _answer(svc, db, b, nested.id)
+    assert await _mail_count(db) == before
+    assert (await db.get(MailMessage, nested.id)).request_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_same_key_replay_with_the_same_exact_target_is_idempotent(db, svc):
+    a, b, c, root, nested = await _canonical_fixture(db, svc, "replay-same")
+    first = await _answer(svc, db, b, nested.id, delivery_key="k-exact")
+    again = await _answer(svc, db, b, nested.id, delivery_key="k-exact")
+    assert first.id == again.id
+    assert await db.scalar(select(func.count()).select_from(MailMessage)
+                           .where(MailMessage.delivery_key == "k-exact")) == 1
+    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_a_same_key_replay_through_another_target_conflicts_and_resolves_nothing(db, svc):
+    a, b, c, root, nested = await _canonical_fixture(db, svc, "replay-conflict")
+    other = await _raw_row(db, c, b, root.id, kind="context_request", status="pending", holders=(c, b))
+    await db.commit()
+    await _answer(svc, db, b, nested.id, delivery_key="k-conflict")
+    before = await _mail_count(db)
+    with pytest.raises(MailDeliveryIntegrityError):
+        await _answer(svc, db, b, root.id, delivery_key="k-conflict")       # the root request instead
+    with pytest.raises(MailDeliveryIntegrityError):
+        await _answer(svc, db, b, other.id, delivery_key="k-conflict")      # another nested request
+    assert await _mail_count(db) == before
+    assert (await db.get(MailMessage, root.id)).request_status == "pending"
+    assert (await db.get(MailMessage, other.id)).request_status == "pending"
+    assert (await db.get(MailMessage, nested.id)).request_status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_a_normal_answer_replays_through_any_reply_id_of_the_same_thread(db, svc):
+    first = await _member(db, "replay-norm-a", "replay-norm-a")
+    second = await _member(db, "replay-norm-b", "replay-norm-b")
+    ask = await svc.send_message(db, MailMessageCreate(
+        kind="context_request", sender_member_id=first.id, recipient_member_id=second.id, body_markdown="ask"),
+        auto_nudge=False)
+    follow = await _reply(svc, db, first, ask.id)
+    one = await _answer(svc, db, second, ask.id, delivery_key="k-normal")
+    two = await _answer(svc, db, second, follow.id, delivery_key="k-normal")
+    assert one.id == two.id
+    assert (await db.get(MailMessage, one.id)).payload is None
+    assert (await db.get(MailMessage, ask.id)).request_status == "answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["message", "answer"])
+async def test_a_caller_cannot_supply_the_reserved_resolution_metadata(db, svc, kind):
+    a, b, c, root, nested = await _canonical_fixture(db, svc, f"reserved-{kind}")
+    before = await _mail_count(db)
+    with pytest.raises(ValueError, match="resolves_request_id"):
+        await svc.send_message(db, MailMessageCreate(
+            kind=kind, sender_member_id=b.id, thread_root_id=nested.id, body_markdown="spoof",
+            payload={"resolves_request_id": root.id, "note": "kept elsewhere"}), auto_nudge=False)
+    assert await _mail_count(db) == before
+    assert (await db.get(MailMessage, root.id)).request_status == "pending"
+    # Other caller payload fields are preserved on an ordinary answer.
+    kept = await svc.send_message(db, MailMessageCreate(
+        kind="answer", sender_member_id=b.id, thread_root_id=root.id, body_markdown="ok",
+        payload={"note": "kept"}), auto_nudge=False)
+    assert (await db.get(MailMessage, kept.id)).payload == {"note": "kept"}

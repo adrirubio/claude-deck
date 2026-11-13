@@ -549,3 +549,28 @@ async def test_external_actor_cannot_reach_a_foreign_thread_through_a_nested_id(
                               headers=_auth(owner_token))).json()["replies"]
     assert [item["id"] for item in after] == [item["id"] for item in before]
     assert other.id != member.id
+
+
+@pytest.mark.asyncio
+async def test_external_service_refuses_a_request_with_a_thread_id_and_accepts_a_plain_message(client, db):
+    from app.models.database import MailExternalActor
+    from app.models.schemas import ExternalAgentMailMessageRequest
+
+    member = await _member(db, "repo-ext-req", "ext-req")
+    token, actor_data = await _actor_token(client, key="ext-req", name="ExtReq")
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests", headers=_auth(token),
+        json={"recipient_member_id": member.id, "subject": "Thread", "body_markdown": "Owner request."})
+    root_id = created.json()["message"]["id"]
+    actor = await db.get(MailExternalActor, actor_data["id"])
+    request = ExternalAgentMailMessageRequest(recipient_member_id=member.id, body_markdown="Nested request")
+    from sqlalchemy import func, select
+    from app.models.database import MailMessage
+    before = await db.scalar(select(func.count()).select_from(MailMessage))
+    with pytest.raises(ValueError, match="a request starts its own thread"):
+        await external_agent_mail_service.send_message(
+            db, actor, request, kind="context_request", recipient_member_id=member.id, thread_root_id=root_id)
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == before
+    ok = await client.post(f"/api/v1/external/agent-mail/threads/{root_id}/replies", headers=_auth(token),
+                           json={"body_markdown": "A plain follow-up."})
+    assert ok.status_code == 200 and ok.json()["message"]["thread_root_id"] == root_id

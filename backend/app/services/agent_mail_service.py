@@ -107,6 +107,8 @@ class MailAuthorityError(ValueError):
 MAX_THREAD_ANCESTRY_HOPS = 32
 THREAD_REPLY_LIMIT = 500
 THREAD_DEPTH_LIMIT = 33
+# Service metadata on an answer: the exact nested request it resolved (never caller supplied).
+RESOLVES_REQUEST_KEY = "resolves_request_id"
 
 
 class MailDeliveryIntegrityError(RuntimeError):
@@ -1172,6 +1174,10 @@ class AgentMailService:
                     MailMessage.id == canonical.id, self._member_root_access(request.sender_member_id)))
                 if permitted is None:
                     raise PermissionError("thread_not_authorized")
+            # A request starts its own thread. Authorization came first, so an outsider is refused
+            # with the authorization error and nothing is written.
+            if request.kind in MAIL_REQUEST_KINDS:
+                raise ValueError("a request starts its own thread")
             # An explicit answer still names the exact request row it resolves, never an ancestor:
             # when the supplied row is itself a context request, that row is the target. When it is
             # an ordinary reply, the target is the canonical root (which must be the request).
@@ -1182,6 +1188,13 @@ class AgentMailService:
                 else None
             )
             request = request.model_copy(update={"thread_root_id": canonical.id})
+        if RESOLVES_REQUEST_KEY in (request.payload or {}):
+            raise ValueError(f"payload key {RESOLVES_REQUEST_KEY} is reserved")
+        # The exact nested request an answer resolves is kept on the answer (and compared on a replay)
+        # as service metadata. An answer whose target is the canonical root carries none.
+        resolves_request_id = (
+            answer_target_id
+            if answer_target_id is not None and answer_target_id != request.thread_root_id else None)
         if sender_type not in {None, "system", "director"}:
             raise ValueError("Invalid sender type")
         if sender_type is not None and (
@@ -1209,7 +1222,7 @@ class AgentMailService:
                     sender_actor_id=sender_actor_id,
                     sender_type=sender_type,
                     operator_authorized=operator_authorized,
-                    answer_target_id=answer_target_id,
+                    resolves_request_id=resolves_request_id,
                 ):
                     raise MailDeliveryIntegrityError(
                         f"delivery key {delivery_key!r} conflicts with different mail"
@@ -1226,6 +1239,7 @@ class AgentMailService:
                 authoritative_approval_round=authoritative_approval_round,
                 operator_authorized=operator_authorized,
                 answer_target_id=answer_target_id,
+                resolves_request_id=resolves_request_id,
             )
         else:
             try:
@@ -1240,6 +1254,7 @@ class AgentMailService:
                         authoritative_approval_round=authoritative_approval_round,
                         operator_authorized=operator_authorized,
                         answer_target_id=answer_target_id,
+                        resolves_request_id=resolves_request_id,
                     )
             except IntegrityError:
                 created = False
@@ -1257,7 +1272,7 @@ class AgentMailService:
                     sender_actor_id=sender_actor_id,
                     sender_type=sender_type,
                     operator_authorized=operator_authorized,
-                    answer_target_id=answer_target_id,
+                    resolves_request_id=resolves_request_id,
                 ):
                     raise MailDeliveryIntegrityError(
                         f"delivery key {delivery_key!r} conflicts with different mail"
@@ -1294,11 +1309,11 @@ class AgentMailService:
         sender_actor_id: int | None,
         sender_type: str,
         operator_authorized: bool,
-        answer_target_id: int | None = None,
+        resolves_request_id: int | None = None,
     ) -> bool:
         if request.recipient_member_id is not None or request.thread_root_id is not None:
             audience_type, audience_id = await self._message_audience(
-                db, request, answer_target_id=answer_target_id, sender_actor_id=sender_actor_id)
+                db, request, sender_actor_id=sender_actor_id)
         else:
             audience_type = getattr(request, "audience_type", None)
             audience_id = getattr(request, "audience_id", None)
@@ -1313,7 +1328,9 @@ class AgentMailService:
             "body_markdown": request.body_markdown,
             "decision": request.decision,
             "kind": request.kind,
-            "payload": request.payload or None,
+            # The exact answer target is part of the operation: a replay through another target differs.
+            "payload": ({**(request.payload or {}), RESOLVES_REQUEST_KEY: resolves_request_id}
+                        if resolves_request_id is not None else request.payload or None),
             "recipient_member_id": request.recipient_member_id,
             "sender_actor_id": sender_actor_id,
             "sender_type": sender_type,
@@ -1354,7 +1371,6 @@ class AgentMailService:
         request: MailMessageCreate,
         *,
         operator_authorized: bool = False,
-        answer_target_id: int | None = None,
         sender_actor_id: int | None = None,
     ) -> tuple[str, str]:
         audience_type = getattr(request, "audience_type", None)
@@ -1366,17 +1382,16 @@ class AgentMailService:
             if request.thread_root_id is not None:
                 # A thread reply reaches the thread's participants minus the replier. An explicit
                 # recipient is never added to that audience: it must already be one of them.
-                participants, thread_members = await self._thread_participants(
-                    db, request, answer_target_id, sender_actor_id)
+                participants = await self._thread_participants(db, request, sender_actor_id)
                 if request.recipient_member_id is not None:
                     if await db.get(MailTeamMember, request.recipient_member_id) is None:
                         raise ValueError("recipient_member_id must reference an existing member")
-                    if request.recipient_member_id not in thread_members:
+                    if request.recipient_member_id not in participants:
                         raise ValueError("recipient is not a participant of the thread")
                 resolved_audience_id = (
                     str(next(iter(participants)))
                     if len(participants) == 1
-                    else f"thread:{answer_target_id or request.thread_root_id}"
+                    else f"thread:{request.thread_root_id}"
                 )
             else:
                 member_id = request.recipient_member_id
@@ -1492,14 +1507,14 @@ class AgentMailService:
         authoritative_approval_round: int | None = None,
         operator_authorized: bool = False,
         answer_target_id: int | None = None,
+        resolves_request_id: int | None = None,
     ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
         if request.sender_member_id is not None and sender_actor_id is not None:
             raise ValueError("messages cannot have both sender_member_id and sender_actor_id")
         audience_type, audience_id = await self._message_audience(
-            db, request, operator_authorized=operator_authorized, answer_target_id=answer_target_id,
-            sender_actor_id=sender_actor_id,
+            db, request, operator_authorized=operator_authorized, sender_actor_id=sender_actor_id,
         )
         is_broadcast = request.recipient_member_id is None and request.thread_root_id is None
         if request.kind == "broadcast" and not is_broadcast:
@@ -1532,6 +1547,8 @@ class AgentMailService:
             raise ValueError(f"{request.kind} requires recipient_member_id")
 
         payload = dict(request.payload or {})
+        if resolves_request_id is not None:
+            payload[RESOLVES_REQUEST_KEY] = resolves_request_id
         linked_item = None
         if request.kind == "context_request" and "work_item_id" in payload:
             linked_item = await self._validate_linked_context_request(
@@ -1579,8 +1596,7 @@ class AgentMailService:
         if request.thread_root_id is not None:
             # Already validated before the row existed: never empty, and any explicit recipient is
             # one of these participants.
-            recipients |= (await self._thread_participants(
-                db, request, answer_target_id, sender_actor_id))[0]
+            recipients |= await self._thread_participants(db, request, sender_actor_id)
         elif request.recipient_member_id is not None:
             recipients.add(request.recipient_member_id)
 
@@ -2636,27 +2652,26 @@ class AgentMailService:
         self,
         db: AsyncSession,
         request: MailMessageCreate,
-        answer_target_id: int | None,
         sender_actor_id: int | None = None,
-    ) -> tuple[set[int], set[int]]:
-        """(members a thread reply reaches, members of the thread).
+    ) -> set[int]:
+        """The members a thread message reaches: the CANONICAL ROOT's sender and recipient minus the
+        replier. The exact request an answer resolves never changes this audience.
 
-        A reply reaches the thread's sender and recipient minus the replier. An external actor that
-        started the thread is reached through the thread API and has no receipt, so a reply to it
-        needs no member. A reply with neither a member nor an actor to reach is refused.
+        An external actor that started the thread is reached through the thread API and has no
+        receipt, so a reply to it needs no member. A reply with neither a member nor an actor to
+        reach is refused.
         """
-        row = await db.get(MailMessage, answer_target_id or request.thread_root_id)
+        row = await db.get(MailMessage, request.thread_root_id)
         if row is None:
             raise ValueError("thread_root_id must reference an existing message")
-        thread_members = {
+        participants = {
             member_id for member_id in (row.sender_member_id, row.recipient_member_id)
-            if member_id is not None
+            if member_id is not None and member_id != request.sender_member_id
         }
-        participants = {member_id for member_id in thread_members if member_id != request.sender_member_id}
         reaches_actor = row.sender_actor_id is not None and row.sender_actor_id != sender_actor_id
         if not participants and not reaches_actor:
             raise ValueError("a reply would reach nobody")
-        return participants, thread_members
+        return participants
 
     async def require_member_thread(self, db: AsyncSession, message_id: int, member_id: int) -> None:
         message = await db.get(MailMessage, message_id)
