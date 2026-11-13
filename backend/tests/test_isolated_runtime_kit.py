@@ -151,7 +151,8 @@ def test_kit_preflight_fails_closed_before_the_backend_starts(kit_root, fault):
     result = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
                   env=_env(RUNTIME_KIT_TEST_FAULT=fault))
     assert result.returncode == 2 and "refused" in result.stderr
-    assert "backend" not in json.loads((kit_root / "state" / "started.json").read_text())
+    started = json.loads((kit_root / "state" / "processes.json").read_text())
+    assert {"launcher", "outer", "inner"} <= set(started) and "backend" not in started
     assert not _root_users(kit_root)
 
 
@@ -176,3 +177,133 @@ def test_kit_up_has_a_finite_deadline(kit_root):
     assert result.returncode != 0 and "deadline" in result.stderr
     assert time.monotonic() - started < 60
     assert not _root_users(kit_root)
+
+
+# V1 review 5896490172 (PR #905): destructive steps belong to one validated kit instance,
+# cleanup is proved by namespace containment, a retained root is refused, no credential
+# appears in any argv, and status fails when its proof is incomplete.
+def _up(root, **env):
+    up = _kit("up", "--root", str(root), "--provider", "claude-code", "--cli", str(FAKE_CLI), env=_env(**env))
+    assert up.returncode == 0, up.stderr
+    return json.loads(up.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("state", ["no_instance", "copied_instance", "host_namespace", "forged_namespace"])
+def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state):
+    root = tmp_path / "kit"
+    (root / "state").mkdir(parents=True)
+    (root / ".deck-runtime-kit").write_text("")
+    # The victim lives in a namespace of its own, so a forged record can name it exactly.
+    victim = subprocess.Popen(["unshare", "--user", "--map-root-user", "--net", "sleep", "300"], start_new_session=True)
+    time.sleep(0.3)
+    start = Path(f"/proc/{victim.pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    victim_net = os.readlink(f"/proc/{victim.pid}/ns/net")
+    try:
+        (root / "state" / "processes.json").write_text(json.dumps({
+            "outer": {"pid": victim.pid, "start": start}, "backend": {"pid": victim.pid, "start": start}}))
+        here = root.stat()
+        record = {"id": "0" * 32, "root_dev": here.st_dev, "root_ino": here.st_ino, "uid": os.getuid(),
+                  "net": None, "user": None}
+        if state == "copied_instance":  # copied from another root: its directory identity differs
+            record["root_ino"] += 1
+        elif state == "host_namespace":
+            record["net"] = HOST_NET
+        elif state == "forged_namespace":  # a real namespace, but no anchor of this instance proves it
+            record["net"] = victim_net
+        if state != "no_instance":
+            path = root / "state" / "instance.json"
+            path.write_text(json.dumps(record))
+            path.chmod(0o600)
+        result = _kit("down", "--root", str(root))
+        # Invalid ownership is refused outright; a real but unproved namespace is reported, never signalled.
+        expected = ("incomplete", 1) if state == "forged_namespace" else ("refused", 2)
+        assert (result.returncode, expected[0] in result.stderr) == (expected[1], True), result.stderr
+        assert victim.poll() is None and root.exists()
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+def test_down_stops_a_detached_process_inside_the_kit_namespace(kit_root):
+    _up(kit_root)
+    started = _kit("exec", "--root", str(kit_root), "--", "sh", "-c",
+                   'cd / && setsid env -i sleep 300 </dev/null >/dev/null 2>&1 & echo $!')
+    assert started.returncode == 0, started.stderr
+    child = int(started.stdout.split()[-1])
+    assert _alive(child)
+    down = _kit("down", "--root", str(kit_root))
+    assert down.returncode == 0, down.stderr
+    assert not _alive(child) and not kit_root.exists()
+
+
+def test_up_refuses_a_retained_root_before_starting_anything(kit_root):
+    _up(kit_root)
+    kept = _kit("down", "--root", str(kit_root), "--keep")
+    assert kept.returncode == 0, kept.stderr
+    before = set(_root_users(kit_root))
+    again = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI))
+    assert again.returncode == 2 and "refused" in again.stderr
+    assert set(_root_users(kit_root)) <= before
+
+
+def test_an_interrupted_preflight_leaves_no_process(kit_root):
+    result = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
+                  env=_env(RUNTIME_KIT_TEST_FAULT="after_anchor_spawn"))
+    assert result.returncode != 0
+    time.sleep(0.5)
+    assert not _root_users(kit_root)
+
+
+def test_no_credential_ever_appears_in_a_process_argv(kit_root):
+    import threading
+    seen: set[bytes] = set()
+    done = threading.Event()
+
+    def observe():
+        while not done.is_set():
+            for entry in Path("/proc").iterdir():
+                if entry.name.isdigit():
+                    try:
+                        if entry.stat().st_uid == os.getuid():
+                            seen.add((entry / "cmdline").read_bytes())
+                    except OSError:
+                        pass
+            time.sleep(0.01)
+
+    watcher = threading.Thread(target=observe, daemon=True)
+    watcher.start()
+    try:
+        _up(kit_root)
+        _kit("status", "--root", str(kit_root))
+    finally:
+        done.set()
+        watcher.join()
+    for name in ("run-token", "operator-token"):
+        secret = (kit_root / "state" / name).read_text().strip().encode()
+        assert secret and not [argv for argv in seen if secret in argv], name
+
+
+@pytest.mark.parametrize("fault", ["dead_backend", "unhealthy_backend", "dead_cli", "reused_cli", "missing_registration"])
+def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
+    import signal
+    import sqlite3
+    _up(kit_root)
+    state = kit_root / "state" / "processes.json"
+    processes = json.loads(state.read_text())
+    if fault == "dead_backend":
+        os.kill(processes["backend"]["pid"], signal.SIGKILL)
+    elif fault == "dead_cli":
+        os.kill(processes["cli"]["pid"], signal.SIGKILL)
+    elif fault == "reused_cli":
+        processes["cli"]["start"] = str(int(processes["cli"]["start"]) + 1)
+        state.write_text(json.dumps(processes))
+    elif fault == "unhealthy_backend":  # alive, but no longer proves it is this run's backend
+        token = kit_root / "state" / "run-token"
+        token.write_text("0" * 32)
+    else:
+        with sqlite3.connect(kit_root / "kit.db") as db:
+            db.execute("UPDATE mail_agent_sessions SET closed_at = CURRENT_TIMESTAMP")
+    time.sleep(0.5)
+    result = _kit("status", "--root", str(kit_root))
+    assert result.returncode != 0 and ("incomplete" in result.stderr or "refused" in result.stderr), result.stderr
+    assert not (kit_root / "evidence" / "MANIFEST.sha256").exists()

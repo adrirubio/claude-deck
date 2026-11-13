@@ -23,11 +23,22 @@ scripts/isolated-runtime-kit.sh down   --root /tmp/kit [--keep]
 | Command | Deadline | What it does |
 |---|---|---|
 | `up` | 90 s (`RUNTIME_KIT_UP_DEADLINE`) | Preflight (10 s), stub (5 s), backend health (30 s), launch and registration (30 s). A failure stops every process and keeps the root for its logs. |
-| `status` | 15 s | Writes the evidence and prints the summary again. |
+| `status` | 15 s | Checks every recorded process, the backend's health and the registration, then writes the evidence and prints the summary. If any proof is missing it fails as incomplete and writes no manifest. |
 | `exec` | 120 s by default, at most 600 s | Runs a command inside the namespaces with the kit's environment. |
-| `down` | 30 s | Stops every recorded process, proves nothing still runs from the root, checks the evidence manifest, and removes the root (`--keep` keeps it). |
+| `down` | 30 s | Stops every process of the instance, including ones started later inside its namespace, proves none remains, checks the evidence manifest, and removes the root (`--keep` keeps it). If it can't prove cleanup, it fails as incomplete and keeps the root. |
 
-**Exit codes:** 0 means success, 1 a failure or a deadline, and 2 a refusal.
+**Exit codes:** 0 means success, 1 a failure, a deadline or an incomplete proof, and 2 a refusal.
+
+## Ownership and cleanup
+
+Each `up` creates one instance with a random id. `state/instance.json` (a private file) records that id, the root directory's identity and the kit's namespaces. The anchors carry the id in their arguments. `status`, `exec` and `down` refuse (exit 2), before any signal or deletion, when:
+- the record is missing or malformed, or isn't a private file of the caller;
+- it was copied from another root;
+- it names a host namespace.
+
+`down` stops the processes of the instance: those carrying its id, and those inside its network namespace, but the namespace counts only while the instance's own anchor is alive in it. If processes run in a namespace that no live anchor proves, or a process can't be inspected, `down` signals nothing, reports the cleanup as incomplete and keeps the root.
+
+**A root is never reused.** A root left by `down --keep` or by a failed `up` is refused by the next `up`; run `down` to remove it.
 
 ## Evidence
 
@@ -67,5 +78,7 @@ The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake pro
 ## Limits
 
 - **Linux only.** The kit needs unprivileged user and network namespaces, plus `tmux`, `unshare`, `nsenter`, `ip`, `timeout` and `setsid`. The test fails, and doesn't skip, on a host without them.
+- **Not on the hosted `ubuntu-latest` runner as configured.** Its AppArmor policy refuses unprivileged user namespaces (`unshare: write failed /proc/self/uid_map: Operation not permitted`), so the kit can't run there.
+- **One OS user.** Factory members share one OS user, so ownership is proved by the instance id and namespace, never by the user id alone.
 - **Local checks only.** The stub model doesn't model a real provider; a real-provider check is a separate decision with its own approval.
 - **One kit per root.** The ports (18780 for the backend, 18781 for the stub) belong to the kit's own network namespace, so separate kits don't collide.
