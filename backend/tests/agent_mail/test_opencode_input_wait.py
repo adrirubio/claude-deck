@@ -253,9 +253,10 @@ async def test_an_equal_generation_collision_is_retained_not_cleared(maker, team
     assert (await _binding(maker, team)).waiting_input_reason == "question"
     assert len(await _notices(maker)) == 1
     later = _gen(5000)
-    await _post("open", later)  # a newer generation can still take over and clear normally
+    await _post("open", later)  # a newer open takes the generation but cannot prove the order
     await _post("clear", later)
-    assert (await _binding(maker, team)).waiting_input_reason is None
+    binding = await _binding(maker, team)
+    assert binding.waiting_input_reason == "question" and binding.opencode_wait_uncertain is True
 
 
 async def _record(maker, state, generation):
@@ -297,14 +298,17 @@ async def test_a_backend_restart_keeps_the_wait_and_its_generation(maker, team, 
 
 
 @pytest.mark.asyncio
-async def test_the_generation_round_trips_at_full_precision(maker, team):
-    from app.services import opencode_input_wait
-    generation = _gen()
+async def test_the_generation_round_trips_exactly_and_started_at_is_server_time(maker, team):
+    from datetime import datetime, timedelta
+    generation = _gen(-3_600_000)  # the plugin's clock reads one hour behind
+    before = datetime.utcnow()
     await _record(maker, "open", generation)
-    await _record(maker, "open", generation)  # collision: marked +1 µs
-    stored = (await _binding(maker, team)).waiting_input_started_at
-    expected = opencode_input_wait.generation_time(generation, opencode_input_wait.datetime.utcnow())
-    assert stored - expected == opencode_input_wait.timedelta(microseconds=1)
+    binding = await _binding(maker, team)
+    assert binding.opencode_wait_generation == generation and binding.opencode_wait_uncertain is False
+    assert before - timedelta(seconds=1) <= binding.waiting_input_started_at <= datetime.utcnow()
+    await _record(maker, "open", generation)  # collision: unprovable, kept exact, no marker
+    binding = await _binding(maker, team)
+    assert binding.opencode_wait_generation == generation and binding.opencode_wait_uncertain is True
     assert await _record(maker, "clear", generation) is False
 
 
@@ -352,3 +356,152 @@ async def test_replayed_clear_after_a_new_wait_with_the_same_generation_keeps_it
     await _record(maker, "open", generation)
     await _record(maker, "clear", generation)
     assert (await _binding(maker, team)).waiting_input_reason == "question"
+
+
+async def _set(maker, team, **values):
+    from sqlalchemy import update
+    from app.models.database import AgentPaneBinding
+    async with maker() as db:
+        await db.execute(update(AgentPaneBinding).where(AgentPaneBinding.id == team.binding_id).values(**values))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_an_equal_generation_marks_the_wait_uncertain_and_keeps_it(maker, team):
+    generation = _gen()
+    assert await _record(maker, "open", generation) is True
+    assert await _record(maker, "open", generation) is True  # changed: now uncertain
+    binding = await _binding(maker, team)
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (generation, True)
+    assert await _record(maker, "clear", generation) is False
+    assert (await _binding(maker, team)).waiting_input_reason == "question"
+    assert len(await _notices(maker)) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_older_open_after_a_clear_starts_an_uncertain_wait(maker, team):
+    old, new = _gen(), _gen(5000)
+    await _record(maker, "open", new)
+    assert await _record(maker, "clear", new) is True
+    assert (await _binding(maker, team)).opencode_wait_generation == new  # the fence survives the clear
+    assert await _record(maker, "open", old) is True  # a real but unprovable new interval
+    binding = await _binding(maker, team)
+    assert binding.waiting_input_reason == "question"
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (new, True)
+    assert len(await _notices(maker)) == 2
+    assert await _record(maker, "clear", old) is False
+    assert await _record(maker, "clear", new) is False
+    assert (await _binding(maker, team)).waiting_input_reason == "question"
+
+
+@pytest.mark.asyncio
+async def test_an_older_open_during_a_wait_is_a_no_op(maker, team):
+    old, new = _gen(), _gen(5000)
+    await _record(maker, "open", new)
+    assert await _record(maker, "open", old) is False
+    binding = await _binding(maker, team)
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (new, False)
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_clear_is_a_no_op_and_keeps_the_fence(maker, team):
+    generation = _gen()
+    await _record(maker, "open", generation)
+    assert await _record(maker, "clear", generation) is True
+    assert await _record(maker, "clear", generation) is False
+    binding = await _binding(maker, team)
+    assert binding.waiting_input_reason is None and binding.waiting_input_started_at is None
+    assert binding.waiting_input_notice_id is None
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (generation, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uncertain", [None, False])
+async def test_a_legacy_wait_without_a_generation_gives_no_clear_authority(maker, team, uncertain):
+    from datetime import datetime
+    generation = _gen()
+    await _set(maker, team, waiting_input_reason="question", waiting_input_started_at=datetime.utcnow(),
+               opencode_wait_generation=None, opencode_wait_uncertain=uncertain)
+    assert await _record(maker, "clear", generation) is False
+    assert (await _binding(maker, team)).waiting_input_reason == "question"
+
+
+@pytest.mark.asyncio
+async def test_uncertainty_survives_a_newer_open_and_a_backend_restart(maker, team, tmp_path):
+    generation, newer = _gen(), _gen(5000)
+    await _record(maker, "open", generation)
+    await _record(maker, "open", generation)  # uncertain
+    assert await _record(maker, "open", newer) is True
+    binding = await _binding(maker, team)
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (newer, True)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wait.db'}")
+    reopened = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        assert await _record(reopened, "clear", newer) is False
+        binding = await _binding(reopened, team)
+        assert binding.waiting_input_reason == "question" and binding.opencode_wait_uncertain is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_one_notice_per_continuous_wait(maker, team):
+    first = _gen()
+    await _record(maker, "open", first)
+    await _record(maker, "open", first + 1)  # the same continuous wait: no new notice
+    assert len(await _notices(maker)) == 1
+    await _record(maker, "clear", first + 1)
+    await _record(maker, "open", first + 2)  # a new wait: one new notice
+    notices = await _notices(maker)
+    assert len(notices) == 2
+    assert all(n.payload == {"notice": "native_input_wait", "slot_id": team.slot_id, "reason": "question",
+                             "supervisor_actor_id": team.actor_id} for n in notices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["closed_at", "retired", "replaced_member", "rebound_pane"])
+async def test_a_clear_after_an_authority_change_is_a_no_op(maker, team, change):
+    from datetime import datetime
+    from sqlalchemy import update
+    from app.models.database import MailAgentSession, MailPaneLifecycle, MailTeamMember
+
+    generation = _gen()
+    await _record(maker, "open", generation)
+    async with maker() as db:
+        if change == "closed_at":
+            await db.execute(update(MailAgentSession).where(MailAgentSession.id == team.session_id)
+                             .values(closed_at=datetime.utcnow()))
+        elif change == "retired":
+            db.add(MailPaneLifecycle(pane_pid=PANE.pane_pid, pane_proc_start=PANE.pane_proc_start,
+                                     retired_at=datetime.utcnow()))
+        elif change == "replaced_member":
+            db.add(MailTeamMember(identity_key="oc-wait-replacement", repo_id="fixture", repo_name="fixture",
+                                  repo_path="/synthetic/project", display_name="Replacement",
+                                  team_preset_id=team.team_id, team_slot_id=team.slot_id,
+                                  updated_at=datetime(2100, 1, 1)))
+        else:
+            await db.execute(update(MailAgentSession).where(MailAgentSession.id == team.session_id)
+                             .values(bound_pane_pid=PANE.pane_pid + 1))
+        await db.commit()
+    assert await _record(maker, "clear", generation) is False
+    binding = await _binding(maker, team)
+    assert binding.waiting_input_reason == "question" and binding.opencode_wait_generation == generation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["clear", "question"])
+async def test_the_native_wait_recorder_leaves_the_opencode_fence_alone(maker, team, reason):
+    from datetime import datetime
+    from app.services import agent_activity_service
+
+    await _set(maker, team, opencode_wait_generation=1_763_020_800_000, opencode_wait_uncertain=True)
+    pane = SimpleNamespace(binding_id=team.binding_id, pane_pid=PANE.pane_pid, pane_start=PANE.pane_proc_start,
+                           tmux_target="%8", cwd="/synthetic/project")
+    entry = (team.slot_id, "opencode-cli", None, [pane])
+    details = {"input_wait_known": True, "input_wait_reason": reason, "input_wait_binding_id": team.binding_id}
+    async with maker() as db:
+        await agent_activity_service._record_input_waits(db, team.team_id, [entry], [details],
+                                                         {team.slot_id: entry}, now=datetime.utcnow())
+        await db.commit()
+    binding = await _binding(maker, team)
+    assert (binding.opencode_wait_generation, binding.opencode_wait_uncertain) == (1_763_020_800_000, True)

@@ -5,22 +5,26 @@ permission prompt appears and ``clear`` when the last one closes, with the same 
 Callers establish identity from the kernel (peer chain, OpenCode 2 gate, bound pane); the
 payload only supplies the state and the generation, which is validated data, never identity.
 
-Every decision is one conditional UPDATE in the shared database, so concurrent backend
-workers race only on the row:
+The binding keeps a fence: ``opencode_wait_generation`` (G), the highest generation seen, which
+survives a clear, and ``opencode_wait_uncertain`` (U), set when the report order cannot be proved.
+Every decision is one conditional UPDATE on those columns in the shared database, so concurrent
+backend workers race only on the row:
 
-- open(T): record when there is no wait (one fixed notice); a strictly newer T takes over the
-  generation; an equal T marks the wait as unprovable (T + 1 µs), so no clear can match it;
-  an older T does nothing.
-- clear(T): clears only the wait whose generation is exactly T.
+- open(T) with no wait: record it with one fixed notice. If G is unset or T > G, G becomes T and
+  U is cleared; otherwise (a replayed, equal or older generation) the wait is real but its order is
+  unprovable, so U is set and G is kept.
+- open(T) during a wait: T > G takes over G and keeps U; T = G sets U; T < G does nothing.
+- clear(T): clears the wait only when G = T and U is unset. G and U are kept.
 
-When ordering cannot be proved, the wait is retained rather than cleared. The notice is the
-existing four-key "Waiting for input" notice; it carries no question text or private context.
+An uncertain wait is retained, never cleared by a plugin report; nothing here clears it later.
+``waiting_input_started_at`` is server time. The notice is the existing four-key "Waiting for
+input" notice; it carries no question text or private context.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import case, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -32,7 +36,6 @@ PROVIDER = "opencode-cli"
 REASON = "question"
 _PAST = timedelta(days=7)
 _FUTURE = timedelta(days=1)
-_COLLISION = timedelta(microseconds=1)
 
 
 def generation_time(value: object, now: datetime) -> datetime | None:
@@ -108,15 +111,15 @@ async def record(db: AsyncSession, *, pane_pid: int, pane_proc_start: str, state
                  now: datetime | None = None) -> bool:
     """Apply one plugin report. Returns True when the stored wait changed."""
     now = now or datetime.utcnow()
-    moment = generation_time(generation, now)
-    if state not in {"open", "clear"} or moment is None:
+    if state not in {"open", "clear"} or generation_time(generation, now) is None:
         return False
     binding, conditions = await _authority(db, pane_pid, pane_proc_start)
     if binding is None:
         return False
+    fence, uncertain = AgentPaneBinding.opencode_wait_generation, AgentPaneBinding.opencode_wait_uncertain
     if state == "clear":
         result = await db.execute(update(AgentPaneBinding).where(*conditions,
-            AgentPaneBinding.waiting_input_reason.is_not(None), AgentPaneBinding.waiting_input_started_at == moment)
+            AgentPaneBinding.waiting_input_reason.is_not(None), fence == generation, uncertain.is_(False))
             .values(waiting_input_reason=None, waiting_input_started_at=None, waiting_input_notice_id=None,
                     waiting_input_observed_at=now).execution_options(synchronize_session=False))
         await db.commit()
@@ -125,9 +128,13 @@ async def record(db: AsyncSession, *, pane_pid: int, pane_proc_start: str, state
     route = await _route(db, binding.preset_id)
     if route is not None:
         actor_id, recipient, extra = route
+        provable = or_(fence.is_(None), fence < generation)
         opened = await db.execute(update(AgentPaneBinding).where(*conditions, *extra,
             AgentPaneBinding.waiting_input_reason.is_(None)).values(waiting_input_reason=REASON,
-            waiting_input_started_at=moment, waiting_input_observed_at=now).execution_options(synchronize_session=False))
+            waiting_input_started_at=now, waiting_input_observed_at=now,
+            opencode_wait_generation=case((provable, generation), else_=fence),
+            opencode_wait_uncertain=case((provable, False), else_=True))
+            .execution_options(synchronize_session=False))
         if opened.rowcount == 1:
             payload = {"notice": "native_input_wait", "slot_id": binding.slot_id, "reason": REASON}
             if actor_id is not None:
@@ -144,16 +151,18 @@ async def record(db: AsyncSession, *, pane_pid: int, pane_proc_start: str, state
                 .values(waiting_input_notice_id=message.id).execution_options(synchronize_session=False))
             await db.commit()
             return True
-    # A wait is already recorded: only a strictly newer generation takes over; an equal one is unprovable.
+    # A wait is already recorded: a strictly newer generation takes over G (U is kept); an equal one
+    # makes the order unprovable. A legacy wait without G matches neither, so it is left as it is.
     newer = await db.execute(update(AgentPaneBinding).where(*conditions,
-        AgentPaneBinding.waiting_input_reason.is_not(None), AgentPaneBinding.waiting_input_started_at < moment)
-        .values(waiting_input_started_at=moment, waiting_input_observed_at=now).execution_options(synchronize_session=False))
+        AgentPaneBinding.waiting_input_reason.is_not(None), fence < generation)
+        .values(opencode_wait_generation=generation, waiting_input_observed_at=now)
+        .execution_options(synchronize_session=False))
     if newer.rowcount == 1:
         await db.commit()
         return True
     collided = await db.execute(update(AgentPaneBinding).where(*conditions,
-        AgentPaneBinding.waiting_input_reason.is_not(None), AgentPaneBinding.waiting_input_started_at == moment)
-        .values(waiting_input_started_at=moment + _COLLISION, waiting_input_observed_at=now)
+        AgentPaneBinding.waiting_input_reason.is_not(None), fence == generation, uncertain.is_(False))
+        .values(opencode_wait_uncertain=True, waiting_input_observed_at=now)
         .execution_options(synchronize_session=False))
     await db.commit()
     return collided.rowcount == 1
