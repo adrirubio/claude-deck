@@ -1214,6 +1214,18 @@ class AgentTeamService:
             reasons.append(opencode_version.REASON_REQUIRED)
             block_code = opencode_version.BLOCK_CODE
 
+        if (
+            block_code is None
+            and slot.provider == PROVIDER_OPENCODE_CLI
+            and self._truthy_launch_option((slot.launch_options or {}).get("use_last"))
+        ):
+            # A slot stored with use_last before #731 fails closed on every path,
+            # before any reuse or adoption: --continue is not an exact session.
+            reasons.append(
+                "OpenCode members resume only an exact saved session; --continue is not supported"
+            )
+            block_code = "opencode_continue_unsupported"
+
         mail_reason = self._agent_mail_ready_reason(slot.provider, install_status)
         if mail_reason and mail_reason not in reasons:
             reasons.append(mail_reason)
@@ -2074,6 +2086,7 @@ class AgentTeamService:
     ) -> dict[str, Any]:
         if not value:
             return {}
+        self._refuse_unsupported_reasoning_effort(provider, value)
         if provider is not None:
             allowed = set(option_keys_for(provider))
             if not supports_bedrock(provider):
@@ -2082,6 +2095,14 @@ class AgentTeamService:
             if unknown:
                 raise ValueError(f"Unsupported launch_options for {provider}: {', '.join(unknown)}")
         return {key: option for key, option in value.items() if key in _OPTION_FIELDS}
+
+    def _refuse_unsupported_reasoning_effort(self, provider: str | None, options: dict[str, Any]) -> None:
+        """OpenCode does not list reasoning_effort, but keeps its precise refusal (#731)."""
+        if provider == PROVIDER_OPENCODE_CLI and self._clean_optional(options.get("reasoning_effort")):
+            raise ProviderLaunchError(
+                f"{provider} does not support reasoning_effort",
+                "reasoning_effort_unsupported",
+            )
 
     def _validate_slot_options(
         self,
@@ -2100,6 +2121,7 @@ class AgentTeamService:
                 f"{', '.join(unsupported_bedrock_keys)}"
             )
 
+        self._refuse_unsupported_reasoning_effort(provider, options)
         allowed_keys = set(option_keys_for(provider))
         if not supports_bedrock(provider):
             allowed_keys |= _BEDROCK_LAUNCH_OPTION_KEYS

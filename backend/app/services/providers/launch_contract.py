@@ -97,7 +97,6 @@ PROVIDER_OPTION_KEYS: dict[str, tuple[str, ...]] = {
         "platform",
         "aws_region",
         "aws_profile",
-        "reasoning_effort",
         "prompt",
     ),
 }

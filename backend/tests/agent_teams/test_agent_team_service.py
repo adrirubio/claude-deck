@@ -3045,3 +3045,52 @@ def test_opencode_pane_without_identity_fails_closed():
     reason = agent_team_service._opencode_pane_refusal({"pid": None, "pane_proc_start": "x"})
     assert reason == opencode_version.REASON_UNKNOWN
     assert agent_team_service._opencode_pane_refusal({"pid": "not-a-pid", "pane_proc_start": "x"}) == opencode_version.REASON_UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_options,blocked", [
+    ({"adopt_unbound_sessions": True}, True),
+    ({"reuse_existing": True}, True),
+    ({"adopt_unbound_sessions": True, "reuse_existing": True}, True),
+    ({"reuse_existing": False}, True),
+])
+async def test_stored_opencode_use_last_is_refused_before_adopt_or_reuse(db, tmp_path, monkeypatch, request_options, blocked):
+    # V1 F1: a slot stored with use_last before #731 never launches, adopts or reuses a pane.
+    from app.services import opencode_version
+    from app.services.providers import get_provider
+
+    opencode = get_provider("opencode-cli")
+    monkeypatch.setattr("app.services.agent_team_service.get_provider", lambda _id: SimpleNamespace(
+        display_name="OpenCode", get_status=lambda: {"installed": True},
+        build_spawn_command=opencode.build_spawn_command))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    slot.launch_mode = "resume"
+    slot.launch_options = {"use_last": True}
+    await db.commit()
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(**request_options))
+
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert (item.action, item.block_code) == ("blocked", "opencode_continue_unsupported")
+    assert "exact saved session" in item.reasons[0]
+
+
+@pytest.mark.asyncio
+async def test_opencode_slot_with_a_saved_session_is_still_adopted(db, tmp_path, monkeypatch):
+    # Control for F1: a valid stored resume slot keeps the existing adoption path.
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo, launch_mode="resume")
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    assert plan.can_launch is True
+    assert plan.items[0].action == "adopt"

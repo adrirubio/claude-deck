@@ -21,6 +21,8 @@ _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._:@+-]*"
 _MODEL = re.compile(rf"{_SEGMENT}(?:/{_SEGMENT})+(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?")
 _AGENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _MAX_MODEL_LENGTH = 256
+# Largest /proc/<pid>/cmdline accepted. A longer one is refused, never parsed from its prefix.
+CMDLINE_CAP = 65536
 
 
 def new_session_id() -> str:
@@ -112,15 +114,20 @@ def is_private_server_argv(argv: Sequence[str]) -> bool:
 
 
 def read_argv(pid: int) -> Optional[list[str]]:
-    """``/proc/<pid>/cmdline`` as argv, or None when unreadable."""
+    """``/proc/<pid>/cmdline`` as argv, or None when unreadable or over CMDLINE_CAP.
+
+    A truncated prefix could hide a forbidden tail such as ``--continue``, so an
+    oversized command line is refused rather than parsed."""
     from app.utils import peer_process
 
     if type(pid) is not int or pid <= 0:
         return None
     try:
         with open(f"{peer_process._PROC_ROOT}/{pid}/cmdline", "rb") as handle:
-            raw = handle.read(65536)
+            raw = handle.read(CMDLINE_CAP + 1)
     except OSError:
+        return None
+    if len(raw) > CMDLINE_CAP:
         return None
     parts = raw.split(b"\0")
     if parts and parts[-1] == b"":

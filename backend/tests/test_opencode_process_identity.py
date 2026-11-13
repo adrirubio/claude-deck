@@ -187,3 +187,40 @@ def test_owner_identity_needs_the_exact_opencode_member(monkeypatch, case, accep
     else:
         with pytest.raises(ValueError, match="owner_native_identity_changed"):
             pause._process_identity(slot, session, workspace)
+
+
+def _write_cmdline(root, pid, argv):
+    proc = root / str(pid)
+    proc.mkdir(parents=True, exist_ok=True)
+    (proc / "cmdline").write_bytes(b"\0".join(part.encode() for part in argv) + b"\0")
+
+
+def _sized_prompt(prefix, total):
+    """A --prompt value that makes the NUL-terminated cmdline exactly ``total`` bytes."""
+    used = sum(len(part.encode()) + 1 for part in prefix) + 1  # +1 for the prompt's own NUL
+    return "x" * (total - used)
+
+
+@pytest.mark.parametrize("over_cap", [True, False])
+def test_an_oversized_cmdline_is_never_parsed_from_a_truncated_prefix(monkeypatch, tmp_path, over_cap):
+    # V1 F3: a long --prompt must not hide a forbidden tail such as --continue.
+    from app.services import opencode_version
+    from app.utils import peer_process
+
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane",
+                        lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+    prefix = ["/opt/bin/opencode", "/work/repo", "--standalone", "--session", "ses_owner", "--prompt"]
+    if over_cap:
+        argv = prefix + [_sized_prompt(prefix, identity.CMDLINE_CAP)] + ["--continue"]
+    else:
+        argv = prefix + [_sized_prompt(prefix, identity.CMDLINE_CAP)]
+    _write_cmdline(tmp_path, 11, argv)
+
+    assert len((tmp_path / "11" / "cmdline").read_bytes()) == identity.CMDLINE_CAP + (len("--continue") + 1 if over_cap else 0)
+    if over_cap:
+        assert identity.read_argv(11) is None
+        assert identity.is_current_member(11, "start", "ses_owner") is False
+    else:
+        assert identity.read_argv(11) == argv
+        assert identity.is_current_member(11, "start", "ses_owner") is True

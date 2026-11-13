@@ -10,7 +10,6 @@ from app.services.providers.base import (
     ProviderLaunchError,
     SpawnCommandOptions,
     argv0_name,
-    has_binary_descendant,
 )
 
 
@@ -48,20 +47,13 @@ class OpenCodeCliProvider(AgentProvider):
         return paths
 
     def is_process_match(self, command: str, pid: str) -> bool:
-        name = argv0_name(command)
-        if name == "opencode":
-            # A server (a member's private one, or the shared service) is never a session.
-            argv = opencode_process_identity.read_argv(int(pid)) if pid.isdigit() else None
-            return not (argv and opencode_process_identity.is_server_argv(argv))
-        if name in {"opencode-server"}:
+        """Positive evidence only: the readable argv of an ``opencode`` process that is
+        not a server. OpenCode 2 is a compiled binary, so a node or bun wrapper is
+        never a member, and an unreadable or oversized cmdline is no match."""
+        if argv0_name(command) != "opencode" or not pid.isdigit():
             return False
-        if name in {"node", "bun"}:
-            return has_binary_descendant(
-                pid,
-                {"opencode"},
-                excluded_names={"opencode-server"},
-            )
-        return False
+        argv = opencode_process_identity.read_argv(int(pid))
+        return bool(argv) and not opencode_process_identity.is_server_argv(argv)
 
     def _validate(self, options: SpawnCommandOptions) -> None:
         if options.mode not in {"plain", "resume"}:
