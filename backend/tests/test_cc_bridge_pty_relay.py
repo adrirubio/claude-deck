@@ -15,7 +15,6 @@ import tempfile
 import termios
 import threading
 import time
-import warnings
 
 import pytest
 from starlette.websockets import WebSocketState
@@ -717,19 +716,6 @@ def run_sudo(*args, check=True, timeout=60):
     return result
 
 
-# TEMPORARY DIAGNOSTIC (#749, continuation revision 2). Every line marked DIAG749 in this file is
-# removed by the restoration commit. It only records facts; no assertion depends on it.
-def diagnose(text: str) -> None:
-    line = f"DIAG749 {text}"[:700]
-    print(line)
-    warnings.warn(line, UserWarning, stacklevel=2)
-
-
-def first_line(text: str) -> str:
-    lines = [line for line in (text or "").splitlines() if line.strip()]
-    return lines[0][:200] if lines else ""
-
-
 def parse_capbnd(text: str) -> int:
     lines = [line for line in text.splitlines() if line.startswith("CapBnd:")]
     assert len(lines) == 1, f"expected one CapBnd line, saw {text!r}"
@@ -825,22 +811,6 @@ class DisposableAgent:
             remaining = self._processes_of_uid(uid)
         return remaining
 
-    def record_provenance(self):  # DIAG749
-        for tool in ("sudo", "visudo"):
-            path = shutil.which(tool)
-            version = ""
-            if path:
-                found = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=30)
-                version = first_line(found.stdout or found.stderr) or f"returncode {found.returncode}"
-            diagnose(f"controller {tool} path={path!r} real={os.path.realpath(path) if path else None!r} version={version!r}")
-        found_paths = run_sudo("sh", "-c", "command -v sudo; command -v visudo", check=False)
-        for root_path in found_paths.stdout.split()[:2]:
-            root_version = run_sudo(root_path, "--version", check=False)
-            diagnose(
-                f"root context {root_path!r} real={os.path.realpath(root_path)!r} "
-                f"version={first_line(root_version.stdout or root_version.stderr)!r}"
-            )
-
     def check_prerequisites(self):
         assert shutil.which("sudo"), "the privileged regression needs sudo on this hosted runner"
         run_sudo("true")
@@ -898,7 +868,6 @@ class DisposableAgent:
         run_sudo("install", "-m", "0440", "-o", "root", "-g", "root", staged, self.dropin)
         run_sudo("true")  # sudo still works with the new file
         installed = run_sudo("cat", self.dropin).stdout
-        diagnose(f"rules use_pty={use_pty} installed_equals_intended={installed == rules} bytes={len(installed)}")  # DIAG749
         assert installed == rules, f"the installed rules are not the intended rules: {installed!r}"
 
     def attest(self):
@@ -915,10 +884,6 @@ class DisposableAgent:
         assert agent_user == self.user, f"the probe ran as {agent_user!r}, not {self.user!r}"
         assert int(agent_uid) not in (0, controller), "the agent must be a distinct non-root identity"
         inner_capbnd = parse_capbnd(inner.stdout)
-        diagnose(  # DIAG749
-            f"attest controller uid={controller} gid={os.getgid()} outer CapBnd={outer_capbnd:#x}; "
-            f"agent user={agent_user!r} uid={agent_uid} inner CapBnd={inner_capbnd:#x}"
-        )
         for capbnd in (outer_capbnd, inner_capbnd):
             assert capbnd == EXPECTED_CAPBND, f"CapBnd {capbnd:#x} is not the production set {EXPECTED_CAPBND:#x}"
             assert not capbnd & (1 << CAP_CHOWN) and not capbnd & (1 << CAP_KILL)
@@ -973,7 +938,6 @@ class DisposableAgent:
         for name in sorted(self.attempted - {k for k, v in self.owned.items() if v}):
             if name in paths and self._path_exists(paths[name]):
                 errors.append(f"{paths[name]} exists but this test did not confirm creating it, so it was left in place")
-        diagnose(f"cleanup owned={self.owned} survivors={survivors} errors={errors}")  # DIAG749
         assert not errors, "the privileged regression cleanup failed: " + "; ".join(errors)
 
 
@@ -1011,7 +975,6 @@ async def test_real_sudo_under_production_capabilities_needs_use_pty_off_for_the
     monkeypatch, disposable_agent, caplog
 ):
     agent = disposable_agent()
-    agent.record_provenance()  # DIAG749
     monkeypatch.setattr(pty_relay, "TMUX_BINARY", agent.launcher)
 
     # Phase 1, the defect the real trial found (run H2): with use_pty the attach cannot start.
@@ -1025,10 +988,6 @@ async def test_real_sudo_under_production_capabilities_needs_use_pty_off_for_the
 
     # The browser frame is fixed and generic, so it proves nothing about the cause. The cause is
     # proven only by the backend log, which keeps sudo's own text out of the client payload.
-    diagnose(  # DIAG749
-        f"phase1 frames={websocket.frames!r} close_code={websocket.close_code!r} "
-        f"ready_sent={b'ready' in websocket.sent} log={logged[:500]!r}"
-    )
     assert "unable to allocate pty" in logged, f"the attach did not fail for the intended cause. Log: {logged!r}"
     for marker in WRONG_SETUP_MARKERS:
         assert marker not in logged, f"the attach failed for the wrong reason ({marker!r}). Log: {logged!r}"
