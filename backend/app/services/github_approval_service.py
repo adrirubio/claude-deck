@@ -67,6 +67,12 @@ _CONTINUATION_ACTIONS = frozenset(
 IMPLEMENTATION_COMPLETION_ACTIONS = frozenset(
     {"push_pr_head", "request_verification"}
 )
+# A handoff the new owner has accepted leaves a settled owner binding. A pending or unknown one does not.
+_SETTLED_HANDOFF_STATES = (None, "accepted")
+
+
+def _settled_handoff_condition():
+    return or_(GithubWorkItem.handoff_state.is_(None), GithubWorkItem.handoff_state == "accepted")
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
 # Frozen v1 hash domain: persisted lease hashes depend on these exact bytes.
 # Matching a hash does not renew a lease or bypass its HOLD/approval checks.
@@ -390,7 +396,7 @@ class GithubApprovalService:
         await db.refresh(scope)
         team = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
         if (hold_code() or not scope.enabled or not team or not team.autonomy_enabled
-                or item.scope_id != scope.id or item.handoff_state is not None
+                or item.scope_id != scope.id or item.handoff_state not in _SETTLED_HANDOFF_STATES
                 or item.dispatch_status not in ({"dispatched", "verifying", "ready_for_review", "awaiting_human_review"}
                     | ({"escalated"} if allow_recovery else set()))
                 or not item.dispatch_nonce or not item.dispatch_head_ref):
@@ -3028,8 +3034,14 @@ class GithubApprovalService:
         revision_guards = self.amendment_revision_conditions(revision)
         baseline_tree = revision.baseline_tree_sha
         revision_phase = revision.phase
+        # An active revision on a plan_blocked item has no healthy route, so the operator may cancel it.
+        escalated_active = (
+            revision_status == "active" and item_status == "escalated"
+            and item.escalation_reason == "plan_blocked"
+        )
         cancellable_state = (
             (revision_status == "active" and item_status == "dispatched")
+            or escalated_active
             or (revision_status == "submitted" and item_status in {
                 "dispatched", "verifying", "ready_for_review", "awaiting_human_review", "escalated"})
             or (revision_status == "exhausted" and revision.phase == "diagnostic"
@@ -3039,7 +3051,7 @@ class GithubApprovalService:
             not cancellable_state
             or item.active_scope_revision != revision.revision
             or item.owner_slot_id != revision.owner_slot_id
-            or item.handoff_state is not None
+            or item.handoff_state not in _SETTLED_HANDOFF_STATES
             or item.pr_number is None
             or approval is None
             or approval.status != "approved"
@@ -3070,7 +3082,8 @@ class GithubApprovalService:
         if scope is None:
             raise GithubApprovalError("scope_not_found")
         cancellation_context = None
-        if revision_status in {"submitted", "exhausted"} or revision.origin_kind == "scope_amendment":
+        if (revision_status in {"submitted", "exhausted"} or revision.origin_kind == "scope_amendment"
+                or escalated_active):
             cancellation_context, _, _, _ = await self.healthy_scope_context(db, item, scope, allow_recovery=True)
         head_sha = await self._active_cancellation_head_sha(scope, item)
         if revision_phase == "diagnostic":
@@ -3090,6 +3103,7 @@ class GithubApprovalService:
             await self.claim_healthy_scope_context(db, cancellation_context)
         charge_head = (
             revision.phase == "implementation"
+            and not escalated_active
             and head_sha != revision.baseline_head_sha
             and not (
                 revision.failed_head_count > 0
@@ -3147,7 +3161,7 @@ class GithubApprovalService:
                         GithubWorkItem.dispatch_nonce == dispatch_nonce,
                         GithubWorkItem.active_scope_revision == revision_number,
                         GithubWorkItem.owner_slot_id == revision.owner_slot_id,
-                        GithubWorkItem.handoff_state.is_(None),
+                        _settled_handoff_condition(),
                         GithubWorkItem.scope_id == item.scope_id,
                         GithubWorkItem.pr_number == item.pr_number,
                         GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
@@ -3181,7 +3195,7 @@ class GithubApprovalService:
                 GithubWorkItem.dispatch_nonce == dispatch_nonce,
                 GithubWorkItem.active_scope_revision == revision_number,
                 GithubWorkItem.owner_slot_id == revision.owner_slot_id,
-                GithubWorkItem.handoff_state.is_(None),
+                _settled_handoff_condition(),
                 GithubWorkItem.scope_id == item.scope_id,
                 GithubWorkItem.pr_number == item.pr_number,
                 GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
@@ -3217,7 +3231,8 @@ class GithubApprovalService:
                 escalation_reason=(
                     "continuation_budget_exhausted"
                     if attempt_exhausted
-                    else revision.originating_escalation_reason or "plan_blocked"
+                    else (item.escalation_reason if escalated_active else None)
+                    or revision.originating_escalation_reason or "plan_blocked"
                 ),
                 status_note=(
                     f"Continuation revision {revision.revision} was cancelled by "

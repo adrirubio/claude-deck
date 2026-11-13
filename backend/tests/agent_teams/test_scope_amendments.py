@@ -1143,3 +1143,29 @@ async def test_review_head_check_uses_the_same_base_comparison(db, submitted_att
     else:
         review = await record_changes(db, a)
         assert review.id and a.revision.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_healthy_amendment_accepts_a_settled_accepted_handoff(db, healthy_attempt):
+    a = healthy_attempt
+    a.item.handoff_state = "accepted"
+    await db.commit()
+    revision, request, created = await github_approval_service.create_scope_amendment_request(
+        db, a.item, a.scope, **amendment(a))
+    assert created and request.status == "pending" and revision.status == "proposed"
+    assert revision.owner_member_id == a.owner.id and revision.owner_slot_id == a.item.owner_slot_id
+    assert a.item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["pending", "declined", "cancelled", ""])
+async def test_healthy_amendment_still_refuses_an_unsettled_or_unknown_handoff(db, healthy_attempt, state):
+    a = healthy_attempt
+    a.item.handoff_state = state
+    if state == "pending":
+        a.item.handoff_target_slot_id = a.item.owner_slot_id
+    await db.commit()
+    with pytest.raises(GithubApprovalError, match="amendment_context_unavailable"):
+        await github_approval_service.create_scope_amendment_request(db, a.item, a.scope, **amendment(a))
+    await db.refresh(a.item)
+    assert a.item.active_scope_revision == 0 and a.item.dispatch_status == "dispatched"
