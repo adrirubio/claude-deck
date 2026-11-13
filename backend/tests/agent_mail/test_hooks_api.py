@@ -135,12 +135,17 @@ async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+@pytest.mark.parametrize("state", ["unsupported", "unknown", "ok"])
 @pytest.mark.parametrize("route", ["session-start", "user-prompt-submit", "post-tool-use"])
 async def test_opencode_hook_registration_is_refused_below_2(client, db, tmp_path, monkeypatch, state, route):
+    from app.config import settings
+
+    # Test-only: without capability tokens every hook route reaches the version
+    # gate instead of stopping at authentication first.
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
     cwd = tmp_path / "myrepo"
     cwd.mkdir()
-    _opencode_gate(monkeypatch, state)
+    seen = _opencode_gate(monkeypatch, state)
 
     resp = await client.post(
         f"/api/v1/agent-mail/hooks/{route}",
@@ -148,7 +153,12 @@ async def test_opencode_hook_registration_is_refused_below_2(client, db, tmp_pat
     )
 
     assert resp.status_code == 200
-    assert (await db.execute(select(MailAgentSession))).scalars().all() == []
+    assert seen == [(41, 40)]  # the gate was reached, on the kernel-derived chain
+    sessions = (await db.execute(select(MailAgentSession))).scalars().all()
+    if state == "ok":
+        assert [session.provider for session in sessions] == ["opencode-cli"]
+    else:
+        assert sessions == []
 
 
 @pytest.mark.asyncio

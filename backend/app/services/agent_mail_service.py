@@ -2281,6 +2281,9 @@ class AgentMailService:
                     or peer_process.pane_is_alive(session.pid, pane_start) is not True
                     or (transport_guard is not None and not transport_guard())):
                 raise MailWakeError("wake_transport_uncertain" if staged else "wake_target_stale")
+            if getattr(session, "provider", None) == "opencode-cli":
+                # The lookup and guard awaited; the member's OpenCode may have changed meanwhile.
+                self._require_opencode_2_pane(session)
 
         if not session.tmux_target or not session.pane_id or session.pid is None:
             raise MailWakeError("wake_target_unbound")
@@ -2400,6 +2403,9 @@ class AgentMailService:
                     raise MailWakeError("wake_session_mismatch")
             if delivery_guard is not None and not await delivery_guard():
                 raise MailWakeError("wake_session_mismatch")
+            if session.provider == "opencode-cli":
+                # Check again after the awaited audit commit and guard, just before transport.
+                self._require_opencode_2_pane(session)
             if expected_session_id is not None:
                 if delivery_guard is None:
                     raise MailWakeError("wake_session_mismatch")

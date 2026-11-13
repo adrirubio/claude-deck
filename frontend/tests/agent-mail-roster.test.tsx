@@ -103,6 +103,17 @@ describe('Team tab roster', () => {
     expect(screen.queryByText(/Charter of R1 Leader/)).not.toBeInTheDocument()
   })
 
+  it('names the OpenCode version requirement when an OpenCode member cannot be woken', () => {
+    const opencode = member(6, 'O1 OpenCode member', 'opencode-team', {
+      sessions: [session(6, { provider: 'opencode-cli' })],
+      agent_status: agentStatus({ wake_state: 'cannot_wake', wake_reason: 'opencode_version_unsupported' }),
+    })
+    renderTab([opencode])
+    fireEvent.click(screen.getByRole('button', { name: 'Show details of O1 OpenCode member' }))
+    expect(screen.getByText(/OpenCode 2 or later is required/)).toBeInTheDocument()
+    expect(screen.queryByText('Albiex Synth City cannot confirm a wake path.')).not.toBeInTheDocument()
+  })
+
   it('collapses the members with no team into one group that Show opens', () => {
     renderTab()
     expect(screen.getByText(`${OTHER_SESSIONS_LABEL} · 2`)).toBeInTheDocument()

@@ -18,6 +18,7 @@ const WAKE_REASONS: Record<string, string> = {
   wake_target_ambiguous: 'More than one session matches this agent.',
   wake_opted_out: 'Wake participation is turned off for this agent.',
   observation_unavailable: 'Albiex Synth City cannot read or confirm the wake path.',
+  opencode_version_unsupported: "OpenCode 2 or later is required. This member's OpenCode is older or could not be verified.",
 }
 
 const ACTIVITY_REASONS: Record<string, string> = {
