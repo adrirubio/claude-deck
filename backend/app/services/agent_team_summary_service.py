@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from mcp_shim.work_remaining_protocol import MAX_AGE
 
 from app.models.database import (
@@ -123,6 +124,16 @@ class AgentTeamSummaryService:
             if remaining <= 0:
                 raise TimeoutError
             return await asyncio.wait_for(read(), timeout=remaining)
+
+        # The identity baseline is taken BEFORE the native await, inside the stall budget. A failed
+        # capture stays None (untrusted): the stall view never takes a replacement baseline.
+        try:
+            native_baseline = await bounded(
+                lambda: mail_request_stall_service._coherent_snapshot(db, preset_id), stall_deadline)
+        except (TimeoutError, OSError, ValueError, OperationalError):
+            native_baseline = None
+            if db.in_transaction():
+                await db.rollback()
 
         try:
             from app.services.agent_activity_service import observe_team, _team_inputs
@@ -246,7 +257,8 @@ class AgentTeamSummaryService:
         # adds a next actor and does not change team_idle.
         stall = await mail_request_stall_service.observe(db, preset_id, now=now, native_states=native_states,
                                                          native_ok=native_ok and not changed,
-                                                         deadline=stall_deadline, native_fence=native_fence)
+                                                         deadline=stall_deadline, native_fence=native_fence,
+                                                         native_baseline=native_baseline)
         for entry in stall.items:
             attention.append(TeamSummaryAttention(code="unanswered_request", request_id=entry.request_id,
                 requester=entry.requester, recipient=entry.recipient, unanswered_seconds=entry.unanswered_seconds))

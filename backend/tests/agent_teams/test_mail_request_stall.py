@@ -1005,6 +1005,107 @@ async def test_an_open_transaction_pinning_an_old_snapshot_is_never_certified(db
     assert slot_id in identity
 
 
+# --- the summary takes its identity baseline before its native await (F2, revision C2b) -------------
+
+@pytest.mark.asyncio
+async def test_a_member_replaced_between_the_summarys_native_await_and_the_stall_view_is_not_old_evidence(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19601)
+    before = await inputs_of(db, team)
+
+    async def replace():
+        await commit_new_current_member(db, team, people[1], pid=19601, cwd="/same-workspace")
+        assert await inputs_of(db, team) == before         # the native input tuple cannot see it
+
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team, attention=_HookedAttention(replace))
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+    assert not [item for item in summary.attention if item.code == "unanswered_request"]
+
+
+@pytest.mark.asyncio
+async def test_a_session_replaced_between_the_summarys_native_await_and_the_stall_view_is_not_old_evidence(db, monkeypatch):
+    team, people = await bound_fixture(db, monkeypatch, pid=19602)
+    before = await inputs_of(db, team)
+
+    async def replace():
+        await commit_new_session_same_member(db, team, people[1], pid=19602, cwd="/same-workspace")
+        assert await inputs_of(db, team) == before
+
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team, attention=_HookedAttention(replace))
+    view = summary.supervisor_observation.unanswered_requests
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [ValueError("activity_context_limit"), OSError("read failed"), "timeout"])
+async def test_a_failed_early_summary_capture_is_untrusted_and_never_replaced(db, monkeypatch, failure):
+    from app.services.mail_request_stall_service import mail_request_stall_service
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19603)
+    monkeypatch.setattr(mail_request_stall_service, "deadline_seconds", 0.5)
+    original, calls = mail_request_stall_service._coherent_snapshot, []
+
+    async def failing(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            if failure == "timeout":
+                await asyncio.sleep(2)
+            raise failure
+        return await original(*args)
+
+    monkeypatch.setattr(mail_request_stall_service, "_coherent_snapshot", failing)
+    seen = []
+    observe_original = mail_request_stall_service.observe
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs.get("native_baseline", "omitted"))
+        return await observe_original(*args, **kwargs)
+
+    monkeypatch.setattr(mail_request_stall_service, "observe", spy)
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)
+    view = summary.supervisor_observation.unanswered_requests
+    assert seen == [None]                          # a FAILED capture is passed as None, not as omitted
+    assert len(calls) == 1                         # no replacement baseline was ever taken
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+    assert not [item for item in summary.attention if item.code == "unanswered_request"]
+
+
+@pytest.mark.asyncio
+async def test_the_summary_passes_the_baseline_it_captured_before_the_native_await(db, monkeypatch):
+    from app.services.mail_request_stall_service import _UNSET, mail_request_stall_service
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19604)
+    seen = []
+    original = mail_request_stall_service.observe
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs.get("native_baseline", _UNSET))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(mail_request_stall_service, "observe", spy)
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)
+    assert len(seen) == 1 and seen[0] is not _UNSET and seen[0] is not None
+    inputs, identity = seen[0]
+    assert people[1].slot.id in identity
+
+
+@pytest.mark.asyncio
+async def test_a_failed_early_capture_leaves_the_summarys_other_data_in_place(db, monkeypatch):
+    from app.services.mail_request_stall_service import mail_request_stall_service
+
+    team, people = await bound_fixture(db, monkeypatch, pid=19605)
+
+    async def failing(*args):
+        raise OSError("read failed")
+
+    monkeypatch.setattr(mail_request_stall_service, "_coherent_snapshot", failing)
+    summary, _elapsed = await summary_for(db, monkeypatch, people, team)
+    assert summary is not None
+    incomplete = [item for item in summary.attention if item.code == "unanswered_request_incomplete"]
+    assert len(incomplete) == 1 and incomplete[0].coverage_reason == "native_unknown"
+    assert summary.supervisor_observation.unanswered_requests.reason == "native_unknown"
+
+
 # --- privacy, order, repetition ---------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -1078,6 +1179,17 @@ class _Attention:
         return {"complete": True, "actions": []}
 
 
+class _HookedAttention(_Attention):
+    """The summary calls dispatch_snapshot after its native await and before the stall view starts."""
+
+    def __init__(self, action):
+        self.action = action
+
+    async def dispatch_snapshot(self, db, scopes):
+        await self.action()
+        return await super().dispatch_snapshot(db, scopes)
+
+
 @pytest.mark.asyncio
 async def test_the_team_summary_shows_the_request_on_both_surfaces(db, monkeypatch):
     from app.services.agent_team_summary_service import AgentTeamSummaryService
@@ -1126,7 +1238,7 @@ async def test_the_team_summary_labels_an_incomplete_view_with_its_reason(db, mo
     assert summary.supervisor_observation.unanswered_requests.complete is False
 
 
-async def summary_for(db, monkeypatch, people, team, **service_args):
+async def summary_for(db, monkeypatch, people, team, attention=None, **service_args):
     from app.services.agent_team_summary_service import AgentTeamSummaryService
 
     monkeypatch.setattr("app.services.agent_team_summary_service.hold_code", lambda: None)
@@ -1136,7 +1248,8 @@ async def summary_for(db, monkeypatch, people, team, **service_args):
 
     monkeypatch.setattr("app.services.agent_team_summary_service.observe_supervisor", no_supervisor)
     started = asyncio.get_running_loop().time()
-    summary = await AgentTeamSummaryService(attention=_Attention(), **service_args).summary(db, team.id)
+    summary = await AgentTeamSummaryService(attention=attention or _Attention(), **service_args).summary(
+        db, team.id)
     return summary, asyncio.get_running_loop().time() - started
 
 
