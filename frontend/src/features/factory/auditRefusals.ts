@@ -43,6 +43,8 @@ export const REFUSAL_REASONS: Record<string, string> = {
 
   allowed_actions_invalid: "Some actions are not allowed in this plan.",
   allowed_paths_invalid: "The plan's file paths are not valid.",
+  plan_metadata_reserved_key: "A plan may not supply the companion keys that the server writes.",
+  continuation_summary_reserved: "A request summary may not contain the reserved companion list line.",
   continuation_failed_head_limit_exceeded: "Too many failed attempts for this plan.",
   continuation_budget_exhausted: "The budget for this plan is used up.",
   continuation_command_limit_exceeded: "The plan lists more commands than the limit allows.",
