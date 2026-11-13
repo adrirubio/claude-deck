@@ -105,6 +105,7 @@ class AgentTeamSummaryService:
         scopes = [SimpleNamespace(**row._mapping) for row in scope_rows[:32]]
         attention, human_actions, actors, observations = [], [], set(), []
         waiting_input, native_fence, native_known = None, {}, False
+        native_states, native_ok = {}, False
         expires = [started + timedelta(seconds=15)]
         hold = hold_code()
         if hold:
@@ -122,6 +123,7 @@ class AgentTeamSummaryService:
             native = await bounded(lambda: observe_team(db, preset_id, include_agent_status=False,
                 persist_identities=False, max_input_rows=256, input_fence=native_fence))
             native_known = all(entry.state != "unknown" for entry in native.slots)
+            native_states = {entry.slot_id: entry.state for entry in native.slots}
             waiting_input = [TeamWaitingInput(slot_id=entry.slot_id, reason=entry.waiting_input.reason)
                 for entry in native.slots if entry.waiting_input is not None]
             expires.append(_utc(native.valid_until))
@@ -177,6 +179,8 @@ class AgentTeamSummaryService:
             native_current = {entry[0]: entry for entry in await bounded(lambda: _team_inputs(db, preset_id, 256))}
             if native_current != native_fence:
                 waiting_input = None
+            else:
+                native_ok = True
         except (TimeoutError, OSError, ValueError):
             waiting_input = None
             complete = False
@@ -231,6 +235,19 @@ class AgentTeamSummaryService:
         except (TimeoutError, OSError, ValueError):
             if db.in_transaction():
                 await db.rollback()
+        # Unanswered explicit requests (#752): its own bounded, read-only view. It reuses the native
+        # observation above and its fence; a changed context is not a stable observation. It never
+        # adds a next actor and does not change team_idle.
+        from app.services.mail_request_stall_service import mail_request_stall_service
+        stall = await mail_request_stall_service.observe(db, preset_id, now=now, native_states=native_states,
+                                                         native_ok=native_ok and not changed)
+        for entry in stall.items:
+            attention.append(TeamSummaryAttention(code="unanswered_request", request_id=entry.request_id,
+                requester=entry.requester, recipient=entry.recipient, unanswered_seconds=entry.unanswered_seconds))
+        if not stall.complete:
+            attention.append(TeamSummaryAttention(code="unanswered_request_incomplete",
+                coverage_reason=stall.reason, omitted_count=stall.omitted_count or None))
+        supervisor["unanswered_requests"] = stall
         campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
         unreadable = []
         for item in final[2][:self.item_limit]:
