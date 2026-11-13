@@ -134,7 +134,7 @@ function CampaignCard({ preset, summary }: { preset: AgentTeamPreset; summary: A
           </p>
           <ol className="space-y-2" aria-label="Observed dispatch order">
             {c.dispatch_order!.map((item) => (
-              <li key={`${item.scope_id}:${item.issue_number}`}>
+              <li key={`${item.scope_id}:${item.issue_number}`} className="wrap-anywhere">
                 <span>{item.title}</span>
                 <span className="block text-xs text-muted-foreground">
                   Dispatch order in {item.repository}: {item.dispatch_position} · #{item.issue_number} · {item.priority === null ? 'oldest first' : `priority ${item.priority}`}

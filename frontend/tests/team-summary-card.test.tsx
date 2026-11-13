@@ -191,18 +191,18 @@ describe('team summary card', () => {
 })
 
 
-it('shows the observed per-repository priority queue without promising a launch', () => {
+it.each(['example/repo', `example/${'r'.repeat(80)}`])('shows the complete observed queue for repository %s without promising a launch', (repository) => {
   const data = summary({ campaign: {
     backlog_state: 'backlog unavailable', done_count: 0, latest_done: [],
     under_way_count: 0, under_way: [], queued_count: 0, queued: [],
     dispatch_order: [
-      { title: 'Priority work', scope_id: 1, repository: 'example/repo', issue_number: 789, priority: 1, dispatch_position: 1 },
-      { title: 'Oldest fallback', scope_id: 1, repository: 'example/repo', issue_number: 788, priority: null, dispatch_position: 2 },
+      { title: 'Priority work', scope_id: 1, repository, issue_number: 789, priority: 1, dispatch_position: 1 },
+      { title: 'Oldest fallback', scope_id: 1, repository, issue_number: 788, priority: null, dispatch_position: 2 },
     ], not_started_count: null, not_started_groups: [], decisions_ahead: [],
   } })
   render(<MemoryRouter><CampaignProgress presets={[preset]} summaries={[data]} /></MemoryRouter>)
-  expect(screen.getByText('Dispatch order in example/repo: 1 · #789 · priority 1')).toBeInTheDocument()
-  expect(screen.getByText('Dispatch order in example/repo: 2 · #788 · oldest first')).toBeInTheDocument()
+  expect(screen.getByText(`Dispatch order in ${repository}: 1 · #789 · priority 1`)).toBeInTheDocument()
+  expect(screen.getByText(`Dispatch order in ${repository}: 2 · #788 · oldest first`)).toBeInTheDocument()
   expect(screen.getByText(/Last-polled order per repository/)).toHaveTextContent(/routing and capacity gates/)
   const texts = screen.getByRole('article').textContent!
   expect(texts.indexOf('Priority work')).toBeLessThan(texts.indexOf('Oldest fallback'))
