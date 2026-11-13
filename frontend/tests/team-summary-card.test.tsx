@@ -75,6 +75,22 @@ const cases = [
     expects: ['Team idle on', 'Last recorded actor: Reviewer Ada', '#839'],
   },
   {
+    name: 'a team with an unanswered request',
+    data: summary({ attention: [{ code: 'unanswered_request', request_id: 5, requester: 'L1', recipient: 'C1',
+      unanswered_seconds: 1500 }] }),
+    expects: ['Unanswered request', "C1 has not answered L1's request for 25 min"],
+  },
+  {
+    name: 'a team whose unanswered-request view cannot be proven',
+    data: summary({ attention: [{ code: 'unanswered_request_incomplete', coverage_reason: 'ambiguous_legacy_request' }] }),
+    expects: ['Unanswered-request view incomplete', 'an older nested request cannot be matched to a reply'],
+  },
+  {
+    name: 'a team with more unanswered requests than the view lists',
+    data: summary({ attention: [{ code: 'unanswered_request_incomplete', coverage_reason: 'entry_limit', omitted_count: 3 }] }),
+    expects: ['Unanswered-request view incomplete', 'more unanswered requests than are listed', '3 more not listed'],
+  },
+  {
     name: 'a team with no work', data: noWork,
     expects: ['None open.', 'Nothing is left.'],
   },

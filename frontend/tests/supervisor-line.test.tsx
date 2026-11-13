@@ -1,7 +1,7 @@
 import { cleanup, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TeamSummaryCard } from '../src/features/agent-teams/TeamSummaryCard'
-import { supervisorWords, waitingScreen } from '../src/features/agent-teams/supervisorText'
+import { supervisorWords, unansweredWords, waitingScreen } from '../src/features/agent-teams/supervisorText'
 import { OverviewPage } from '../src/features/factory/pages/OverviewPage'
 import { resetFactoryReads } from '../src/features/factory/reads'
 import type { AgentTeamPreset, AgentTeamSummary, SupervisorObservation } from '../src/types/agentTeams'
@@ -163,5 +163,54 @@ describe('Overview Needs you', () => {
     await run(summary({ waiting_input: [] }))
     expect(screen.queryByRole('heading', { name: /Needs you/ })).not.toBeInTheDocument()
     expect(screen.getByText('Nothing needs you right now.')).toBeInTheDocument()
+  })
+})
+
+
+// #752: unanswered explicit requests on the Supervisor line. The sentence is plain words, a reason is
+// always a fixed word, and an older server that sends no field changes nothing.
+const unanswered = (over: Record<string, unknown> = {}) => ({
+  items: [
+    { request_id: 5, kind: 'context_request', requester: 'L1', recipient: 'C1', requested_at: minutesFromNow(-35),
+      unanswered_seconds: 2100, threshold_seconds: 1200, text: "C1 has not answered L1's request for 35 min." },
+    { request_id: 6, kind: 'handoff', requester: 'L1', recipient: 'R1', requested_at: minutesFromNow(-25),
+      unanswered_seconds: 1500, threshold_seconds: 1200, text: "R1 has not answered L1's handoff for 25 min." },
+  ],
+  complete: true, reason: null, omitted_count: 0, ...over,
+})
+
+describe('unanswered requests on the supervisor line', () => {
+  it('says how many are unanswered and how long the oldest has waited', async () => {
+    const row = supervisorRow(await card(summary({ supervisor_observation: observation({ unanswered_requests: unanswered() } as never) })))
+    expect(row).toHaveTextContent('Healthy')
+    expect(row).toHaveTextContent('2 unanswered requests, oldest 35 min')
+    expect(row.textContent).not.toMatch(/incomplete/i)
+  })
+
+  it('uses the singular for one request', () => {
+    const view = unanswered({ items: [unanswered().items[0]] })
+    expect(unansweredWords(view as never)).toBe('1 unanswered request, oldest 35 min')
+  })
+
+  it('names the reason when the view is incomplete, with or without entries', () => {
+    expect(unansweredWords(unanswered({ complete: false, reason: 'native_unknown' }) as never))
+      .toBe("2 unanswered requests, oldest 35 min · view incomplete: a member's activity is unknown or not readable")
+    expect(unansweredWords(unanswered({ items: [], complete: false, reason: 'candidate_limit' }) as never))
+      .toBe('Unanswered-request view incomplete: more candidates than the view reads')
+    expect(unansweredWords(unanswered({ complete: false, reason: 'entry_limit', omitted_count: 4 }) as never))
+      .toContain('4 more not listed')
+  })
+
+  it('shows nothing when nothing is unanswered and the view is complete, or when the field is absent', async () => {
+    expect(unansweredWords(unanswered({ items: [] }) as never)).toBeNull()
+    expect(unansweredWords(undefined)).toBeNull()
+    expect(unansweredWords(null)).toBeNull()
+    const row = supervisorRow(await card(summary({ supervisor_observation: observation({}) })))
+    expect(row.textContent).not.toMatch(/unanswered/i)
+  })
+
+  it('falls back to a fixed sentence for a reason it does not know', () => {
+    expect(unansweredWords(unanswered({ items: [], complete: false, reason: 'something_new' }) as never))
+      .toBe('Unanswered-request view incomplete: the view could not be proven')
   })
 })

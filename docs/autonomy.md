@@ -178,3 +178,27 @@ no pre-upgrade idle duration is guessed. Human, native-input and external-check
 waits, OFF/HOLD and incomplete bounded observations suppress this signal. Actual
 progress clears it. Last actor names come from authenticated recorded evidence;
 otherwise the view says Unknown. Idle attention grants no execution authority.
+
+### Unanswered explicit requests
+
+The team summary and the Supervisor check-in also show **unanswered requests**: a pending
+Agent Mail `context_request` or `handoff` that is addressed to an idle member of the team and
+is older than `MAIL_REQUEST_UNANSWERED_SECONDS` (default 1200 seconds, valid 60–86400; an age
+equal to the threshold counts). The team card shows "C1 has not answered L1's request for 25
+min" and the Supervisor line shows a second sentence with the count and the age of the oldest.
+The names are display names only. A subject, a body or a payload is never shown.
+
+- Only an **explicit** request counts. A plain message that asks for something carries no
+  request marker, and Albiex Synth City does not guess from prose. Send a request that needs an
+  answer as a context request addressed to the member directly.
+- A request leaves the view when it is answered, superseded or acknowledged, or when the
+  addressed member sends a plain reply in the request's own thread. A message from any other
+  member, including the requester, never clears it. Approval requests have their own timeout
+  flow and are not listed. A working member is active, so its requests are not listed.
+- The view says when it is **incomplete**, with a fixed reason: `candidate_limit` (more than 64
+  pending requests), `native_unknown` (a member's activity is unknown, stopped or could not be
+  read in time), `ambiguous_legacy_request` (an older request nested inside a thread cannot be
+  matched to a reply), `reply_scan_limit` (the reply check reached its bound) or `entry_limit`
+  (more than 16 unanswered requests; the count of those not listed is shown). A truncated or
+  unproven view is never shown as complete.
+- The signal grants no authority and does not change `team_idle` or the next actor.

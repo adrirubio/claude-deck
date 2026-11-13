@@ -82,6 +82,11 @@ export interface AgentTeamPreset {
 export type TeamSummaryAttentionCode =
   | 'attempt_stopped' | 'recovery_decision' | 'human_review' | 'owner_stalled'
   | 'observation_pause' | 'hold' | 'recovery_only' | 'hold_unavailable' | 'team_idle'
+  | 'unanswered_request' | 'unanswered_request_incomplete'
+
+// Why the unanswered-request view is not complete (#752). A fixed word, never free text.
+export type UnansweredRequestReason =
+  | 'candidate_limit' | 'native_unknown' | 'ambiguous_legacy_request' | 'reply_scan_limit' | 'entry_limit'
 
 export interface TeamSummaryAttention {
   code: TeamSummaryAttentionCode
@@ -93,6 +98,12 @@ export interface TeamSummaryAttention {
   resume_deadline?: string | null
   last_actor?: string | null
   last_progress_at?: string | null
+  request_id?: number | null
+  requester?: string | null
+  recipient?: string | null
+  unanswered_seconds?: number | null
+  coverage_reason?: UnansweredRequestReason | null
+  omitted_count?: number | null
 }
 
 export interface TeamSummaryHumanAction {
@@ -165,6 +176,26 @@ export interface SupervisorObservation {
   note: string | null
   attention: 'Supervisor check-in overdue' | null
   team_idle?: { work_item_id: number; scope_id: number; issue_number: number; last_actor: string; last_progress_at: string }[]
+  // Explicit requests that an idle member has not answered (#752). Absent on an older server.
+  unanswered_requests?: UnansweredRequestView | null
+}
+
+export interface UnansweredRequestItem {
+  request_id: number
+  kind: 'context_request' | 'handoff'
+  requester: string
+  recipient: string
+  requested_at: string
+  unanswered_seconds: number
+  threshold_seconds: number
+  text: string
+}
+
+export interface UnansweredRequestView {
+  items: UnansweredRequestItem[]
+  complete: boolean
+  reason: UnansweredRequestReason | null
+  omitted_count: number
 }
 
 // A member waits at an interactive screen. Only the fixed reason is on the wire.
