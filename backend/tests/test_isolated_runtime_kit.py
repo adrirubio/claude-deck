@@ -57,6 +57,24 @@ def _pidfd_kill(entry: dict) -> None:
         os.close(fd)
 
 
+_PROBE: list[int] = []
+
+
+def _namespace_skip_reason(probe_returncode: int):
+    """The exact skip reason when the host refuses unprivileged user and network namespaces."""
+    return None if probe_returncode == 0 else "capability unavailable: uid_map"
+
+
+def _needs_namespaces():
+    """Skip one namespace-dependent test (never the module) on hosts that refuse the uid_map write."""
+    if not _PROBE:
+        _PROBE.append(subprocess.run(["unshare", "--user", "--map-root-user", "--net", "true"],
+                                     capture_output=True, timeout=10).returncode)
+    reason = _namespace_skip_reason(_PROBE[0])
+    if reason:
+        pytest.skip(reason)
+
+
 def _alive(pid: int) -> bool:
     """Read-only: whether a process with this pid exists (no signal, not even signal 0)."""
     return Path(f"/proc/{pid}").exists()
@@ -83,9 +101,10 @@ def test_host_provides_what_the_kit_needs():
     # Report the missing piece by name instead of failing deep inside the kit.
     for tool in ("bash", "tmux", "unshare", "nsenter", "ip", "timeout", "setsid"):
         assert shutil.which(tool), f"{tool} is required by the isolated runtime kit"
+    # The namespace capability is reported, not asserted: namespace tests skip on their own.
     probe = subprocess.run(["unshare", "--user", "--map-root-user", "--net", "true"],
                            capture_output=True, text=True, timeout=10)
-    assert probe.returncode == 0, f"unprivileged user and network namespaces are refused: {probe.stderr.strip()}"
+    print("namespace capability:", "available" if probe.returncode == 0 else probe.stderr.strip())
 
 
 @pytest.fixture
@@ -97,6 +116,7 @@ def kit_root(tmp_path):
 
 
 def test_fake_provider_runs_through_the_kit_end_to_end(kit_root):
+    _needs_namespaces()
     up = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
               env=_env(RUNTIME_KIT_CANARY="caller-secret-canary"))
     assert up.returncode == 0, up.stderr
@@ -163,6 +183,7 @@ def test_kit_refuses_a_root_it_does_not_own(tmp_path):
 
 @pytest.mark.parametrize("fault", ["uid_mismatch", "join_mismatch"])
 def test_kit_preflight_fails_closed_before_the_backend_starts(kit_root, fault):
+    _needs_namespaces()
     result = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
                   env=_env(RUNTIME_KIT_TEST_FAULT=fault))
     assert result.returncode == 2 and "refused" in result.stderr
@@ -172,6 +193,7 @@ def test_kit_preflight_fails_closed_before_the_backend_starts(kit_root, fault):
 
 
 def test_kit_refuses_to_enter_or_signal_a_reused_pid(kit_root):
+    _needs_namespaces()
     up = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI))
     assert up.returncode == 0, up.stderr
     state = kit_root / "state" / "processes.json"
@@ -189,6 +211,7 @@ def test_kit_refuses_to_enter_or_signal_a_reused_pid(kit_root):
 
 
 def test_kit_up_has_a_finite_deadline(kit_root):
+    _needs_namespaces()
     started = time.monotonic()
     result = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
                   env=_env(RUNTIME_KIT_TEST_FAULT="no_registration", RUNTIME_KIT_UP_DEADLINE="20"))
@@ -208,6 +231,7 @@ def _up(root, **env):
 
 @pytest.mark.parametrize("state", ["no_instance", "copied_instance", "host_namespace", "forged_namespace"])
 def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state):
+    _needs_namespaces()
     root = tmp_path / "kit"
     (root / "state").mkdir(parents=True)
     (root / ".deck-runtime-kit").write_text("")
@@ -243,6 +267,7 @@ def test_down_never_signals_or_deletes_outside_its_own_instance(tmp_path, state)
 
 
 def test_down_refuses_an_unrecorded_process_before_any_signal(kit_root):
+    _needs_namespaces()
     summary = _up(kit_root)
     started = _kit("exec", "--root", str(kit_root), "--", "sh", "-c",
                    'cd / && setsid env -i sleep 300 </dev/null >/dev/null 2>&1 & echo $!')
@@ -263,6 +288,7 @@ def test_down_refuses_an_unrecorded_process_before_any_signal(kit_root):
 
 
 def test_up_refuses_a_retained_root_before_starting_anything(kit_root):
+    _needs_namespaces()
     _up(kit_root)
     kept = _kit("down", "--root", str(kit_root), "--keep")
     assert kept.returncode == 0, kept.stderr
@@ -273,6 +299,7 @@ def test_up_refuses_a_retained_root_before_starting_anything(kit_root):
 
 
 def test_an_interrupted_preflight_leaves_no_process(kit_root):
+    _needs_namespaces()
     result = _kit("up", "--root", str(kit_root), "--provider", "claude-code", "--cli", str(FAKE_CLI),
                   env=_env(RUNTIME_KIT_TEST_FAULT="after_anchor_spawn"))
     assert result.returncode != 0
@@ -281,6 +308,7 @@ def test_an_interrupted_preflight_leaves_no_process(kit_root):
 
 
 def test_no_credential_ever_appears_in_a_process_argv(kit_root):
+    _needs_namespaces()
     import threading
     seen: set[bytes] = set()
     done = threading.Event()
@@ -311,6 +339,7 @@ def test_no_credential_ever_appears_in_a_process_argv(kit_root):
 
 @pytest.mark.parametrize("fault", ["dead_backend", "unhealthy_backend", "dead_cli", "reused_cli", "missing_registration"])
 def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
+    _needs_namespaces()
     import sqlite3
     _up(kit_root)
     state = kit_root / "state" / "processes.json"
@@ -338,6 +367,7 @@ def test_status_fails_when_its_proof_is_incomplete(kit_root, fault):
 
 
 def test_down_kills_a_recorded_child_that_ignores_term(kit_root):
+    _needs_namespaces()
     summary = _up(kit_root, RUNTIME_KIT_TEST_FAULT="stub_ignores_term")
     stub = summary["pids"]["stub"]
     down = _kit("down", "--root", str(kit_root))
@@ -515,3 +545,35 @@ def test_model_signal_check_refuses_before_any_signal(monkeypatch, fault):
     with pytest.raises(SystemExit) as refused:
         module["send"](ROOT_MODEL, name, "TERM", dry=False)
     assert refused.value.code in (2, 3, 4)
+
+
+def test_status_on_an_invalid_root_writes_nothing(tmp_path):
+    root = tmp_path / "kit"
+    (root / "evidence").mkdir(parents=True)
+    (root / ".deck-runtime-kit").write_text("")
+    (root / "evidence" / "MANIFEST.sha256").write_text("old evidence\n")
+    def tree():
+        return {str(p.relative_to(root)): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
+    before = tree()
+    result = _kit("status", "--root", str(root))
+    assert result.returncode == 2 and "refused" in result.stderr
+    assert tree() == before
+
+
+def test_status_publishes_nothing_when_its_summary_fails(kit_root):
+    _needs_namespaces()
+    _up(kit_root)
+    first = _kit("status", "--root", str(kit_root))
+    assert first.returncode == 0, first.stderr
+    published = (kit_root / "evidence" / "MANIFEST.sha256").read_text()
+    link = os.readlink(kit_root / "evidence")
+    failed = _kit("status", "--root", str(kit_root), env=_env(RUNTIME_KIT_TEST_FAULT="summary_fails"))
+    assert failed.returncode == 1 and "incomplete" in failed.stderr
+    assert os.readlink(kit_root / "evidence") == link
+    assert (kit_root / "evidence" / "MANIFEST.sha256").read_text() == published
+    assert sorted(p.name for p in (kit_root / "evidence.d").iterdir()) == [link.split("/")[-1]]
+
+
+def test_model_capability_skip_gate():
+    assert _namespace_skip_reason(1) == "capability unavailable: uid_map"
+    assert _namespace_skip_reason(0) is None

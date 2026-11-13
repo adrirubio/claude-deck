@@ -23,7 +23,7 @@ scripts/isolated-runtime-kit.sh down   --root /tmp/kit [--keep]
 | Command | Deadline | What it does |
 |---|---|---|
 | `up` | 90 s (`RUNTIME_KIT_UP_DEADLINE`) | Preflight (10 s), stub (5 s), backend health (30 s), launch and registration (30 s). A failure stops every process and keeps the root for its logs. |
-| `status` | 15 s | Checks every recorded process, the backend's health and the registration, then writes the evidence and prints the summary. If any proof is missing it fails as incomplete and writes no manifest. |
+| `status` | 15 s | Checks the instance, every recorded process, the backend's health and the registration before it writes anything. It then builds the evidence and the summary in a new attempt directory and publishes them by one atomic link swap. If anything fails, the published evidence is left unchanged. |
 | `exec` | 120 s by default, at most 600 s | Runs a command inside the namespaces with the kit's environment. |
 | `down` | 30 s | Stops every process of the instance, including ones started later inside its namespace, proves none remains, checks the evidence manifest, and removes the root (`--keep` keeps it). If it can't prove cleanup, it fails as incomplete and keeps the root. |
 
@@ -31,18 +31,28 @@ scripts/isolated-runtime-kit.sh down   --root /tmp/kit [--keep]
 
 ## Ownership and cleanup
 
-Each `up` creates one instance with a random id. `state/instance.json` (a private file) records that id, the root directory's identity and the kit's namespaces. The anchors carry the id in their arguments. `status`, `exec` and `down` refuse (exit 2), before any signal or deletion, when:
+Each `up` creates one instance with a random id. `state/instance.json` (a private file) records that id, the root directory's identity and the kit's namespaces. `status`, `exec` and `down` refuse (exit 2) before any signal, write or deletion when:
 - the record is missing or malformed, or isn't a private file of the caller;
 - it was copied from another root;
 - it names a host namespace.
 
-`down` stops the processes of the instance: those carrying its id, and those inside its network namespace, but the namespace counts only while the instance's own anchor is alive in it. If processes run in a namespace that no live anchor proves, or a process can't be inspected, `down` signals nothing, reports the cleanup as incomplete and keeps the root.
+**Ownership comes only from records.** The kit records every process it starts with its pid, start time, a SHA-256 of its command line, and its parent's pid and start time. Each process has one expected parent:
+- the launcher is the parent of the outer anchor;
+- the outer anchor is the parent of the inner anchor;
+- the inner anchor is the parent of the tmux server, the stub and the backend (it starts them itself);
+- the tmux server is the parent of the CLI pane.
+
+A process counts as the kit's only when every recorded field matches and its parent is the recorded process of its expected parent role. It must also be in the kit's recorded namespaces. Before those are recorded, only the anchors may exist, and only in their own non-host namespaces. A process in a host namespace never counts. When a process re-executes, only its recorded command line may change.
+
+**Signals.** Every signal opens a pidfd first, proves the full recorded identity, and then signals through that pidfd. Without pidfd support, or on any mismatch, nothing is signalled. The launcher is never signalled; it exits with the outer anchor.
+
+**`down`** first computes a read-only plan. It refuses before any signal, keeping the root and the anchors, if any recorded process fails its proof, or if any unrecorded or unreadable process is in the kit's network namespace. Otherwise it stops the CLI, the stub, the backend, the tmux server, the inner anchor and the outer anchor, in that order.
 
 **A root is never reused.** A root left by `down --keep` or by a failed `up` is refused by the next `up`; run `down` to remove it.
 
 ## Evidence
 
-`status` writes these files to `ROOT/evidence/`, with `MANIFEST.sha256`:
+`status` publishes these files in `ROOT/evidence/` (a link to the latest complete attempt in `ROOT/evidence.d/`), with `MANIFEST.sha256`:
 - `namespaces.json`
 - `links.txt`
 - `processes.txt`
@@ -50,6 +60,7 @@ Each `up` creates one instance with a random id. `state/instance.json` (a privat
 - `registration.json`
 - `environment-names.json`, holding variable names only, never values
 - `stub-requests.jsonl`
+- `summary.json`
 
 `down` refuses to finish if the manifest no longer matches.
 
@@ -65,7 +76,7 @@ The kit refuses, with exit 2, when:
 - the two-step namespace entry doesn't land in the anchors' namespaces;
 - a recorded process id now has another start time, so it may belong to another process.
 
-**Namespace entry is two-step.** The kit enters through the outer anchor, which owns the network namespace, and then the inner one. A single `nsenter` into the inner anchor is refused by the kernel. Before it enters a namespace or sends a signal, the kit checks the recorded pid and its start time (`/proc/<pid>/stat` field 22).
+**Namespace entry is two-step.** The kit enters through the outer anchor, which owns the network namespace, and then the inner one. A single `nsenter` into the inner anchor is refused by the kernel. Before it enters a namespace, the kit proves both anchors as described in [Ownership and cleanup](#ownership-and-cleanup).
 
 ## Using it for a live check
 
@@ -77,8 +88,8 @@ The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake pro
 
 ## Limits
 
-- **Linux only.** The kit needs unprivileged user and network namespaces, plus `tmux`, `unshare`, `nsenter`, `ip`, `timeout` and `setsid`. The test fails, and doesn't skip, on a host without them.
-- **Not on the hosted `ubuntu-latest` runner as configured.** Its AppArmor policy refuses unprivileged user namespaces (`unshare: write failed /proc/self/uid_map: Operation not permitted`), so the kit can't run there.
+- **Linux only.** The kit needs unprivileged user and network namespaces, plus `tmux`, `unshare`, `nsenter`, `ip`, `timeout` and `setsid`. The kit's own checks without namespaces (the model, refusal, fake-CLI and stub tests) run on every host.
+- **Not on the hosted `ubuntu-latest` runner as configured.** The runner denies the namespace setup (`unshare: write failed /proc/self/uid_map: Operation not permitted`). The log shows the denial, not its cause. There, each namespace-dependent test skips with `capability unavailable: uid_map`, and the namespace path is proved by one local run in the owner's leased workspace, with evidence on the PR for review.
 - **One OS user.** Factory members share one OS user, so ownership is proved by the instance id and namespace, never by the user id alone.
 - **Local checks only.** The stub model doesn't model a real provider; a real-provider check is a separate decision with its own approval.
 - **One kit per root.** The ports (18780 for the backend, 18781 for the stub) belong to the kit's own network namespace, so separate kits don't collide.

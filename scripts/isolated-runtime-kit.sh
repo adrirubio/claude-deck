@@ -566,7 +566,7 @@ up() {
 
   mkdir -p "$ROOT"
   touch "$ROOT/$MARKER"
-  mkdir -p "$ROOT/state" "$ROOT/home/work" "$ROOT/bin" "$ROOT/run" "$ROOT/t" "$ROOT/evidence" "$ROOT/logs"
+  mkdir -p "$ROOT/state" "$ROOT/home/work" "$ROOT/bin" "$ROOT/run" "$ROOT/t" "$ROOT/evidence.d" "$ROOT/logs"
   chmod 700 "$ROOT/t" "$ROOT/state"
   local instance
   instance="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
@@ -815,10 +815,8 @@ PY
 # --- status ----------------------------------------------------------------------------
 
 status() {
-  local ev="$ROOT/evidence"
-  # A stale manifest must never pass for current evidence.
-  rm -f "$ev/MANIFEST.sha256"
-  kitpy instance "$ROOT" >/dev/null || refuse "this root has no valid kit instance"
+  # Ownership and every proof before any write: an invalid root is never modified.
+  kitpy instance "$ROOT" >/dev/null || refuse "this root has no valid kit instance; nothing was written"
   load_env
   local name python="${PYTHON:-}"
   for name in outer inner tmux stub backend cli; do
@@ -830,21 +828,43 @@ status() {
   backend_healthy "$python" || incomplete "the isolated backend does not report this run as healthy"
   registration_row >/dev/null || incomplete "no registered session with a pane binding"
 
+  # Build the whole attempt, summary included, beside the published evidence; publish it
+  # only when everything succeeded, by atomically swapping the evidence link.
+  local id att
+  id="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  mkdir -p "$ROOT/evidence.d"
+  att="$ROOT/evidence.d/$id"
+  mkdir "$att"
+  if ! capture_evidence "$att"; then
+    rm -rf "$att"
+    incomplete "the evidence could not be captured; the published evidence is unchanged"
+  fi
+  local old=""
+  [[ -L "$ROOT/evidence" ]] && old="$(readlink "$ROOT/evidence")"
+  ln -s "evidence.d/$id" "$ROOT/.evidence-$id"
+  mv -T "$ROOT/.evidence-$id" "$ROOT/evidence"
+  [[ -n "$old" && "$old" == evidence.d/* && "$old" != "evidence.d/$id" ]] && rm -rf "${ROOT:?}/$old"
+  note "evidence written to $ROOT/evidence"
+  cat "$att/summary.json"
+}
+
+capture_evidence() { # dir: every evidence file and the summary; fails without publishing anything
+  local ev="$1" name
   in_ns sh -c 'printf "{\"net\": \"%s\", \"user\": \"%s\"}\n" "$(readlink /proc/self/ns/net)" "$(readlink /proc/self/ns/user)"' \
-    | python3 -I -c 'import json,sys,os; d=json.load(sys.stdin); d["host_net"]=os.readlink("/proc/self/ns/net"); d["host_user"]=os.readlink("/proc/self/ns/user"); print(json.dumps(d))' >"$ev/namespaces.json"
-  in_ns ip -o link | awk -F': ' '{print $2}' >"$ev/links.txt"
-  python3 -I - "$ROOT/state/processes.json" >"$ev/processes.txt" <<'PY'
+    | python3 -I -c 'import json,sys,os; d=json.load(sys.stdin); d["host_net"]=os.readlink("/proc/self/ns/net"); d["host_user"]=os.readlink("/proc/self/ns/user"); print(json.dumps(d))' >"$ev/namespaces.json" || return 1
+  in_ns ip -o link | awk -F': ' '{print $2}' >"$ev/links.txt" || return 1
+  python3 -I - "$ROOT/state/processes.json" >"$ev/processes.txt" <<'PY' || return 1
 import json, sys
 for name, entry in json.load(open(sys.argv[1])).items():
     try:
         cmd = open(f"/proc/{entry['pid']}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace").strip()
     except OSError:
         cmd = "(gone)"
-    print(f"{name}\t{entry['pid']}\t{entry['start']}\t{cmd[:200]}")
+    print(f"{name}\t{entry['pid']}\t{entry['start']}\t{entry['argv'][:16]}\t{entry['ppid']}:{entry['pstart']}\t{cmd[:200]}")
 PY
-  in_ns "$ROOT/bin/tmux" list-panes -a -F '{"pane_pid": #{pane_pid}, "pane_current_command": "#{pane_current_command}", "target": "#{session_name}:#{window_index}.#{pane_index}"}' >"$ev/pane.json"
-  registration_row >"$ev/registration.json"
-  python3 -I - "$ROOT/state/processes.json" >"$ev/environment-names.json" <<'PY'
+  in_ns "$ROOT/bin/tmux" list-panes -a -F '{"pane_pid": #{pane_pid}, "pane_current_command": "#{pane_current_command}", "target": "#{session_name}:#{window_index}.#{pane_index}"}' >"$ev/pane.json" || return 1
+  registration_row >"$ev/registration.json" || return 1
+  python3 -I - "$ROOT/state/processes.json" >"$ev/environment-names.json" <<'PY' || return 1
 import json, sys
 names = {}
 for name, entry in json.load(open(sys.argv[1])).items():
@@ -857,16 +877,15 @@ for name, entry in json.load(open(sys.argv[1])).items():
     names[name] = sorted({item.split(b"=", 1)[0].decode(errors="replace") for item in raw.split(b"\0") if item})
 print(json.dumps(names, indent=1))
 PY
-  cp "$ROOT/run/stub-requests.jsonl" "$ev/stub-requests.jsonl" 2>/dev/null || : >"$ev/stub-requests.jsonl"
-  # The identities are checked again after capture: evidence of a process that
-  # changed while it was read is not published.
+  if [[ -f "$ROOT/run/stub-requests.jsonl" ]]; then cp "$ROOT/run/stub-requests.jsonl" "$ev/stub-requests.jsonl" || return 1; else : >"$ev/stub-requests.jsonl"; fi
+  [[ "${RUNTIME_KIT_TEST_FAULT:-}" != summary_fails ]] || return 1
+  summary >"$ev/summary.json" || return 1
+  # Identities are checked again after capture: evidence of a changed process is not published.
   for name in outer inner tmux stub backend cli; do
-    verify "$name" >/dev/null
+    kitpy verify "$ROOT" "$name" >/dev/null 2>&1 || return 1
   done
   (cd "$ev" && sha256sum namespaces.json links.txt processes.txt pane.json registration.json \
-    environment-names.json stub-requests.jsonl >MANIFEST.sha256)
-  note "evidence written to $ev"
-  summary
+    environment-names.json stub-requests.jsonl summary.json >MANIFEST.sha256) || return 1
 }
 
 # --- exec --------------------------------------------------------------------------------
