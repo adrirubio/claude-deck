@@ -170,9 +170,21 @@ NO_ELIGIBLE_OWNER_NOTE = (
 )
 
 
+_ROLE_TRIM = " \t\r\n"
+
+
 def _ineligible_owner(slot: AgentTeamSlot, leader_slot_id: int | None) -> bool:
     """The Leader approves every plan, and a coordinator never builds, so neither may own an item."""
-    return slot.id == leader_slot_id or (slot.role or "").strip().casefold() == "coordinator"
+    return slot.id == leader_slot_id or (slot.role or "").strip(_ROLE_TRIM).lower() == "coordinator"
+
+
+def _eligible_owner_condition(preset_id: int):
+    """The same rule as _ineligible_owner, for a conditional write against the current rows."""
+    leader_id = select(AgentTeamPreset.leader_slot_id).where(AgentTeamPreset.id == preset_id).scalar_subquery()
+    return and_(
+        AgentTeamSlot.id.is_distinct_from(leader_id),
+        func.lower(func.trim(func.coalesce(AgentTeamSlot.role, ""), _ROLE_TRIM)) != "coordinator",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -1001,7 +1013,8 @@ class GithubDispatchService:
             return False
         if owner_slot_id is not None:
             owner = await db.get(AgentTeamSlot, owner_slot_id, populate_existing=True)
-            if owner is None or not owner.enabled or owner.preset_id != scope.preset_id:
+            if (owner is None or not owner.enabled or owner.preset_id != scope.preset_id
+                    or _ineligible_owner(owner, preset.leader_slot_id)):
                 return False
         if require_autonomy:
             from app.services.github_coordination_service import hold_code
@@ -1039,7 +1052,7 @@ class GithubDispatchService:
             AgentTeamPreset.autonomy_enabled.is_(True) if require_autonomy else True,
         )) & exists(select(AgentTeamSlot.id).where(
             AgentTeamSlot.id == identity[3], AgentTeamSlot.preset_id == scope.preset_id,
-            AgentTeamSlot.enabled.is_(True),
+            AgentTeamSlot.enabled.is_(True), _eligible_owner_condition(scope.preset_id),
         )) & exists(select(GithubWorkspace.id).where(
             GithubWorkspace.id == acquisition[0], GithubWorkspace.scope_id == scope.id,
             GithubWorkspace.leased_item_id == acquisition[1],

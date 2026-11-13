@@ -8325,3 +8325,112 @@ async def test_no_eligible_owner_reason_and_note_reach_the_queue_projection(db):
     assert projected.pending_reason == "no_eligible_owner"
     assert projected.owner_slot_id is None
     assert projected.status_note and "No eligible owner" in projected.status_note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["coordinator", "leader"])
+@pytest.mark.parametrize("when", ["workspace", "brief", "late_read"])
+async def test_owner_made_ineligible_after_the_claim_never_launches(db, monkeypatch, who, when):
+    from app.models.schemas import AgentTeamSlotUpdate
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    backend = slots[1]
+    item = await _pending_item(db, scope, 9101)
+
+    async def make_ineligible(*_args, **_kwargs):
+        if who == "coordinator":
+            await agent_team_service.update_slot(db, backend.id, AgentTeamSlotUpdate(role="coordinator"))
+        else:
+            # set_leader refuses while the team is dispatching, so this isolated fixture edits the preset row.
+            preset.leader_slot_id = backend.id
+            await db.commit()
+
+    brief = AsyncMock(side_effect=make_ineligible if when == "brief" else None)
+    launcher = AsyncMock(return_value=_Launched())
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", brief)
+    if when == "workspace":
+        monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", make_ineligible)
+    if when == "late_read":
+        original = github_dispatch_service._dispatch_authorized
+
+        async def authorized(*args, **kwargs):
+            allowed = await original(*args, **kwargs)
+            if kwargs.get("owner_slot_id") is not None:
+                await make_ineligible()
+            return allowed
+
+        monkeypatch.setattr(github_dispatch_service, "_dispatch_authorized", authorized)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, launcher=launcher, issue_labels_by_number={9101: ["area:backend"]})
+    await db.refresh(item)
+    assert launcher.await_count == 0, "an owner made ineligible after the claim must not be launched"
+    assert item.launch_id is None
+    assert brief.await_count == (1 if when == "brief" else 0)
+    # A delivered brief may already have woken a harness, so that start is kept, as for the other late gates.
+    assert item.dispatch_status == ("dispatched" if when == "brief" else "pending")
+
+
+@pytest.mark.asyncio
+async def test_a_harmless_role_change_after_the_claim_still_launches(db, monkeypatch):
+    from app.models.schemas import AgentTeamSlotUpdate
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 9102)
+
+    async def change_role(*_args, **_kwargs):
+        await agent_team_service.update_slot(db, slots[1].id, AgentTeamSlotUpdate(role="builder"))
+
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", AsyncMock(side_effect=change_role))
+    launcher = AsyncMock(return_value=_Launched())
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, launcher=launcher, issue_labels_by_number={9102: ["area:backend"]})
+    await db.refresh(item)
+    assert launcher.await_count == 1 and item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role, leader, expected", [
+    (None, False, True), ("", False, True), ("builder", False, True), ("coordinators", False, True),
+    ("coordinator", False, False), ("Coordinator", False, False), ("  CoOrDiNaToR \t", False, False),
+    ("builder", True, False),
+])
+async def test_late_authority_read_refuses_an_ineligible_owner(db, role, leader, expected):
+    preset, slots, scope = await _team(db)
+    backend = slots[1]
+    backend.role = role
+    if leader:
+        preset.leader_slot_id = backend.id
+    await db.commit()
+    assert await github_dispatch_service._dispatch_authorized(
+        db, scope, require_autonomy=False, owner_slot_id=backend.id) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [None, "", " ", "builder", "coordinators", "xcoordinator", "Leader",
+                                  "coordinator", "Coordinator", "  CoOrDiNaToR  ", "\tcoordinator\n", "coordinator\r"])
+async def test_final_authority_condition_agrees_with_the_python_eligibility_rule(db, role):
+    from app.services.github_dispatch_service import _eligible_owner_condition, _ineligible_owner
+    preset, slots, scope = await _team(db)
+    slot = await _slot(db, preset, 5, "Subject", role=role)
+    in_sql = await db.scalar(
+        select(AgentTeamSlot.id).where(AgentTeamSlot.id == slot.id, _eligible_owner_condition(preset.id)))
+    assert (in_sql is not None) is (not _ineligible_owner(slot, preset.leader_slot_id))
+    # The current Leader is excluded by id in both.
+    leader_in_sql = await db.scalar(select(AgentTeamSlot.id).where(
+        AgentTeamSlot.id == preset.leader_slot_id, _eligible_owner_condition(preset.id)))
+    assert leader_in_sql is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["  CoOrDiNaToR  ", "\tcoordinator\n"])
+async def test_claim_refuses_a_padded_mixed_case_role_set_after_routing(db, role):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 9103)
+    owner, method = await github_dispatch_service.route_item(
+        db, item, slots, ["area:backend"], leader_slot_id=preset.leader_slot_id)
+    slots[1].role = role
+    await db.commit()
+    assert not await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=owner, routing_method=method, require_autonomy=False)
+    await db.refresh(item)
+    assert item.pending_reason == "no_eligible_owner" and item.owner_slot_id is None
