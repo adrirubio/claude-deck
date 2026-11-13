@@ -2918,6 +2918,8 @@ class AgentTeamLaunchPlanItem(BaseModel):
     matching_session: Optional[Dict[str, Any]] = None
     block_code: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
 
 class AgentTeamLaunchPlan(BaseModel):

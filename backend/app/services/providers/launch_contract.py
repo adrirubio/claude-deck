@@ -14,6 +14,7 @@ PROVIDER_PI_CLI = "pi-cli"
 PROVIDER_MUSE_CLI = "muse-cli"
 
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
+CLAUDE_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MUSE_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 COPILOT_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 COPILOT_CONTEXT_TIERS = ("default", "long_context")
@@ -29,6 +30,7 @@ PROVIDER_LAUNCH_MODES: dict[str, tuple[str, ...]] = {
 
 PROVIDER_REASONING_EFFORTS: dict[str, tuple[str, ...]] = {
     PROVIDER_PI_CLI: ("off", "minimal", "low", "medium", "high", "xhigh", "max"),
+    PROVIDER_CLAUDE_CODE: CLAUDE_REASONING_EFFORTS,
     PROVIDER_CODEX_CLI: CODEX_REASONING_EFFORTS,
     PROVIDER_COPILOT_CLI: COPILOT_REASONING_EFFORTS,
     PROVIDER_MUSE_CLI: MUSE_REASONING_EFFORTS,
@@ -46,6 +48,8 @@ PROVIDER_OPTION_KEYS: dict[str, tuple[str, ...]] = {
     PROVIDER_PI_CLI: ("model", "platform", "reasoning_effort", "prompt", "use_last", "session_id"),
     PROVIDER_MUSE_CLI: ("model", "reasoning_effort", "skip_permissions", "prompt", "session_id"),
     PROVIDER_CLAUDE_CODE: (
+        "model",
+        "reasoning_effort",
         "skip_permissions",
         "platform",
         "aws_region",
@@ -108,6 +112,8 @@ MODEL_EXAMPLES: dict[str, tuple[dict[str, str], ...]] = {
         {"value": "muse-spark-1.3", "label": "Muse Spark", "source": "example"},
     ),
     PROVIDER_CLAUDE_CODE: (
+        {"value": "claude-opus-5-5", "label": "Claude Opus 5.5", "source": "example"},
+        {"value": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5", "source": "example"},
         {
             "value": "arn:aws:bedrock:REGION:ACCOUNT:inference-profile/PROFILE_ID",
             "label": "Amazon Bedrock inference profile ARN",
