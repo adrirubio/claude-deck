@@ -34,10 +34,13 @@ function refusal(id: number, code: string, hoursAgo: number, overrides: Partial<
 
 describe("plain reasons for refused requests", () => {
   it("has one short sentence for each code that the controller can record", () => {
-    const source = ["../backend/app/services/github_approval_service.py", "../backend/app/api/v1/agent_teams.py"]
+    const source = ["../backend/app/services/github_approval_service.py", "../backend/app/api/v1/agent_teams.py",
+      "../backend/app/services/github_terminal_revision_service.py"]
       .map((file) => readFileSync(file, "utf8")).join("\n");
-    const codes = new Set([...source.matchAll(/GithubApprovalError\(\s*"([a-z0-9_]+)"/g)].map((match) => match[1]));
+    const codes = new Set([...source.matchAll(/GithubApprovalError\(\s*(["'])([a-z0-9_]+)\1/g)].map((match) => match[2]));
     expect(codes.size).toBeGreaterThan(30);
+    expect(codes.has("amendment_count_limit")).toBe(true); // Double-quoted service literal.
+    expect(codes.has("current_negative_review_required")).toBe(true); // Single-quoted review literal.
     const missing = [...codes].filter((code) => !REFUSAL_REASONS[code]);
     expect(missing).toEqual([]);
     for (const [code, sentence] of Object.entries(REFUSAL_REASONS)) {

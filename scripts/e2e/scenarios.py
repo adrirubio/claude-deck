@@ -353,6 +353,7 @@ def seed_lane_g(s: Seeder, root: Path, sample: Path) -> None:
     # #535: a legacy active revision on merged item #104. Reconcile it before startup.
     s.insert(
         "github_attempt_scope_revisions", id=1, work_item_id=ITEM_MERGED,
+        origin_kind="continuation", amendment_base_paths=[], amendment_added_paths=[], previous_scope_revision=0,
         dispatch_nonce=f"seed{ITEM_MERGED:012d}", revision=1, owner_slot_id=2, owner_member_id=2,
         phase="implementation", execution_target="workspace",
         summary="Synthetic recovery revision for #104.",
