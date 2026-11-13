@@ -214,7 +214,7 @@ async def _read_review_head(scope, context, head_sha):
     if (pull.get('number') != context['pr_number'] or pull.get('state') != 'open' or pull.get('merged_at')
             or head.get('sha') != head_sha or head.get('ref') != context['dispatch_head_ref']
             or (head.get('repo') or {}).get('full_name') != f"{scope.repo_owner}/{scope.repo_name}"
-            or (context['dispatch_base_ref'] and base.get('ref') != context['dispatch_base_ref'])):
+            or not approval.base_ref_matches(base.get('ref'), context['dispatch_base_ref'])):
         raise GithubApprovalError('revision_review_head_changed')
 
 
