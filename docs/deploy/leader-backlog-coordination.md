@@ -75,6 +75,15 @@ several repositories. Keep release publication under the configured review gate.
 
 ## Leader protocol
 
+Plan approval uses an activity-aware, bounded wait. A healthy Leader can finish
+a long turn before reading a pending plan; it need not keep turns short to avoid
+the initial five-minute reminder. That reminder and the Supervisor's system
+notice preserve the pending request and builder lease. Authenticated bound
+activity may extend the wait to the fixed maximum, but never approves work.
+The Leader must still record an explicit decision for the current request.
+See [Leader plan-approval wait](../autonomy.md#leader-plan-approval-wait) for
+global defaults, validated per-team overrides, inactive grace and the hard cap.
+
 The scheduler observes the assigned issues by number, independently of the
 dispatch label. It sends bounded Agent Mail requests on meaningful issue,
 work-state, resource, routing and policy changes, after resume/restart, and on a

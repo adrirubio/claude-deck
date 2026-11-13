@@ -18,6 +18,41 @@ from app.database import (
 
 
 @pytest.mark.asyncio
+async def test_leader_ack_wait_columns_are_additive_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            expected = {
+                "agent_team_presets": ("leader_ack_timeout_seconds", "leader_ack_max_wait_seconds"),
+                "github_approval_requests": ("leader_ack_reminded_at", "leader_activity_extended_at"),
+            }
+            for table, names in expected.items():
+                columns = await _sqlite_columns(conn, table)
+                for name in names:
+                    if name in columns:
+                        await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
+            await conn.execute(text("INSERT INTO agent_team_presets "
+                "(name, description, created_at, updated_at, autonomy_enabled) "
+                "VALUES ('Existing wait team', 'Keep this row.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"))
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            for table, names in expected.items():
+                assert set(names) <= await _sqlite_columns(conn, table)
+            row = (await conn.execute(text("SELECT description, leader_ack_timeout_seconds, "
+                "leader_ack_max_wait_seconds FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Keep this row.", None, None)
+            await conn.execute(text("UPDATE agent_team_presets SET leader_ack_timeout_seconds=600, "
+                "leader_ack_max_wait_seconds=3600"))
+            await _run_sqlite_compat_migrations(conn)
+            assert (await conn.execute(text("SELECT leader_ack_timeout_seconds, "
+                "leader_ack_max_wait_seconds FROM agent_team_presets"))).one() == (600, 3600)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", [
     ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
      "supervisor_grace_seconds", "supervisor_observed_status"),

@@ -2377,7 +2377,8 @@ async def update_preset(
             autonomy_enabled=request.autonomy_enabled,
             **({"parent_issue_url": request.parent_issue_url}
                if "parent_issue_url" in request.model_fields_set else {}),
-            **{field: getattr(request, field) for field in ("backlog_milestone", "planned_decisions")
+            **{field: getattr(request, field) for field in ("backlog_milestone", "planned_decisions",
+                    "leader_ack_timeout_seconds", "leader_ack_max_wait_seconds")
                if field in request.model_fields_set},
         )
     except ValueError as exc:

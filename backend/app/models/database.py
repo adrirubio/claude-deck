@@ -158,6 +158,8 @@ class AgentTeamPreset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     leader_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leader_ack_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leader_ack_max_wait_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
     backlog_milestone: Mapped[str | None] = mapped_column(String, nullable=True)
     planned_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
@@ -823,6 +825,8 @@ class GithubApprovalRequest(Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    leader_ack_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    leader_activity_extended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         Index(
