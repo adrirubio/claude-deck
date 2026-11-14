@@ -447,3 +447,83 @@ async def _review_audit(db, item, revision, fact, outcome, actor, member_id, rea
                          + (f': {reason}' if reason else ''),
         after_values={'review_id': fact.id, 'head_sha': fact.head_sha, 'verdict': fact.verdict,
                       'reviewer_member_id': fact.reviewer_member_id, 'outcome': outcome})
+
+
+def _finalize_evidence(item, pull):
+    """The merge evidence of a freshly read PR, or the plain reason it cannot be finalized."""
+    from app.services.github_verification_service import github_verification_service as verification
+    if verification._classify_pull(pull) != "merged" or pull.get("merged") is not True:
+        raise ValueError("finalize_merged_not_merged")
+    head = verification._head_sha(pull)
+    if not isinstance(head, str) or not head or verification._pull_number(pull) != item.pr_number:
+        raise ValueError("finalize_merged_context_changed")
+    return {"pr_number": item.pr_number, "merged_head_sha": head, "merge_commit_sha": pull.get("merge_commit_sha"),
+            "merged_at": pull.get("merged_at")}
+
+
+async def _finalize_context(db, item, scope, pull):
+    if item.dispatch_status in TERMINAL_ITEMS:
+        raise ValueError("finalize_merged_item_terminal")
+    if item.pr_number is None:
+        raise ValueError("finalize_merged_pr_required")
+    evidence = _finalize_evidence(item, pull)
+    revision = await db.scalar(select(GithubAttemptScopeRevision).where(
+        GithubAttemptScopeRevision.work_item_id == item.id,
+        GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+        GithubAttemptScopeRevision.revision == item.active_scope_revision,
+        GithubAttemptScopeRevision.status.not_in(TERMINAL_REVISIONS),
+    ).execution_options(populate_existing=True))
+    digest = _digest([_values(item), _values(revision) if revision is not None else None, _values(scope), evidence])
+    return evidence, revision, digest
+
+
+async def finalize_merged_preview(db, item, scope, read_pull):
+    """Read-only: the fresh merge evidence and the digest an operator binds a finalize to. No lease or nonce."""
+    evidence, revision, digest = await _finalize_context(db, item, scope, await read_pull())
+    return {"work_item_id": item.id, "issue_number": item.issue_number, "dispatch_status": item.dispatch_status,
+            "revision_status": revision.status if revision is not None else None, **evidence,
+            "context_sha256": digest, "updated_at": format_utc_time(datetime.utcnow()),
+            "limits": "Read-only evidence. A finalize records the merge and performs no merge, retry, lease or approval."}
+
+
+async def finalize_merged_item(db, item, scope, read_pull, *, expected_context_sha256, operation_id, reason):
+    """Record a merge that the poll cannot settle, from fresh merged-PR evidence and one operator decision.
+
+    The PR is read again right before the write and must match the evidence the digest was bound to. It performs
+    no merge, grants no authority and releases no workspace: the owner releases it normally afterwards.
+    """
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("finalize_merged_reason_required")
+    from app.models.database import GithubMaintenanceEvent
+    from app.services.github_verification_service import github_verification_service as verification
+    item_id = item.id
+    operation = f"finalize_merged:{operation_id}"
+    request_digest = _digest([item_id, expected_context_sha256, reason])
+    old = await db.scalar(select(GithubMaintenanceEvent).where(GithubMaintenanceEvent.operation_id == operation))
+    if old is not None:
+        if old.work_item_id != item_id or old.request_sha256 != request_digest:
+            raise ValueError("finalize_merged_replay_conflict")
+        return {"status": "already_finalized", "work_item_id": item_id}
+    _evidence, _revision, digest = await _finalize_context(db, item, scope, await read_pull())
+    if digest != expected_context_sha256:
+        raise ValueError("finalize_merged_context_changed")
+    pull = await read_pull()  # fresh again, right before the write
+    # The terminal writer next: it claims the loaded item, and nothing else can commit until this transaction ends.
+    # Then the whole context the digest was bound to is read again under it. A refusal writes nothing.
+    try:
+        await lock_terminal_transition(db, item)
+        await db.refresh(item)
+        await db.refresh(scope)
+        _evidence_now, _revision_now, digest_now = await _finalize_context(db, item, scope, pull)
+        if digest_now != expected_context_sha256:  # the digest covers the item, revision, scope and merge evidence
+            raise ValueError("finalize_merged_context_changed")
+    except (TerminalRevisionContextChanged, ValueError) as exc:
+        await db.rollback()
+        raise ValueError(str(exc) if str(exc).startswith("finalize_merged_") else "finalize_merged_context_changed") from None
+    db.add(GithubMaintenanceEvent(operation_id=operation, work_item_id=item_id,
+                                  outcome="merged_item_finalized", request_sha256=request_digest))
+    await verification._mark_merged_with_fact(db, item, pull, source="factory_maintenance.finalize_merged_item")
+    item.status_note = "Finalized as merged by an operator: " + audit.sanitize_reason(reason)
+    await db.commit()
+    return {"status": "finalized", "work_item_id": item_id, **_evidence_now}

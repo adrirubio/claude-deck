@@ -19,6 +19,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
+    GithubHeadReview,
     GithubOwnerObservationPause,
     GithubWorkItem,
     GithubWorkspace,
@@ -89,6 +90,15 @@ class ContinuationCompletionError(ValueError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+# What a merged-PR settlement must find unchanged under the terminal writer: the attempt, the scope's target and
+# access, and (compared whole) the exact submitted revision.
+_SETTLEMENT_ITEM_IDENTITY = (
+    "id", "scope_id", "dispatch_status", "dispatch_nonce", "launch_id", "owner_slot_id", "active_scope_revision",
+    "attempt_phase", "pr_number", "dispatch_head_ref", "dispatch_base_ref", "handoff_state",
+)
+_SETTLEMENT_SCOPE_IDENTITY = ("id", "preset_id", "repo_owner", "repo_name", "github_auth_mode", "enabled")
 
 
 class GithubVerificationService:
@@ -1024,7 +1034,9 @@ class GithubVerificationService:
                         GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
                         GithubAttemptScopeRevision.origin_kind == "scope_amendment")))):
                 # A proposed, rejected or approved-but-unacknowledged amendment
-                # stops the whole round. It cannot advance old source through CI.
+                # stops the whole round. It cannot advance old source through CI,
+                # but a merged PR is an external fact that the stopped round must not hide.
+                await self._settle_merged_while_round_stopped(db, scope, item, client)
                 continue
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
@@ -1323,6 +1335,119 @@ class GithubVerificationService:
         await db.commit()
         if notify:
             await self._notify_blocker_merged(db, scope, item)
+
+    async def _settle_merged_while_round_stopped(
+        self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient
+    ) -> None:
+        """Record a merge that happened while an unacknowledged amendment stopped the round.
+
+        Only a merged PR changes anything here; an open or closed pull leaves the stopped round as it is.
+        A failure for this item is logged and isolated, and never stops the other items.
+        """
+        item_id = item.id
+        try:
+            if item.dispatch_status not in ("dispatched", "verifying") or item.active_scope_revision <= 0:
+                return
+            revision = await self._active_scope_revision(db, item)
+            if revision is None or revision.status != "submitted" or revision.phase != "implementation":
+                return
+            pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+            if self._classify_pull(pull) != "merged" or pull.get("merged") is not True:
+                return
+            expected_base = await self.normalize_base_ref(
+                scope, client, token=None, base_ref=item.dispatch_base_ref)
+            self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
+            await self._settle_merged_submitted(
+                db, scope, item, client, revision, pull,
+                source="github_verification_service._settle_merged_while_round_stopped")
+        except TerminalRevisionContextChanged:
+            await db.rollback()
+            await db.refresh(scope)
+            logger.info("Terminal attempt changed; no merge transition recorded")
+        except Exception:
+            logger.warning("Merged-PR check failed for work item %s; the item stays as it is", item_id,
+                           exc_info=True)
+            await db.rollback()
+            await db.refresh(scope)
+
+    async def _settle_merged_submitted(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        revision: GithubAttemptScopeRevision,
+        pull: dict,
+        *,
+        source: str,
+    ) -> None:
+        """A PR merged while a revision is submitted: settle it only at a head someone submitted or accepted.
+
+        The merged head must equal the submitted revision's head or the head of an active accepted review.
+        Then the revision completes and the item is merged. Any other merged head escalates with a note naming
+        both heads and records no merge. Everything the decision rests on is captured before the awaited reads.
+        The PR is read again and must pass the full identity check; then the terminal writer is taken and the
+        captured item, scope and exact revision must still be what they were, so BOTH outcomes are fenced and a
+        lost fence changes nothing. The verified final response is the one that is recorded.
+        """
+        head = self._head_sha(pull)
+        if not isinstance(head, str) or not head:
+            raise ValueError("merged PR head SHA is unavailable")
+        if self._pull_number(pull) != item.pr_number:
+            raise ValueError("merged PR number does not match the tracked PR")
+        item_before = {name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY}
+        scope_before = {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY}
+        revision_before = {column.name: getattr(revision, column.name) for column in revision.__table__.columns}
+        item_id, pr_number, nonce, base_ref = item.id, item.pr_number, item.dispatch_nonce, item.dispatch_base_ref
+        current = await client.get_pull(scope.repo_owner, scope.repo_name, int(pr_number))
+        if (self._classify_pull(current) != "merged" or self._pull_number(current) != pr_number
+                or self._head_sha(current) != head):
+            return  # the next poll reads the new state
+        try:
+            expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=base_ref)
+            self._verify_pull_identity(current, scope, item, expected_base=expected_base)
+        except ValueError as exc:
+            logger.warning("Merged PR #%s for work item %s failed the identity check on its final read (%s); "
+                           "nothing was settled", pr_number, item_id, exc)
+            return
+        # The terminal writer first: it claims the loaded item identity, and nothing else can commit until this
+        # transaction ends. Then the context the decision was made on must be unchanged.
+        await lock_terminal_transition(db, item)
+        await db.refresh(item)
+        await db.refresh(scope)
+        await db.refresh(revision)
+        if ({name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY} != item_before
+                or {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY} != scope_before
+                or {column.name: getattr(revision, column.name) for column in revision.__table__.columns} != revision_before
+                or revision.status != "submitted"):
+            raise TerminalRevisionContextChanged("terminal_revision_context_changed")
+        authorized = head == revision.submitted_head_sha or bool(await db.scalar(select(exists().where(
+            GithubHeadReview.work_item_id == item_id, GithubHeadReview.dispatch_nonce == nonce,
+            GithubHeadReview.pr_number == pr_number, GithubHeadReview.head_sha == head,
+            GithubHeadReview.verdict == "accepted", GithubHeadReview.status == "active"))))
+        outcome = "completed" if authorized else "superseded"
+        values = {"status": outcome, "completed_at": datetime.utcnow()} if authorized else {"status": outcome}
+        claim = await db.execute(update(GithubAttemptScopeRevision).where(
+            GithubAttemptScopeRevision.id == revision.id,
+            GithubAttemptScopeRevision.work_item_id == item_id,
+            GithubAttemptScopeRevision.dispatch_nonce == nonce,
+            GithubAttemptScopeRevision.revision == item.active_scope_revision,
+            GithubAttemptScopeRevision.status == "submitted",
+        ).values(**values).execution_options(synchronize_session=False))
+        if claim.rowcount != 1:
+            raise TerminalRevisionContextChanged("terminal_revision_context_changed")
+        await db.refresh(revision)
+        await self._record_revision_outcome(db, item, revision, outcome, source=source)
+        if not authorized:
+            await github_dispatch_service.escalate_without_notification(
+                db, item, "continuation_invalid_state",
+                f"PR #{pr_number} merged at head {head}, which is not the submitted revision head "
+                f"{revision_before['submitted_head_sha']} or an accepted head; no merge was recorded. An operator "
+                "must review and finalize this item.")
+            return
+        await self._mark_merged_with_fact(db, item, current, source=source)
+        await db.commit()
+        await self._notify_blocker_merged(db, scope, item)
 
     async def _active_scope_revision(
         self,
@@ -1831,6 +1956,11 @@ class GithubVerificationService:
             )
             return
         if verdict == "merged":
+            if revision is not None and revision.status == "submitted" and revision.phase == "implementation":
+                await self._settle_merged_submitted(
+                    db, scope, item, client, revision, pull,
+                    source="github_verification_service._verify_item")
+                return
             if revision is not None:
                 revision.status = "completed"
                 revision.completed_at = datetime.utcnow()
