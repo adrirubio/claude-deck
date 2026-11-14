@@ -25,21 +25,24 @@ def is_sqlite_busy(exc) -> bool:
     return "database is locked" in str(exc.orig).lower()
 
 
-async def retry_when_busy(db, step, *, route, attempts=3, delay=0.05, reload=()):
+async def retry_when_busy(db, step, *, route, attempts=3, delay=0.05, prepare=None):
     """Run ``step`` again while SQLite reports busy or locked, then raise SqliteBusyExhausted.
 
-    Only for a step that is safe to repeat. Before each retry the failed transaction is rolled back and the
-    rows in ``reload`` are read again (a rollback expires them). A failure that is not a lock is never retried.
+    Only for a step that is safe to repeat. A failed attempt is rolled back and waited out. Then ``prepare`` runs
+    before EVERY retry (never before the first attempt), after the wait and immediately before the step: it must
+    read the context again and refuse (by raising) if the step should no longer run, because anything may have
+    changed while the attempt waited. A refusal raised there is not retried. A failure that is not a lock is
+    never retried.
     """
     for attempt in range(1, attempts + 1):
         try:
+            if attempt > 1 and prepare is not None:
+                await prepare()
             return await step()
         except OperationalError as exc:
             if not is_sqlite_busy(exc):
                 raise
             await db.rollback()
-            for row in reload:
-                await db.refresh(row)
             logger.warning("sqlite_busy route=%s attempt=%s/%s", route, attempt, attempts)
             if attempt == attempts:
                 raise SqliteBusyExhausted(route) from exc

@@ -1551,6 +1551,18 @@ async def request_github_work_item_continuation(
                 revision,
             ):
                 raise GithubApprovalError("continuation_request_expired")
+            async def renew_context_before_a_retry():
+                # Anything may change while an attempt waits out a lock: read the rows again and repeat the same
+                # expiry and pending checks as above, so the notice's own attempt, participant and status
+                # checks run against current rows. A refusal here stops the retry before any notice.
+                await db.refresh(item)
+                await db.refresh(approval)
+                await db.refresh(revision)
+                if await github_approval_service.expire_continuation_if_needed(db, approval, revision):
+                    raise GithubApprovalError("continuation_request_expired")
+                if approval.status != "pending":
+                    raise GithubApprovalError("request_not_pending")
+
             # The notice is an "ensure": it sends with a fixed delivery key and links with a guarded update, so
             # repeating it after a lock changes nothing twice. The nudge below is not repeated.
             _root, linked = await retry_when_busy(
@@ -1562,7 +1574,7 @@ async def request_github_work_item_continuation(
                     revision,
                 ),
                 route=_CONTINUATION_REQUEST_ROUTE,
-                reload=(item, approval, revision),
+                prepare=renew_context_before_a_retry,
             )
             if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")

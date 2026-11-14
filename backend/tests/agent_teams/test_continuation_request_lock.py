@@ -4,20 +4,25 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
 import pytest_asyncio
 from fastapi import Depends, FastAPI
-from sqlalchemy import event, func, select, text
+from sqlalchemy import event, func, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.database import Base, configure_sqlite_connection, get_db
 from app.main import app
-from app.models.database import FactoryAuditEvent, GithubApprovalRequest, GithubAttemptScopeRevision, MailMessage
+from app.models.database import (
+    FactoryAuditEvent, GithubApprovalRequest, GithubAttemptScopeRevision, GithubWorkItem, MailMessage,
+)
 from app.services.github_approval_service import github_approval_service
+from app.services import sqlite_busy_retry
 from app.services.sqlite_busy_retry import SqliteBusyExhausted, is_sqlite_busy, retry_when_busy
 from tests.agent_mail.test_api import (  # noqa: F401  (the route's fixtures and helpers, and its autouse session binding)
     _continuation_approval_fixture, _continuation_request_body, _stub_continuation_github, live_slot_session_bindings,
@@ -207,6 +212,77 @@ async def test_a_busy_nudge_after_the_notice_is_saved_is_logged_and_not_retried(
     assert saved.request_message_id is not None
 
 
+# --- the context can change while the step waits: nothing stale is ever noticed ------------------------------------
+
+async def _change_context(maker, item_id, change):
+    async with maker() as other:
+        if change == "nonce":
+            await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id)
+                                .values(dispatch_nonce="replacement-attempt"))
+        elif change == "expired":
+            await other.execute(update(GithubAttemptScopeRevision)
+                                .values(expires_at=datetime.utcnow() - timedelta(seconds=1)))
+        elif change == "decided":  # a status the notice step itself would still accept
+            await other.execute(update(GithubApprovalRequest).values(status="approved"))
+        else:  # superseded and cancelled
+            await other.execute(update(GithubApprovalRequest).values(status="superseded"))
+            await other.execute(update(GithubAttemptScopeRevision).values(status="cancelled"))
+        await other.commit()
+
+
+async def _assert_refused_without_a_notice(client, db, maker, monkeypatch, item, token, nudges, status):
+    response = await _post(client, item, token)
+    assert response.status_code == status, response.text
+    async with maker() as fresh:
+        approval = (await fresh.execute(select(GithubApprovalRequest))).scalars().one()
+        assert await _count(fresh, MailMessage, MailMessage.delivery_key == f"github-approval:{approval.id}:request") == 0
+    assert nudges == []  # and nobody was told about it
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["nonce", "expired", "cancelled", "decided"])
+async def test_a_context_change_during_the_retry_wait_is_refused_before_any_notice(client, db, maker, monkeypatch, change):
+    item, token = await _setup(db, monkeypatch)
+    item_id = item.id  # a plain int: the helper's rollback expires the ORM row
+    monkeypatch.setattr(github_approval_service, "ensure_continuation_request_message", HoldTheWriter(maker, times=1))
+    nudges = []
+
+    async def record_nudge(*args, **kwargs):
+        nudges.append(1)
+
+    monkeypatch.setattr(github_approval_service, "nudge_pending_continuation_leader", record_nudge)
+
+    async def wait_while_the_context_changes(delay):
+        await _change_context(maker, item_id, change)
+
+    monkeypatch.setattr(sqlite_busy_retry, "asyncio", SimpleNamespace(sleep=wait_while_the_context_changes))
+    await _assert_refused_without_a_notice(client, db, maker, monkeypatch, item, token, nudges, status=409)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["nonce", "expired"])
+async def test_a_context_change_while_the_lock_is_held_is_refused_before_any_notice(client, db, maker, monkeypatch, change):
+    item, token = await _setup(db, monkeypatch)
+    item_id = item.id
+    hold = HoldTheWriter(maker, times=1)
+
+    async def change_after_the_failed_attempt(db_, item_, approval, revision):
+        try:
+            return await hold(db_, item_, approval, revision)
+        except OperationalError:
+            await _change_context(maker, item_id, change)  # committed before the helper prepares
+            raise
+
+    monkeypatch.setattr(github_approval_service, "ensure_continuation_request_message", change_after_the_failed_attempt)
+    nudges = []
+
+    async def record_nudge(*args, **kwargs):
+        nudges.append(1)
+
+    monkeypatch.setattr(github_approval_service, "nudge_pending_continuation_leader", record_nudge)
+    await _assert_refused_without_a_notice(client, db, maker, monkeypatch, item, token, nudges, status=409)
+
+
 # --- the helper --------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("code", [5, 6, 261, 517, 262])  # BUSY, LOCKED, BUSY_RECOVERY, BUSY_SNAPSHOT, LOCKED_SHAREDCACHE
@@ -222,41 +298,72 @@ def test_other_errors_are_not_busy():
 
 
 class _Session:
-    def __init__(self):
-        self.rollbacks, self.refreshed = 0, []
+    def __init__(self, events):
+        self.events = events
 
     async def rollback(self):
-        self.rollbacks += 1
+        self.events.append("rollback")
 
-    async def refresh(self, row):
-        self.refreshed.append(row)
+
+def _record_sleeps(monkeypatch, events):
+    async def sleep(delay):
+        events.append("wait")
+
+    monkeypatch.setattr(sqlite_busy_retry, "asyncio", SimpleNamespace(sleep=sleep))
 
 
 @pytest.mark.asyncio
-async def test_the_helper_retries_a_busy_step_rolls_back_and_reloads_each_time():
-    session, outcomes = _Session(), [_busy(), _busy(), "done"]
+async def test_the_helper_prepares_after_the_wait_and_before_every_retry_not_before_the_first_attempt(monkeypatch):
+    events, outcomes = [], [_busy(), _busy(), "done"]
+    _record_sleeps(monkeypatch, events)
 
     async def step():
+        events.append("step")
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    assert await retry_when_busy(session, step, route="/r", delay=0, reload=("item", "request")) == "done"
-    assert session.rollbacks == 2 and session.refreshed == ["item", "request"] * 2
+    async def prepare():
+        events.append("prepare")
+
+    assert await retry_when_busy(_Session(events), step, route="/r", prepare=prepare) == "done"
+    assert events == ["step", "rollback", "wait", "prepare", "step", "rollback", "wait", "prepare", "step"]
 
 
 @pytest.mark.asyncio
-async def test_the_helper_gives_up_after_its_attempts_and_leaves_the_session_usable():
-    session, calls = _Session(), []
+async def test_the_helper_gives_up_after_its_attempts_and_prepares_only_for_the_retries(monkeypatch):
+    events = []
+    _record_sleeps(monkeypatch, events)
 
     async def always_busy():
+        events.append("step")
+        raise _busy()
+
+    async def prepare():
+        events.append("prepare")
+
+    with pytest.raises(SqliteBusyExhausted):
+        await retry_when_busy(_Session(events), always_busy, route="/r", attempts=3, prepare=prepare)
+    assert events.count("step") == 3 and events.count("prepare") == 2 and events.count("rollback") == 3
+    assert events[-1] == "rollback"  # no wait and no further preparation after the last attempt
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_raised_while_preparing_is_not_retried_and_the_step_never_runs(monkeypatch):
+    events, calls = [], []
+    _record_sleeps(monkeypatch, events)
+
+    async def step():
         calls.append(1)
         raise _busy()
 
-    with pytest.raises(SqliteBusyExhausted):
-        await retry_when_busy(session, always_busy, route="/r", attempts=3, delay=0, reload=("row",))
-    assert len(calls) == 3 and session.rollbacks == 3 and session.refreshed == ["row"] * 3
+    async def prepare():
+        raise ValueError("the request is no longer pending")
+
+    with pytest.raises(ValueError):
+        await retry_when_busy(_Session(events), step, route="/r", prepare=prepare)
+    assert calls == [1]  # only the first attempt ran; the retry was refused before its step
 
 
 def _not_busy_database_error():
@@ -268,15 +375,15 @@ def _not_busy_database_error():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [RuntimeError("not a lock"), _not_busy_database_error()])
 async def test_the_helper_does_not_retry_an_error_that_is_not_busy(error):
-    session, calls = _Session(), []
+    events, calls = [], []
 
     async def failing():
         calls.append(1)
         raise error
 
     with pytest.raises(type(error)):
-        await retry_when_busy(session, failing, route="/r", delay=0)
-    assert calls == [1] and session.rollbacks == 0
+        await retry_when_busy(_Session(events), failing, route="/r", delay=0)
+    assert calls == [1] and events == []
 
 
 # --- the pragma: a second writer waits instead of failing ----------------------------------------------------------
