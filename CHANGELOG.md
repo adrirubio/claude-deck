@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - Unreleased
+
+This entry lists what is merged into `release/v4.1` for Albiex Synth City 4.1.0. The release date and the published release notes are set when 4.1.0 is published.
+
+### Added
+
+- **OpenCode 2 members.** Albiex Synth City accepts OpenCode 2 or later only and refuses OpenCode 1 ([#730](https://github.com/albiexai/synth-city/issues/730), [PR #876](https://github.com/albiexai/synth-city/pull/876)). The OpenCode launch contract is reworked for OpenCode 2 ([#731](https://github.com/albiexai/synth-city/issues/731), [PR #879](https://github.com/albiexai/synth-city/pull/879)). The Install tab and the Harnesses page set up Agent Mail for OpenCode 2, and the install denies OpenCode's question tool ([#732](https://github.com/albiexai/synth-city/issues/732), [PR #884](https://github.com/albiexai/synth-city/pull/884)). See [Harnesses](https://albiex.org/docs/features/harnesses).
+- **Claude Code model and reasoning effort per team member**, on every platform and not only on Amazon Bedrock ([#869](https://github.com/albiexai/synth-city/issues/869), [PR #889](https://github.com/albiexai/synth-city/pull/889)). See [Agent Teams](https://albiex.org/docs/features/agent-teams).
+- **Dispatch priority labels** `priority:1` to `priority:9999` order ready issues, with the oldest issue first as the fallback ([#795](https://github.com/albiexai/synth-city/issues/795), [PR #888](https://github.com/albiexai/synth-city/pull/888)).
+- **Required-check watch.** The assigned reviewer and the Leader are woken when a PR's required checks finish, and a team that has stopped moving is flagged ([#839](https://github.com/albiexai/synth-city/issues/839), [PR #878](https://github.com/albiexai/synth-city/pull/878)).
+- **Healthy scope amendments and submitted-revision settlement.** An owner can amend an approved plan, and a submitted revision can be ended cleanly after review requires changes ([#859](https://github.com/albiexai/synth-city/issues/859), [PR #882](https://github.com/albiexai/synth-city/pull/882)). Approved plans carry companion paths: the tests, fixtures, docs and generated contracts that travel with the files they name ([#901](https://github.com/albiexai/synth-city/issues/901), [PR #907](https://github.com/albiexai/synth-city/pull/907)).
+- **Auto-merge only after reviewer acceptance.** With the automatic merge policy a code PR merges only when the team's reviewer accepted its exact current head ([#904](https://github.com/albiexai/synth-city/issues/904), [PR #915](https://github.com/albiexai/synth-city/pull/915)). The review hold label still blocks automatic merge. See [Autonomous GitHub dispatch](https://albiex.org/docs/autonomy).
+- **Isolated runtime kit** for provider live checks ([#902](https://github.com/albiexai/synth-city/issues/902), [PR #905](https://github.com/albiexai/synth-city/pull/905)). See the [isolated runtime kit guide](https://albiex.org/docs/guide/isolated-runtime-kit).
+
+### Changed
+
+- **Leader plan-approval wait.** A busy Leader's pending plan approval stays active for a bounded, activity-aware wait instead of escalating at once ([#843](https://github.com/albiexai/synth-city/issues/843), [PR #874](https://github.com/albiexai/synth-city/pull/874)).
+- **Scope amendment rules.** Only approved amendments count toward the limit of three ([#906](https://github.com/albiexai/synth-city/issues/906), [PR #911](https://github.com/albiexai/synth-city/pull/911)). The approved plan's file list is read from `allowed_paths` or `paths` ([#908](https://github.com/albiexai/synth-city/issues/908), [PR #910](https://github.com/albiexai/synth-city/pull/910)). A healthy scope amendment is no longer refused for items with acknowledged plans or `origin/` base refs ([#890](https://github.com/albiexai/synth-city/issues/890), [PR #892](https://github.com/albiexai/synth-city/pull/892)). An active continuation on an escalated item can be settled or amended ([#887](https://github.com/albiexai/synth-city/issues/887), [PR #897](https://github.com/albiexai/synth-city/pull/897)).
+
+### Fixed
+
+- **Cross-user terminal lanes.** When agents run as another user and the attach fails, the lane shows one fixed message, and the message names the `!use_pty` rule when `sudo` cannot allocate its own pty ([#749](https://github.com/albiexai/synth-city/issues/749), [PR #877](https://github.com/albiexai/synth-city/pull/877)).
+
+### Setup
+
+- If the controller and the agents run as different operating-system users, the operator adds a command-scoped `!use_pty` rule to `sudoers` for the agent `tmux` command. Albiex Synth City does not change `sudoers`. See [Live sessions](https://albiex.org/docs/features/agent-bridge) and [Installation](https://albiex.org/docs/guide/installation).
+
+### Evidence limits
+
+- Several of these changes were checked with unit, component, mocked-render and hosted CI evidence. This entry makes no claim about a live check with a real OpenCode member or about OpenCode working and idle states; the Harnesses page lists those as not yet available.
+
 ## [4.0.0]
 
 # Albiex Synth City v4.0.0 — formerly Claude Deck

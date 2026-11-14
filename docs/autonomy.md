@@ -1,6 +1,6 @@
 # Autonomous GitHub dispatch
 
-This guide is for the operator of a Albiex Synth City team. Autonomy is off until you enable it for the team, and a watched repo can also be paused separately.
+This guide is for the operator of an Albiex Synth City team. Autonomy is off until you enable it for the team, and a watched repo can also be paused separately.
 
 ## Before enabling
 
@@ -8,7 +8,7 @@ This guide is for the operator of a Albiex Synth City team. Autonomy is off unti
 2. Assign the Leader explicitly and launch it. Guided repository setup names the Leader slot for a new team. For an existing team, use **Set Leader** on an enabled slot in Roster while team automation is off; the server also requires a quiescent team. The team's `leader_slot_id` supplies Leader authority. Slot order and the Role field do not select it. The Leader approves plans and takes issues that no other slot matches.
 3. Add a watched repo. Give its GitHub owner/name and an existing primary clone under your home directory. Synth City creates a separate issue worktree beside that clone; ordinary slot sessions keep using their own repo path.
 4. Create the dispatch and optional design/area labels on GitHub. Adding the dispatch label queues an issue; an area label routes it to a matching owner. Without one, Synth City uses slot expertise and finally the Leader. A design label on the same issue uses the human-review design pipeline. Removing the dispatch label during an attempt escalates it.
-5. Choose merge policy and finite budgets. Human policy leaves PRs for review. Auto policy merges eligible code PRs after checks pass, subject to the daily cap; design PRs always need human review. Enable autonomy when the roster and watched repos are ready.
+5. Choose merge policy and finite budgets. Human policy leaves PRs for review. Auto policy merges eligible code PRs after checks pass, subject to the daily cap; design PRs always need human review. With Auto policy a code PR also needs the team's reviewer to have accepted its exact current head (a push after the acceptance waits for a new one), and a scope can name a review hold label: while the PR or its issue carries that label, automatic merge is blocked. See [Agent Mail](/features/agent-mail#amend-an-approved-scope-and-end-a-submitted-revision) and the [API workflow](/api/agent-mail) for the exact rules. Enable autonomy when the roster and watched repos are ready.
 
 Synth City polls GitHub every 60 seconds by default. The Activity table refreshes every five seconds while open; it does not trigger another GitHub poll. Issues move through queued, dispatched, verifying, and ready for human review or merged. An escalated issue has stopped and needs attention.
 
@@ -123,6 +123,8 @@ Previous review acceptance and CI readiness apply to the previous head. Preserve
 the configured merge policy; human policy still requires human merge. The owner
 context returned by `synth_city_get_work_item_context` includes `review_rework_guidance`;
 that text explains the workflow and does not grant approval.
+
+When the approved plan no longer fits the work, the owner can request a healthy scope amendment instead of escalating: the Leader reviews the new paths, actions and commands, and the owner acknowledges the approval before editing. An approved plan also carries the companion files that normally travel with the files it names (tests, fixtures, docs and generated contracts). Each attempt has fixed limits on approved amendments, amendment requests and added paths. When review requires changes to a submitted revision, the reviewer records a structured disposition for the exact head and the Leader ends that revision, so the owner stays on the same branch and lease. See [Amend an approved scope](/features/agent-mail#amend-an-approved-scope-and-end-a-submitted-revision), the [API workflow](/api/agent-mail#healthy-scope-amendments-and-submitted-review-settlement) and [Companion paths](/guide/supervised-factory-playbook#companion-paths).
 
 This rule applies to nonterminal, non-escalated initial implementation attempts
 with `active_scope_revision=0`. Scoped and diagnostic continuations retain their
