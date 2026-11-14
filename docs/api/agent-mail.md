@@ -281,5 +281,4 @@ With `merge_policy` set to `auto`, a code item merges automatically only when th
 the pull request's current head is `accepted` and its reviewer still qualifies when the gate runs. This
 check does not depend on a required-check watch. The review hold label still blocks first, and the
 gate runs again at the merge boundary. The work view shows the state through the item's status note:
-`Waiting for reviewer acceptance at <sha>`, `Head changed since acceptance (accepted at <sha>, head is
-<sha>)`, `Reviewer requires changes at <sha>` or `Reviewer accepted head <sha>`.
+`Waiting for reviewer acceptance at <sha>`, `Head changed since acceptance (accepted at <sha>, head is <sha>)`, `Reviewer requires changes at <sha>` or `Reviewer accepted head <sha>`.
