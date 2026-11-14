@@ -1451,7 +1451,8 @@ class GithubVerificationService:
                 await self._escalate_settled_closed(db, scope, item, client, revision)
         except TerminalRevisionContextChanged:
             raise  # the caller rolls back and records that the attempt changed
-        except httpx.HTTPError:
+        except (httpx.HTTPError, GithubClientResponseError):
+            # An unreadable or uninterpretable GitHub response is a failed read: nothing changes, nothing is logged.
             await db.rollback()
             await db.refresh(scope)
         except ValueError as exc:
@@ -1459,10 +1460,30 @@ class GithubVerificationService:
             await db.refresh(scope)
             self._log_inconsistent_once(None, f"a PR response failed the identity check ({exc})", snapshot=snapshot)
 
+    @staticmethod
+    def _require_pull_shape(pull: object) -> None:
+        """Translate a malformed PR response into the identity ValueError before anything reads into it.
+
+        The fields the identity check reads must have the shape GitHub documents: the response, its base and
+        head, and their repo objects are objects, and the author is an object. Anything else is a malformed
+        response, not a programming error.
+        """
+        if not isinstance(pull, dict):
+            raise ValueError("the PR response is not an object")
+        for key in ("base", "head"):
+            side = pull.get(key)
+            if side is not None and not isinstance(side, dict):
+                raise ValueError(f"the PR response has a malformed {key}")
+            if isinstance(side, dict) and side.get("repo") is not None and not isinstance(side["repo"], dict):
+                raise ValueError(f"the PR response has a malformed {key} repository")
+        if pull.get("user") is not None and not isinstance(pull["user"], dict):
+            raise ValueError("the PR response has a malformed author")
+
     async def _verify_settled_pull(
         self, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient, pull: dict,
     ) -> None:
         """The PR response must be this item's PR in this scope and base; otherwise ValueError."""
+        self._require_pull_shape(pull)
         if self._pull_number(pull) != item.pr_number:
             raise ValueError("the PR number does not match the tracked PR")
         expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=item.dispatch_base_ref)
@@ -1533,6 +1554,8 @@ class GithubVerificationService:
         revision_before = {column.name: getattr(revision, column.name) for column in revision.__table__.columns}
         item_id, pr_number, nonce, base_ref = item.id, item.pr_number, item.dispatch_nonce, item.dispatch_base_ref
         current = await client.get_pull(scope.repo_owner, scope.repo_name, int(pr_number))
+        if revision_before["status"] == "completed":  # a settled revision: a malformed shape is a ValueError
+            self._require_pull_shape(current)
         if (self._classify_pull(current) != "merged" or self._pull_number(current) != pr_number
                 or self._head_sha(current) != head):
             return  # the next poll reads the new state

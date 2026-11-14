@@ -292,3 +292,95 @@ async def test_the_settlement_event_and_time_survive_the_merge_and_a_repeat_poll
     assert await _outcome_events(db, revision.id) == 1
     await db.refresh(event)
     assert (event.id, event.occurred_at, event.after_values) == (event_id, SETTLED_AT, {"outcome": "completed"})
+
+
+# --- V1 review 5903639166: the response boundary (real client errors and malformed nested shapes) ---
+
+
+def _malformed_response(shape, base_payload):
+    """The HTTP response a real GitHub client would parse for the given malformed shape."""
+    def response(request):
+        if shape == "invalid_json":
+            return httpx.Response(200, text="{not-json", request=request)
+        if shape == "array":
+            return httpx.Response(200, json=[], request=request)
+        payload = dict(base_payload)
+        if shape == "base_repo_string":
+            payload["base"] = dict(payload["base"], repo="invalid nested object")
+        elif shape == "head_string":
+            payload["head"] = "invalid head"
+        elif shape == "head_repo_list":
+            payload["head"] = dict(payload["head"], repo=["not", "an", "object"])
+        return httpx.Response(200, json=payload, request=request)
+    return response
+
+
+SHAPES = ["invalid_json", "array", "base_repo_string", "head_string", "head_repo_list"]
+
+
+async def _with_healthy_second_item(db, scope, item, client):
+    other = GithubWorkItem(scope_id=scope.id, issue_number=77, issue_title="other", issue_url="u",
+                           github_updated_at=datetime.utcnow(), dispatch_status="verifying", pr_number=77,
+                           dispatch_nonce="attempt-77", dispatch_head_ref="deck/other", dispatch_base_ref="release/v4.1",
+                           owner_slot_id=item.owner_slot_id)
+    db.add(other)
+    await db.commit()
+    return other
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pull", [MERGED, CLOSED])
+@pytest.mark.parametrize("shape", SHAPES)
+async def test_a_malformed_real_client_response_is_contained_and_the_poll_goes_on(db, shape, pull):
+    from app.services.github_client import GithubClient
+    scope, item, revision, client = await _settled(db, pull=pull)
+    await _with_healthy_second_item(db, scope, item, client)
+    healthy, settled_pr = client.get_pull, item.pr_number  # plain values: a rollback expires the item
+    seen = []
+    before = await _unchanged(db, item, revision)
+    async with httpx.AsyncClient(base_url="https://api.github.com", transport=httpx.MockTransport(
+            _malformed_response(shape, dict(client.pull)))) as http:
+        real = GithubClient(http=http, token="")
+
+        async def routed(owner, repo, number):
+            seen.append(number)
+            return await (real.get_pull(owner, repo, number) if number == settled_pr else healthy(owner, repo, number))
+
+        client.get_pull = routed
+        await _tick(db, scope, client, item, revision)  # must not raise out of process_scope
+    assert 77 in seen, "the poll stopped at the malformed settled item"
+    assert await _unchanged(db, item, revision) == before and item.dispatch_status == "verifying"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["base_repo_string", "head_string"])
+async def test_a_malformed_final_reread_of_the_merge_is_contained(db, shape):
+    scope, item, revision, client = await _settled(db)
+    original, calls = client.get_pull, []
+
+    async def second_read_malformed(*args):
+        calls.append(1)
+        pull = dict(await original(*args))
+        if len(calls) >= 2:
+            pull["base"] = dict(pull["base"], repo="invalid nested object") if shape == "base_repo_string" else pull["base"]
+            if shape == "head_string":
+                pull["head"] = "invalid head"
+        return pull
+
+    client.get_pull = second_read_malformed
+    before = await _unchanged(db, item, revision)
+    await _tick(db, scope, client, item, revision)
+    assert len(calls) >= 2
+    assert await _unchanged(db, item, revision) == before and item.dispatch_status == "verifying"
+
+
+@pytest.mark.asyncio
+async def test_an_implementation_error_inside_the_settled_path_is_not_swallowed(db, monkeypatch):
+    scope, item, revision, client = await _settled(db)
+
+    async def broken(*args, **kwargs):
+        raise AttributeError("a programming error in the merge settlement")
+
+    monkeypatch.setattr(service, "_settle_merged_submitted", broken)
+    with pytest.raises(AttributeError):
+        await service.process_scope(db, scope, client=client)
