@@ -3,29 +3,74 @@
 
 It speaks just enough of the OpenAI-compatible chat API for a provider CLI's
 live check: `GET /v1/models` and `POST /v1/chat/completions` (plain or
-`stream: true`). Every reply is the same scripted text. It listens on
-127.0.0.1 only, inside the kit's loopback-only network namespace, and never
-forwards anything.
+`stream: true`). Every reply is the same fixed text, unless `--script` names a
+JSON list of turns (#912): each turn is `{"text": ...}` or
+`{"tool_call": {"name": ..., "arguments": {...}}}`, served in order, one per chat
+completion, and the fixed text resumes after the last one. A malformed script is
+refused before the server binds. It listens on 127.0.0.1 only, inside the kit's
+loopback-only network namespace, and never forwards anything.
 
 The request log keeps the time, the path, the model name and a SHA-256 of the
-request body. It never keeps prompt text.
+request body; with a script, also the turn index and the reply kind. It never
+keeps prompt or argument text.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 REPLY = "stub reply from the isolated runtime kit"
 MAX_BODY = 4 << 20
+MAX_SCRIPT_BYTES = 64 << 10
+MAX_TURNS = 64
+
+
+class ScriptError(ValueError):
+    """A script the stub refuses before it serves anything."""
+
+
+def _valid_turn(turn) -> bool:
+    if not isinstance(turn, dict) or len(turn) != 1:
+        return False
+    if "text" in turn:
+        return isinstance(turn["text"], str)
+    call = turn.get("tool_call")
+    return (isinstance(call, dict) and set(call) == {"name", "arguments"} and isinstance(call["name"], str)
+            and call["name"] != "" and isinstance(call["arguments"], dict))
+
+
+def load_script(path: Path | str) -> list[dict]:
+    """Read and check a script: 1 to 64 turns, at most 64 KiB, each exactly one known kind."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ScriptError(f"the script can't be read: {exc.strerror}") from exc
+    if len(raw) > MAX_SCRIPT_BYTES:
+        raise ScriptError("the script is larger than 64 KiB")
+    try:
+        turns = json.loads(raw)
+    except ValueError as exc:
+        raise ScriptError("the script is not JSON") from exc
+    if not isinstance(turns, list) or not 1 <= len(turns) <= MAX_TURNS:
+        raise ScriptError(f"the script must be a list of 1 to {MAX_TURNS} turns")
+    for index, turn in enumerate(turns):
+        if not _valid_turn(turn):
+            raise ScriptError(f'turn {index} is not {{"text": str}} or {{"tool_call": {{"name": str, "arguments": object}}}}')
+    return turns
 
 
 class Handler(BaseHTTPRequestHandler):
     log_path: Path
     model = "stub-model"
+    script: list[dict] | None = None
+    served = [0]
+    lock = threading.Lock()
 
     def log_message(self, *args):  # no access log on stderr
         return
@@ -37,9 +82,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _record(self, body: bytes, model: str | None) -> None:
+    def _next_turn(self) -> tuple[int | None, dict | None]:
+        with self.lock:
+            index = self.served[0]
+            if index < len(self.script):
+                self.served[0] += 1
+                return index, self.script[index]
+        return None, None
+
+    def _record(self, body: bytes, model: str | None, scripted: tuple[int | None, str] | None = None) -> None:
         entry = {"time": time.time(), "path": self.path, "model": model,
                  "sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body)}
+        if scripted is not None:
+            entry["turn"], entry["kind"] = scripted
         with self.log_path.open("a") as log:
             log.write(json.dumps(entry) + "\n")
 
@@ -62,35 +117,65 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             request = {}
         model = request.get("model") if isinstance(request, dict) else None
-        self._record(body, model if isinstance(model, str) else None)
-        if self.path not in ("/v1/chat/completions", "/chat/completions"):
+        chat = self.path in ("/v1/chat/completions", "/chat/completions")
+        index, turn = self._next_turn() if chat and self.script is not None else (None, None)
+        scripted = None
+        if chat and self.script is not None:
+            scripted = (index, next(iter(turn)) if turn is not None else "fallback")
+        self._record(body, model if isinstance(model, str) else None, scripted)
+        if not chat:
             self._send(404, b'{"error": "not found"}')
             return
+        text, call = REPLY, None
+        if turn is not None:
+            if "tool_call" in turn:
+                call = {"id": f"call_stub_{index}", "type": "function",
+                        "function": {"name": turn["tool_call"]["name"],
+                                     "arguments": json.dumps(turn["tool_call"]["arguments"])}}
+            else:
+                text = turn.get("text", REPLY)
+        finish = "tool_calls" if call else "stop"
         created = int(time.time())
         if isinstance(request, dict) and request.get("stream"):
-            chunks = [
-                {"id": "stub", "object": "chat.completion.chunk", "created": created, "model": model or self.model,
-                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": REPLY}, "finish_reason": None}]},
-                {"id": "stub", "object": "chat.completion.chunk", "created": created, "model": model or self.model,
-                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-            ]
+            deltas = ([{"role": "assistant"}, {"tool_calls": [dict(call, index=0)]}] if call
+                      else [{"role": "assistant", "content": text}])
+            chunks = [{"id": "stub", "object": "chat.completion.chunk", "created": created, "model": model or self.model,
+                       "choices": [{"index": 0, "delta": delta, "finish_reason": None}]} for delta in deltas]
+            chunks.append({"id": "stub", "object": "chat.completion.chunk", "created": created,
+                           "model": model or self.model, "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]})
             data = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
             self._send(200, data.encode(), "text/event-stream")
             return
+        message = {"role": "assistant", "content": None, "tool_calls": [call]} if call else {
+            "role": "assistant", "content": text}
         reply = {"id": "stub", "object": "chat.completion", "created": created, "model": model or self.model,
-                 "choices": [{"index": 0, "message": {"role": "assistant", "content": REPLY}, "finish_reason": "stop"}],
+                 "choices": [{"index": 0, "message": message, "finish_reason": finish}],
                  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
         self._send(200, json.dumps(reply).encode())
 
 
-def main() -> int:
+def make_server(port: int, log_path: Path, script: list[dict] | None = None) -> ThreadingHTTPServer:
+    """A server on 127.0.0.1 with its own script position, so each server serves its script once."""
+    handler = type("StubHandler", (Handler,), {"log_path": log_path, "script": script, "served": [0],
+                                               "lock": threading.Lock()})
+    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--log", type=Path, required=True)
-    args = parser.parse_args()
-    Handler.log_path = args.log
+    parser.add_argument("--script", type=Path)
+    args = parser.parse_args(argv)
+    script = None
+    if args.script is not None:
+        try:
+            script = load_script(args.script)
+        except ScriptError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
     args.log.touch()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = make_server(args.port, args.log, script)
     server.serve_forever()
     return 0
 

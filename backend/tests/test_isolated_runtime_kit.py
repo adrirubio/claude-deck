@@ -1518,3 +1518,204 @@ def test_opencode_outcome_control_is_caught(tmp_path, monkeypatch):
     monkeypatch.setitem(globals(), "KIT", Path(os.environ["RUNTIME_KIT_SCRIPT_UNDER_TEST"]))
     with pytest.raises(AssertionError):
         test_up_keeps_the_opencode_helper_outcome(1, 1, "incomplete:")
+
+
+# --- Scripted stub replies (#912 A1a) ------------------------------------------------------
+# The stub can serve a script of text and tool-call turns, so a provider CLI can be driven
+# through a tool call. These tests load the stub module by path and run its server on
+# 127.0.0.1 port 0 in a thread: no subprocess, no namespace, no kit.
+STUB = REPO / "scripts" / "runtime-kit" / "stub_provider.py"
+STUB_SCRIPT = [{"text": "first"}, {"tool_call": {"name": "read", "arguments": {"filePath": "README.md"}}},
+               {"text": "last"}]
+
+
+def _stub_module(path: Path = STUB):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(f"kit_stub_{abs(hash(str(path)))}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _StubServer:
+    """The stub's own server on an ephemeral loopback port, in a thread of this process."""
+
+    def __init__(self, module, tmp_path: Path, script: list | None):
+        import threading
+        self.log = tmp_path / "stub-requests.jsonl"
+        script_path = None
+        if script is not None:
+            script_path = tmp_path / "stub-script.json"
+            script_path.write_text(json.dumps(script))
+        turns = module.load_script(script_path) if script_path else None
+        self.server = module.make_server(0, self.log, turns)
+        self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def chat(self, stream: bool = False, prompt: str = "secret prompt text"):
+        import urllib.request
+        body = json.dumps({"model": "stub", "stream": stream,
+                           "messages": [{"role": "user", "content": prompt}]}).encode()
+        request = urllib.request.Request(self.url + "/v1/chat/completions", data=body,
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            raw = response.read().decode()
+        if not stream:
+            return json.loads(raw)
+        chunks = [line[len("data: "):] for line in raw.split("\n\n") if line]
+        assert chunks[-1] == "[DONE]"
+        return [json.loads(chunk) for chunk in chunks[:-1]]
+
+    def entries(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(5)
+
+
+def _with_stub(module, tmp_path, script, check):
+    server = _StubServer(module, tmp_path, script)
+    try:
+        return check(server)
+    finally:
+        server.close()
+
+
+def _check_json_turns(server):
+    first, call, last, after = (server.chat() for _ in range(4))
+    assert first["choices"][0]["message"] == {"role": "assistant", "content": "first"}
+    assert first["choices"][0]["finish_reason"] == "stop"
+    message = call["choices"][0]["message"]
+    assert call["choices"][0]["finish_reason"] == "tool_calls"
+    assert message["role"] == "assistant" and message.get("content") is None
+    assert message["tool_calls"] == [{"id": "call_stub_1", "type": "function",
+                                      "function": {"name": "read", "arguments": '{"filePath": "README.md"}'}}]
+    assert last["choices"][0]["message"]["content"] == "last"
+    assert after["choices"][0]["message"]["content"] == "stub reply from the isolated runtime kit"  # script ended
+
+
+def _check_sse_turns(server):
+    first, call = server.chat(stream=True), server.chat(stream=True)
+    assert [c["choices"][0]["delta"] for c in first] == [{"role": "assistant", "content": "first"}, {}]
+    assert first[-1]["choices"][0]["finish_reason"] == "stop"
+    assert all(c["object"] == "chat.completion.chunk" for c in first + call)
+    deltas = [c["choices"][0]["delta"] for c in call]
+    assert deltas == [{"role": "assistant"},
+                      {"tool_calls": [{"index": 0, "id": "call_stub_1", "type": "function",
+                                       "function": {"name": "read", "arguments": '{"filePath": "README.md"}'}}]},
+                      {}]
+    assert call[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def _check_log(server):
+    for stream in (False, True, False, False):
+        server.chat(stream=stream)
+    entries = server.entries()
+    assert [(e["turn"], e["kind"]) for e in entries] == [(0, "text"), (1, "tool_call"), (2, "text"),
+                                                          (None, "fallback")]
+    text = server.log.read_text()
+    assert "secret prompt text" not in text and "README.md" not in text and "first" not in text
+    assert all(len(e["sha256"]) == 64 for e in entries)
+
+
+def test_stub_script_serves_text_and_tool_call_turns_as_json(tmp_path):
+    _with_stub(_stub_module(), tmp_path, STUB_SCRIPT, _check_json_turns)
+
+
+def test_stub_script_serves_text_and_tool_call_turns_as_sse(tmp_path):
+    _with_stub(_stub_module(), tmp_path, STUB_SCRIPT, _check_sse_turns)
+
+
+def test_stub_script_log_keeps_turn_and_kind_but_no_text(tmp_path):
+    _with_stub(_stub_module(), tmp_path, STUB_SCRIPT, _check_log)
+
+
+def test_stub_script_absent_keeps_the_default_replies_and_log(tmp_path):
+    def check(server):
+        plain, chunks = server.chat(), server.chat(stream=True)
+        assert plain["choices"][0] == {"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant", "content": "stub reply from the isolated runtime kit"}}
+        assert [c["choices"][0]["delta"] for c in chunks] == [
+            {"role": "assistant", "content": "stub reply from the isolated runtime kit"}, {}]
+        assert [sorted(e) for e in server.entries()] == [["bytes", "model", "path", "sha256", "time"]] * 2
+    _with_stub(_stub_module(), tmp_path, None, check)
+
+
+def _bad_scripts():
+    turn = {"text": "x"}
+    return {
+        "not_json": "{",
+        "not_a_list": json.dumps({"text": "x"}),
+        "empty": "[]",
+        "too_many_turns": json.dumps([turn] * 65),
+        "oversized": json.dumps([{"text": "x" * (64 << 10)}]),
+        "extra_key": json.dumps([{"text": "x", "tool_call": {"name": "read", "arguments": {}}}]),
+        "unknown_kind": json.dumps([{"image": "x"}]),
+        "text_not_string": json.dumps([{"text": 1}]),
+        "tool_extra_key": json.dumps([{"tool_call": {"name": "read", "arguments": {}, "id": "x"}}]),
+        "tool_no_name": json.dumps([{"tool_call": {"name": "", "arguments": {}}}]),
+        "tool_arguments_not_object": json.dumps([{"tool_call": {"name": "read", "arguments": "{}"}}]),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_bad_scripts()))
+def test_stub_script_refuses_a_malformed_script_before_serving(tmp_path, case, capsys):
+    module = _stub_module()
+    path = tmp_path / "stub-script.json"
+    path.write_text(_bad_scripts()[case])
+    with pytest.raises(module.ScriptError):
+        module.load_script(path)
+    bound = []
+    module.make_server = lambda *args: bound.append(args)  # main must refuse before it binds
+    assert module.main(["--port", "0", "--log", str(tmp_path / "log.jsonl"), "--script", str(path)]) == 2
+    assert bound == [] and "refused" in capsys.readouterr().err
+
+
+def test_stub_script_accepts_the_limits(tmp_path):
+    module = _stub_module()
+    path = tmp_path / "stub-script.json"
+    path.write_text(json.dumps([{"text": "x"}] * 64))
+    assert len(module.load_script(path)) == 64
+
+
+# Mutation controls: each patched copy of the stub must make a check above fail.
+_STUB_CONTROLS = {
+    "no_tool_call_branch": ('if "tool_call" in turn:', 'if "tool_call_removed" in turn:'),
+    "sse_tool_call_as_text": ('{"tool_calls": [dict(call, index=0)]}', '{"content": "text"}'),
+    "no_validation": ("def load_script(path", "def _unchecked(path"),
+}
+
+
+@pytest.mark.parametrize("control", sorted(_STUB_CONTROLS))
+def test_stub_script_controls_are_caught(tmp_path, control):
+    old, new = _STUB_CONTROLS[control]
+    source = STUB.read_text()
+    assert source.count(old) == 1, old
+    source = source.replace(old, new)
+    if control == "no_validation":
+        source += "\n\ndef load_script(path):\n    return json.loads(Path(path).read_text())\n"
+    mutated = tmp_path / "mutated_stub.py"
+    mutated.write_text(source)
+    module = _stub_module(mutated)
+    failed = []
+    for name, check in (("json", _check_json_turns), ("sse", _check_sse_turns), ("log", _check_log)):
+        work = tmp_path / name
+        work.mkdir()
+        try:
+            _with_stub(module, work, STUB_SCRIPT, check)
+        except (AssertionError, KeyError, TypeError, IndexError, OSError):
+            failed.append(name)
+    if control == "no_validation":
+        path = tmp_path / "bad.json"
+        path.write_text(_bad_scripts()["extra_key"])
+        try:
+            module.load_script(path)
+        except module.ScriptError:
+            pass
+        else:
+            failed.append("validation")
+    assert failed, f"control {control} was not caught"
+    assert STUB.read_text().count(old) == 1  # the control changed only its own copy
