@@ -253,6 +253,16 @@ visible and inconclusive, consume no product-failure unit, and cannot satisfy re
 A real failed check in the same observation still charges the head once.
 
 
+### Continuation phases
+
+A continuation or amendment request names one phase. The Leader's decision prompt and the recovery proposal
+prompt use this wording:
+
+> Temporary diagnostic changes (instrumentation, hosted log collection, probe edits) use phase `diagnostic` and must be reverted with `revert_diagnostic_changes`. Any change that stays in the PR, including re-adding tests or code, uses phase `implementation` and includes `push_pr_head` plus `request_verification`.
+
+- **Example, `diagnostic`:** add a temporary log line to a probe script and read the hosted run's output. The PR returns to its approved baseline with `revert_diagnostic_changes` before the attempt can continue.
+- **Example, `implementation`:** re-add a test that an earlier revision removed. The test is a permanent change, so the revision allows `push_pr_head` and `request_verification`, and the test stays in the PR.
+
 ### Reviewer verdict for the exact head and the auto-merge gate
 
 `synth_city_record_head_review`, or `POST /github-work-items/{id}/head-reviews`, records an explicit

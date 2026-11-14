@@ -34,6 +34,7 @@ from app.models.schemas import MailMessageCreate
 from app.services import companion_paths
 from app.services import factory_audit_service as audit
 from app.services.agent_mail_service import agent_mail_service
+from app.services.continuation_phase_guidance import PHASE_GUIDANCE
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
@@ -1470,12 +1471,8 @@ class GithubApprovalService:
             "`synth_city_check_inbox(unread_only=False)` now, find request message "
             f"{request.request_message_id} for work item {request.work_item_id} "
             f"revision {revision.revision}, and review its persisted phase and "
-            "allowed actions before calling `synth_city_decide_continuation`. Evidence "
-            "collection, temporary hosted instrumentation, hosted log collection, "
-            "or restoration work must use phase `diagnostic` and include "
-            "`revert_diagnostic_changes`. Phase `implementation` is only for a "
-            "bounded fix and must include `push_pr_head` plus "
-            "`request_verification`. Approve or reject only through the "
+            f"allowed actions before calling `synth_city_decide_continuation`. {PHASE_GUIDANCE} "
+            "Approve or reject only through the "
             "authenticated decision tool; an ordinary reply is not authority."
         )
 
