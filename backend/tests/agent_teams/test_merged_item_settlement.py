@@ -11,7 +11,9 @@ from sqlalchemy import func, select, update
 
 from app.config import settings
 from app.database import get_db
-from app.models.database import GithubAttemptScopeRevision, GithubHeadReview, GithubMaintenanceEvent, GithubWorkItem
+from app.models.database import (
+    FactoryAuditEvent, GithubAttemptScopeRevision, GithubHeadReview, GithubMaintenanceEvent, GithubWorkItem,
+)
 from app.services.github_terminal_revision_service import TERMINAL_ITEMS, finalize_merged_item, finalize_merged_preview
 from app.services.github_verification_service import github_verification_service
 from app.services.github_watcher_service import github_watcher_service
@@ -216,6 +218,169 @@ async def test_a_pr_that_is_no_longer_merged_at_the_second_read_settles_nothing(
     await _tick(db, scope, client, item, revision)
     assert len(calls) >= 2  # the second read happened
     assert item.dispatch_status != "merged" and revision.status != "completed"
+
+
+# --- review batch 1: every outcome is fenced against the context the decision was made on ------------------------
+
+HEADS = [("sha", "the submitted head"), ("unaccepted-head", "a head nobody submitted or accepted")]
+
+
+def _on_second_read(client, change):
+    """Run ``change`` (async, no arguments) when the settlement makes its own fresh PR read, then return the pull."""
+    original = client.get_pull
+    calls = []
+
+    async def read(owner, repo, number):
+        calls.append(number)
+        if len(calls) == 2:
+            await change()
+        return await original(owner, repo, number)
+
+    client.get_pull = read
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_the_final_pr_response_is_fully_revalidated_and_a_stable_one_still_settles(db, stopped):
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=stopped)
+    original = client.get_pull
+    calls = []
+
+    async def second_response_targets_another_base(owner, repo, number):
+        calls.append(number)
+        pull = await original(owner, repo, number)
+        return dict(pull, base=dict(pull["base"], ref="unapproved-target")) if len(calls) == 2 else pull
+
+    client.get_pull = second_response_targets_another_base
+    events_before = await db.scalar(select(func.count()).select_from(FactoryAuditEvent))
+    await _tick(db, scope, client, item, revision)
+    assert item.dispatch_status == "verifying" and revision.status == "submitted"  # number and SHA unchanged, base not
+    assert await db.scalar(select(func.count()).select_from(FactoryAuditEvent)) == events_before  # no fact written
+    client.get_pull = original  # a stable second response settles, so the refusal above is the identity check
+    await _tick(db, scope, client, item, revision)
+    assert item.dispatch_status == "merged" and revision.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+@pytest.mark.parametrize("head,_why", HEADS)
+async def test_a_submitted_head_that_changes_during_the_read_stops_both_outcomes(twin, stopped, head, _why):
+    db, maker = twin
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=stopped, pull_head=head)
+    revision_id = revision.id
+
+    async def another_head_is_submitted():
+        async with maker() as other:
+            await other.execute(update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision_id)
+                                .values(submitted_head_sha="newly-submitted-head"))
+            await other.commit()
+
+    events_before = await db.scalar(select(func.count()).select_from(FactoryAuditEvent))
+    _on_second_read(client, another_head_is_submitted)
+    await _tick(db, scope, client, item, revision)
+    assert item.dispatch_status == "verifying"  # not merged, not escalated
+    assert await db.scalar(select(func.count()).select_from(FactoryAuditEvent)) == events_before  # no fact written
+    assert revision.status == "submitted" and revision.submitted_head_sha == "newly-submitted-head"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+@pytest.mark.parametrize("head,_why", HEADS)
+async def test_a_replaced_attempt_is_not_touched_by_either_outcome(twin, stopped, head, _why):
+    db, maker = twin
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=stopped, pull_head=head)
+    item_id = item.id
+
+    async def the_attempt_is_replaced():
+        async with maker() as other:
+            await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id)
+                                .values(dispatch_nonce="replacement-attempt", dispatch_status="dispatched"))
+            await other.commit()
+
+    events_before = await db.scalar(select(func.count()).select_from(FactoryAuditEvent))
+    _on_second_read(client, the_attempt_is_replaced)
+    await _tick(db, scope, client, item, revision)
+    assert await db.scalar(select(func.count()).select_from(FactoryAuditEvent)) == events_before  # no fact written
+    assert (item.dispatch_status, item.dispatch_nonce, item.escalation_reason) == ("dispatched", "replacement-attempt", None)
+    assert revision.status == "submitted"  # the old revision was not superseded by a stale handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["revision_cancelled", "scope_repository", "dispatch_base"])
+async def test_a_finalize_refuses_a_context_that_changes_during_its_final_read(twin, change):
+    from app.models.database import TeamGithubScope
+    db, maker = twin
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=True)
+    digest = (await finalize_merged_preview(db, item, scope, _reader(client)))["context_sha256"]
+    ids = dict(revision=revision.id, scope=scope.id, item=item.id)
+    note_before = item.status_note
+    reads = []
+
+    async def read():
+        reads.append(1)
+        if len(reads) == 2:  # the final read before the write
+            async with maker() as other:
+                if change == "revision_cancelled":
+                    await other.execute(update(GithubAttemptScopeRevision)
+                                        .where(GithubAttemptScopeRevision.id == ids["revision"]).values(status="cancelled"))
+                elif change == "scope_repository":
+                    await other.execute(update(TeamGithubScope).where(TeamGithubScope.id == ids["scope"])
+                                        .values(repo_name="changed-repository"))
+                else:
+                    await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == ids["item"])
+                                        .values(dispatch_base_ref="changed-base"))
+                await other.commit()
+        return dict(client.pull, merge_commit_sha=MERGE_SHA)
+
+    with pytest.raises(ValueError, match="finalize_merged_context_changed"):
+        await finalize_merged_item(db, item, scope, read, expected_context_sha256=digest,
+                                   operation_id="race-op", reason=REASON)
+    await db.rollback()
+    await db.refresh(item); await db.refresh(revision)
+    assert item.dispatch_status == "verifying" and item.status_note == note_before  # nothing was written
+    assert revision.status == ("cancelled" if change == "revision_cancelled" else "submitted")
+    assert await db.scalar(select(func.count()).select_from(GithubMaintenanceEvent)) == 0  # the operation key is unused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+@pytest.mark.parametrize("head,_why", HEADS)
+async def test_a_scope_change_during_the_read_stops_both_outcomes(twin, stopped, head, _why):
+    from app.models.database import TeamGithubScope
+    db, maker = twin
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=stopped, pull_head=head)
+    scope_id = scope.id
+
+    async def the_repository_changes():
+        async with maker() as other:
+            await other.execute(update(TeamGithubScope).where(TeamGithubScope.id == scope_id).values(repo_name="elsewhere"))
+            await other.commit()
+
+    events_before = await db.scalar(select(func.count()).select_from(FactoryAuditEvent))
+    _on_second_read(client, the_repository_changes)
+    await _tick(db, scope, client, item, revision)
+    assert item.dispatch_status == "verifying" and revision.status == "submitted"
+    assert await db.scalar(select(func.count()).select_from(FactoryAuditEvent)) == events_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_the_merge_fact_comes_from_the_verified_final_response(db, stopped):
+    scope, item, revision, workspace, client = await _submitted(db, unacknowledged_amendment=stopped)
+    original = client.get_pull
+    calls = []
+
+    async def merge_time_differs_on_the_second_read(owner, repo, number):
+        calls.append(number)
+        pull = await original(owner, repo, number)
+        return dict(pull, merged_at="2026-11-14T04:12:09Z") if len(calls) == 2 else pull  # first read: 04:12:07Z
+
+    client.get_pull = merge_time_differs_on_the_second_read
+    await _tick(db, scope, client, item, revision)
+    assert item.dispatch_status == "merged"
+    times = {event.fact_time for event in (await db.execute(select(FactoryAuditEvent))).scalars().all() if event.fact_time}
+    assert datetime(2026, 11, 14, 4, 12, 9) in times and datetime(2026, 11, 14, 4, 12, 7) not in times
 
 
 # --- the operator finalizes a merged item that the poll cannot settle -------------------------------------------

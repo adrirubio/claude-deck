@@ -505,15 +505,25 @@ async def finalize_merged_item(db, item, scope, read_pull, *, expected_context_s
         if old.work_item_id != item_id or old.request_sha256 != request_digest:
             raise ValueError("finalize_merged_replay_conflict")
         return {"status": "already_finalized", "work_item_id": item_id}
-    evidence, _revision, digest = await _finalize_context(db, item, scope, await read_pull())
+    _evidence, _revision, digest = await _finalize_context(db, item, scope, await read_pull())
     if digest != expected_context_sha256:
         raise ValueError("finalize_merged_context_changed")
     pull = await read_pull()  # fresh again, right before the write
-    if _finalize_evidence(item, pull) != evidence:
-        raise ValueError("finalize_merged_context_changed")
+    # The terminal writer next: it claims the loaded item, and nothing else can commit until this transaction ends.
+    # Then the whole context the digest was bound to is read again under it. A refusal writes nothing.
+    try:
+        await lock_terminal_transition(db, item)
+        await db.refresh(item)
+        await db.refresh(scope)
+        _evidence_now, _revision_now, digest_now = await _finalize_context(db, item, scope, pull)
+        if digest_now != expected_context_sha256:  # the digest covers the item, revision, scope and merge evidence
+            raise ValueError("finalize_merged_context_changed")
+    except (TerminalRevisionContextChanged, ValueError) as exc:
+        await db.rollback()
+        raise ValueError(str(exc) if str(exc).startswith("finalize_merged_") else "finalize_merged_context_changed") from None
     db.add(GithubMaintenanceEvent(operation_id=operation, work_item_id=item_id,
                                   outcome="merged_item_finalized", request_sha256=request_digest))
     await verification._mark_merged_with_fact(db, item, pull, source="factory_maintenance.finalize_merged_item")
     item.status_note = "Finalized as merged by an operator: " + audit.sanitize_reason(reason)
     await db.commit()
-    return {"status": "finalized", "work_item_id": item_id, **evidence}
+    return {"status": "finalized", "work_item_id": item_id, **_evidence_now}

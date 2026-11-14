@@ -92,6 +92,15 @@ class ContinuationCompletionError(ValueError):
         super().__init__(code)
 
 
+# What a merged-PR settlement must find unchanged under the terminal writer: the attempt, the scope's target and
+# access, and (compared whole) the exact submitted revision.
+_SETTLEMENT_ITEM_IDENTITY = (
+    "id", "scope_id", "dispatch_status", "dispatch_nonce", "launch_id", "owner_slot_id", "active_scope_revision",
+    "attempt_phase", "pr_number", "dispatch_head_ref", "dispatch_base_ref", "handoff_state",
+)
+_SETTLEMENT_SCOPE_IDENTITY = ("id", "preset_id", "repo_owner", "repo_name", "github_auth_mode", "enabled")
+
+
 class GithubVerificationService:
     def __init__(self) -> None:
         self._pr_ready_locks: dict[int, asyncio.Lock] = {}
@@ -1376,32 +1385,53 @@ class GithubVerificationService:
 
         The merged head must equal the submitted revision's head or the head of an active accepted review.
         Then the revision completes and the item is merged. Any other merged head escalates with a note naming
-        both heads and records no merge. The PR is read again right before the claim, and the revision is
-        claimed while it is still the submitted one, so a change during the awaited read settles nothing.
+        both heads and records no merge. Everything the decision rests on is captured before the awaited reads.
+        The PR is read again and must pass the full identity check; then the terminal writer is taken and the
+        captured item, scope and exact revision must still be what they were, so BOTH outcomes are fenced and a
+        lost fence changes nothing. The verified final response is the one that is recorded.
         """
         head = self._head_sha(pull)
         if not isinstance(head, str) or not head:
             raise ValueError("merged PR head SHA is unavailable")
         if self._pull_number(pull) != item.pr_number:
             raise ValueError("merged PR number does not match the tracked PR")
-        item_id, pr_number, nonce, active_revision = item.id, item.pr_number, item.dispatch_nonce, item.active_scope_revision
-        revision_id, submitted_head = revision.id, revision.submitted_head_sha
+        item_before = {name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY}
+        scope_before = {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY}
+        revision_before = {column.name: getattr(revision, column.name) for column in revision.__table__.columns}
+        item_id, pr_number, nonce, base_ref = item.id, item.pr_number, item.dispatch_nonce, item.dispatch_base_ref
         current = await client.get_pull(scope.repo_owner, scope.repo_name, int(pr_number))
         if (self._classify_pull(current) != "merged" or self._pull_number(current) != pr_number
                 or self._head_sha(current) != head):
             return  # the next poll reads the new state
-        authorized = head == submitted_head or bool(await db.scalar(select(exists().where(
+        try:
+            expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=base_ref)
+            self._verify_pull_identity(current, scope, item, expected_base=expected_base)
+        except ValueError as exc:
+            logger.warning("Merged PR #%s for work item %s failed the identity check on its final read (%s); "
+                           "nothing was settled", pr_number, item_id, exc)
+            return
+        # The terminal writer first: it claims the loaded item identity, and nothing else can commit until this
+        # transaction ends. Then the context the decision was made on must be unchanged.
+        await lock_terminal_transition(db, item)
+        await db.refresh(item)
+        await db.refresh(scope)
+        await db.refresh(revision)
+        if ({name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY} != item_before
+                or {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY} != scope_before
+                or {column.name: getattr(revision, column.name) for column in revision.__table__.columns} != revision_before
+                or revision.status != "submitted"):
+            raise TerminalRevisionContextChanged("terminal_revision_context_changed")
+        authorized = head == revision.submitted_head_sha or bool(await db.scalar(select(exists().where(
             GithubHeadReview.work_item_id == item_id, GithubHeadReview.dispatch_nonce == nonce,
             GithubHeadReview.pr_number == pr_number, GithubHeadReview.head_sha == head,
             GithubHeadReview.verdict == "accepted", GithubHeadReview.status == "active"))))
         outcome = "completed" if authorized else "superseded"
-        now = datetime.utcnow()
-        values = {"status": outcome, "completed_at": now} if authorized else {"status": outcome}
+        values = {"status": outcome, "completed_at": datetime.utcnow()} if authorized else {"status": outcome}
         claim = await db.execute(update(GithubAttemptScopeRevision).where(
-            GithubAttemptScopeRevision.id == revision_id,
+            GithubAttemptScopeRevision.id == revision.id,
             GithubAttemptScopeRevision.work_item_id == item_id,
             GithubAttemptScopeRevision.dispatch_nonce == nonce,
-            GithubAttemptScopeRevision.revision == active_revision,
+            GithubAttemptScopeRevision.revision == item.active_scope_revision,
             GithubAttemptScopeRevision.status == "submitted",
         ).values(**values).execution_options(synchronize_session=False))
         if claim.rowcount != 1:
@@ -1412,10 +1442,10 @@ class GithubVerificationService:
             await github_dispatch_service.escalate_without_notification(
                 db, item, "continuation_invalid_state",
                 f"PR #{pr_number} merged at head {head}, which is not the submitted revision head "
-                f"{submitted_head} or an accepted head; no merge was recorded. An operator must "
-                "review and finalize this item.")
+                f"{revision_before['submitted_head_sha']} or an accepted head; no merge was recorded. An operator "
+                "must review and finalize this item.")
             return
-        await self._mark_merged_with_fact(db, item, pull, source=source)
+        await self._mark_merged_with_fact(db, item, current, source=source)
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
 
