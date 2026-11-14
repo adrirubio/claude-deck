@@ -96,6 +96,7 @@ from app.services.agent_mail_service import (
     agent_mail_service,
 )
 from app.services.agent_activity_service import observe_team
+from app.services.sqlite_busy_retry import SqliteBusyExhausted, is_sqlite_busy, retry_when_busy
 from app.services.github_approval_service import (
     CONTINUABLE_ESCALATIONS,
     ActiveCancellationNoticeError,
@@ -1484,6 +1485,9 @@ async def report_dispatch_status(
     }
 
 
+_CONTINUATION_REQUEST_ROUTE = "POST /github-work-items/{item_id}/continuation-requests"
+
+
 @router.post(
     "/github-work-items/{item_id}/continuation-requests",
     response_model=GithubContinuationRequestResponse,
@@ -1547,13 +1551,18 @@ async def request_github_work_item_continuation(
                 revision,
             ):
                 raise GithubApprovalError("continuation_request_expired")
-            _root, linked = (
-                await github_approval_service.ensure_continuation_request_message(
+            # The notice is an "ensure": it sends with a fixed delivery key and links with a guarded update, so
+            # repeating it after a lock changes nothing twice. The nudge below is not repeated.
+            _root, linked = await retry_when_busy(
+                db,
+                lambda: github_approval_service.ensure_continuation_request_message(
                     db,
                     item,
                     approval,
                     revision,
-                )
+                ),
+                route=_CONTINUATION_REQUEST_ROUTE,
+                reload=(item, approval, revision),
             )
             if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
@@ -1572,16 +1581,27 @@ async def request_github_work_item_continuation(
                     outcome="applied",
                     reason="continuation request notice delivered",
                 )
-                await github_approval_service.nudge_pending_continuation_leader(
-                    db,
-                    approval,
-                    revision,
-                    cooldown=timedelta(
-                        seconds=(
-                            settings.github_continuation_leader_nudge_cooldown_seconds
-                        )
-                    ),
-                )
+                try:
+                    await github_approval_service.nudge_pending_continuation_leader(
+                        db,
+                        approval,
+                        revision,
+                        cooldown=timedelta(
+                            seconds=(
+                                settings.github_continuation_leader_nudge_cooldown_seconds
+                            )
+                        ),
+                    )
+                except OperationalError as exc:
+                    if not is_sqlite_busy(exc):
+                        raise
+                    # The request and its notice are saved; the nudge is advisory and the recovery path nudges
+                    # a pending request again. It is not repeated here.
+                    logger.warning("sqlite_busy route=%s nudge skipped after the notice was saved",
+                                   _CONTINUATION_REQUEST_ROUTE)
+                    await db.rollback()
+                    await db.refresh(approval)
+                    await db.refresh(revision)
         return GithubContinuationRequestResponse(
             approval=_approval_authority_response(approval),
             revision=_scope_revision_response(revision),
@@ -1617,6 +1637,21 @@ async def request_github_work_item_continuation(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    except SqliteBusyExhausted as exc:
+        # The request is saved and only its notice is unsettled: say so, and let the same request be repeated.
+        if committed_request is not None:
+            try:
+                await _observe_committed_request_notice(
+                    db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                    item_id=item_id, outcome="uncertain",
+                    reason="continuation request notice unsettled after commit")
+            except OperationalError as observe_exc:
+                if not is_sqlite_busy(observe_exc):
+                    raise
+                logger.warning("sqlite_busy route=%s the unsettled-notice fact could not be written",
+                               _CONTINUATION_REQUEST_ROUTE)
+        raise HTTPException(status_code=503, detail="database_busy_request_saved",
+                            headers={"Retry-After": "2"}) from exc
     except Exception:
         if committed_request is not None:
             # R07: a transport failure after the request commit is uncertain;

@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import event
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -41,15 +42,23 @@ engine = create_async_engine(
 # WAL permits readers and a writer to overlap. SQLite still has one writer;
 # stale read snapshots may need rollback before a write can succeed. A busy
 # timeout alone does not recover that condition. WAL persists in the DB header.
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
+def configure_sqlite_connection(dbapi_conn, busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS) -> None:
+    """The pragmas every SQLite connection of this app gets (also used by tests that need the real behavior)."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
+    cur.close()
+
+
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragma(dbapi_conn, _):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA synchronous=NORMAL")
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.execute("PRAGMA busy_timeout=5000")
-        cur.close()
+        configure_sqlite_connection(dbapi_conn)
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(
@@ -61,8 +70,11 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncSession:
-    """Dependency for getting async database sessions."""
+async def get_db(request: Request = None) -> AsyncSession:
+    """Dependency for getting async database sessions.
+
+    FastAPI injects the request; a direct caller may pass none. It is used only to name the route in the log.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -78,13 +90,15 @@ async def get_db() -> AsyncSession:
                 "CREATE", "DROP",
             }:
                 operation = "OTHER"
+            route = getattr(getattr(request, "scope", {}).get("route"), "path", None) if request is not None else None
             logger.warning(
                 "database_operation_failed dialect=%s sqlite_code=%s "
-                "sqlite_name=%s operation=%s",
+                "sqlite_name=%s operation=%s route=%s",
                 engine.dialect.name,
                 getattr(exc.orig, "sqlite_errorcode", None),
                 getattr(exc.orig, "sqlite_errorname", None),
                 operation,
+                route or (request.url.path if request is not None else "unknown"),
             )
             await session.rollback()
             raise
