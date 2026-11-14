@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [4.1.0] - Unreleased
+## [4.1.0] - 2026-11-14
 
-This entry lists what is merged into `release/v4.1` for Albiex Synth City 4.1.0. The release date and the published release notes are set when 4.1.0 is published.
+Albiex Synth City 4.1.0 makes the delivery factory steadier: owners can amend an approved plan, automatic merges require the reviewer's acceptance of the exact head, dispatch follows priority labels, and several stuck states now settle on their own.
+
+**Not in this release (planned for 4.2):** live runtime acceptance for OpenCode 2 members, the Antigravity CLI harness, the Muse Code observation fixes, automatic dispatch-workspace provisioning, external actor token revocation, the backend CI speed-up and live Mail tool-list refresh.
 
 ### Added
 

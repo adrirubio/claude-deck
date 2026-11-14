@@ -8,19 +8,20 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_p3_all_application_version_fields_are_4_0_0():
-    assert (ROOT / "VERSION").read_text().strip() == "4.0.0"
+def test_all_application_version_fields_match_the_release_version():
+    version = (ROOT / "VERSION").read_text().strip()
+    assert version == "4.1.0"
     package = json.loads((ROOT / "frontend/package.json").read_text())
     lock = json.loads((ROOT / "frontend/package-lock.json").read_text())
-    assert package["version"] == lock["version"] == lock["packages"][""]["version"] == "4.0.0"
+    assert package["version"] == lock["version"] == lock["packages"][""]["version"] == version
     project = tomllib.loads((ROOT / "backend/pyproject.toml").read_text())
     uv = tomllib.loads((ROOT / "backend/uv.lock").read_text())
     roots = [entry for entry in uv["package"] if entry.get("source") == {"editable": "."}]
     assert len(roots) == 1
     assert roots[0]["name"] == "albiex-synth-city-backend"
-    assert project["project"]["version"] == roots[0]["version"] == "4.0.0"
+    assert project["project"]["version"] == roots[0]["version"] == version
     from app.config import Settings
-    assert Settings().app_version == "4.0.0"
+    assert Settings().app_version == version
     assert Settings().app_name == "Albiex Synth City"
 
 
