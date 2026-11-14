@@ -124,7 +124,7 @@ jobs:
           } > release-description.md
 
       - name: Upload description and archives for review
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-v${{ inputs.version }}-candidate
           path: |
