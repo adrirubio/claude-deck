@@ -1876,6 +1876,33 @@ class TeamIdleItem(BaseModel):
     last_progress_at: datetime
 
 
+UnansweredRequestReason = Literal[
+    "candidate_limit", "native_unknown", "ambiguous_legacy_request", "reply_scan_limit", "entry_limit"]
+
+
+class UnansweredRequestItem(BaseModel):
+    """One pending explicit request that its idle addressee has not answered. Names and ids only."""
+    model_config = ConfigDict(extra="forbid")
+    request_id: int = Field(gt=0)
+    kind: Literal["context_request", "handoff"]
+    requester: str = Field(max_length=80)
+    recipient: str = Field(max_length=80)
+    requested_at: datetime
+    unanswered_seconds: int = Field(ge=0)
+    threshold_seconds: int = Field(ge=1)
+    text: str = Field(max_length=240)
+
+
+class UnansweredRequestView(BaseModel):
+    """The bounded view. It is complete only when nothing was truncated or left unproven."""
+    model_config = ConfigDict(extra="forbid")
+    items: list[UnansweredRequestItem] = Field(default_factory=list)
+    complete: bool = True
+    reason: UnansweredRequestReason | None = None
+    # Known omitted entries within the evaluated candidates; never a total beyond an unscanned bound.
+    omitted_count: int = Field(default=0, ge=0)
+
+
 class SupervisorObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["none", "healthy", "late", "absent"]
@@ -1887,6 +1914,7 @@ class SupervisorObservation(BaseModel):
     note: str | None
     attention: Literal["Supervisor check-in overdue"] | None
     team_idle: list[TeamIdleItem] = Field(default_factory=list)
+    unanswered_requests: UnansweredRequestView | None = None
 
 
 class SupervisorBindingRequest(BaseModel):
@@ -2212,6 +2240,9 @@ class MailMessageResponse(BaseModel):
 class MailThreadResponse(BaseModel):
     root: MailMessageResponse
     replies: List[MailMessageResponse] = Field(default_factory=list)
+    # False when the bounded read stopped early; never a complete-looking truncated thread.
+    replies_complete: bool = True
+    replies_incomplete_reason: Optional[Literal["reply_limit", "depth_limit"]] = None
 
 
 class MailInboxResponse(BaseModel):

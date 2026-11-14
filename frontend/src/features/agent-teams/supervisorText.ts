@@ -1,4 +1,5 @@
-import type { SupervisorObservation, TeamWaitingInput } from '@/types/agentTeams'
+import type { SupervisorObservation, TeamWaitingInput, UnansweredRequestView } from '@/types/agentTeams'
+import { coverageReasonText } from './summaryText'
 
 // Plain words for the supervisor status and for a member that waits for input.
 // Only the controller's status word and the fixed reason code are shown.
@@ -42,6 +43,18 @@ export function supervisorWords(
         detail: Number.isFinite(checked) ? `no check-in since ${span(minutes(checked, now))} ago` : 'no check-in yet',
       }
   }
+}
+
+// The second sentence under the supervisor chip (#752): explicit requests that an idle member has not
+// answered. Null when there is nothing to say. A view that is not complete always says why.
+export function unansweredWords(view: UnansweredRequestView | null | undefined): string | null {
+  if (!view) return null
+  const count = view.items.length
+  const reason = view.complete ? '' : coverageReasonText(view.reason) + ((view.omitted_count ?? 0) > 0 ? ` · ${view.omitted_count} more not listed` : '')
+  if (count === 0) return view.complete ? null : `Unanswered-request view incomplete: ${reason}`
+  const oldest = Math.max(...view.items.map((item) => item.unanswered_seconds))
+  const head = `${count} unanswered request${count === 1 ? '' : 's'}, oldest ${span(Math.floor(oldest / 60))}`
+  return view.complete ? head : `${head} · view incomplete: ${reason}`
 }
 
 const WAIT_SCREEN: Record<TeamWaitingInput['reason'], string> = {

@@ -282,7 +282,8 @@ class FactoryErrorResponse(FactoryModel):
 
 class TeamSummaryAttention(FactoryModel):
     code: Literal["attempt_stopped", "recovery_decision", "human_review", "owner_stalled",
-                  "observation_pause", "hold", "recovery_only", "hold_unavailable", "team_idle"]
+                  "observation_pause", "hold", "recovery_only", "hold_unavailable", "team_idle",
+                  "unanswered_request", "unanswered_request_incomplete"]
     work_item_id: PositiveId | None = None
     scope_id: PositiveId | None = None
     issue_number: PositiveId | None = None
@@ -291,6 +292,14 @@ class TeamSummaryAttention(FactoryModel):
     resume_deadline: Timestamp | None = None
     last_actor: str | None = Field(default=None, max_length=80)
     last_progress_at: Timestamp | None = None
+    # Unanswered explicit requests (#752): names and counts only, never a subject or body.
+    request_id: PositiveId | None = None
+    requester: str | None = Field(default=None, max_length=80)
+    recipient: str | None = Field(default=None, max_length=80)
+    unanswered_seconds: int | None = Field(default=None, ge=0)
+    coverage_reason: Literal["candidate_limit", "native_unknown", "ambiguous_legacy_request",
+                             "reply_scan_limit", "entry_limit"] | None = None
+    omitted_count: int | None = Field(default=None, ge=0)
 
 
 class TeamSummaryHumanAction(FactoryModel):

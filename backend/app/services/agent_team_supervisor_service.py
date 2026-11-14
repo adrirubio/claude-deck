@@ -184,6 +184,11 @@ async def supervisor_checkin(db, actor, preset_id: int, next_check_at: datetime,
     # the authenticated caller; do not re-observe or advance the Supervisor clock.
     async with async_sessionmaker(db.bind, expire_on_commit=False)() as observation_db:
         result["team_idle"] = await github_team_idle_service.projection(observation_db, preset_id, now=current)
+        # Unanswered explicit requests (#752), in the same isolated session. A failure of this read
+        # becomes an incomplete view; it never undoes the promise committed above.
+        from app.services.mail_request_stall_service import mail_request_stall_service
+        result["unanswered_requests"] = await mail_request_stall_service.projection(
+            observation_db, preset_id, now=current)
     return result
 
 

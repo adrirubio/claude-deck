@@ -434,6 +434,17 @@
               },
               "title": "Team Idle",
               "type": "array"
+            },
+            "unanswered_requests": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UnansweredRequestView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -737,10 +748,31 @@
                 "hold",
                 "recovery_only",
                 "hold_unavailable",
-                "team_idle"
+                "team_idle",
+                "unanswered_request",
+                "unanswered_request_incomplete"
               ],
               "title": "Code",
               "type": "string"
+            },
+            "coverage_reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "candidate_limit",
+                    "native_unknown",
+                    "ambiguous_legacy_request",
+                    "reply_scan_limit",
+                    "entry_limit"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Coverage Reason"
             },
             "issue_number": {
               "anyOf": [
@@ -794,6 +826,19 @@
               "default": null,
               "title": "Observed At"
             },
+            "omitted_count": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Omitted Count"
+            },
             "pause_id": {
               "anyOf": [
                 {
@@ -806,6 +851,45 @@
               ],
               "default": null,
               "title": "Pause Id"
+            },
+            "recipient": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recipient"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Id"
+            },
+            "requester": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requester"
             },
             "resume_deadline": {
               "anyOf": [
@@ -832,6 +916,19 @@
               ],
               "default": null,
               "title": "Scope Id"
+            },
+            "unanswered_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unanswered Seconds"
             },
             "work_item_id": {
               "anyOf": [
@@ -974,6 +1071,112 @@
             "reason"
           ],
           "title": "TeamWaitingInput",
+          "type": "object"
+        },
+        "UnansweredRequestItem": {
+          "additionalProperties": false,
+          "description": "One pending explicit request that its idle addressee has not answered. Names and ids only.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "context_request",
+                "handoff"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "recipient": {
+              "maxLength": 80,
+              "title": "Recipient",
+              "type": "string"
+            },
+            "request_id": {
+              "exclusiveMinimum": 0,
+              "title": "Request Id",
+              "type": "integer"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
+            },
+            "requester": {
+              "maxLength": 80,
+              "title": "Requester",
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 240,
+              "title": "Text",
+              "type": "string"
+            },
+            "threshold_seconds": {
+              "minimum": 1,
+              "title": "Threshold Seconds",
+              "type": "integer"
+            },
+            "unanswered_seconds": {
+              "minimum": 0,
+              "title": "Unanswered Seconds",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "request_id",
+            "kind",
+            "requester",
+            "recipient",
+            "requested_at",
+            "unanswered_seconds",
+            "threshold_seconds",
+            "text"
+          ],
+          "title": "UnansweredRequestItem",
+          "type": "object"
+        },
+        "UnansweredRequestView": {
+          "additionalProperties": false,
+          "description": "The bounded view. It is complete only when nothing was truncated or left unproven.",
+          "properties": {
+            "complete": {
+              "default": true,
+              "title": "Complete",
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/UnansweredRequestItem"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "omitted_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Omitted Count",
+              "type": "integer"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "candidate_limit",
+                    "native_unknown",
+                    "ambiguous_legacy_request",
+                    "reply_scan_limit",
+                    "entry_limit"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            }
+          },
+          "title": "UnansweredRequestView",
           "type": "object"
         }
       },

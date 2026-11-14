@@ -3347,7 +3347,7 @@ async def test_mail_reads_validate_every_supplied_credential(auth_client, db, mo
 @pytest.mark.parametrize("kind", ["message", "context_request", "handoff"])
 async def test_member_thread_writes_require_participation(auth_client, db, monkeypatch, required, path, kind):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
-    sender, _, outsider, root, _ = await request_thread(db)
+    sender, recipient, outsider, root, _ = await request_thread(db)
     headers = await session_headers(db, outsider)
     before_messages = (await db.execute(select(MailMessage.id, MailMessage.request_status))).all()
     before_receipts = (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
@@ -3364,9 +3364,26 @@ async def test_member_thread_writes_require_participation(auth_client, db, monke
     assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
     assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
         MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
-    accepted = await auth_client.post("/api/v1/agent-mail/messages", headers=await session_headers(db, sender), json=payload)
-    assert accepted.status_code == 200
-    assert accepted.json()["thread_root_id"] == root.id
+    sender_headers = await session_headers(db, sender)
+    if kind == "message":
+        # A thread reply never addresses the replier itself: the recipient must be another participant.
+        self_addressed = await auth_client.post("/api/v1/agent-mail/messages", headers=sender_headers, json=payload)
+        assert self_addressed.status_code == 400
+        assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
+        assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+            MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
+    accepted_payload = {**payload, "recipient_member_id": recipient.id}
+    accepted = await auth_client.post("/api/v1/agent-mail/messages", headers=sender_headers, json=accepted_payload)
+    if kind == "message":
+        assert accepted.status_code == 200
+        assert accepted.json()["thread_root_id"] == root.id
+    else:
+        # A request starts its own thread; the refusal writes nothing.
+        assert accepted.status_code == 400
+        assert "a request starts its own thread" in accepted.text
+        assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
+        assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+            MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
 
 
 @pytest.mark.asyncio

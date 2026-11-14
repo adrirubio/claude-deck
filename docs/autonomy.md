@@ -178,3 +178,46 @@ no pre-upgrade idle duration is guessed. Human, native-input and external-check
 waits, OFF/HOLD and incomplete bounded observations suppress this signal. Actual
 progress clears it. Last actor names come from authenticated recorded evidence;
 otherwise the view says Unknown. Idle attention grants no execution authority.
+
+### Unanswered explicit requests
+
+The team summary and the Supervisor check-in also show **unanswered requests**: a pending
+Agent Mail `context_request` or `handoff` that is addressed to an idle member of the team and
+is older than `MAIL_REQUEST_UNANSWERED_SECONDS` (default 1200 seconds, valid 60–86400; an age
+equal to the threshold counts). The team card shows "C1 has not answered L1's request for 25
+min" and the Supervisor line shows a second sentence with the count and the age of the oldest.
+The names are display names only. A subject, a body or a payload is never shown.
+
+- Only an **explicit** request counts. A plain message that asks for something carries no
+  request marker, and Albiex Synth City does not guess from prose. Send a request that needs an
+  answer as a context request addressed to the member directly.
+- A request leaves the view when it is answered, superseded or acknowledged, or when the
+  addressed member sends a plain reply in the request's own thread. A message from any other
+  member, including the requester, never clears it. Approval requests have their own timeout
+  flow and are not listed. A working member is active, so its requests are not listed.
+- The view says when it is **incomplete**, with a fixed reason: `candidate_limit` (more than 64
+  unresolved requests, or older history than the budget below was not examined), `native_unknown` (a member's activity is unknown, stopped or could not be
+  read in time), `ambiguous_legacy_request` (an older request nested inside a thread cannot be
+  matched to a reply), `reply_scan_limit` (the reply check reached its bound) or `entry_limit`
+  (more than 16 unanswered requests; the count of those not listed is shown). A truncated or
+  unproven view is never shown as complete.
+- Requests are examined oldest first, page after page, and a request that is provably answered,
+  including one answered only through an older nested reply in its own thread, is skipped without
+  counting. The first 64 requests that are not provably answered are evaluated, and a 65th means
+  `candidate_limit`. All of the reading shares one budget: 256 reply rows, 512 reads (each examined
+  request is one read) and five seconds. History beyond that budget is reported as incomplete,
+  never as complete, and it is not claimed to have been examined.
+- The signal grants no authority and does not change `team_idle` or the next actor.
+
+### Thread view limits
+
+A thread read returns at most 500 replies. It reads the thread breadth first, by depth and then by
+id, with indexed page reads, so the work depends on the replies kept and not on how many
+descendants exist. The depth bound is 33. A thread with at most 500 replies and a depth below 33
+is returned whole, in the usual order (creation time, then id).
+
+When a thread is **truncated**, the reply list says so with `replies_complete: false` and the
+reason `reply_limit` (more than 500 replies) or `depth_limit` (a reply at depth 33). A truncated
+view holds the 500 replies with the smallest ids by depth and then id. It does **not** hold the
+500 earliest replies by time, and it must not be read that way. The kept replies are still shown
+ordered by creation time and id.

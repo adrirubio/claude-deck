@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import heapq
 import hmac
 import json
 import logging
@@ -100,6 +101,17 @@ class MailAuthorityError(ValueError):
         self.detail = detail
         self.status_code = status_code
         super().__init__(detail)
+
+
+# A thread is resolved and read within fixed bounds (#752).
+MAX_THREAD_ANCESTRY_HOPS = 32
+THREAD_REPLY_LIMIT = 500
+THREAD_DEPTH_LIMIT = 33
+# Child ids are read in pages of this size, so the work of a thread read never depends on how many
+# children one parent has.
+THREAD_CHILD_PAGE = 16
+# Service metadata on an answer: the exact nested request it resolved (never caller supplied).
+RESOLVES_REQUEST_KEY = "resolves_request_id"
 
 
 class MailDeliveryIntegrityError(RuntimeError):
@@ -1152,8 +1164,40 @@ class AgentMailService:
         sender_type: str | None = None,
         commit: bool = True,
     ) -> MailMessageResponse:
-        if request.thread_root_id is not None and request.sender_member_id is not None:
-            await self.require_member_thread(db, request.thread_root_id, request.sender_member_id)
+        answer_target_id: int | None = None
+        if request.thread_root_id is not None:
+            supplied_id = request.thread_root_id
+            if request.sender_member_id is not None:
+                # The existing check on the supplied id stays first and unchanged.
+                await self.require_member_thread(db, supplied_id, request.sender_member_id)
+            canonical = await self.resolve_canonical_root(db, supplied_id)
+            if request.sender_member_id is not None:
+                # The canonical root can only deny: an intermediate-only participant is refused.
+                permitted = await db.scalar(select(MailMessage.id).where(
+                    MailMessage.id == canonical.id, self._member_root_access(request.sender_member_id)))
+                if permitted is None:
+                    raise PermissionError("thread_not_authorized")
+            # A request starts its own thread. Authorization came first, so an outsider is refused
+            # with the authorization error and nothing is written.
+            if request.kind in MAIL_REQUEST_KINDS:
+                raise ValueError("a request starts its own thread")
+            # An explicit answer still names the exact request row it resolves, never an ancestor:
+            # when the supplied row is itself a context request, that row is the target. When it is
+            # an ordinary reply, the target is the canonical root (which must be the request).
+            supplied_row = await db.get(MailMessage, supplied_id)
+            answer_target_id = (
+                supplied_id
+                if request.kind == "answer" and supplied_row is not None and supplied_row.kind == "context_request"
+                else None
+            )
+            request = request.model_copy(update={"thread_root_id": canonical.id})
+        if RESOLVES_REQUEST_KEY in (request.payload or {}):
+            raise ValueError(f"payload key {RESOLVES_REQUEST_KEY} is reserved")
+        # The exact nested request an answer resolves is kept on the answer (and compared on a replay)
+        # as service metadata. An answer whose target is the canonical root carries none.
+        resolves_request_id = (
+            answer_target_id
+            if answer_target_id is not None and answer_target_id != request.thread_root_id else None)
         if sender_type not in {None, "system", "director"}:
             raise ValueError("Invalid sender type")
         if sender_type is not None and (
@@ -1181,6 +1225,7 @@ class AgentMailService:
                     sender_actor_id=sender_actor_id,
                     sender_type=sender_type,
                     operator_authorized=operator_authorized,
+                    resolves_request_id=resolves_request_id,
                 ):
                     raise MailDeliveryIntegrityError(
                         f"delivery key {delivery_key!r} conflicts with different mail"
@@ -1196,6 +1241,8 @@ class AgentMailService:
                 authenticated_sender_member_id=authenticated_sender_member_id,
                 authoritative_approval_round=authoritative_approval_round,
                 operator_authorized=operator_authorized,
+                answer_target_id=answer_target_id,
+                resolves_request_id=resolves_request_id,
             )
         else:
             try:
@@ -1209,6 +1256,8 @@ class AgentMailService:
                         delivery_key=delivery_key,
                         authoritative_approval_round=authoritative_approval_round,
                         operator_authorized=operator_authorized,
+                        answer_target_id=answer_target_id,
+                        resolves_request_id=resolves_request_id,
                     )
             except IntegrityError:
                 created = False
@@ -1226,6 +1275,7 @@ class AgentMailService:
                     sender_actor_id=sender_actor_id,
                     sender_type=sender_type,
                     operator_authorized=operator_authorized,
+                    resolves_request_id=resolves_request_id,
                 ):
                     raise MailDeliveryIntegrityError(
                         f"delivery key {delivery_key!r} conflicts with different mail"
@@ -1262,9 +1312,11 @@ class AgentMailService:
         sender_actor_id: int | None,
         sender_type: str,
         operator_authorized: bool,
+        resolves_request_id: int | None = None,
     ) -> bool:
         if request.recipient_member_id is not None or request.thread_root_id is not None:
-            audience_type, audience_id = await self._message_audience(db, request)
+            audience_type, audience_id = await self._message_audience(
+                db, request, sender_actor_id=sender_actor_id)
         else:
             audience_type = getattr(request, "audience_type", None)
             audience_id = getattr(request, "audience_id", None)
@@ -1279,7 +1331,9 @@ class AgentMailService:
             "body_markdown": request.body_markdown,
             "decision": request.decision,
             "kind": request.kind,
-            "payload": request.payload or None,
+            # The exact answer target is part of the operation: a replay through another target differs.
+            "payload": ({**(request.payload or {}), RESOLVES_REQUEST_KEY: resolves_request_id}
+                        if resolves_request_id is not None else request.payload or None),
             "recipient_member_id": request.recipient_member_id,
             "sender_actor_id": sender_actor_id,
             "sender_type": sender_type,
@@ -1320,6 +1374,7 @@ class AgentMailService:
         request: MailMessageCreate,
         *,
         operator_authorized: bool = False,
+        sender_actor_id: int | None = None,
     ) -> tuple[str, str]:
         audience_type = getattr(request, "audience_type", None)
         audience_id = getattr(request, "audience_id", None)
@@ -1327,25 +1382,25 @@ class AgentMailService:
             if audience_type is not None or audience_id is not None:
                 if audience_type != "member" or audience_id is None:
                     raise ValueError("direct and threaded messages use member audience")
-            if request.recipient_member_id is not None:
+            if request.thread_root_id is not None:
+                # A thread reply reaches the thread's participants minus the replier. An explicit
+                # recipient is never added to that audience: it must already be one of them.
+                participants = await self._thread_participants(db, request, sender_actor_id)
+                if request.recipient_member_id is not None:
+                    if await db.get(MailTeamMember, request.recipient_member_id) is None:
+                        raise ValueError("recipient_member_id must reference an existing member")
+                    if request.recipient_member_id not in participants:
+                        raise ValueError("recipient is not a participant of the thread")
+                resolved_audience_id = (
+                    str(next(iter(participants)))
+                    if len(participants) == 1
+                    else f"thread:{request.thread_root_id}"
+                )
+            else:
                 member_id = request.recipient_member_id
                 resolved_audience_id = str(member_id)
                 if await db.get(MailTeamMember, member_id) is None:
                     raise ValueError("recipient_member_id must reference an existing member")
-            else:
-                root = await db.get(MailMessage, request.thread_root_id)
-                if root is None:
-                    raise ValueError("thread_root_id must reference an existing message")
-                participants = {
-                    member_id
-                    for member_id in (root.sender_member_id, root.recipient_member_id)
-                    if member_id is not None and member_id != request.sender_member_id
-                }
-                resolved_audience_id = (
-                    str(next(iter(participants)))
-                    if len(participants) == 1
-                    else f"thread:{root.id}"
-                )
             if audience_type == "member" and audience_id != resolved_audience_id:
                 raise ValueError("member audience_id must match the direct recipient or thread")
             return "member", resolved_audience_id
@@ -1454,13 +1509,15 @@ class AgentMailService:
         delivery_key: Optional[str] = None,
         authoritative_approval_round: int | None = None,
         operator_authorized: bool = False,
+        answer_target_id: int | None = None,
+        resolves_request_id: int | None = None,
     ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
         if request.sender_member_id is not None and sender_actor_id is not None:
             raise ValueError("messages cannot have both sender_member_id and sender_actor_id")
         audience_type, audience_id = await self._message_audience(
-            db, request, operator_authorized=operator_authorized
+            db, request, operator_authorized=operator_authorized, sender_actor_id=sender_actor_id,
         )
         is_broadcast = request.recipient_member_id is None and request.thread_root_id is None
         if request.kind == "broadcast" and not is_broadcast:
@@ -1477,7 +1534,8 @@ class AgentMailService:
         if request.kind == "answer" and request.thread_root_id is None:
             raise ValueError("answer messages require thread_root_id")
         if request.kind == "answer":
-            root = await db.get(MailMessage, request.thread_root_id)
+            # The answer resolves the exact request row it names, never the canonical root.
+            root = await db.get(MailMessage, answer_target_id or request.thread_root_id)
             if root is None:
                 raise ValueError("answer messages require an existing thread root")
             if root.kind != "context_request":
@@ -1492,6 +1550,8 @@ class AgentMailService:
             raise ValueError(f"{request.kind} requires recipient_member_id")
 
         payload = dict(request.payload or {})
+        if resolves_request_id is not None:
+            payload[RESOLVES_REQUEST_KEY] = resolves_request_id
         linked_item = None
         if request.kind == "context_request" and "work_item_id" in payload:
             linked_item = await self._validate_linked_context_request(
@@ -1536,20 +1596,18 @@ class AgentMailService:
         db.add(message)
         await db.flush()
 
-        if request.recipient_member_id is not None:
+        if request.thread_root_id is not None:
+            # Already validated before the row existed: never empty, and any explicit recipient is
+            # one of these participants.
+            recipients |= await self._thread_participants(db, request, sender_actor_id)
+        elif request.recipient_member_id is not None:
             recipients.add(request.recipient_member_id)
-        elif request.thread_root_id is not None:
-            root = await db.get(MailMessage, request.thread_root_id)
-            if root is not None:
-                for member_id in (root.sender_member_id, root.recipient_member_id):
-                    if member_id is not None and member_id != request.sender_member_id:
-                        recipients.add(member_id)
 
         for member_id in recipients:
             db.add(MailReceipt(message_id=message.id, member_id=member_id))
 
         if request.kind == "answer":
-            root = await db.get(MailMessage, request.thread_root_id)
+            root = await db.get(MailMessage, answer_target_id or request.thread_root_id)
             if root is not None and root.request_status == "pending":
                 root.request_status = "answered"
 
@@ -2571,6 +2629,53 @@ class AgentMailService:
         return ((MailMessage.sender_member_id == member_id)
                 | (MailMessage.recipient_member_id == member_id) | receipt)
 
+    async def resolve_canonical_root(self, db: AsyncSession, message_id: int) -> MailMessage:
+        """Follow thread_root_id from any message of a thread to the first message without one.
+
+        Bounded: at most MAX_THREAD_ANCESTRY_HOPS hops. A missing ancestor, a cycle and a chain that
+        is too deep all raise the same ValueError before anything is written.
+        """
+        current = await db.get(MailMessage, message_id)
+        if current is None:
+            raise ValueError("thread_root_id must reference an existing message")
+        seen: set[int] = set()
+        for _hop in range(MAX_THREAD_ANCESTRY_HOPS + 1):
+            if current.thread_root_id is None:
+                return current
+            if current.id in seen:
+                break
+            seen.add(current.id)
+            parent = await db.get(MailMessage, current.thread_root_id)
+            if parent is None:
+                break
+            current = parent
+        raise ValueError("invalid thread ancestry")
+
+    async def _thread_participants(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        sender_actor_id: int | None = None,
+    ) -> set[int]:
+        """The members a thread message reaches: the CANONICAL ROOT's sender and recipient minus the
+        replier. The exact request an answer resolves never changes this audience.
+
+        An external actor that started the thread is reached through the thread API and has no
+        receipt, so a reply to it needs no member. A reply with neither a member nor an actor to
+        reach is refused.
+        """
+        row = await db.get(MailMessage, request.thread_root_id)
+        if row is None:
+            raise ValueError("thread_root_id must reference an existing message")
+        participants = {
+            member_id for member_id in (row.sender_member_id, row.recipient_member_id)
+            if member_id is not None and member_id != request.sender_member_id
+        }
+        reaches_actor = row.sender_actor_id is not None and row.sender_actor_id != sender_actor_id
+        if not participants and not reaches_actor:
+            raise ValueError("a reply would reach nobody")
+        return participants
+
     async def require_member_thread(self, db: AsyncSession, message_id: int, member_id: int) -> None:
         message = await db.get(MailMessage, message_id)
         if message is None:
@@ -2582,28 +2687,85 @@ class AgentMailService:
         if permitted is None:
             raise PermissionError("thread_not_authorized")
 
+    @staticmethod
+    def _thread_child_page(parent_id: int, after_id: int):
+        """One page of a parent's child ids in id order: a single probe of the thread_root_id index."""
+        return (select(MailMessage.id)
+                .where(MailMessage.thread_root_id == parent_id, MailMessage.id > after_id)
+                .order_by(MailMessage.id).limit(THREAD_CHILD_PAGE))
+
+    async def _select_thread_replies(self, db: AsyncSession, root_id: int) -> tuple[list[int], str | None]:
+        """Descendant ids of a thread in (depth, id) order, and why the list is incomplete (or None).
+
+        Breadth-first. At each depth the children of every parent are merged by id (a heap over one page
+        per parent), so the selection at a depth is exactly its smallest ids across ALL parents. The walk
+        stops as soon as THREAD_REPLY_LIMIT + 1 rows are selected, so its work depends on the rows kept
+        and the parents examined, not on how many descendants exist. A row selected at the depth bound is
+        not expanded. A truncated selection holds the smallest ids by (depth, id), not the earliest
+        timestamps.
+        """
+        limit = THREAD_REPLY_LIMIT + 1
+        selected: list[int] = []
+        frontier = [root_id]
+        reached_depth_limit = False
+        for depth in range(1, THREAD_DEPTH_LIMIT + 1):
+            pages: dict[int, tuple[list[int], int]] = {}
+            heap: list[tuple[int, int]] = []
+            for parent in frontier:
+                ids = list((await db.scalars(self._thread_child_page(parent, 0))).all())
+                if ids:
+                    pages[parent] = (ids, 0)
+                    heapq.heappush(heap, (ids[0], parent))
+            level: list[int] = []
+            while heap and len(selected) + len(level) < limit:
+                child_id, parent = heapq.heappop(heap)
+                level.append(child_id)
+                ids, position = pages[parent]
+                if position + 1 < len(ids):
+                    pages[parent] = (ids, position + 1)
+                    heapq.heappush(heap, (ids[position + 1], parent))
+                elif len(ids) == THREAD_CHILD_PAGE:
+                    more = list((await db.scalars(self._thread_child_page(parent, ids[-1]))).all())
+                    if more:
+                        pages[parent] = (more, 0)
+                        heapq.heappush(heap, (more[0], parent))
+            selected.extend(level)
+            if len(selected) >= limit:
+                return selected, "reply_limit"
+            if depth == THREAD_DEPTH_LIMIT and level:
+                reached_depth_limit = True
+            frontier = level
+            if not frontier:
+                break
+        return selected, "depth_limit" if reached_depth_limit else None
+
     async def get_thread(
         self, db: AsyncSession, root_id: int, for_member_id: Optional[int] = None
     ) -> MailThreadResponse:
         if for_member_id is not None:
             await self.require_member_thread(db, root_id, for_member_id)
-        root = await db.get(MailMessage, root_id)
-        if root is None:
+        if await db.get(MailMessage, root_id) is None:
             raise ValueError(f"Message {root_id} not found")
-        replies = (
-            (
-                await db.execute(
-                    select(MailMessage)
-                    .where(MailMessage.thread_root_id == root_id)
-                    .order_by(MailMessage.created_at.asc())
-                )
-            )
-            .scalars()
-            .all()
-        )
+        # Any message id of a thread opens the whole thread, under its canonical root.
+        root = await self.resolve_canonical_root(db, root_id)
+        if for_member_id is not None:
+            permitted = await db.scalar(select(MailMessage.id).where(
+                MailMessage.id == root.id, self._member_root_access(for_member_id)))
+            if permitted is None:
+                raise PermissionError("thread_not_authorized")
+        # The first 501 descendants of the canonical root by (depth, id), found breadth-first with paged
+        # index probes (see _select_thread_replies). A 501st row, or a row at the depth bound, is
+        # reported instead of returning a complete-looking truncated thread.
+        selected, incomplete_reason = await self._select_thread_replies(db, root.id)
+        by_id = {reply.id: reply for reply in (await db.scalars(
+            select(MailMessage).where(MailMessage.id.in_(selected)))).all()} if selected else {}
+        replies = sorted((by_id[row_id] for row_id in selected[:THREAD_REPLY_LIMIT]),
+                         key=lambda reply: (reply.created_at, reply.id))
         return MailThreadResponse(
             root=await self._message_response(db, root, for_member_id),
             replies=[await self._message_response(db, reply, for_member_id) for reply in replies],
+            replies_complete=incomplete_reason is None,
+            replies_incomplete_reason=incomplete_reason,
         )
 
     async def list_root_messages(
