@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import event
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -41,15 +42,23 @@ engine = create_async_engine(
 # WAL permits readers and a writer to overlap. SQLite still has one writer;
 # stale read snapshots may need rollback before a write can succeed. A busy
 # timeout alone does not recover that condition. WAL persists in the DB header.
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
+def configure_sqlite_connection(dbapi_conn, busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS) -> None:
+    """The pragmas every SQLite connection of this app gets (also used by tests that need the real behavior)."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
+    cur.close()
+
+
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragma(dbapi_conn, _):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA synchronous=NORMAL")
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.execute("PRAGMA busy_timeout=5000")
-        cur.close()
+        configure_sqlite_connection(dbapi_conn)
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(
@@ -61,8 +70,11 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncSession:
-    """Dependency for getting async database sessions."""
+async def get_db(request: Request = None) -> AsyncSession:
+    """Dependency for getting async database sessions.
+
+    FastAPI injects the request; a direct caller may pass none. It is used only to name the route in the log.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -78,13 +90,15 @@ async def get_db() -> AsyncSession:
                 "CREATE", "DROP",
             }:
                 operation = "OTHER"
+            route = getattr(getattr(request, "scope", {}).get("route"), "path", None) if request is not None else None
             logger.warning(
                 "database_operation_failed dialect=%s sqlite_code=%s "
-                "sqlite_name=%s operation=%s",
+                "sqlite_name=%s operation=%s route=%s",
                 engine.dialect.name,
                 getattr(exc.orig, "sqlite_errorcode", None),
                 getattr(exc.orig, "sqlite_errorname", None),
                 operation,
+                route or (request.url.path if request is not None else "unknown"),
             )
             await session.rollback()
             raise
@@ -105,14 +119,16 @@ async def _sqlite_columns(conn, table_name: str) -> set[str]:
 
 
 async def _sqlite_create_approval_tables(conn) -> None:
-    from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision
+    from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision, GithubRevisionReview
 
     def create_tables(sync_conn) -> None:
         GithubApprovalRequest.__table__.create(sync_conn, checkfirst=True)
         GithubAttemptScopeRevision.__table__.create(sync_conn, checkfirst=True)
+        GithubRevisionReview.__table__.create(sync_conn, checkfirst=True)
         for table in (
             GithubApprovalRequest.__table__,
             GithubAttemptScopeRevision.__table__,
+            GithubRevisionReview.__table__,
         ):
             for index in table.indexes:
                 index.create(sync_conn, checkfirst=True)
@@ -744,6 +760,7 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         ("waiting_input_reason", "VARCHAR"), ("waiting_input_started_at", "DATETIME"),
         ("waiting_input_observed_at", "DATETIME"),
         ("waiting_input_notice_id", "INTEGER REFERENCES mail_messages(id) ON DELETE SET NULL"),
+        ("opencode_wait_generation", "BIGINT"), ("opencode_wait_uncertain", "BOOLEAN DEFAULT 0"),
     ):
         if binding_columns and column not in binding_columns:
             await conn.execute(text(f"ALTER TABLE agent_pane_bindings ADD COLUMN {column} {definition}"))
@@ -782,6 +799,9 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if preset_columns and "leader_slot_id" not in preset_columns:
         await conn.execute(text("ALTER TABLE agent_team_presets ADD COLUMN leader_slot_id INTEGER"))
+    for column in ("leader_ack_timeout_seconds", "leader_ack_max_wait_seconds"):
+        if preset_columns and column not in preset_columns:
+            await conn.execute(text(f"ALTER TABLE agent_team_presets ADD COLUMN {column} INTEGER"))
     for column, definition in (
         ("supervisor_actor_id", "INTEGER REFERENCES mail_external_actors(id) ON DELETE SET NULL"),
         ("supervisor_checked_at", "DATETIME"), ("supervisor_next_check_at", "DATETIME"),
@@ -906,6 +926,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}
+    if work_item_columns and "dispatch_priority" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_priority INTEGER"))
     if work_item_columns and "status_note" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
     if work_item_columns and "checks_unavailable_since" not in work_item_columns:
@@ -1081,6 +1103,16 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     await _sqlite_create_approval_tables(conn)
     revision_columns = await _sqlite_columns(conn, "github_attempt_scope_revisions")
+    for column, definition in (
+        ("origin_kind", "VARCHAR NOT NULL DEFAULT 'continuation'"),
+        ("amendment_base_paths", "JSON NOT NULL DEFAULT '[]'"),
+        ("amendment_added_paths", "JSON NOT NULL DEFAULT '[]'"),
+        ("previous_scope_revision", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if revision_columns and column not in revision_columns:
+            await conn.execute(text(
+                f"ALTER TABLE github_attempt_scope_revisions ADD COLUMN {column} {definition}"
+            ))
     if revision_columns and "submitted_head_sha" not in revision_columns:
         await conn.execute(
             text(
@@ -1116,6 +1148,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "ADD COLUMN recovery_checkpoint_stage VARCHAR"
             )
         )
+    approval_columns = await _sqlite_columns(conn, "github_approval_requests")
+    for column in ("leader_ack_reminded_at", "leader_activity_extended_at"):
+        if approval_columns and column not in approval_columns:
+            await conn.execute(text(f"ALTER TABLE github_approval_requests ADD COLUMN {column} DATETIME"))
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",

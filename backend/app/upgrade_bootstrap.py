@@ -196,7 +196,10 @@ def _write_json(path: Path, value: dict, ops: FileOps, *, initial=False):
 @contextmanager
 def _migration_lock(parent: Path):
     path = parent / LOCK_NAME
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        raise RuntimeError(f'Database upgrade cannot open lock ({error.errno}): {path}') from None
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise RuntimeError(f'Database upgrade lock is invalid: {path}')
@@ -204,6 +207,8 @@ def _migration_lock(parent: Path):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError(f'Database upgrade in progress: {parent / OLD_NAME} -> {parent / NEW_NAME}') from None
+        except OSError as error:
+            raise RuntimeError(f'Database upgrade cannot acquire lock ({error.errno}): {path}') from None
         try:
             yield
         finally:
@@ -577,7 +582,8 @@ def _database_choice(configured_url: str, cwd: Path | None):
 
 
 @contextmanager
-def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps, *, reference_phase=False):
+def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps, *,
+                    default_database=False, reference_phase=False):
     """One order for both entries: HOME first, then sorted unique DB anchors.
 
     The HOME anchor is the parent of both product directories. The same anchor
@@ -589,7 +595,9 @@ def _resource_locks(home: Path, cwd: Path, configured: Path | None, ops: FileOps
             raise RuntimeError('Upgrade reference set is incomplete: file phase in progress')
         binding = home / NEW_HOME / BINDING_NAME
         bindings = _bindings(binding)
-        parents = {cwd} if configured is not None else set()
+        # A custom database does not use the default CWD file set. Requiring
+        # its unrelated lock prevents startup from a read-only installation.
+        parents = {cwd} if configured is not None and default_database else set()
         # Only the database-open phase adds a custom DB parent. In the file
         # phase that directory may itself be inside a planned HOME move, or
         # intentionally missing; creating its lock would contaminate the plan
@@ -651,7 +659,8 @@ def prepare_database_url(configured_url: str, *, explicit: bool,
         return configured_url
     ops = ops or FileOps()
     try:
-        with _resource_locks(home, cwd, configured, ops) as (binding, bindings):
+        with _resource_locks(home, cwd, configured, ops,
+                default_database=not explicit or configured == cwd / OLD_NAME) as (binding, bindings):
             return _resolve_database_locked(configured_url, url, configured, explicit,
                                              cwd, binding, bindings, ops)
     except OSError as error:
@@ -1469,7 +1478,8 @@ def prepare_resource_locations(configured_url: str, configured_attachment_dir: s
     ops = ops or FileOps()
     url, configured = _database_choice(configured_url, cwd)
     try:
-        with _resource_locks(home, cwd, configured, ops) as (binding, bindings):
+        with _resource_locks(home, cwd, configured, ops,
+                default_database=not database_explicit or configured == cwd / OLD_NAME) as (binding, bindings):
             # Internal recovery may inspect a partial publication. The public
             # read API instead refuses ANY surviving controlling file journal.
             records = _read_reference_records(home)

@@ -13,10 +13,10 @@
   </defs>
 
   <!-- factory boundary -->
-  <rect x="15" y="100" width="760" height="460" rx="16" fill="#fafaf9" stroke="#1c1917" stroke-width="2.5" stroke-dasharray="11 6"/>
+  <rect x="236" y="100" width="539" height="460" rx="16" fill="#fafaf9" stroke="#1c1917" stroke-width="2.5" stroke-dasharray="11 6"/>
   <rect x="622" y="88" width="138" height="24" rx="5" fill="#1c1917"/>
   <text x="691" y="105" text-anchor="middle" font-size="13" font-weight="800" fill="#fff" letter-spacing="1">THE FACTORY</text>
-  <text x="760" y="132" text-anchor="end" font-size="12" font-weight="600" fill="#1c1917">= supervisor + controller + team</text>
+  <text x="760" y="132" text-anchor="end" font-size="12" font-weight="600" fill="#1c1917">= controller + team</text>
 
   <!-- Director (human) -->
   <rect x="350" y="12" width="300" height="62" rx="10" fill="#fef3c7" stroke="#b45309" stroke-width="2.5"/>
@@ -24,7 +24,8 @@
   <text x="500" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#78350f">Director</text>
   <text x="500" y="60" text-anchor="middle" font-size="12.5" fill="#78350f">HUMAN · sets the outcome · decides</text>
 
-  <!-- Supervisor (agent) -->
+  <!-- Supervisor (agent, outside the factory: helps the Director act on it) -->
+  <g transform="translate(-15,0)">
   <rect x="30" y="180" width="170" height="190" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5" stroke-dasharray="7 4"/>
   <use href="#i-agent" x="40" y="190" width="24" height="24" fill="#6d28d9"/>
   <text x="70" y="208" font-size="15.5" font-weight="700" fill="#4c1d95">Supervisor</text>
@@ -33,8 +34,9 @@
   <text x="42" y="270" font-size="11.5" fill="#4c1d95">or the Director</text>
   <text x="42" y="294" font-size="11.5" fill="#4c1d95"><tspan font-weight="700">optional:</tspan> normal running</text>
   <text x="42" y="311" font-size="11.5" fill="#4c1d95"><tspan font-weight="700">required:</tspan> maintenance</text>
-  <text x="42" y="335" font-size="11" fill="#5b21b6">holds no state · runs</text>
-  <text x="42" y="351" font-size="11" fill="#5b21b6">outside the controller</text>
+  <text x="42" y="335" font-size="11" fill="#5b21b6">holds no state · acts on</text>
+  <text x="42" y="351" font-size="11" fill="#5b21b6">the factory from outside</text>
+  </g>
 
   <!-- Controller (system) -->
   <rect x="250" y="145" width="300" height="392" rx="12" fill="#f1f5f9" stroke="#334155" stroke-width="2.5"/>
@@ -112,17 +114,17 @@
   <text x="508" y="94" font-size="12" fill="#78350f">reads one card</text>
   <path d="M650,43 L968,43 L968,266" stroke="#b45309" stroke-width="2.6" fill="none" marker-end="url(#mh)"/>
   <text x="668" y="35" font-size="12" font-weight="700" fill="#78350f">owns + grooms the backlog · decides</text>
-  <path d="M350,43 C200,43 115,90 115,176" stroke="#b45309" stroke-width="2.2" fill="none" marker-end="url(#mh)"/>
-  <text x="150" y="40" text-anchor="end" font-size="12" fill="#78350f">delegates</text>
-  <text x="150" y="55" text-anchor="end" font-size="11" fill="#78350f">(text in parent issue)</text>
+  <path d="M350,43 C200,43 100,90 100,176" stroke="#b45309" stroke-width="2.2" fill="none" marker-end="url(#mh)"/>
+  <text x="135" y="40" text-anchor="end" font-size="12" fill="#78350f">delegates</text>
+  <text x="135" y="55" text-anchor="end" font-size="11" fill="#78350f">(text in parent issue)</text>
 
   <!-- Arrows: agent -->
-  <path d="M200,236 L246,236" stroke="#6d28d9" stroke-width="2.5" fill="none" marker-end="url(#ma)" stroke-dasharray="6 3"/>
-  <text x="201" y="228" font-size="9.5" fill="#4c1d95" font-weight="700">check-in</text>
-  <path d="M200,300 L246,300" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)"/>
-  <text x="204" y="318" font-size="10" fill="#4c1d95">operator</text>
-  <text x="204" y="330" font-size="10" fill="#4c1d95">API</text>
-  <path d="M115,370 L115,615 L892,615 L892,484" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)" stroke-dasharray="6 4"/>
+  <path d="M185,236 L246,236" stroke="#6d28d9" stroke-width="2.5" fill="none" marker-end="url(#ma)" stroke-dasharray="6 3"/>
+  <text x="186" y="228" font-size="9.5" fill="#4c1d95" font-weight="700">check-in</text>
+  <path d="M185,300 L246,300" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)"/>
+  <text x="189" y="318" font-size="10" fill="#4c1d95">operator</text>
+  <text x="189" y="330" font-size="10" fill="#4c1d95">API</text>
+  <path d="M100,370 L100,615 L892,615 L892,484" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)" stroke-dasharray="6 4"/>
   <text x="300" y="636" font-size="12" fill="#4c1d95">supervisor publishes checkpoints and maintenance status to the parent issue</text>
   <path d="M700,390 L700,410 L796,410" stroke="#6d28d9" stroke-width="2" fill="none" marker-end="url(#ma)"/>
   <text x="706" y="404" font-size="10.5" fill="#4c1d95">PRs, pushes</text>

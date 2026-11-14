@@ -11,8 +11,10 @@ from app.api.v1.deps import require_operator
 from app.database import get_db
 from app.models.api_model import format_utc_time
 from app.models.database import GithubAcceptedSourceImport, GithubMaintenanceEvent, GithubOwnerObservationPause, GithubWorkItem, TeamGithubScope
-from app.models.schemas import TerminalRevisionReconcileRequest
-from app.services.github_terminal_revision_service import terminal_revision_report, reconcile_terminal_revision
+from app.models.schemas import FinalizeMergedRequest, TerminalRevisionReconcileRequest
+from app.services.github_terminal_revision_service import (
+    finalize_merged_item, finalize_merged_preview, reconcile_terminal_revision, terminal_revision_report,
+)
 from app.services.accepted_source_imports import SourceImportRequest, register_source_import
 from app.services.github_client import GithubClientResponseError
 from app.services.github_check_observation import GithubCheckObservationError
@@ -179,3 +181,40 @@ async def integration_outcome(preset_id: int, item_id: int, request: Integration
     except (IntegrityError,OperationalError):
         await db.rollback()
         raise HTTPException(status_code=409,detail="maintenance_context_changed") from None
+
+
+async def read_merged_pull(db, scope, item):
+    """Read the tracked PR fresh with the scope's own read access and verify it is this attempt's pull."""
+    from app.services.github_approval_service import GithubApprovalError, github_approval_service
+    from app.services.github_client import github_client
+    from app.services.github_verification_service import github_verification_service as verification
+    try:
+        token = await github_approval_service.github_read_token(scope)
+        pull = await github_client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number), token=token)
+        base = await verification.normalize_base_ref(scope, github_client, token=token, base_ref=item.dispatch_base_ref)
+    except (GithubApprovalError, GithubClientResponseError, httpx.HTTPError):
+        raise ValueError("finalize_merged_pr_unreadable") from None
+    try:
+        verification._verify_pull_identity(pull, scope, item, expected_base=base)
+    except ValueError:
+        raise ValueError("finalize_merged_pr_identity_invalid") from None
+    return pull
+
+
+@router.post("/presets/{preset_id}/work-items/{item_id}/finalize-merged")
+async def finalize_merged_route(preset_id: int, item_id: int, request: FinalizeMergedRequest, response: Response,
+                                _operator=Depends(require_operator), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    item, scope = await context(db, preset_id, item_id)
+    try:
+        if request.dry_run:  # fresh evidence and the digest only: no event, no settlement, no operation id used
+            return await finalize_merged_preview(db, item, scope, lambda: read_merged_pull(db, scope, item))
+        return await finalize_merged_item(db, item, scope, lambda: read_merged_pull(db, scope, item),
+                                          expected_context_sha256=request.expected_context_sha256,
+                                          operation_id=request.operation_id, reason=request.reason)
+    except ValueError as error:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="finalize_merged_context_changed") from None

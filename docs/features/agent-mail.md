@@ -76,7 +76,15 @@ Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for se
 
 GitHub Copilot CLI gets the MCP server through `copilot mcp add` and user-level hook JSON for session registration, activity updates, and idle inbox reminders.
 
-OpenCode CLI gets the MCP server entry and a lifecycle plugin from the Install tab. A backup is attempted first.
+OpenCode CLI (OpenCode 2) gets three things from the Install tab:
+
+- **MCP server:** `mcp.servers.albiex-synth-city-mail`, with `codemode: false` so that the Mail tools are direct tool calls. An older flat `mcp.albiex-synth-city-mail` entry that Synth City wrote is moved there. An entry under that name that Synth City did not write is refused, not overwritten.
+- **Lifecycle plugin:** an OpenCode 2 plugin. An OpenCode 1 plugin never loads on OpenCode 2, so it shows as **Needs update**, and **Set up** replaces it in place.
+- **Question deny:** a `permissions` rule that denies the question tool, so unattended members never stall on a question. The plugin also denies it for team members, and every team launch carries the same rule.
+
+Everything is read and checked first. A malformed config file is refused before the backup and before any write, and each file is replaced atomically. Synth City records whether it added the deny rule. **Remove** deletes the rule only when that record proves it added it to that file and the file still has exactly one such rule; a rule you added yourself is kept.
+
+If a team member still opens a question or a permission prompt, the plugin reports it and Synth City sends the bound Supervisor (or the Leader) the usual "Waiting for input" notice. When the order of reports cannot be proven, the wait is kept rather than cleared. This is a notice only: the activity view does not show OpenCode waits yet.
 
 Pi uses the repository-local Agent Mail extension. Synth City passes it explicitly on Synth City launches and changes no global Pi configuration. The Install tab shows only its readiness; it has no Pi install action.
 
@@ -126,3 +134,31 @@ Open **Agent Mail** in Synth City and use the **Install** tab.
 - Install and uninstall actions require confirmation and attempt a backup before mutating config.
 
 The Install tab also shows manual Codex snippets and Copilot fallback commands/hook JSON.
+
+## Amend an approved scope and end a submitted revision
+
+An owner can request a healthy scope amendment before or after opening a PR. The current Leader
+reviews the normalized path/action/command scope, then the owner separately acknowledges the
+delivered approval. Held workspace edits remain intact. Three approved amendments, eight amendment
+requests of any outcome and sixteen cumulative unique added file paths are the attempt limits; any
+stricter configured limits remain in force. A rejected amendment does not count toward the three
+approved ones, but it still counts toward the eight requests and its added paths keep their cost.
+Removed paths retain their history and budget cost.
+
+When independent review requires changes to a submitted implementation revision, the assigned
+reviewer records a structured negative disposition for the exact head, then the current Leader
+ends that revision. The owner remains on the same issue, branch and lease, with source work
+stopped until fresh amendment approval and acknowledgement. Prose, CI completion and an old
+review cannot grant that authority. An operator can also cancel submitted revisions; diagnostic
+work must first restore the exact baseline tree, including when its failed head was already charged.
+
+With the automatic merge policy, a code item merges only after the team's verifier has recorded an
+explicit `accepted` verdict for the pull request's exact current head (`synth_city_record_head_review`).
+A push after the acceptance waits for a new acceptance, an owner or non-verifier cannot supply one, and
+the work view shows `Waiting for reviewer acceptance` or `Head changed since acceptance`. The review hold
+label keeps working as an extra control. See the API workflow for the exact rules.
+
+Cancelled and timed-out CI runs remain blocked and visible without consuming a failed-head unit.
+Closing an unmerged submitted PR on an escalated attempt supersedes that revision without
+implicitly authorizing a retry or releasing the workspace. See the [API workflow](../api/agent-mail.md#healthy-scope-amendments-and-submitted-review-settlement)
+for tools, authentication, compatibility limits and separate review/merge gates.

@@ -25,7 +25,19 @@ from app.services.agent_mail_service import (
     AgentMailService,
     MailWakeError,
 )
+from app.utils import peer_process
 from app.utils.repo_utils import derive_repo_identity
+
+
+_REAL_OPENCODE_WAKE_GATE = AgentMailService.__dict__["_require_opencode_2_pane"]
+
+
+@pytest.fixture(autouse=True)
+def _opencode_wake_gate_ready(monkeypatch):
+    # Fixture panes have no host process. The OpenCode 2 wake gate is proved by
+    # test_wake_refuses_an_opencode_member_below_2; other wake tests assume a
+    # supported member.
+    monkeypatch.setattr(AgentMailService, "_require_opencode_2_pane", staticmethod(lambda _session: None))
 
 
 @pytest.fixture
@@ -2015,3 +2027,194 @@ async def test_heartbeat_refreshes_and_sets_activity(db, svc, tmp_path):
     members = await svc.list_team(db)
     assert members[0].status == "connected"
     assert members[0].sessions[0].activity == "edited src/main.py"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown", "ok"])
+async def test_wake_refuses_an_opencode_member_below_2(db, svc, tmp_path, monkeypatch, state):
+    from app.services import opencode_version
+
+    cwd = tmp_path / "opencode-wake"
+    cwd.mkdir()
+    observed = [{
+        "provider": "opencode-cli", "tmux_target": "w:0.2", "pane_id": "%8",
+        "cwd": str(cwd), "pid": "4343", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    seen = []
+
+    def gate(pid, start):
+        seen.append((pid, start))
+        return opencode_version.VersionGate(state, "2.0.29" if state == "ok" else None, None if state == "ok" else "fixture")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", gate)
+    monkeypatch.setattr(AgentMailService, "_require_opencode_2_pane", _REAL_OPENCODE_WAKE_GATE)
+    real_stat = peer_process.read_proc_stat
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: (1, "test-start") if pid == 4343 else real_stat(pid))
+    sent = []
+    monkeypatch.setattr(svc, "_send_tmux_inbox_check", lambda session, prompt: sent.append(session) or {"target": "w:0.2"})
+
+    if state == "ok":
+        await svc.queue_inbox_check(db, member.id, actor_type="operator", force=True, reason_code="operator_maintenance")
+    else:
+        with pytest.raises(MailWakeError, match=opencode_version.BLOCK_CODE):
+            await svc.queue_inbox_check(db, member.id, actor_type="operator", force=True, reason_code="operator_maintenance")
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert seen and seen[0][0] == 4343
+    if state == "ok":
+        assert (attempt.result, attempt.failure_code) == ("delivered", None)
+        assert len(sent) == 1
+    else:
+        assert (attempt.result, attempt.failure_code) == ("refused", opencode_version.BLOCK_CODE)
+        assert sent == []  # no terminal input for a refused member
+
+
+def _flipping_opencode_gate(monkeypatch, state, seen):
+    from app.services import opencode_version
+
+    def gate(pid, start):
+        seen.append(state[0])
+        return opencode_version.VersionGate(state[0], "2.0.29" if state[0] == "ok" else "1.17.11", None)
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", gate)
+    monkeypatch.setattr(AgentMailService, "_require_opencode_2_pane", _REAL_OPENCODE_WAKE_GATE)
+    real_stat = peer_process.read_proc_stat
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: (1, "test-start") if pid == 4343 else real_stat(pid))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flip", [None, "audit_commit", "delivery_guard"])
+async def test_wake_rechecks_opencode_version_after_awaits_before_transport(db, svc, tmp_path, monkeypatch, flip):
+    from app.services import opencode_version
+
+    cwd = tmp_path / "late-opencode-wake"
+    cwd.mkdir()
+    observed = [{
+        "provider": "opencode-cli", "tmux_target": "w:0.2", "pane_id": "%8",
+        "cwd": str(cwd), "pid": "4343", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    state, seen = ["ok"], []
+    _flipping_opencode_gate(monkeypatch, state, seen)
+    commit = db.commit
+
+    async def commit_then_maybe_replace():
+        await commit()
+        if seen and flip == "audit_commit":
+            # The pane stays alive while its OpenCode process changes during the awaited commit.
+            state[0] = "unsupported"
+
+    monkeypatch.setattr(db, "commit", commit_then_maybe_replace)
+
+    async def delivery_guard():
+        if flip == "delivery_guard":
+            state[0] = "unsupported"
+        return True
+
+    sent = []
+    monkeypatch.setattr(svc, "_send_tmux_inbox_check", lambda session, prompt: sent.append(state[0]) or {"target": "w:0.2"})
+
+    wake = svc._wake_member(db, member.id, datetime.utcnow(), force=True, delivery_guard=delivery_guard)
+    if flip is None:
+        await wake
+    else:
+        with pytest.raises(MailWakeError, match=opencode_version.BLOCK_CODE):
+            await wake
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert seen[0] == "ok"  # the first check passed; only a later check can refuse
+    if flip is None:
+        assert (attempt.result, attempt.failure_code) == ("delivered", None)
+        assert sent == ["ok"]
+    else:
+        assert (attempt.result, attempt.failure_code) == ("refused", opencode_version.BLOCK_CODE)
+        assert sent == []  # no terminal input after the version changed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flip", [None, "lookup", "text"])
+async def test_guarded_wake_rechecks_opencode_version_before_each_submission(monkeypatch, flip):
+    from app.services import agent_mail_service as mail_module
+    from app.services import opencode_version
+
+    state, seen, sent = ["ok"], [], []
+    _flipping_opencode_gate(monkeypatch, state, seen)
+    session = SimpleNamespace(
+        provider="opencode-cli", pid=4343, pane_id="%8", tmux_target="w:0.2",
+        bound_pane_pid=4343, bound_pane_proc_start="test-start",
+    )
+
+    def run(command, **kwargs):
+        sent.append(command)
+        if command[1] == "display-message":
+            if flip == "lookup":
+                state[0] = "unsupported"
+            return SimpleNamespace(stdout="%8|4343\n")
+        if "-l" in command and flip == "text":
+            state[0] = "unsupported"
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(mail_module.subprocess, "run", run)
+    monkeypatch.setattr(mail_module.peer_process, "pane_is_alive", lambda *_: True)
+    monkeypatch.setattr(mail_module, "TMUX_ENTER_DELAY_SECONDS", 0)
+
+    async def delivery_guard():
+        return True
+
+    send = AgentMailService()._send_guarded_tmux_inbox_check(session, "Fixture notice", "test-start", delivery_guard, None)
+    if flip is None:
+        await send
+    else:
+        with pytest.raises(MailWakeError, match=opencode_version.BLOCK_CODE):
+            await send
+    assert seen  # the version is read inside the guarded transport itself
+    assert any("-l" in command for command in sent) == (flip != "lookup")
+    assert any(command[-1] == "Enter" for command in sent) == (flip is None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flip", [None, "lookup", "text"])
+async def test_plain_wake_rechecks_opencode_version_before_each_submission(db, svc, tmp_path, monkeypatch, flip):
+    from app.services import agent_mail_service as mail_module
+    from app.services import opencode_version
+
+    cwd = tmp_path / "plain-opencode-wake"
+    cwd.mkdir()
+    observed = [{
+        "provider": "opencode-cli", "tmux_target": "w:0.2", "pane_id": "%8",
+        "cwd": str(cwd), "pid": "4343", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    state, seen, sent = ["ok"], [], []
+    _flipping_opencode_gate(monkeypatch, state, seen)
+
+    def run(command, **kwargs):
+        # The real plain transport runs; only tmux itself is faked.
+        sent.append(command)
+        if command[1] == "display-message":
+            if flip == "lookup":
+                state[0] = "unsupported"
+            return SimpleNamespace(stdout="%8|4343\n")
+        if "-l" in command and flip == "text":
+            state[0] = "unsupported"
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(mail_module.subprocess, "run", run)
+    monkeypatch.setattr(mail_module, "TMUX_ENTER_DELAY_SECONDS", 0)
+
+    wake = svc.queue_inbox_check(db, member.id, actor_type="operator", force=True, reason_code="operator_maintenance")
+    if flip is None:
+        await wake
+    else:
+        with pytest.raises(MailWakeError, match=opencode_version.BLOCK_CODE):
+            await wake
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert seen[0] == "ok"  # the checks before transport passed
+    assert any("-l" in command for command in sent) == (flip != "lookup")
+    assert any(command[-1] == "Enter" for command in sent) == (flip is None)
+    if flip is None:
+        assert (attempt.result, attempt.failure_code) == ("delivered", None)
+    else:
+        assert (attempt.result, attempt.failure_code) == ("refused", opencode_version.BLOCK_CODE)

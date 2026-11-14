@@ -348,65 +348,144 @@ def test_copilot_spawn_builds_cli_flags(monkeypatch, tmp_path):
     assert command_parts[command_parts.index("-i") + 1] == "Review the plan"
 
 
-def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
+def _opencode_spawn_fixture(monkeypatch):
+    from app.services import opencode_version
     from app.services.agent_bridge import spawn
-    from app.services.providers.base import SpawnCommandOptions
 
     calls = []
 
     def fake_run(args, capture_output=True, text=True, timeout=10):
         calls.append(args)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="4242\n", stderr="")
 
     monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
     monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    trusted = opencode_version.BinaryIdentity("/opt/trusted/bin/opencode", 1, 2, 3, 4)
+    monkeypatch.setattr(opencode_version, "opencode_version_gate", lambda: opencode_version.VersionGate("ok", "2.2.7", None, trusted))
     spawn.get_spawned_sessions().clear()
+    return spawn, calls
 
-    spawn.spawn_session(
+
+def _tmux_env(args):
+    env = {}
+    for flag, value in zip(args, args[1:]):
+        if flag == "-e":
+            key, _, val = value.partition("=")
+            env[key] = val
+    return env
+
+
+def test_opencode_spawn_builds_the_v2_member_command_and_env(monkeypatch, tmp_path):
+    import json
+
+    from app.services.providers.base import SpawnCommandOptions
+
+    spawn, calls = _opencode_spawn_fixture(monkeypatch)
+    result = spawn.spawn_session(
         "opencode-cli",
         SpawnCommandOptions(
             directory=str(tmp_path),
             mode="resume",
-            use_last=True,
-            model="anthropic/claude-sonnet-4.6",
+            session_id="ses_e2e111c0dffe5XAqhRWBFFBZDf",
+            model="anthropic/claude-sonnet-4.6#high",
             agent="planner",
+            skip_permissions=True,
             prompt="Review the plan",
         ),
+        extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"},
     )
 
-    command_parts = shlex.split(calls[0][-1])
-    assert command_parts[:2] == ["opencode", str(tmp_path)]
-    assert "--continue" in command_parts
-    assert command_parts[command_parts.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
-    assert command_parts[command_parts.index("--agent") + 1] == "planner"
-    assert command_parts[command_parts.index("--prompt") + 1] == "Review the plan"
-    assert "--variant" not in command_parts
+    # The exact v2 contract (#729 spec): the probed binary, standalone, exact session, --auto.
+    assert shlex.split(calls[0][-1]) == [
+        "/opt/trusted/bin/opencode", str(tmp_path), "--standalone",
+        "--session", "ses_e2e111c0dffe5XAqhRWBFFBZDf", "--auto", "--prompt", "Review the plan",
+    ]
+    env = _tmux_env(calls[0])
+    assert env["SYNTH_CITY_TEAM_SLOT_ID"] == "7"
+    assert json.loads(env["OPENCODE_CONFIG_CONTENT"]) == {
+        "model": "anthropic/claude-sonnet-4.6#high",
+        "default_agent": "planner",
+        "update": "disable",
+        "enabled_providers": ["anthropic"],
+        "permissions": [{"action": "question", "resource": "*", "effect": "deny"}],
+    }
+    assert result["session_id"] == "ses_e2e111c0dffe5XAqhRWBFFBZDf"
 
 
-def test_opencode_spawn_rejects_unsupported_tui_flags(tmp_path):
+def test_opencode_plain_spawn_chooses_an_exact_session_id(monkeypatch, tmp_path):
+    import json
+    import re
+
+    from app.services.providers.base import SpawnCommandOptions
+
+    spawn, calls = _opencode_spawn_fixture(monkeypatch)
+    result = spawn.spawn_session("opencode-cli", SpawnCommandOptions(directory=str(tmp_path)))
+
+    parts = shlex.split(calls[0][-1])
+    assert parts[:3] == ["/opt/trusted/bin/opencode", str(tmp_path), "--standalone"]
+    assert parts[3] == "--session" and re.fullmatch(r"ses_[0-9A-Za-z]{26}", parts[4])
+    assert len(parts) == 5
+    assert result["session_id"] == parts[4]
+    assert json.loads(_tmux_env(calls[0])["OPENCODE_CONFIG_CONTENT"]) == {
+        "update": "disable", "disabled_providers": ["opencode"],
+        "permissions": [{"action": "question", "resource": "*", "effect": "deny"}],
+    }
+
+
+@pytest.mark.parametrize("options,code", [
+    ({"reasoning_effort": "high"}, "reasoning_effort_unsupported"),
+    ({"mode": "resume", "use_last": True}, "opencode_continue_unsupported"),
+    ({"use_last": True}, "opencode_continue_unsupported"),
+])
+def test_opencode_spawn_refuses_unsupported_options_with_a_block_code(tmp_path, options, code):
+    from app.services.providers import get_provider
+    from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+
+    with pytest.raises(ProviderLaunchError) as raised:
+        get_provider("opencode-cli").build_spawn_command(SpawnCommandOptions(directory=str(tmp_path), **options))
+    assert raised.value.block_code == code
+
+
+@pytest.mark.parametrize("options,message", [
+    ({"dangerously_bypass_approvals_and_sandbox": True}, "does not support permission bypass"),
+    ({"mode": "resume"}, "session_id is required"),
+    ({"mode": "resume", "session_id": "0b5b3c1e-4c1d-4b6f-9f0e-0d4d6d1f2a3b"}, "must start with ses"),
+    ({"session_id": "deck-slot-29"}, "must start with ses"),
+    ({"mode": "fork", "session_id": "ses_abc"}, "Unsupported OpenCode CLI mode"),
+    ({"model": "claude-sonnet-4.6"}, "provider/model"),
+    ({"agent": "two words"}, "agent"),
+    ({"platform": "bedrock", "model": "anthropic/claude-sonnet-4.6"}, "amazon-bedrock/"),
+    ({"platform": "bedrock"}, "amazon-bedrock/"),
+])
+def test_opencode_spawn_rejects_invalid_options(tmp_path, options, message):
     from app.services.providers import get_provider
     from app.services.providers.base import SpawnCommandOptions
 
+    with pytest.raises(ValueError, match=message):
+        get_provider("opencode-cli").build_spawn_command(SpawnCommandOptions(directory=str(tmp_path), **options))
+
+
+def test_opencode_bedrock_member_allows_only_the_bedrock_provider(tmp_path):
+    import json
+
+    from app.services.providers import get_provider
+    from app.services.providers.base import SpawnCommandOptions
+
+    options = SpawnCommandOptions(
+        directory=str(tmp_path), platform="bedrock", aws_region="us-east-1",
+        model="amazon-bedrock/anthropic.claude-sonnet-4-6-v1:0", session_id="ses_abc",
+    )
     provider = get_provider("opencode-cli")
+    assert provider.build_spawn_command(options) == ["opencode", str(tmp_path), "--standalone", "--session", "ses_abc"]
+    assert json.loads(provider.build_spawn_env(options)["OPENCODE_CONFIG_CONTENT"])["enabled_providers"] == ["amazon-bedrock"]
 
-    try:
-        provider.build_spawn_command(
-            SpawnCommandOptions(directory=str(tmp_path), reasoning_effort="high")
-        )
-    except ValueError as exc:
-        assert "does not support reasoning_effort" in str(exc)
-        assert getattr(exc, "block_code", None) == "reasoning_effort_unsupported"
-    else:
-        raise AssertionError("expected OpenCode variant launch to be rejected")
 
-    try:
-        provider.build_spawn_command(
-            SpawnCommandOptions(directory=str(tmp_path), dangerously_bypass_approvals_and_sandbox=True)
-        )
-    except ValueError as exc:
-        assert "does not support permission bypass" in str(exc)
-    else:
-        raise AssertionError("expected OpenCode permission bypass launch to be rejected")
+def test_other_providers_add_no_spawn_env(tmp_path):
+    from app.services.providers import get_provider
+    from app.services.providers.base import SpawnCommandOptions
+
+    for provider_id in ("claude-code", "codex-cli", "copilot-cli", "muse-cli", "pi-cli"):
+        assert get_provider(provider_id).build_spawn_env(SpawnCommandOptions(directory=str(tmp_path))) == {}
 
 
 def test_anthropic_platform_adds_no_env_flags(monkeypatch, tmp_path):
@@ -603,3 +682,54 @@ def test_failed_spawn_reports_completed_trust_change(monkeypatch, tmp_path):
         spawn.spawn_session("codex-cli", SpawnCommandOptions(directory=str(tmp_path)),
                             extra_env={"SYNTH_CITY_TEAM_SLOT_ID": "7"})
     assert error.value.workspace_trust_changed is True
+
+
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+def test_opencode_spawn_refuses_below_2_before_tmux(monkeypatch, tmp_path, state):
+    from app.services import opencode_version
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+
+    calls = []
+    monkeypatch.setattr(spawn.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        opencode_version,
+        "opencode_version_gate",
+        lambda: opencode_version.VersionGate(state, "1.17.11" if state == "unsupported" else None, "fixture"),
+    )
+    with pytest.raises(ProviderLaunchError) as raised:
+        spawn.spawn_session("opencode-cli", SpawnCommandOptions(directory=str(tmp_path)))
+    assert raised.value.block_code == opencode_version.BLOCK_CODE
+    assert opencode_version.REASON_REQUIRED in str(raised.value)
+    assert calls == []  # no tmux command ran
+
+
+def test_bridge_new_session_returns_the_opencode_block_code(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from app.api.v1.agent_bridge import router
+    from app.services import opencode_version
+    from app.services.providers.base import ProviderLaunchError
+
+    def refused(*_args, **_kwargs):
+        raise ProviderLaunchError(f"{opencode_version.BLOCK_CODE}: {opencode_version.REASON_REQUIRED}", opencode_version.BLOCK_CODE)
+
+    monkeypatch.setattr(router, "spawn_session", refused)
+    with pytest.raises(HTTPException) as raised:
+        router.spawn_session_endpoint(router.SpawnRequest(provider="opencode-cli", directory=str(tmp_path)), principal=None)
+    assert raised.value.status_code == 400
+    assert raised.value.detail["block_code"] == opencode_version.BLOCK_CODE
+
+
+def test_bridge_new_session_returns_the_opencode_continue_block_code(tmp_path):
+    from fastapi import HTTPException
+
+    from app.api.v1.agent_bridge import router
+
+    with pytest.raises(HTTPException) as raised:
+        router.spawn_session_endpoint(
+            router.SpawnRequest(provider="opencode-cli", directory=str(tmp_path), mode="resume", use_last=True),
+            principal=None,
+        )
+    assert raised.value.status_code == 400
+    assert raised.value.detail["block_code"] == "opencode_continue_unsupported"

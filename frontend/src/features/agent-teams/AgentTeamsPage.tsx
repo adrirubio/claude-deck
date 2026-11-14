@@ -722,6 +722,11 @@ function LaunchPlanDialog({
                       <Badge variant="secondary">{item.provider}</Badge>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">{item.repo_path}</p>
+                    {(item.model || item.reasoning_effort) && (
+                      <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                        {`Model: ${[item.model || 'default', item.reasoning_effort ? `${item.reasoning_effort} effort` : null].filter(Boolean).join(' · ')}`}
+                      </p>
+                    )}
                   </div>
                   <p className="text-sm text-muted-foreground">{item.status}</p>
                 </div>

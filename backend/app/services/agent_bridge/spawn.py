@@ -81,7 +81,30 @@ def spawn_session(
     name = _session_name_for(directory)
     if provider.id == "claude-code" and options.mode == "worktree" and not options.worktree_name:
         options = SpawnCommandOptions(**{**options.__dict__, "worktree_name": name})
+    if provider.id == "opencode-cli" and options.session_id is None and options.mode == "plain":
+        from app.services import opencode_process_identity
+
+        # Choose the session id so that resume is exact (#731).
+        options = SpawnCommandOptions(
+            **{**options.__dict__, "session_id": opencode_process_identity.new_session_id()}
+        )
     command = provider.build_spawn_command(options)
+    provider_env = provider.build_spawn_env(options)
+    if provider_env:
+        extra_env = {**(extra_env or {}), **provider_env}
+    if provider.id == "opencode-cli":
+        from app.services import opencode_version
+
+        # OpenCode 2 or later only; v1 and an unknown version never reach tmux.
+        gate = opencode_version.opencode_version_gate()
+        if not gate.ready or gate.identity is None:
+            raise ProviderLaunchError(
+                f"{opencode_version.BLOCK_CODE}: {opencode_version.REASON_REQUIRED}",
+                opencode_version.BLOCK_CODE,
+            )
+        # Launch the exact binary that was probed, not whatever the tmux
+        # server's PATH resolves "opencode" to.
+        command[0] = gate.identity.path
     if provider.id == "pi-cli":
         from app.services.pi_mail_readiness import integration_path, pi_mail_environment, pi_mail_readiness
 
@@ -151,6 +174,7 @@ def spawn_session(
         "session_name": name,
         "pane_pid": pane_pid,
         "workspace_trust_changed": trust_changed,
+        **({"session_id": options.session_id} if provider.id == "opencode-cli" else {}),
     }
 
 

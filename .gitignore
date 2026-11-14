@@ -34,6 +34,8 @@ frontend/dist/
 *.db-wal
 *.sqlite
 *.sqlite3
+/.albiex-synth-city-db-upgrade.lock
+/backend/.albiex-synth-city-db-upgrade.lock
 
 # Logs
 logs/

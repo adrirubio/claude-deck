@@ -72,6 +72,12 @@ def _process_identity(slot, session, workspace):
         state, _uid = _native_process(session.pid, auxiliary_start, pid, start, session.cwd)
         if state in activity._STOPPED_STATES:
             raise ValueError("owner_native_identity_changed")
+    elif slot.provider == "opencode-cli":
+        from app.services.opencode_process_identity import is_current_member
+        # The exact `opencode <dir> --standalone --session <saved id>` member on OpenCode 2,
+        # registered from the pane or its own private server (#731).
+        if not is_current_member(pid, start, options.get("session_id"), session.pid):
+            raise ValueError("owner_native_identity_changed")
     else:
         raise ValueError("owner_provider_unsupported")
     # A process can exit or be replaced during argv inspection.

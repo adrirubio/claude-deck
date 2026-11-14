@@ -213,3 +213,55 @@ async def test_empty_milestone_field_uses_parent_milestone(db, monkeypatch):
     result = await summary.summary(db, team.id)
     assert result.campaign.not_started_count == 1
     assert client.calls == [("issue", "example", "repo", 506), ("issues", "example", "repo", 7)]
+
+
+@pytest.mark.asyncio
+async def test_priority_queue_order_is_visible_without_milestone_backlog(db, monkeypatch):
+    team, scope, items, summary = await fixed_campaign(db, monkeypatch, ("pending",) * 3)
+    for item, number, priority in zip(items, (790, 789, 788), (2, 1, None)):
+        item.issue_number, item.issue_title = number, f"Work {number}"
+        item.dispatch_priority = priority
+    await db.commit()
+    result = await summary.summary(db, team.id)
+    assert result.campaign.backlog_state == "backlog unavailable"
+    assert [item.title for item in result.campaign.queued] == ["Work 790", "Work 789", "Work 788"]
+    queued = result.campaign.dispatch_order
+    assert [item.title for item in queued] == ["Work 789", "Work 790", "Work 788"]
+    assert [(item.issue_number, item.priority, item.dispatch_position) for item in queued] == [
+        (789, 1, 1), (790, 2, 2), (788, None, 3)]
+    assert all(item.scope_id == scope.id and item.repository == "example/repo" for item in queued)
+    public = result.campaign.model_dump_json()
+    for private in ("private-nonce", "lease_token", "/private", "launch_options"):
+        assert private not in public
+
+
+@pytest.mark.asyncio
+async def test_priority_order_includes_ready_work_outside_campaign_milestone(db, monkeypatch):
+    team, scope, items, summary = await fixed_campaign(db, monkeypatch, ("pending", "pending"))
+    items[0].dispatch_priority = 3
+    items[1].dispatch_priority = 1
+    await db.commit()
+    await observe_backlog(db, scope, summary, Backlog([issue(1, "In milestone")]))
+    result = await summary.summary(db, team.id)
+    assert result.campaign.backlog_state == "available"
+    assert result.campaign.queued_count == 1
+    assert [item.title for item in result.campaign.queued] == ["Work 1"]
+    assert [(item.issue_number, item.dispatch_position) for item in result.campaign.dispatch_order] == [(2, 1), (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_priority_ranks_are_per_scope_with_oldest_issue_ties(db, monkeypatch):
+    from app.models.database import TeamGithubScope
+    team, scope, items, summary = await fixed_campaign(db, monkeypatch, ("pending", "pending"))
+    other = TeamGithubScope(preset_id=team.id, repo_owner="other", repo_name="repo", repo_path="/private/other")
+    db.add(other)
+    await db.flush()
+    items[0].issue_number = 8
+    items[1].issue_number = 7
+    items[0].dispatch_priority = items[1].dispatch_priority = 2
+    db.add(GithubWorkItem(scope_id=other.id, issue_number=1, issue_title="Other scope", issue_url="url",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending", dispatch_priority=1))
+    await db.commit()
+    result = await summary.summary(db, team.id)
+    assert [(item.repository, item.issue_number, item.dispatch_position) for item in result.campaign.dispatch_order] == [
+        ("example/repo", 7, 1), ("example/repo", 8, 2), ("other/repo", 1, 1)]

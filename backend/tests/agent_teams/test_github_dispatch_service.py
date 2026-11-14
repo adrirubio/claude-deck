@@ -21,11 +21,13 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
+    AgentPaneBinding,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
+    MailPaneLifecycle,
     MailMessage,
     MailReceipt,
     MailTeamMember,
@@ -1707,7 +1709,7 @@ async def test_route_classification_fallback(db):
 
 
 @pytest.mark.asyncio
-async def test_route_leader_fallback_when_no_expertise(db):
+async def test_route_never_falls_back_to_the_leader(db):
     preset, slots, scope = await _team(db)
     for slot in slots:
         slot.expertise = None
@@ -1724,9 +1726,7 @@ async def test_route_leader_fallback_when_no_expertise(db):
     owner_id, method = await github_dispatch_service.route_item(
         db, item, slots, ["nothing"], leader_slot_id=preset.leader_slot_id
     )
-    architect = next(slot for slot in slots if slot.display_name == "Architect")
-    assert owner_id == architect.id
-    assert method == "leader_fallback"
+    assert (owner_id, method) == (None, "no_eligible_owner")
 
 
 @pytest.mark.asyncio
@@ -2299,9 +2299,9 @@ async def test_dispatch_pending_reuses_and_still_passes_the_repo_override(db):
         db,
         scope,
         slots,
-        client=_LabelsClient([]),
+        client=_LabelsClient(["area:backend"]),
         launcher=fake_launcher,
-        issue_labels_by_number={23: []},
+        issue_labels_by_number={23: ["area:backend"]},
     )
 
     assert launched["reuse_existing"] is True
@@ -2387,13 +2387,14 @@ async def test_dispatch_pending_commits_success_before_later_plan_block(db):
             raise ValueError("plan is blocked")
         return _Result()
 
+    docs = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
     await github_dispatch_service.dispatch_pending(
         db,
         scope,
-        slots,
-        client=_LabelsClient(["area:backend"]),
+        [*slots, docs],
+        client=_LabelsClient(["area:backend", "area:docs"]),
         launcher=fake_launcher,
-        issue_labels_by_number={26: [], 27: ["area:backend"]},
+        issue_labels_by_number={26: ["area:docs"], 27: ["area:backend"]},
     )
     await db.refresh(first)
     await db.refresh(second)
@@ -2567,9 +2568,9 @@ async def test_dispatch_pending_marks_failed_launch_result_failed(db):
         db,
         scope,
         slots,
-        client=_LabelsClient([]),
+        client=_LabelsClient(["area:backend"]),
         launcher=fake_launcher,
-        issue_labels_by_number={28: []},
+        issue_labels_by_number={28: ["area:backend"]},
     )
     await db.refresh(item)
     assert item.dispatch_status == "failed"
@@ -6538,6 +6539,10 @@ async def test_monitor_does_not_escalate_slow_live_owner(db):
 
 
 async def _pending_initial_plan(db, item, slots, created_at):
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.autonomy_enabled = True
+    scope.enabled = True
     members = [await agent_mail_service.get_or_create_slot_member(db, slot) for slot in slots]
     item.dispatch_nonce = "timeout-attempt"
     item.approval_round_count = 1
@@ -7102,6 +7107,7 @@ async def test_disabled_prepared_owner_keeps_attempt_and_lease(db):
         "blocked",
         "blocked_provider_unavailable",
         "blocked_agent_mail_not_configured",
+        "blocked_opencode_version_unsupported",
         "skipped_disabled",
     ],
 )
@@ -7709,11 +7715,12 @@ async def test_dispatch_rechecks_authority_after_brief(db, monkeypatch, tmp_path
 async def test_stale_queue_refusal_cannot_change_the_winning_owner(wal_dispatch_sessions, monkeypatch):
     maker = wal_dispatch_sessions
     async with maker() as db:
-        _, slots, scope = await _team(db)
+        preset, slots, scope = await _team(db)
+        winner = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
         item = GithubWorkItem(scope_id=scope.id, issue_number=9060, issue_title="One winner", issue_url="u",
             github_updated_at=datetime.utcnow(), dispatch_status="pending")
         db.add(item); await db.commit()
-        scope_id, preset_id, winner_owner = scope.id, scope.preset_id, slots[0].id
+        scope_id, preset_id, winner_owner = scope.id, scope.preset_id, winner.id
     reached, resume = asyncio.Event(), asyncio.Event()
 
     async def ambiguity(db, _slot):
@@ -7733,7 +7740,7 @@ async def test_stale_queue_refusal_cannot_change_the_winning_owner(wal_dispatch_
             scope = await db.get(TeamGithubScope, scope_id)
             slots = list((await db.scalars(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == preset_id))).all())
             await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
-                issue_labels_by_number={9060: ["area:backend"] if stalled else []})
+                issue_labels_by_number={9060: ["area:backend"] if stalled else ["area:docs"]})
 
     stale = asyncio.create_task(dispatch(True))
     await asyncio.wait_for(reached.wait(), timeout=10)
@@ -7843,3 +7850,587 @@ async def test_new_lease_and_release_reset_the_reminder_budget(db):
     assert acquired.id == workspace.id
     assert acquired.lease_release_reminder_count == 0
     assert acquired.lease_release_reminder_started_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case,expected', [
+    ('native', True), ('recent_mcp', True), ('stale', False), ('future', False),
+    ('observed_session', False), ('retired', False), ('closed', False),
+    ('no_capability', False), ('wrong_provider', False), ('duplicate_binding', False),
+    ('duplicate_native_identity', False), ('waiting_input', False), ('dead_process', False),
+    ('binding_changed', False), ('native_timeout', False), ('native_future', False),
+])
+async def test_leader_activity_requires_current_authenticated_bound_evidence(db, monkeypatch, case, expected):
+    from app.services import agent_activity_service as activity
+    from app.utils import peer_process
+    preset, slots, _scope = await _team(db)
+    leader = slots[0]
+    leader.launch_options = {'session_id': '12345678-1234-1234-1234-123456789abc'}
+    member = await agent_mail_service.get_or_create_slot_member(db, leader)
+    now = datetime.utcnow()
+    binding = AgentPaneBinding(preset_id=preset.id, slot_id=leader.id,
+                              pane_pid=9191, pane_proc_start='fixture-start')
+    session = MailAgentSession(member_id=member.id, provider=leader.provider, source='mcp',
+        session_key='ack-activity-fixture', team_preset_id=preset.id, team_slot_id=leader.id,
+        capability_token_hash='synthetic-hash', bound_pane_pid=9191,
+        bound_pane_proc_start='fixture-start', cwd='/tmp/ack-activity',
+        last_seen_at=now)
+    if case in {'native', 'stale', 'native_future'}:
+        session.last_seen_at = now - timedelta(minutes=10)
+    if case == 'recent_mcp':
+        session.last_seen_at = now
+    elif case == 'future':
+        session.last_seen_at = now + timedelta(minutes=1)
+    elif case == 'observed_session':
+        session.source = 'observed'
+        session.last_seen_at = now
+    elif case == 'retired':
+        db.add(MailPaneLifecycle(pane_pid=9191, pane_proc_start='fixture-start', retired_at=now))
+    elif case == 'closed':
+        session.closed_at = now
+    elif case == 'no_capability':
+        session.capability_token_hash = None
+    elif case == 'wrong_provider':
+        session.provider = 'claude-code'
+    elif case == 'duplicate_binding':
+        db.add(AgentPaneBinding(preset_id=preset.id, slot_id=leader.id,
+                              pane_pid=9292, pane_proc_start='another-start'))
+        db.add(MailAgentSession(member_id=member.id, provider=leader.provider, source='mcp',
+            session_key='other-ack-fixture', team_preset_id=preset.id, team_slot_id=leader.id,
+            capability_token_hash='synthetic-other', bound_pane_pid=9292,
+            bound_pane_proc_start='another-start', cwd='/tmp/ack-activity', last_seen_at=now))
+    elif case == 'duplicate_native_identity':
+        slots[1].launch_options = dict(leader.launch_options)
+    db.add_all([binding, session])
+    await db.commit()
+    state = 'working' if case in {'native', 'native_future'} else 'unknown'
+    observed_at = now + timedelta(minutes=1) if case == 'native_future' else now - timedelta(minutes=15)
+    observation = SimpleNamespace(state=state, observed_at=observed_at,
+        waiting_input=object() if case == 'waiting_input' else None)
+    monkeypatch.setattr(activity, '_observe', lambda *_args, **_kwargs: observation)
+    monkeypatch.setattr(peer_process, 'pane_is_alive_strict', lambda *_args: case != 'dead_process')
+    if case == 'waiting_input':
+        session.last_seen_at = now
+        await db.commit()
+    if case == 'binding_changed':
+        async def changed(read):
+            binding.pane_proc_start = 'replaced-start'
+            await db.commit()
+            return read()
+        monkeypatch.setattr(activity, '_bounded_native_read', changed)
+    elif case == 'native_timeout':
+        monkeypatch.setattr(activity, '_bounded_native_read', AsyncMock(side_effect=TimeoutError))
+    fence = []
+    result = await github_dispatch_service._leader_is_active(
+        db, preset.id, member.id, leader.id, 300, fence=fence)
+    assert result is expected
+    if expected:
+        assert fence
+        assert await db.scalar(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id, *fence)) == preset.id
+        # A retirement between observation and the write invalidates the same fence.
+        db.add(MailPaneLifecycle(pane_pid=9191, pane_proc_start='fixture-start', retired_at=now))
+        await db.flush()
+        assert await db.scalar(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id, *fence)) is None
+
+
+def test_ack_deadlines_apply_explicit_team_values_and_design_multiplier(monkeypatch):
+    monkeypatch.setattr(settings, 'github_design_ack_multiplier', 4)
+    preset = AgentTeamPreset(leader_ack_timeout_seconds=450, leader_ack_max_wait_seconds=2100)
+    item = GithubWorkItem(issue_type='design')
+    assert github_dispatch_service._ack_deadline_seconds(item, preset) == 1800
+    assert github_dispatch_service._ack_deadline_seconds(item, preset, maximum=True) == 8400
+    item.issue_type = 'code'
+    assert github_dispatch_service._ack_deadline_seconds(item, preset) == 450
+    assert github_dispatch_service._ack_deadline_seconds(item, preset, maximum=True) == 2100
+
+
+def test_default_ack_guidance_explains_busy_leader_wait_without_approval():
+    text = github_dispatch_service._leader_ack_instruction(None, None, before='implementation')
+    assert 'finite' in text and 'activity' in text
+    assert 'does not approve' in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('leader_state', ['unassigned', 'disabled'])
+async def test_acknowledged_owner_contact_monitor_survives_unavailable_leader(db, monkeypatch, leader_state):
+    preset, slots, scope = await _team(db)
+    if leader_state == 'unassigned':
+        preset.leader_slot_id = None
+    else:
+        slots[0].enabled = False
+    old = datetime.utcnow() - timedelta(minutes=16)
+    item = GithubWorkItem(scope_id=scope.id, issue_number=843, issue_title='Owner health',
+        issue_url='u', github_updated_at=old, dispatch_status='dispatched',
+        owner_slot_id=slots[1].id, dispatched_at=old, updated_at=old, ack_received_at=old)
+    db.add(item)
+    await db.commit()
+    workspace = await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+    async def renew(_db, _scope, _item, leased):
+        leased.lease_last_owner_contact_at = datetime.utcnow()
+        await _db.flush()
+        return True
+    monkeypatch.setattr('app.services.native_owner_contact.renew_native_owner_contact', renew)
+    monkeypatch.setattr(github_dispatch_service, '_brief_delivered', AsyncMock(return_value=True))
+    monkeypatch.setattr(github_dispatch_service, '_leader_is_active',
+        AsyncMock(side_effect=AssertionError('Acknowledged owner health does not observe Leader activity')))
+    await github_dispatch_service.monitor_dispatched(db, scope, slots,
+        wake_state_by_slot={slot.id: 'wakeable' for slot in slots if slot.enabled})
+    await db.refresh(workspace)
+    await db.refresh(item)
+    assert workspace.lease_last_owner_contact_at > old
+    assert item.dispatch_status == 'dispatched' and item.escalation_reason is None
+    assert item.ack_received_at == old and item.last_nudge_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("priorities,expected", [
+    ({}, 788),
+    ({790: ["priority:8"], 789: ["priority:1"]}, 789),
+    ({790: ["priority:2"], 789: ["priority:2"]}, 789),
+    ({790: ["priority:0", "priority:01", "priority:-1", "priority:10000", "Priority:1"]}, 788),
+    ({790: ["priority:3", "priority:1"], 789: ["priority:2"]}, 790),
+])
+async def test_priority_selects_actual_launch_over_newest_first_creation(db, priorities, expected):
+    _, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    items = []
+    for index, number in enumerate((790, 789, 788)):
+        item = GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title=f"Work {number}",
+            issue_url=f"https://github.com/o/r/issues/{number}", github_updated_at=datetime.utcnow(),
+            dispatch_status="pending", created_at=datetime(2026, 11, 1) + timedelta(seconds=index))
+        db.add(item)
+        items.append(item)
+    await db.commit()
+    launched = []
+
+    async def launcher(_db, _preset_id, request):
+        launched.append(request.slot_ids)
+        return SimpleNamespace(launch_id=101)
+
+    labels = {number: [scope.dispatch_label, "area:backend", *priorities.get(number, [])]
+              for number in (790, 789, 788)}
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number=labels,
+        issue_details_by_number={number: {"body": "Approved ready work"} for number in labels})
+    for item in items:
+        await db.refresh(item)
+    assert [item.issue_number for item in items if item.dispatch_status == "dispatched"] == [expected]
+    assert len(launched) == 1
+    assert all(item.pending_reason == "queued_slot_busy" for item in items if item.issue_number != expected)
+
+
+@pytest.mark.asyncio
+async def test_priority_busy_top_candidate_preserves_other_area_progress(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    frontend = AgentTeamSlot(preset_id=preset.id, position=2, display_name="Frontend", provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", enabled=True, area_labels=["area:frontend"])
+    db.add(frontend)
+    await db.flush()
+    slots.append(frontend)
+    busy = GithubWorkItem(scope_id=scope.id, issue_number=780, issue_title="Busy backend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="dispatched", owner_slot_id=slots[1].id)
+    lower = GithubWorkItem(scope_id=scope.id, issue_number=790, issue_title="Free frontend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    higher = GithubWorkItem(scope_id=scope.id, issue_number=788, issue_title="Queued backend", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending")
+    db.add_all([busy, lower, higher])
+    await db.commit()
+    launches, routing_order = [], []
+    original_route = github_dispatch_service.route_item
+
+    async def route(*args, **kwargs):
+        routing_order.append(args[1].issue_number)
+        return await original_route(*args, **kwargs)
+
+    monkeypatch.setattr(github_dispatch_service, "route_item", route)
+
+    async def launcher(_db, _preset_id, request):
+        launches.extend(request.slot_ids)
+        return SimpleNamespace(launch_id=102)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={788: ["area:backend", "priority:1"], 790: ["area:frontend", "priority:2"]})
+    await db.refresh(higher)
+    await db.refresh(lower)
+    assert higher.dispatch_status == "pending" and higher.pending_reason == "queued_slot_busy"
+    assert lower.dispatch_status == "dispatched" and launches == [frontend.id]
+    assert routing_order == [788, 790]
+    assert busy.dispatch_status == "dispatched" and busy.owner_slot_id == slots[1].id
+
+
+@pytest.mark.asyncio
+async def test_priority_current_poll_removes_stale_stored_priority_before_launch(db):
+    _, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    items = []
+    for number, priority in ((790, 1), (788, None)):
+        item = GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title="Work", issue_url="u",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending")
+        item.dispatch_priority = priority
+        db.add(item)
+        items.append(item)
+    await db.commit()
+
+    async def launcher(*_args):
+        return SimpleNamespace(launch_id=103)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={790: ["area:backend"], 788: ["area:backend"]})
+    for item in items:
+        await db.refresh(item)
+    assert [item.issue_number for item in items if item.dispatch_status == "dispatched"] == [788]
+    assert items[0].dispatch_priority is None
+
+
+@pytest.mark.asyncio
+async def test_priority_selects_owner_before_repository_capacity_is_consumed(db):
+    preset, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    frontend = AgentTeamSlot(preset_id=preset.id, position=2, display_name="Frontend", provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", enabled=True, area_labels=["area:frontend"])
+    db.add(frontend)
+    await db.flush()
+    slots.append(frontend)
+    for number in (790, 788):
+        db.add(GithubWorkItem(scope_id=scope.id, issue_number=number, issue_title="Ready", issue_url="u",
+            github_updated_at=datetime.utcnow(), dispatch_status="pending"))
+    await db.commit()
+    launches = []
+
+    async def launcher(_db, _preset_id, request):
+        launches.extend(request.slot_ids)
+        return SimpleNamespace(launch_id=104)
+
+    await github_dispatch_service.dispatch_pending(db, scope, slots, launcher=launcher,
+        issue_labels_by_number={790: ["area:frontend", "priority:2"], 788: ["area:backend", "priority:1"]})
+    items = (await db.scalars(select(GithubWorkItem).order_by(GithubWorkItem.issue_number))).all()
+    assert launches == [slots[1].id]
+    assert items[0].dispatch_status == "dispatched"
+    assert items[1].dispatch_status == "pending" and items[1].pending_reason == "queued_repo_cap"
+
+
+async def _slot(db, preset, position, name, **values):
+    slot = AgentTeamSlot(
+        preset_id=preset.id, position=position, display_name=name, provider="codex-cli",
+        repo_id="r", repo_path="/tmp/r", repo_name="r", launch_mode="plain", launch_options={},
+        enabled=True, **values,
+    )
+    db.add(slot)
+    await db.commit()
+    return slot
+
+
+async def _pending_item(db, scope, number):
+    item = GithubWorkItem(
+        scope_id=scope.id, issue_number=number, issue_title="x", issue_url="u",
+        github_updated_at=datetime.utcnow(), dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    return item
+
+
+class _Launched:
+    launch_id = 7
+
+
+async def _never_launch(db_, preset_id, request):
+    raise AssertionError("an item without an eligible owner must not launch")
+
+
+async def _launch_ok(db_, preset_id, request):
+    return _Launched()
+
+
+@pytest.mark.asyncio
+async def test_route_skips_a_leader_that_carries_the_matching_area_label(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    architect.area_labels = ["area:ops"]
+    await db.commit()
+    item = await _pending_item(db, scope, 40)
+    leader_id = preset.leader_slot_id
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:ops"], leader_slot_id=leader_id) == (None, "no_eligible_owner")
+    backend.area_labels = ["area:backend", "area:ops"]
+    await db.commit()
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:ops"], leader_slot_id=leader_id) == (backend.id, "label")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["coordinator", "Coordinator"])
+async def test_route_never_chooses_a_coordinator_role_slot(db, role):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    coordinator = await _slot(db, preset, 2, "Second coordinator", role=role, area_labels=["area:x"],
+                              expertise="coordination")
+    item = await _pending_item(db, scope, 41)
+    slots = [architect, backend, coordinator]
+    assert await github_dispatch_service.route_item(
+        db, item, slots, ["area:x"], leader_slot_id=preset.leader_slot_id) == (None, "no_eligible_owner")
+    builder = await _slot(db, preset, 3, "Builder", area_labels=["area:x"])
+    assert await github_dispatch_service.route_item(
+        db, item, [*slots, builder], ["area:x"], leader_slot_id=preset.leader_slot_id) == (builder.id, "label")
+
+
+@pytest.mark.asyncio
+async def test_route_without_a_named_leader_still_never_chooses_a_coordinator(db):
+    preset, slots, scope = await _team(db)
+    coordinator = await _slot(db, preset, 2, "Coordinator", role="coordinator", area_labels=["area:x"])
+    item = await _pending_item(db, scope, 42)
+    assert await github_dispatch_service.route_item(
+        db, item, [coordinator], ["area:x"], leader_slot_id=None) == (None, "no_eligible_owner")
+
+
+@pytest.mark.asyncio
+async def test_classifier_is_offered_no_leader_or_coordinator(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    coordinator = await _slot(db, preset, 2, "Coordinator", role="coordinator", expertise="coordination")
+    item = await _pending_item(db, scope, 43)
+    offered = []
+
+    async def classify(it, candidates):
+        offered.extend(slot.id for slot in candidates)
+        return backend.id
+
+    owner_id, method = await github_dispatch_service.route_item(
+        db, item, [architect, backend, coordinator], ["no-area"], classify=classify,
+        leader_slot_id=preset.leader_slot_id)
+    assert offered == [backend.id]
+    assert (owner_id, method) == (backend.id, "classified")
+    only_leader = []
+
+    async def classify_leader_only(it, candidates):
+        only_leader.append(candidates)
+        return None
+
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, coordinator], ["no-area"], classify=classify_leader_only,
+        leader_slot_id=preset.leader_slot_id) == (None, "no_eligible_owner")
+    assert only_leader == []
+
+
+@pytest.mark.asyncio
+async def test_route_keeps_label_order_and_ignores_disabled_slots(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    second = await _slot(db, preset, 2, "Second backend", area_labels=["area:backend"])
+    item = await _pending_item(db, scope, 44)
+    leader_id = preset.leader_slot_id
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, backend, second], ["area:backend"], leader_slot_id=leader_id) == (backend.id, "label")
+    backend.enabled = False
+    await db.commit()
+    assert await github_dispatch_service.route_item(
+        db, item, [architect, backend, second], ["area:backend"], leader_slot_id=leader_id) == (second.id, "label")
+
+
+@pytest.mark.asyncio
+async def test_item_without_an_area_label_stays_pending_and_never_goes_to_the_leader(db):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 45)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient([]), launcher=_never_launch, issue_labels_by_number={45: []})
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "no_eligible_owner"
+    assert item.owner_slot_id is None and item.escalation_reason is None
+    assert item.status_note and "owner" in item.status_note.lower()
+    leased = (await db.execute(
+        select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))).first()
+    assert leased is None
+    assert item.owner_slot_id != preset.leader_slot_id
+
+
+@pytest.mark.asyncio
+async def test_pending_item_becomes_dispatchable_when_an_eligible_slot_appears(db):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 46)
+    labels = {46: ["area:docs"]}
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient(["area:docs"]), launcher=_never_launch, issue_labels_by_number=labels)
+    await db.refresh(item)
+    assert (item.dispatch_status, item.pending_reason) == ("pending", "no_eligible_owner")
+    docs = await _slot(db, preset, 2, "Docs", area_labels=["area:docs"])
+    await github_dispatch_service.dispatch_pending(
+        db, scope, [*slots, docs], client=_LabelsClient(["area:docs"]), launcher=_launch_ok,
+        issue_labels_by_number=labels)
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched" and item.owner_slot_id == docs.id
+    assert item.routing_method == "label" and item.pending_reason is None
+    assert item.owner_slot_id != preset.leader_slot_id
+
+
+@pytest.mark.asyncio
+async def test_a_team_with_only_a_leader_keeps_every_item_pending(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    backend.enabled = False
+    architect.area_labels = ["area:backend"]
+    await db.commit()
+    item = await _pending_item(db, scope, 47)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient(["area:backend"]), launcher=_never_launch,
+        issue_labels_by_number={47: ["area:backend"]})
+    await db.refresh(item)
+    assert (item.dispatch_status, item.pending_reason, item.owner_slot_id) == ("pending", "no_eligible_owner", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["leader", "coordinator"])
+async def test_claim_boundary_refuses_a_leader_or_coordinator_owner(db, who):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    owner = architect if who == "leader" else await _slot(db, preset, 2, "Coordinator", role="coordinator")
+    item = await _pending_item(db, scope, 48)
+    claimed = await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=owner.id, routing_method="label", require_autonomy=False)
+    await db.refresh(item)
+    assert claimed is False
+    assert (item.dispatch_status, item.pending_reason) == ("pending", "no_eligible_owner")
+    assert item.owner_slot_id is None and item.dispatched_at is None and item.status_note
+    leased = (await db.execute(
+        select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))).first()
+    assert leased is None
+
+
+@pytest.mark.asyncio
+async def test_claim_boundary_still_accepts_an_eligible_owner(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots
+    item = await _pending_item(db, scope, 49)
+    claimed = await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=backend.id, routing_method="label", require_autonomy=False)
+    await db.refresh(item)
+    assert claimed is True and item.dispatch_status == "dispatched" and item.owner_slot_id == backend.id
+
+
+def test_no_eligible_owner_is_a_declared_pending_reason():
+    from app.services.github_dispatch_service import PENDING_REASONS
+    assert "no_eligible_owner" in PENDING_REASONS
+
+
+@pytest.mark.asyncio
+async def test_no_eligible_owner_reason_and_note_reach_the_queue_projection(db):
+    from app.services.github_work_item_projection import _work_item_response
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 50)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, client=_LabelsClient([]), launcher=_never_launch, issue_labels_by_number={50: []})
+    await db.refresh(item)
+    projected = _work_item_response(item, scope)
+    assert projected.dispatch_status == "pending"
+    assert projected.pending_reason == "no_eligible_owner"
+    assert projected.owner_slot_id is None
+    assert projected.status_note and "No eligible owner" in projected.status_note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["coordinator", "leader"])
+@pytest.mark.parametrize("when", ["workspace", "brief", "late_read"])
+async def test_owner_made_ineligible_after_the_claim_never_launches(db, monkeypatch, who, when):
+    from app.models.schemas import AgentTeamSlotUpdate
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    backend = slots[1]
+    item = await _pending_item(db, scope, 9101)
+
+    async def make_ineligible(*_args, **_kwargs):
+        if who == "coordinator":
+            await agent_team_service.update_slot(db, backend.id, AgentTeamSlotUpdate(role="coordinator"))
+        else:
+            # set_leader refuses while the team is dispatching, so this isolated fixture edits the preset row.
+            preset.leader_slot_id = backend.id
+            await db.commit()
+
+    brief = AsyncMock(side_effect=make_ineligible if when == "brief" else None)
+    launcher = AsyncMock(return_value=_Launched())
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", brief)
+    if when == "workspace":
+        monkeypatch.setattr(github_workspace_service, "configure_dispatch_worktree", make_ineligible)
+    if when == "late_read":
+        original = github_dispatch_service._dispatch_authorized
+
+        async def authorized(*args, **kwargs):
+            allowed = await original(*args, **kwargs)
+            if kwargs.get("owner_slot_id") is not None:
+                await make_ineligible()
+            return allowed
+
+        monkeypatch.setattr(github_dispatch_service, "_dispatch_authorized", authorized)
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, launcher=launcher, issue_labels_by_number={9101: ["area:backend"]})
+    await db.refresh(item)
+    assert launcher.await_count == 0, "an owner made ineligible after the claim must not be launched"
+    assert item.launch_id is None
+    assert brief.await_count == (1 if when == "brief" else 0)
+    # A delivered brief may already have woken a harness, so that start is kept, as for the other late gates.
+    assert item.dispatch_status == ("dispatched" if when == "brief" else "pending")
+
+
+@pytest.mark.asyncio
+async def test_a_harmless_role_change_after_the_claim_still_launches(db, monkeypatch):
+    from app.models.schemas import AgentTeamSlotUpdate
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 9102)
+
+    async def change_role(*_args, **_kwargs):
+        await agent_team_service.update_slot(db, slots[1].id, AgentTeamSlotUpdate(role="builder"))
+
+    monkeypatch.setattr(github_dispatch_service, "_send_dispatch_brief_to_slot", AsyncMock(side_effect=change_role))
+    launcher = AsyncMock(return_value=_Launched())
+    await github_dispatch_service.dispatch_pending(
+        db, scope, slots, launcher=launcher, issue_labels_by_number={9102: ["area:backend"]})
+    await db.refresh(item)
+    assert launcher.await_count == 1 and item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role, leader, expected", [
+    (None, False, True), ("", False, True), ("builder", False, True), ("coordinators", False, True),
+    ("coordinator", False, False), ("Coordinator", False, False), ("  CoOrDiNaToR \t", False, False),
+    ("builder", True, False),
+])
+async def test_late_authority_read_refuses_an_ineligible_owner(db, role, leader, expected):
+    preset, slots, scope = await _team(db)
+    backend = slots[1]
+    backend.role = role
+    if leader:
+        preset.leader_slot_id = backend.id
+    await db.commit()
+    assert await github_dispatch_service._dispatch_authorized(
+        db, scope, require_autonomy=False, owner_slot_id=backend.id) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [None, "", " ", "builder", "coordinators", "xcoordinator", "Leader",
+                                  "coordinator", "Coordinator", "  CoOrDiNaToR  ", "\tcoordinator\n", "coordinator\r"])
+async def test_final_authority_condition_agrees_with_the_python_eligibility_rule(db, role):
+    from app.services.github_dispatch_service import _eligible_owner_condition, _ineligible_owner
+    preset, slots, scope = await _team(db)
+    slot = await _slot(db, preset, 5, "Subject", role=role)
+    in_sql = await db.scalar(
+        select(AgentTeamSlot.id).where(AgentTeamSlot.id == slot.id, _eligible_owner_condition(preset.id)))
+    assert (in_sql is not None) is (not _ineligible_owner(slot, preset.leader_slot_id))
+    # The current Leader is excluded by id in both.
+    leader_in_sql = await db.scalar(select(AgentTeamSlot.id).where(
+        AgentTeamSlot.id == preset.leader_slot_id, _eligible_owner_condition(preset.id)))
+    assert leader_in_sql is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["  CoOrDiNaToR  ", "\tcoordinator\n"])
+async def test_claim_refuses_a_padded_mixed_case_role_set_after_routing(db, role):
+    preset, slots, scope = await _team(db)
+    item = await _pending_item(db, scope, 9103)
+    owner, method = await github_dispatch_service.route_item(
+        db, item, slots, ["area:backend"], leader_slot_id=preset.leader_slot_id)
+    slots[1].role = role
+    await db.commit()
+    assert not await github_dispatch_service._claim_dispatch_start(
+        db, scope, item, owner_slot_id=owner, routing_method=method, require_autonomy=False)
+    await db.refresh(item)
+    assert item.pending_reason == "no_eligible_owner" and item.owner_slot_id is None

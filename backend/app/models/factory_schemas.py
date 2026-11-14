@@ -282,13 +282,24 @@ class FactoryErrorResponse(FactoryModel):
 
 class TeamSummaryAttention(FactoryModel):
     code: Literal["attempt_stopped", "recovery_decision", "human_review", "owner_stalled",
-                  "observation_pause", "hold", "recovery_only", "hold_unavailable"]
+                  "observation_pause", "hold", "recovery_only", "hold_unavailable", "team_idle",
+                  "unanswered_request", "unanswered_request_incomplete"]
     work_item_id: PositiveId | None = None
     scope_id: PositiveId | None = None
     issue_number: PositiveId | None = None
     pause_id: PositiveId | None = None
     observed_at: Timestamp | None = None
     resume_deadline: Timestamp | None = None
+    last_actor: str | None = Field(default=None, max_length=80)
+    last_progress_at: Timestamp | None = None
+    # Unanswered explicit requests (#752): names and counts only, never a subject or body.
+    request_id: PositiveId | None = None
+    requester: str | None = Field(default=None, max_length=80)
+    recipient: str | None = Field(default=None, max_length=80)
+    unanswered_seconds: int | None = Field(default=None, ge=0)
+    coverage_reason: Literal["candidate_limit", "native_unknown", "ambiguous_legacy_request",
+                             "reply_scan_limit", "entry_limit"] | None = None
+    omitted_count: int | None = Field(default=None, ge=0)
 
 
 class TeamSummaryHumanAction(FactoryModel):
@@ -329,6 +340,14 @@ class CampaignQueuedItem(FactoryModel):
     title: str
 
 
+class CampaignDispatchItem(CampaignQueuedItem):
+    scope_id: PositiveId
+    repository: str
+    issue_number: PositiveId
+    priority: int | None = Field(default=None, ge=1, le=9999)
+    dispatch_position: PositiveId
+
+
 class CampaignAreaGroup(FactoryModel):
     area: str
     count: int = Field(ge=0)
@@ -347,6 +366,7 @@ class TeamCampaignSummary(FactoryModel):
     under_way: list[CampaignUnderWayItem]
     queued_count: int = Field(ge=0)
     queued: list[CampaignQueuedItem]
+    dispatch_order: list[CampaignDispatchItem] = Field(default_factory=list)
     not_started_count: int | None = Field(ge=0)
     not_started_groups: list[CampaignAreaGroup]
     decisions_ahead: list[CampaignDecision]
@@ -381,6 +401,6 @@ class AgentTeamSummaryResponse(FactoryModel):
     reminder_attention_complete: bool = True
     human_actions: list[TeamSummaryHumanAction]
     remaining_work: TeamRemainingWork
-    next_actors: list[Literal["owner", "leader", "operator", "controller"]]
+    next_actors: list[Literal["owner", "leader", "operator", "controller", "reviewer"]]
     next_actor_coverage_complete: bool
     campaign: TeamCampaignSummary

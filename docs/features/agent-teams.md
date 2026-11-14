@@ -50,6 +50,17 @@ Each team has slots. A slot stores:
 - launch mode and provider options
 - enabled or disabled state
 
+### Claude Code model and reasoning effort
+
+A Claude Code slot can set its **Model** and **Reasoning effort** on every platform, not only on Amazon Bedrock. Both are optional launch options; leave them on **Default** to use the harness's own choice.
+
+- **Model:** choose **Default**, one of the listed examples, or **Custom model** and type a concrete model ID (for example `claude-sonnet-5-5`). Synth City refuses a value that is not a concrete model ID with the code `invalid_model`. A launch passes it as `--model <id>`.
+- **Reasoning effort:** `low`, `medium`, `high`, `xhigh` or `max`. Any other value is refused with `invalid_reasoning_effort`. A launch passes it as `--effort <value>`.
+- **Amazon Bedrock:** a Bedrock member sets **Bedrock model ID**, not **Model**. A member that sets both is refused with `bedrock_model_conflict`; the editor offers **Clear model**. A launch that sets only the Bedrock model ID works as before.
+- **Where you see it:** the slot row shows the harness, the model and the effort, for example `Claude Code · claude-opus-5-5 · high effort` (a Bedrock member shows its Bedrock model ID). The launch plan row shows `Model: <model> · <effort> effort`, or `default` when only the effort is set.
+
+Other harnesses keep their own launch options (see [Harnesses](/features/harnesses)).
+
 Agent Teams do not create a second messaging system. Once agents are launched or reused, use Agent Mail for messages, context requests, and handoffs.
 
 ## Controlled Language

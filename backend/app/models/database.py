@@ -1,6 +1,7 @@
 """SQLAlchemy database models."""
 from datetime import datetime
 from sqlalchemy import (
+    BigInteger,
     ForeignKey,
     String,
     Integer,
@@ -158,6 +159,8 @@ class AgentTeamPreset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     leader_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leader_ack_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leader_ack_max_wait_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
     backlog_milestone: Mapped[str | None] = mapped_column(String, nullable=True)
     planned_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
@@ -378,6 +381,7 @@ class GithubWorkItem(Base):
     issue_type: Mapped[str] = mapped_column(String, default="code", nullable=False)
     dispatch_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     pending_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispatch_priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
     launch_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_team_launches.id", ondelete="SET NULL"), nullable=True
     )
@@ -438,6 +442,51 @@ class GithubWorkItem(Base):
     __table_args__ = (
         UniqueConstraint("scope_id", "issue_number", name="uix_scope_issue"),
     )
+
+
+class GithubRequiredCheckWatch(Base):
+    """Current-head observation and immutable first completion, never review authority."""
+
+    __tablename__ = "github_required_check_watches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    scope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    owner_slot_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_digest: Mapped[str] = mapped_column(String, nullable=False)
+    reviewer_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checks: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completion_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_checks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (UniqueConstraint("work_item_id", "dispatch_nonce", "scope_revision", "head_sha",
+                                      name="uix_required_check_head"),)
+
+
+class GithubRequiredCheckRecipient(Base):
+    """One durable mail and at most one external wake attempt per head/recipient."""
+
+    __tablename__ = "github_required_check_recipients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    watch_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_required_check_watches.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wake_state: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    __table_args__ = (UniqueConstraint("watch_id", "member_id", name="uix_required_check_recipient"),)
+
+
+class GithubTeamProgress(Base):
+    """Semantic progress baseline; observation reads never renew its clock."""
+
+    __tablename__ = "github_team_progress"
+    preset_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_team_presets.id", ondelete="CASCADE"), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    last_progress_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    items: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class GithubDeliveryPolicyEvent(Base):
@@ -575,6 +624,12 @@ class AgentPaneBinding(Base):
     waiting_input_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     waiting_input_notice_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # OpenCode wait fence (#732): the highest plugin generation (epoch ms) seen for this pane, kept
+    # after a clear, and whether the current wait's report order could not be proven.
+    opencode_wait_generation: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    opencode_wait_uncertain: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -823,6 +878,8 @@ class GithubApprovalRequest(Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    leader_ack_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    leader_activity_extended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         Index(
@@ -858,6 +915,10 @@ class GithubAttemptScopeRevision(Base):
         ForeignKey("mail_team_members.id", ondelete="CASCADE"),
         nullable=False,
     )
+    origin_kind: Mapped[str] = mapped_column(String, default="continuation", server_default="continuation", nullable=False)
+    amendment_base_paths: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    amendment_added_paths: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    previous_scope_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     phase: Mapped[str] = mapped_column(String, nullable=False)
     execution_target: Mapped[str] = mapped_column(String, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
@@ -916,6 +977,50 @@ class GithubAttemptScopeRevision(Base):
             name="uix_github_attempt_scope_revision",
         ),
     )
+
+
+class GithubRevisionReview(Base):
+    """Authenticated negative review fact; never independent acceptance authority."""
+
+    __tablename__ = "github_revision_reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    revision_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="CASCADE"))
+    watch_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_required_check_watches.id", ondelete="CASCADE"))
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    reviewer_member_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_lease_token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    verdict: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_url: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    settled_by_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    settlement_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class GithubHeadReview(Base):
+    """Authenticated reviewer verdict bound to one PR head; the auto-merge gate reads it.
+
+    It grants no source authority. A newer fact for the same work item, nonce, PR and head supersedes older ones.
+    """
+
+    __tablename__ = "github_head_reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    scope_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    reviewer_member_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_url: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FactoryContextKey(Base):

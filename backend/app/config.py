@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Application settings
     app_name: str = "Albiex Synth City"
-    app_version: str = "4.0.0"
+    app_version: str = "4.1.0"
     debug: bool = False
 
     # API settings
@@ -46,8 +46,13 @@ class Settings(BaseSettings):
     github_check_signal_grace_seconds: int = 120
     github_owner_registration_grace_seconds: int = 120
     github_leader_ack_timeout_seconds: int = 300
+    github_leader_ack_max_wait_seconds: int = Field(default=1800, ge=30, le=86400)
     github_design_ack_multiplier: int = 3
     github_owner_idle_timeout_seconds: int = 900
+    github_team_idle_timeout_seconds: int = Field(default=1800, ge=30, le=86400)
+    # A pending context request or handoff older than this, addressed to an idle member, is shown
+    # as unanswered on the team summary and the Supervisor check-in (#752).
+    mail_request_unanswered_seconds: int = Field(default=1200, ge=60, le=86400)
     github_nudge_grace_seconds: int = 180
     github_min_available_memory_mb: int = 3000
     github_stale_lease_backstop_seconds: int = 21600

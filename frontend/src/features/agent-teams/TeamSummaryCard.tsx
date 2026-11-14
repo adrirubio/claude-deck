@@ -8,7 +8,7 @@ import { formatServerTime } from '@/lib/serverTime'
 import type {
   AgentTeamPresetListResponse, AgentTeamSummary, TeamRemainingWork,
 } from '@/types/agentTeams'
-import { ACTION_TEXT, ATTENTION_TEXT } from './summaryText'
+import { ACTION_TEXT, ATTENTION_TEXT, incompleteRequestText, unansweredRequestText } from './summaryText'
 import { waitingText } from './supervisorText'
 import { parseReminders, reminderAge } from './reminderText'
 import { SupervisorStatus } from './SupervisorStatus'
@@ -24,6 +24,7 @@ const ACTORS = {
   leader: 'The Leader',
   operator: 'You',
   controller: 'Synth City',
+  reviewer: 'The reviewer',
 } as const
 
 const UNKNOWN_REASON: Record<TeamRemainingWork['reason'], string> = {
@@ -136,6 +137,10 @@ export function TeamSummaryCard({ presetId, name, running, showChecked = true, c
                       {item.work_item_id && item.issue_number ? (
                         <>{ATTENTION_TEXT[item.code]} on <Link className={anchor} to={`/work/${item.work_item_id}`}>#{item.issue_number}</Link></>
                       ) : ATTENTION_TEXT[item.code]}
+                      {item.code === 'unanswered_request' && <span> · {unansweredRequestText(item)}</span>}
+                      {item.code === 'unanswered_request_incomplete' && <span> · {incompleteRequestText(item)}</span>}
+                      {item.code === 'team_idle' && <span> · Last recorded actor: {item.last_actor ?? 'Unknown'}
+                        {item.last_progress_at && <> · no progress since {formatServerTime(item.last_progress_at)}</>}</span>}
                       {item.resume_deadline && <> · resume by {formatServerTime(item.resume_deadline)}</>}
                     </li>
                   ))}

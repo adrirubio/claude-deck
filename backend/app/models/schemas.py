@@ -15,6 +15,27 @@ class TerminalRevisionReconcileRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=240)
 
 
+class FinalizeMergedRequest(BaseModel):
+    """One operator request about a merge the poll cannot settle.
+
+    ``dry_run`` (the default is false) reads fresh merge evidence and returns it with the context digest, and
+    changes nothing. A real finalize requires the digest, an operation id and a reason; a missing one is
+    refused here, before any mutation.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    dry_run: bool = False
+    operation_id: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+    expected_context_sha256: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    reason: Optional[str] = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _a_real_finalize_names_everything(self):
+        if not self.dry_run and None in (self.operation_id, self.expected_context_sha256, self.reason):
+            raise ValueError("a finalize requires expected_context_sha256, operation_id and reason")
+        return self
+
+
 class ConfigFile(BaseModel):
     """Represents a configuration file."""
 
@@ -1867,6 +1888,42 @@ class SupervisorAddress(BaseModel):
     display_name: str | None = None
 
 
+class TeamIdleItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: int = Field(gt=0)
+    scope_id: int = Field(gt=0)
+    issue_number: int = Field(gt=0)
+    last_actor: str = Field(max_length=80)
+    last_progress_at: datetime
+
+
+UnansweredRequestReason = Literal[
+    "candidate_limit", "native_unknown", "ambiguous_legacy_request", "reply_scan_limit", "entry_limit"]
+
+
+class UnansweredRequestItem(BaseModel):
+    """One pending explicit request that its idle addressee has not answered. Names and ids only."""
+    model_config = ConfigDict(extra="forbid")
+    request_id: int = Field(gt=0)
+    kind: Literal["context_request", "handoff"]
+    requester: str = Field(max_length=80)
+    recipient: str = Field(max_length=80)
+    requested_at: datetime
+    unanswered_seconds: int = Field(ge=0)
+    threshold_seconds: int = Field(ge=1)
+    text: str = Field(max_length=240)
+
+
+class UnansweredRequestView(BaseModel):
+    """The bounded view. It is complete only when nothing was truncated or left unproven."""
+    model_config = ConfigDict(extra="forbid")
+    items: list[UnansweredRequestItem] = Field(default_factory=list)
+    complete: bool = True
+    reason: UnansweredRequestReason | None = None
+    # Known omitted entries within the evaluated candidates; never a total beyond an unscanned bound.
+    omitted_count: int = Field(default=0, ge=0)
+
+
 class SupervisorObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["none", "healthy", "late", "absent"]
@@ -1877,6 +1934,8 @@ class SupervisorObservation(BaseModel):
     grace_seconds: int = Field(ge=1)
     note: str | None
     attention: Literal["Supervisor check-in overdue"] | None
+    team_idle: list[TeamIdleItem] = Field(default_factory=list)
+    unanswered_requests: UnansweredRequestView | None = None
 
 
 class SupervisorBindingRequest(BaseModel):
@@ -1962,6 +2021,15 @@ class MailDecisionRequest(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class MailRequiredCheckWatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: int = Field(gt=0)
+    dispatch_nonce: str = Field(min_length=1, max_length=200)
+    scope_revision: int = Field(ge=0)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    reviewer_member_id: int | None = Field(..., gt=0)
+
+
 class MailApprovalRequestCreate(BaseModel):
     work_item_id: int
     dispatch_nonce: str
@@ -1992,6 +2060,69 @@ class GithubContinuationProposalCreate(BaseModel):
     lease_token: str = Field(min_length=1)
 
 
+class GithubScopeAmendmentCreate(GithubContinuationProposalCreate):
+    phase: Literal["implementation"] = "implementation"
+
+
+class GithubRevisionReviewCreate(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    summary: str = Field(min_length=1, max_length=12000)
+    evidence_url: str = Field(min_length=1, max_length=2000)
+    verdict: str = Field(default="changes_required", pattern=r"^(changes_required|accepted)$")
+
+
+class GithubHeadReviewCreate(BaseModel):
+    """An explicit reviewer verdict for the exact current head of a work item's PR; the verdict has no default."""
+
+    dispatch_nonce: str = Field(min_length=1)
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    verdict: str = Field(pattern=r"^(changes_required|accepted)$")
+    summary: str = Field(min_length=1, max_length=12000)
+    evidence_url: str = Field(min_length=1, max_length=2000)
+
+
+class GithubHeadReviewResponse(BaseModel):
+    id: int
+    work_item_id: int
+    pr_number: int
+    head_sha: str
+    scope_revision: int
+    reviewer_member_id: int
+    verdict: str
+    summary: str
+    evidence_url: str
+    status: str
+    created_at: datetime
+    ended_at: Optional[datetime] = None
+
+
+class GithubRevisionReviewWithdraw(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+
+
+class GithubSubmittedRevisionEnd(GithubRevisionReviewWithdraw):
+    review_id: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=12000)
+
+
+class GithubRevisionReviewResponse(BaseModel):
+    id: int
+    work_item_id: int
+    revision_id: int
+    head_sha: str
+    reviewer_member_id: int
+    verdict: str
+    summary: str
+    evidence_url: str
+    status: str
+    created_at: datetime
+    ended_at: Optional[datetime] = None
+    settled_by_member_id: Optional[int] = None
+    settlement_reason: Optional[str] = None
+
+
 class GithubScopeRevisionResponse(BaseModel):
     id: int
     work_item_id: int
@@ -1999,6 +2130,10 @@ class GithubScopeRevisionResponse(BaseModel):
     revision: int
     owner_slot_id: int
     owner_member_id: int
+    origin_kind: str = "continuation"
+    amendment_base_paths: List[str] = Field(default_factory=list)
+    amendment_added_paths: List[str] = Field(default_factory=list)
+    previous_scope_revision: int = 0
     phase: str
     execution_target: str
     summary: str
@@ -2126,6 +2261,9 @@ class MailMessageResponse(BaseModel):
 class MailThreadResponse(BaseModel):
     root: MailMessageResponse
     replies: List[MailMessageResponse] = Field(default_factory=list)
+    # False when the bounded read stopped early; never a complete-looking truncated thread.
+    replies_complete: bool = True
+    replies_incomplete_reason: Optional[Literal["reply_limit", "depth_limit"]] = None
 
 
 class MailInboxResponse(BaseModel):
@@ -2255,6 +2393,11 @@ class AgentMailInstallStatus(BaseModel):
     opencode_mcp_installed: bool = False
     opencode_plugin_events: List[str] = Field(default_factory=list)
     opencode_plugin_events_missing: List[str] = Field(default_factory=list)
+    opencode_plugin_needs_update: bool = False
+    opencode_question_denied: bool = False
+    opencode_version: Optional[str] = None
+    opencode_version_ready: bool = False
+    opencode_version_reason: Optional[str] = None
     curl_available: bool
     shim_path: str
     python_path: str
@@ -2290,6 +2433,7 @@ AgentTeamLaunchStatus = Literal[
     "failed",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "blocked_opencode_version_unsupported",
 ]
 
 
@@ -2387,6 +2531,15 @@ class PlannedCampaignDecision(BaseModel):
 class CampaignPresetFields(BaseModel):
     backlog_milestone: Optional[str] = Field(default=None, max_length=160)
     planned_decisions: Optional[List[PlannedCampaignDecision]] = Field(default=None, max_length=12)
+    leader_ack_timeout_seconds: Optional[int] = Field(default=None, strict=True, ge=30, le=86400)
+    leader_ack_max_wait_seconds: Optional[int] = Field(default=None, strict=True, ge=30, le=86400)
+
+    @model_validator(mode="after")
+    def ordered_ack_windows(self):
+        if (self.leader_ack_timeout_seconds is not None and self.leader_ack_max_wait_seconds is not None
+                and self.leader_ack_max_wait_seconds < self.leader_ack_timeout_seconds):
+            raise ValueError("leader_ack_max_wait_seconds must be at least leader_ack_timeout_seconds")
+        return self
 
     @field_validator("backlog_milestone")
     @classmethod
@@ -2845,6 +2998,8 @@ class AgentTeamLaunchPlanItem(BaseModel):
     matching_session: Optional[Dict[str, Any]] = None
     block_code: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
 
 class AgentTeamLaunchPlan(BaseModel):

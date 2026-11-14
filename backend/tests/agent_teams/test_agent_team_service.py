@@ -127,6 +127,7 @@ def _ready_install_status():
         opencode_cli_available=True,
         opencode_mcp_installed=True,
         opencode_plugin_events_missing=[],
+        opencode_version_ready=True,
         muse_cli_available=True,
         muse_mcp_installed=True,
         muse_hooks_missing=[],
@@ -724,7 +725,14 @@ async def test_multiple_same_repo_copilot_continue_slots_are_blocked(db, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_multiple_same_repo_opencode_continue_slots_are_blocked(db, tmp_path):
+async def test_stored_opencode_continue_slots_fail_closed(db, tmp_path, monkeypatch):
+    # --continue is not exact; a slot stored with use_last from before #731 is blocked, not converted.
+    from app.services.providers import get_provider
+
+    opencode = get_provider("opencode-cli")
+    monkeypatch.setattr("app.services.agent_team_service.get_provider", lambda _id: SimpleNamespace(
+        display_name="OpenCode", get_status=lambda: {"installed": True},
+        build_spawn_command=opencode.build_spawn_command))
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -732,35 +740,60 @@ async def test_multiple_same_repo_opencode_continue_slots_are_blocked(db, tmp_pa
         AgentTeamPresetCreate(
             name="OpenCode team",
             slots=[
-                AgentTeamSlotCreate(
-                    display_name="Planner",
-                    provider="opencode-cli",
-                    repo_path=str(repo),
-                    launch_mode="resume",
-                    launch_options={"use_last": True},
-                ),
-                AgentTeamSlotCreate(
-                    display_name="Implementer",
-                    provider="opencode-cli",
-                    repo_path=str(repo),
-                    launch_mode="resume",
-                    launch_options={"use_last": True},
-                ),
+                AgentTeamSlotCreate(display_name="Planner", provider="opencode-cli", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Implementer", provider="opencode-cli", repo_path=str(repo)),
             ],
         ),
     )
+    for created in preset.slots:
+        slot = await db.get(AgentTeamSlot, created.id)
+        slot.launch_mode = "resume"
+        slot.launch_options = {"use_last": True}
+    await db.commit()
 
-    plan = await agent_team_service.plan_launch(
-        db,
-        preset.id,
-        AgentTeamLaunchRequest(reuse_existing=False),
-    )
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(reuse_existing=False))
 
     assert plan.can_launch is False
-    assert plan.spawn_count == 0
     assert plan.blocked_count == 2
-    assert {item.block_code for item in plan.items} == {"unsafe_opencode_continue"}
-    assert all("OpenCode --continue cannot be used" in item.reasons[0] for item in plan.items)
+    assert {item.block_code for item in plan.items} == {"opencode_continue_unsupported"}
+    assert all("exact saved session" in item.reasons[0] for item in plan.items)
+
+
+@pytest.mark.asyncio
+async def test_create_opencode_slot_refuses_use_last(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(ValueError, match="Unsupported launch_options for opencode-cli: use_last"):
+        await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Last", slots=[AgentTeamSlotCreate(
+            display_name="OpenCode", provider="opencode-cli", repo_path=str(repo),
+            launch_mode="resume", launch_options={"use_last": True})]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_mode,options,message", [
+    ("plain", {"model": "claude-sonnet-4.6"}, "provider/model"),
+    ("plain", {"model": "openai/gpt-5.5#"}, "provider/model"),
+    ("plain", {"agent": "two words"}, "agent"),
+    ("resume", {"session_id": "0b5b3c1e-4c1d-4b6f-9f0e-0d4d6d1f2a3b"}, "must start with ses"),
+    ("plain", {"platform": "bedrock", "model": "anthropic/claude-sonnet-4.6"}, "amazon-bedrock/"),
+])
+async def test_create_opencode_slot_validates_the_v2_options(db, tmp_path, launch_mode, options, message):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with pytest.raises(ValueError, match=message):
+        await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Bad", slots=[AgentTeamSlotCreate(
+            display_name="OpenCode", provider="opencode-cli", repo_path=str(repo),
+            launch_mode=launch_mode, launch_options=options)]))
+
+
+@pytest.mark.asyncio
+async def test_create_opencode_slot_accepts_the_v2_options(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Good", slots=[AgentTeamSlotCreate(
+        display_name="OpenCode", provider="opencode-cli", repo_path=str(repo), launch_options={
+            "model": "openai/gpt-5.5#high", "agent": "plan", "skip_permissions": True})]))
+    assert preset.slots[0].launch_options == {"model": "openai/gpt-5.5#high", "agent": "plan", "skip_permissions": True}
 
 
 @pytest.mark.asyncio
@@ -2802,6 +2835,57 @@ async def test_fresh_claude_launch_persists_identity_for_resume(db, tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_fresh_opencode_launch_persists_an_exact_session_for_resume(db, tmp_path, monkeypatch):
+    import re
+
+    from app.services.providers import get_provider
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Fresh OpenCode", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="opencode-cli", repo_path=str(repo),
+            launch_options={"model": "anthropic/claude-sonnet-4.6"})]))
+    calls = []
+
+    def spawn(provider_id, options, *, extra_env=None):
+        calls.append((options, get_provider(provider_id).build_spawn_command(options)))
+        return {"session_name": "fixture", "tmux_target": "fixture:0.0", "workspace_trust_changed": False}
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", spawn)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    options, command = calls[0]
+    assert re.fullmatch(r"ses_[0-9A-Za-z]{26}", options.session_id)
+    assert command[2:5] == ["--standalone", "--session", options.session_id]
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert slot.launch_options == {"model": "anthropic/claude-sonnet-4.6", "session_id": options.session_id}
+    assert slot.launch_mode == "resume"
+    resumed = agent_team_service._spawn_options_for_slot(slot, None)
+    assert (resumed.mode, resumed.session_id) == ("resume", options.session_id)
+
+
+@pytest.mark.asyncio
+async def test_failed_opencode_spawn_does_not_save_new_identity(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Failed OpenCode", slots=[AgentTeamSlotCreate(
+            display_name="Worker", provider="opencode-cli", repo_path=str(repo))]))
+
+    def refuse(*args, **kwargs):
+        raise ValueError("tmux failed")
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", refuse)
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    result = await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash))
+    assert result.items[0].status == "failed"
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    assert not (slot.launch_options or {}).get("session_id")
+    assert slot.launch_mode == "plain"
+
+
+@pytest.mark.asyncio
 async def test_failed_claude_spawn_does_not_save_new_identity(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2860,3 +2944,277 @@ async def test_muse_launch_sends_the_bootstrap_prompt_only_to_a_new_session(db, 
         assert not any("Custom team startup prompt." in part for part in commands[0])
     else:
         assert commands[0][-1].startswith("Custom team startup prompt.")
+
+
+async def _opencode_preset(db, repo, *, launch_mode="plain"):
+    return await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="OpenCode version team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="OpenCode member",
+                    provider="opencode-cli",
+                    repo_path=str(repo),
+                    launch_mode=launch_mode,
+                    launch_options={"session_id": "ses_fixture"} if launch_mode == "resume" else {},
+                )
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_mode", ["plain", "resume"])
+async def test_opencode_v1_is_refused_before_any_tmux_session(db, tmp_path, monkeypatch, launch_mode):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo, launch_mode=launch_mode)
+
+    async def v1_status():
+        return SimpleNamespace(**{**vars(_ready_install_status()), "opencode_version_ready": False})
+
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_install_service.get_install_status", v1_status
+    )
+    spawned = []
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", lambda *a, **k: spawned.append(a))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest())
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert item.block_code == opencode_version.BLOCK_CODE
+    assert item.reasons == [opencode_version.REASON_REQUIRED]
+    with pytest.raises(ValueError, match="Launch plan is blocked"):
+        await agent_team_service.launch(db, preset.id, AgentTeamLaunchRequest(skip_plan_confirmation=True))
+    assert spawned == []
+
+
+def _opencode_pane(monkeypatch, repo):
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [{"provider": "opencode-cli", "session_name": "repo", "tmux_target": "repo:0.0", "pid": "4242", "cwd": str(repo)}],
+    )
+    monkeypatch.setattr("app.services.agent_team_service.read_proc_stat", lambda pid: (1, "start-4242"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+async def test_opencode_pane_below_2_or_unknown_is_not_adopted(db, tmp_path, monkeypatch, state):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    _opencode_pane(monkeypatch, repo)
+    seen = []
+
+    def gate(pid, start):
+        seen.append((pid, start))
+        reason = opencode_version.REASON_REQUIRED if state == "unsupported" else opencode_version.REASON_UNKNOWN
+        return opencode_version.VersionGate(state, "1.17.11" if state == "unsupported" else None, reason)
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", gate)
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert item.action == "blocked"
+    assert item.block_code == opencode_version.BLOCK_CODE
+    assert seen == [(4242, "start-4242")]
+
+
+@pytest.mark.asyncio
+async def test_opencode_pane_running_trusted_v2_is_adopted(db, tmp_path, monkeypatch):
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.0.29", None))
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    assert plan.can_launch is True
+    assert plan.items[0].action == "adopt"
+
+
+def test_opencode_pane_without_identity_fails_closed():
+    from app.services import opencode_version
+
+    reason = agent_team_service._opencode_pane_refusal({"pid": None, "pane_proc_start": "x"})
+    assert reason == opencode_version.REASON_UNKNOWN
+    assert agent_team_service._opencode_pane_refusal({"pid": "not-a-pid", "pane_proc_start": "x"}) == opencode_version.REASON_UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_options,blocked", [
+    ({"adopt_unbound_sessions": True}, True),
+    ({"reuse_existing": True}, True),
+    ({"adopt_unbound_sessions": True, "reuse_existing": True}, True),
+    ({"reuse_existing": False}, True),
+])
+async def test_stored_opencode_use_last_is_refused_before_adopt_or_reuse(db, tmp_path, monkeypatch, request_options, blocked):
+    # V1 F1: a slot stored with use_last before #731 never launches, adopts or reuses a pane.
+    from app.services import opencode_version
+    from app.services.providers import get_provider
+
+    opencode = get_provider("opencode-cli")
+    monkeypatch.setattr("app.services.agent_team_service.get_provider", lambda _id: SimpleNamespace(
+        display_name="OpenCode", get_status=lambda: {"installed": True},
+        build_spawn_command=opencode.build_spawn_command))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo)
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    slot.launch_mode = "resume"
+    slot.launch_options = {"use_last": True}
+    await db.commit()
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(**request_options))
+
+    item = plan.items[0]
+    assert plan.can_launch is False
+    assert (item.action, item.block_code) == ("blocked", "opencode_continue_unsupported")
+    assert "exact saved session" in item.reasons[0]
+
+
+@pytest.mark.asyncio
+async def test_opencode_slot_with_a_saved_session_is_still_adopted(db, tmp_path, monkeypatch):
+    # Control for F1: a valid stored resume slot keeps the existing adoption path.
+    from app.services import opencode_version
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _opencode_preset(db, repo, launch_mode="resume")
+    _opencode_pane(monkeypatch, repo)
+    monkeypatch.setattr(opencode_version, "member_gate_for_pane", lambda pid, start: opencode_version.VersionGate("ok", "2.2.7", None))
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True))
+    assert plan.can_launch is True
+    assert plan.items[0].action == "adopt"
+
+
+# --- #869: Claude Code model and reasoning effort per member ---------------------------------
+
+_CLAUDE_OPUS = "claude-opus-5-5"
+_CLAUDE_ARN = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/profile-1"
+
+
+async def _claude_preset(db, repo, name, *slots):
+    return await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name=name,
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name=display_name,
+                    provider="claude-code",
+                    repo_path=str(repo),
+                    launch_options=launch_options,
+                )
+                for display_name, launch_options in slots
+            ],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_slot_accepts_a_claude_model_and_effort_on_the_default_platform(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    preset = await _claude_preset(
+        db, repo, "Claude model", ("Builder", {"model": _CLAUDE_OPUS, "reasoning_effort": "high"})
+    )
+
+    assert preset.slots[0].launch_options == {"model": _CLAUDE_OPUS, "reasoning_effort": "high"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_options,fragment", [
+    ({"model": "opus"}, "must be a concrete provider model ID"),
+    ({"model": "Claude Opus 5.5"}, "must be a concrete provider model ID"),
+    ({"model": "claude-opus-5-5", "reasoning_effort": "extreme"}, "Unsupported reasoning_effort for claude-code"),
+])
+async def test_create_slot_rejects_an_invalid_claude_model_or_effort(db, tmp_path, launch_options, fragment):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await _claude_preset(db, repo, "Bad Claude options", ("Builder", launch_options))
+
+    assert fragment in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_refuses_model_with_bedrock_model_on_a_bedrock_slot(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await _claude_preset(
+            db, repo, "Conflict",
+            ("Builder", {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod",
+                         "model": _CLAUDE_OPUS, "bedrock_model": _CLAUDE_ARN}),
+        )
+
+    assert getattr(exc_info.value, "block_code", None) == "bedrock_model_conflict"
+    assert "bedrock_model" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_keeps_a_bedrock_model_only_claude_slot(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    options = {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod", "bedrock_model": _CLAUDE_ARN}
+
+    preset = await _claude_preset(db, repo, "Bedrock only", ("Builder", options))
+
+    assert preset.slots[0].launch_options == options
+
+
+@pytest.mark.asyncio
+async def test_launch_plan_items_show_the_claude_model_and_effort(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _claude_preset(
+        db, repo, "Plan shows model",
+        ("Opus builder", {"model": _CLAUDE_OPUS, "reasoning_effort": "xhigh"}),
+        ("Default builder", {}),
+        ("Bedrock builder", {"platform": "bedrock", "aws_region": "us-east-1", "aws_profile": "prod",
+                             "bedrock_model": _CLAUDE_ARN, "reasoning_effort": "low"}),
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(reuse_existing=False))
+    by_name = {item.slot_name: item for item in plan.items}
+
+    assert (by_name["Opus builder"].model, by_name["Opus builder"].reasoning_effort) == (_CLAUDE_OPUS, "xhigh")
+    assert (by_name["Default builder"].model, by_name["Default builder"].reasoning_effort) == (None, None)
+    assert (by_name["Bedrock builder"].model, by_name["Bedrock builder"].reasoning_effort) == (_CLAUDE_ARN, "low")
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_slot_still_shows_its_model_in_the_launch_plan(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await _claude_preset(db, repo, "Disabled shows model", ("Builder", {"model": _CLAUDE_OPUS}))
+    await agent_team_service.update_slot(db, preset.slots[0].id, AgentTeamSlotUpdate(enabled=False))
+
+    plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest(slot_ids=[preset.slots[0].id]))
+
+    assert plan.items[0].action == "skip"
+    assert plan.items[0].model == _CLAUDE_OPUS
+
+
+def test_launch_plan_item_fields_are_additive_and_default_to_null():
+    from app.models.schemas import AgentTeamLaunchPlanItem
+
+    item = AgentTeamLaunchPlanItem(
+        slot_id=1, slot_name="S", provider="claude-code", repo_id="r", repo_path="/r", repo_name="r",
+        action="spawn", status="ready",
+    )
+
+    assert item.model is None and item.reasoning_effort is None
+    assert item.model_dump()["model"] is None

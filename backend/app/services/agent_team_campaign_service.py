@@ -13,10 +13,11 @@ from sqlalchemy import select
 from app.config import settings
 from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubWorkItem, TeamGithubScope
 from app.models.factory_schemas import (
-    CampaignAreaGroup, CampaignDecision, CampaignDoneItem, CampaignQueuedItem,
+    CampaignAreaGroup, CampaignDecision, CampaignDispatchItem, CampaignDoneItem, CampaignQueuedItem,
     CampaignUnderWayItem, TeamCampaignSummary,
 )
 from app.models.schemas import PlannedCampaignDecision
+from app.services.github_dispatch_priority import dispatch_order_key, effective_priority
 
 _PARENT = re.compile(r"https://github\.com/([^/]+)/([^/]+)/issues/([1-9][0-9]*)\Z")
 _STATE_PHRASES = {
@@ -151,11 +152,24 @@ class AgentTeamCampaignService:
                     backlog[(scope.repo_owner, scope.repo_name, number)] = labels
         rows = (await db.execute(select(GithubWorkItem.id, GithubWorkItem.scope_id,
             GithubWorkItem.issue_number, GithubWorkItem.issue_title, GithubWorkItem.dispatch_status,
+            GithubWorkItem.dispatch_priority,
             GithubWorkItem.dispatch_base_ref, GithubWorkItem.auto_merged_at,
             AgentTeamSlot.display_name).join(TeamGithubScope,
                 TeamGithubScope.id == GithubWorkItem.scope_id).outerjoin(AgentTeamSlot,
                 AgentTeamSlot.id == GithubWorkItem.owner_slot_id).where(
                 TeamGithubScope.preset_id == preset_id).order_by(GithubWorkItem.id))).all()
+        # Dispatch watches the scope, while campaign counts may watch only a
+        # milestone. Keep the complete pending queue independent of those counts.
+        positions, dispatch_order = Counter(), []
+        pending = sorted((row for row in rows if row.dispatch_status == "pending"),
+                         key=lambda row: (row.scope_id, *dispatch_order_key(row)))
+        for row in pending:
+            scope = by_scope[row.scope_id]
+            positions[row.scope_id] += 1
+            dispatch_order.append(CampaignDispatchItem(title=row.issue_title,
+                scope_id=row.scope_id, repository=f"{scope.repo_owner}/{scope.repo_name}",
+                issue_number=row.issue_number, priority=effective_priority(row.dispatch_priority),
+                dispatch_position=positions[row.scope_id]))
         work = {}
         for row in rows:
             scope = by_scope[row.scope_id]
@@ -205,6 +219,7 @@ class AgentTeamCampaignService:
             done_count=len(done), latest_done=[CampaignDoneItem(title=row.issue_title,
                 merged_at=row.auto_merged_at) for row in done[:3]],
             under_way_count=len(under_way), under_way=under_way, queued_count=len(queued), queued=queued,
+            dispatch_order=dispatch_order,
             not_started_count=sum(groups.values()) if available else None,
             not_started_groups=[CampaignAreaGroup(area=area, count=count) for area, count in sorted(groups.items())],
             decisions_ahead=decisions)

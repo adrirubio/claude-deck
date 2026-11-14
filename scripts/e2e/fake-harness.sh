@@ -14,6 +14,7 @@ case "${1:-}" in
     case "$name" in
       claude) echo "2.1.0 (Claude Code)" ;;
       codex) echo "codex-cli 0.50.0" ;;
+      opencode) echo "opencode v2.0.0" ;;
       *) echo "$name 1.0.0" ;;
     esac
     exit 0

@@ -15,8 +15,8 @@ export default defineConfig({
   ],
 
   themeConfig: {
-    logo: '/albiex-logo-compact-dark.svg',
-    siteTitle: 'Albiex Synth City',
+    logo: { src: '/albiex-logo-compact-dark.svg', alt: 'Albiex Synth City' },
+    siteTitle: false,
 
     nav: [
       { text: 'Guide', link: '/guide/' },
@@ -43,6 +43,7 @@ export default defineConfig({
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
             { text: 'Factory Audit & Metrics', link: '/guide/factory-audit-and-metrics' },
+            { text: 'Isolated Runtime Kit', link: '/guide/isolated-runtime-kit' },
             { text: 'Contributing', link: '/guide/contributing' },
             { text: 'Changelog', link: '/changelog' },
           ],

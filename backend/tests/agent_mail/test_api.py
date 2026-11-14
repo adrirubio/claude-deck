@@ -3347,7 +3347,7 @@ async def test_mail_reads_validate_every_supplied_credential(auth_client, db, mo
 @pytest.mark.parametrize("kind", ["message", "context_request", "handoff"])
 async def test_member_thread_writes_require_participation(auth_client, db, monkeypatch, required, path, kind):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", required)
-    sender, _, outsider, root, _ = await request_thread(db)
+    sender, recipient, outsider, root, _ = await request_thread(db)
     headers = await session_headers(db, outsider)
     before_messages = (await db.execute(select(MailMessage.id, MailMessage.request_status))).all()
     before_receipts = (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
@@ -3364,9 +3364,26 @@ async def test_member_thread_writes_require_participation(auth_client, db, monke
     assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
     assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
         MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
-    accepted = await auth_client.post("/api/v1/agent-mail/messages", headers=await session_headers(db, sender), json=payload)
-    assert accepted.status_code == 200
-    assert accepted.json()["thread_root_id"] == root.id
+    sender_headers = await session_headers(db, sender)
+    if kind == "message":
+        # A thread reply never addresses the replier itself: the recipient must be another participant.
+        self_addressed = await auth_client.post("/api/v1/agent-mail/messages", headers=sender_headers, json=payload)
+        assert self_addressed.status_code == 400
+        assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
+        assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+            MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
+    accepted_payload = {**payload, "recipient_member_id": recipient.id}
+    accepted = await auth_client.post("/api/v1/agent-mail/messages", headers=sender_headers, json=accepted_payload)
+    if kind == "message":
+        assert accepted.status_code == 200
+        assert accepted.json()["thread_root_id"] == root.id
+    else:
+        # A request starts its own thread; the refusal writes nothing.
+        assert accepted.status_code == 400
+        assert "a request starts its own thread" in accepted.text
+        assert (await db.execute(select(MailMessage.id, MailMessage.request_status))).all() == before_messages
+        assert (await db.execute(select(MailReceipt.id, MailReceipt.message_id,
+            MailReceipt.member_id, MailReceipt.read_at, MailReceipt.acked_at))).all() == before_receipts
 
 
 @pytest.mark.asyncio
@@ -3431,3 +3448,115 @@ async def test_public_authentication_status_is_one_live_boolean(auth_client, mon
             response = await auth_client.get("/api/v1/agent-mail/authentication-status", headers=headers)
             assert response.status_code == 200
             assert response.json() == {"director_key_configured": bool(key)}
+
+
+@pytest.mark.asyncio
+async def test_required_check_watch_requires_current_member_auth_and_explicit_context(client,db,monkeypatch):
+    from app.services.github_ci_watch_service import github_ci_watch_service
+    person=await _member(db,'ci-watch','Leader')
+    headers=await _session_headers(db,person,'ci-watch')
+    calls=[]
+    async def register(db,**kwargs):
+        calls.append(kwargs)
+        return {'work_item_id':149,'head_sha':'a'*40,'reviewer_member_id':45}
+    monkeypatch.setattr(github_ci_watch_service,'register',register)
+    path='/api/v1/agent-mail/required-check-watch'
+    payload={'work_item_id':149,'dispatch_nonce':'fixture','scope_revision':0,'head_sha':'a'*40,'reviewer_member_id':45}
+    assert (await client.post(path,json=payload)).status_code==401
+    assert (await client.post(path,json=payload,headers={'X-Synth-City-Operator-Token':'test-director-key'})).status_code==401
+    response=await client.post(path,json=payload,headers=headers)
+    assert response.status_code==200 and response.json()['head_sha']=='a'*40
+    assert calls[0]['actor_member_id']==person.id and calls[0]['session'].member_id==person.id
+    assert (await client.post(path,json={**payload,'head_sha':'short'},headers=headers)).status_code==422
+    assert (await client.post(path,json={**payload,'approval':True},headers=headers)).status_code==422
+    async def refused(db,**kwargs):raise PermissionError('current_leader_required')
+    monkeypatch.setattr(github_ci_watch_service,'register',refused)
+    assert (await client.post(path,json=payload,headers=headers)).status_code==403
+    async def private_failure(db,**kwargs):raise ValueError('token=private-fixture')
+    monkeypatch.setattr(github_ci_watch_service,'register',private_failure)
+    response=await client.post(path,json=payload,headers=headers)
+    assert response.status_code==409 and 'private-fixture' not in response.text
+def _register_body(provider="opencode-cli"):
+    return {"provider": provider, "cwd": "/tmp/opencode-version-fixture", "session_key": f"{provider}:version-fixture", "pid": 4242, "source": "mcp"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["unsupported", "unknown"])
+async def test_register_refuses_opencode_below_2_or_unknown(client, monkeypatch, state):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    resolution = SimpleNamespace(pane=None, walked_pids=(31, 30))
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", lambda _request: resolution)
+    seen = []
+
+    def gate(pane, walked):
+        seen.append((pane, tuple(walked)))
+        return opencode_version.VersionGate(state, None, "fixture")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", gate)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 409
+    assert response.json()["detail"] == opencode_version.BLOCK_CODE
+    # The gate saw the kernel-derived chain, not the claimed pid in the body.
+    assert seen == [(None, (31, 30))]
+
+
+@pytest.mark.asyncio
+async def test_register_accepts_opencode_running_the_trusted_v2_binary(client, monkeypatch):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", lambda _request: SimpleNamespace(pane=None, walked_pids=(31,)))
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", lambda pane, walked: opencode_version.VersionGate("ok", "2.0.29", None))
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 200, response.text
+    assert response.json()["session"]["provider"] == "opencode-cli"
+
+
+@pytest.mark.asyncio
+async def test_register_gate_applies_only_to_opencode(client, monkeypatch):
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", lambda _request: None)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("the OpenCode gate ran for another provider")
+
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", forbidden)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body("codex-cli"))
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
+async def test_register_gates_and_binds_the_same_resolved_pane(client, monkeypatch):
+    from app.utils import peer_process
+    from app.services import opencode_version
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    pane = peer_process.PeerPane(pane_pid=10, pane_proc_start="500", tmux_target="%1", peer_pid=30)
+    resolutions = []
+
+    def resolve_detailed(_request):
+        resolutions.append("detailed")
+        return SimpleNamespace(pane=pane, walked_pids=(30, 20, 10))
+
+    def resolve_plain(_request):
+        raise AssertionError("OpenCode registration must not resolve the peer a second time")
+
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane_detailed", resolve_detailed)
+    monkeypatch.setattr("app.api.v1.agent_mail.resolve_request_pane", resolve_plain)
+    gated = []
+    monkeypatch.setattr(opencode_version, "member_gate_for_peer", lambda p, walked: gated.append(p) or opencode_version.VersionGate("ok", "2.0.29", None))
+
+    async def no_binding(_db, _pane):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_mail.agent_mail_service.resolve_pane_binding", no_binding)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_register_body())
+    assert response.status_code == 200, response.text
+    assert resolutions == ["detailed"]
+    assert gated == [pane]

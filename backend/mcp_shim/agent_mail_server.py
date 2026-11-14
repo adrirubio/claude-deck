@@ -517,6 +517,24 @@ def synth_city_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def synth_city_watch_required_checks(work_item_id: int, dispatch_nonce: str, scope_revision: int,
+                                    head_sha: str, reviewer_member_id: Optional[int]) -> dict:
+    """Register or clear the current head's independent reviewer for scheduled CI notices.
+
+    Only the current designated Leader may bind a current enabled team reviewer.
+    Use a full PR head SHA and current attempt revision. Repeat for each new head.
+    Pass null to clear the reviewer. Completion wakes are durable and deduplicated.
+    A watch grants no approval, acceptance, retry, lease or merge authority.
+    """
+    err = _guard()
+    if err:
+        return err
+    return _request("POST", "/required-check-watch", json={"work_item_id": work_item_id,
+        "dispatch_nonce": dispatch_nonce, "scope_revision": scope_revision,
+        "head_sha": head_sha, "reviewer_member_id": reviewer_member_id})
+
+
+@mcp.tool()
 def synth_city_request_work_item_approval(
     work_item_id: int,
     dispatch_nonce: str,
@@ -625,6 +643,46 @@ def synth_city_request_continuation(
         json={
             "dispatch_nonce": dispatch_nonce,
             "phase": phase,
+            "execution_target": execution_target,
+            "summary": summary,
+            "allowed_paths": allowed_paths,
+            "allowed_actions": allowed_actions,
+            "allowed_commands": allowed_commands,
+            "prohibited_actions": prohibited_actions,
+            "max_failed_heads": max_failed_heads,
+            "tool_fallbacks": tool_fallbacks,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
+def synth_city_request_scope_amendment(
+    work_item_id: int,
+    dispatch_nonce: str,
+    execution_target: str,
+    summary: str,
+    allowed_paths: list[str],
+    allowed_actions: list[str],
+    allowed_commands: list[str],
+    prohibited_actions: list[str],
+    max_failed_heads: int,
+    tool_fallbacks: dict[str, Any],
+    lease_token: str,
+) -> dict:
+    """Request a bounded healthy scope amendment. Fresh Leader decision and owner activation are required."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/scope-amendments",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "phase": "implementation",
             "execution_target": execution_target,
             "summary": summary,
             "allowed_paths": allowed_paths,
@@ -936,9 +994,12 @@ def synth_city_create_team(
       session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;
       context_tier: default/long_context. Bedrock launch options are not
       supported for copilot-cli.
-    - opencode-cli: modes plain/resume; launch_options model, agent,
-      use_last, session_id, platform, aws_region, aws_profile, prompt.
-      OpenCode TUI launch does not support reasoning_effort.
+    - opencode-cli (OpenCode 2): modes plain/resume; launch_options model
+      (provider/model with an optional #variant), agent (default agent),
+      skip_permissions (--auto), session_id (ses…), platform, aws_region,
+      aws_profile, prompt. A first launch saves an exact ses… session id;
+      --continue (use_last) and reasoning_effort are not supported. On
+      Bedrock the model must be amazon-bedrock/….
     Use synth_city_plan_team_launch before launch.
     """
     payload = {
@@ -1471,6 +1532,74 @@ def synth_city_report_backlog_assessment(
     return _dispatch_request("POST", f"/github-scopes/{scope_id}/coordination-assessments",
                              json={"generation": generation, "request_sequence": request_sequence,
                                    "entries": entries, "snapshot_token": snapshot_token})
+
+
+
+
+def _revision_review_request(path: str, payload: dict) -> dict:
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request("POST", path, json=payload)
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
+def synth_city_record_revision_review(work_item_id: int, revision: int, dispatch_nonce: str,
+    head_sha: str, summary: str, evidence_url: str, verdict: str = "changes_required") -> dict:
+    """Assigned independent reviewer records CHANGES REQUIRED (default) or ACCEPTED for this exact submitted head.
+
+    This fact grants no source, readiness or merge authority. Link the source review;
+    a separate current-Leader settlement must act on it.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews",
+        {"revision": revision, "dispatch_nonce": dispatch_nonce, "head_sha": head_sha,
+         "summary": summary, "evidence_url": evidence_url, "verdict": verdict})
+
+
+@mcp.tool()
+def synth_city_record_head_review(work_item_id: int, dispatch_nonce: str, head_sha: str, verdict: str,
+    summary: str, evidence_url: str) -> dict:
+    """Assigned verifier records an explicit ACCEPTED or CHANGES_REQUIRED verdict for the PR's exact current head.
+
+    The verdict is required and is never inferred from the summary. Auto-merge needs an accepted fact for the
+    current head. The fact grants no source or readiness authority; link the source review on this PR.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/head-reviews",
+        {"dispatch_nonce": dispatch_nonce, "head_sha": head_sha, "verdict": verdict,
+         "summary": summary, "evidence_url": evidence_url})
+
+
+@mcp.tool()
+def synth_city_withdraw_revision_review(work_item_id: int, review_id: int, dispatch_nonce: str) -> dict:
+    """Withdraw your active negative review disposition. History is retained."""
+    return _revision_review_request(f"/github-work-items/{work_item_id}/revision-reviews/{review_id}/withdraw",
+        {"dispatch_nonce": dispatch_nonce})
+
+
+@mcp.tool()
+def synth_city_settle_accepted_revision(work_item_id: int, review_id: int, dispatch_nonce: str, reason: str) -> dict:
+    """Current Leader completes a submitted revision from a current independent ACCEPTED review.
+
+    Every required job must be successful at the exact head with GitHub Actions provenance.
+    This does not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition,
+    change policy or budgets, release a lease or approve source.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/submitted-revision/settle-accepted",
+        {"review_id": review_id, "dispatch_nonce": dispatch_nonce, "reason": reason})
+
+
+@mcp.tool()
+def synth_city_end_submitted_revision(work_item_id: int, review_id: int, dispatch_nonce: str, reason: str) -> dict:
+    """Current Leader settles a current independent negative review and stops the revision.
+
+    Further source work needs a fresh bounded amendment, approval and owner acknowledgement.
+    This decision does not approve source, merge, retry or release the workspace.
+    """
+    return _revision_review_request(f"/github-work-items/{work_item_id}/submitted-revision/end",
+        {"review_id": review_id, "dispatch_nonce": dispatch_nonce, "reason": reason})
 
 
 if __name__ == "__main__":

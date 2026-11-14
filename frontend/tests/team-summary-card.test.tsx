@@ -1,3 +1,4 @@
+import { CampaignProgress } from '../src/features/factory/components/overview/CampaignProgress'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +68,28 @@ const hold = summary({
 })
 
 const cases = [
+  {
+    name: 'a team with no semantic progress',
+    data: summary({ attention: [{ code: 'team_idle', work_item_id: 9, scope_id: 1, issue_number: 839,
+      last_actor: 'Reviewer Ada', last_progress_at: stamp }], next_actors: ['leader'] }),
+    expects: ['Team idle on', 'Last recorded actor: Reviewer Ada', '#839'],
+  },
+  {
+    name: 'a team with an unanswered request',
+    data: summary({ attention: [{ code: 'unanswered_request', request_id: 5, requester: 'L1', recipient: 'C1',
+      unanswered_seconds: 1500 }] }),
+    expects: ['Unanswered request', "C1 has not answered L1's request for 25 min"],
+  },
+  {
+    name: 'a team whose unanswered-request view cannot be proven',
+    data: summary({ attention: [{ code: 'unanswered_request_incomplete', coverage_reason: 'ambiguous_legacy_request' }] }),
+    expects: ['Unanswered-request view incomplete', 'an older nested request cannot be matched to a reply'],
+  },
+  {
+    name: 'a team with more unanswered requests than the view lists',
+    data: summary({ attention: [{ code: 'unanswered_request_incomplete', coverage_reason: 'entry_limit', omitted_count: 3 }] }),
+    expects: ['Unanswered-request view incomplete', 'more unanswered requests than are listed', '3 more not listed'],
+  },
   {
     name: 'a team with no work', data: noWork,
     expects: ['None open.', 'Nothing is left.'],
@@ -181,4 +204,22 @@ describe('team summary card', () => {
     expect(requests).toHaveLength(1)
     expect(screen.getByRole('alert')).toHaveTextContent('preset_not_found')
   })
+})
+
+
+it.each(['example/repo', `example/${'r'.repeat(80)}`])('shows the complete observed queue for repository %s without promising a launch', (repository) => {
+  const data = summary({ campaign: {
+    backlog_state: 'backlog unavailable', done_count: 0, latest_done: [],
+    under_way_count: 0, under_way: [], queued_count: 0, queued: [],
+    dispatch_order: [
+      { title: 'Priority work', scope_id: 1, repository, issue_number: 789, priority: 1, dispatch_position: 1 },
+      { title: 'Oldest fallback', scope_id: 1, repository, issue_number: 788, priority: null, dispatch_position: 2 },
+    ], not_started_count: null, not_started_groups: [], decisions_ahead: [],
+  } })
+  render(<MemoryRouter><CampaignProgress presets={[preset]} summaries={[data]} /></MemoryRouter>)
+  expect(screen.getByText(`Dispatch order in ${repository}: 1 · #789 · priority 1`)).toBeInTheDocument()
+  expect(screen.getByText(`Dispatch order in ${repository}: 2 · #788 · oldest first`)).toBeInTheDocument()
+  expect(screen.getByText(/Last-polled order per repository/)).toHaveTextContent(/routing and capacity gates/)
+  const texts = screen.getByRole('article').textContent!
+  expect(texts.indexOf('Priority work')).toBeLessThan(texts.indexOf('Oldest fallback'))
 })

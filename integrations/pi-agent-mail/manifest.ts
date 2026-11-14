@@ -191,7 +191,7 @@ export const manifest = [
   },
   {
     "name": "synth_city_create_team",
-    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli: modes plain/resume; launch_options model, agent,\n      use_last, session_id, platform, aws_region, aws_profile, prompt.\n      OpenCode TUI launch does not support reasoning_effort.\n    Use synth_city_plan_team_launch before launch.\n    ",
+    "description": "Create an Agent Team preset.\n\n    parent_issue_url is an HTTPS GitHub issue URL.\n\n    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.\n    Common slot fields: display_name, provider, repo_path, role, charter,\n    ui_color, launch_mode, launch_options. ui_color values: blue, purple,\n    green, amber, red, cyan, slate. Provider launch modes/options:\n    - claude-code: modes plain/worktree/resume; launch_options\n      skip_permissions, platform, aws_region, aws_profile, bedrock_model,\n      prompt, session_id, project_folder, worktree_name.\n    - codex-cli: modes plain/resume/fork; launch_options model, profile,\n      profile_v2, sandbox, approval_policy, search, no_alt_screen,\n      dangerously_bypass_approvals_and_sandbox, use_last, session_id,\n      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,\n      prompt. reasoning_effort: low/medium/high/xhigh.\n    - copilot-cli: modes plain/resume; launch_options model, agent,\n      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,\n      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,\n      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;\n      context_tier: default/long_context. Bedrock launch options are not\n      supported for copilot-cli.\n    - opencode-cli (OpenCode 2): modes plain/resume; launch_options model\n      (provider/model with an optional #variant), agent (default agent),\n      skip_permissions (--auto), session_id (ses\u2026), platform, aws_region,\n      aws_profile, prompt. A first launch saves an exact ses\u2026 session id;\n      --continue (use_last) and reasoning_effort are not supported. On\n      Bedrock the model must be amazon-bedrock/\u2026.\n    Use synth_city_plan_team_launch before launch.\n    ",
     "inputSchema": {
       "properties": {
         "name": {
@@ -273,6 +273,38 @@ export const manifest = [
         "reason"
       ],
       "title": "synth_city_decide_continuationArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_end_submitted_revision",
+    "description": "Current Leader settles a current independent negative review and stops the revision.\n\n    Further source work needs a fresh bounded amendment, approval and owner acknowledgement.\n    This decision does not approve source, merge, retry or release the workspace.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce",
+        "reason"
+      ],
+      "title": "synth_city_end_submitted_revisionArguments",
       "type": "object"
     }
   },
@@ -626,6 +658,95 @@ export const manifest = [
         "next_action"
       ],
       "title": "synth_city_prepare_work_remaining_summaryArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_record_head_review",
+    "description": "Assigned verifier records an explicit ACCEPTED or CHANGES_REQUIRED verdict for the PR's exact current head.\n\n    The verdict is required and is never inferred from the summary. Auto-merge needs an accepted fact for the\n    current head. The fact grants no source or readiness authority; link the source review on this PR.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "verdict": {
+          "title": "Verdict",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_url": {
+          "title": "Evidence Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "head_sha",
+        "verdict",
+        "summary",
+        "evidence_url"
+      ],
+      "title": "synth_city_record_head_reviewArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_record_revision_review",
+    "description": "Assigned independent reviewer records CHANGES REQUIRED (default) or ACCEPTED for this exact submitted head.\n\n    This fact grants no source, readiness or merge authority. Link the source review;\n    a separate current-Leader settlement must act on it.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_url": {
+          "title": "Evidence Url",
+          "type": "string"
+        },
+        "verdict": {
+          "default": "changes_required",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "revision",
+        "dispatch_nonce",
+        "head_sha",
+        "summary",
+        "evidence_url"
+      ],
+      "title": "synth_city_record_revision_reviewArguments",
       "type": "object"
     }
   },
@@ -1071,6 +1192,86 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_request_scope_amendment",
+    "description": "Request a bounded healthy scope amendment. Fresh Leader decision and owner activation are required.",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "execution_target": {
+          "title": "Execution Target",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "allowed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "allowed_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Actions",
+          "type": "array"
+        },
+        "allowed_commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "prohibited_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prohibited Actions",
+          "type": "array"
+        },
+        "max_failed_heads": {
+          "title": "Max Failed Heads",
+          "type": "integer"
+        },
+        "tool_fallbacks": {
+          "additionalProperties": true,
+          "title": "Tool Fallbacks",
+          "type": "object"
+        },
+        "lease_token": {
+          "title": "Lease Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "execution_target",
+        "summary",
+        "allowed_paths",
+        "allowed_actions",
+        "allowed_commands",
+        "prohibited_actions",
+        "max_failed_heads",
+        "tool_fallbacks",
+        "lease_token"
+      ],
+      "title": "synth_city_request_scope_amendmentArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_request_work_item_approval",
     "description": "Submit the current work item's initial plan to its designated Leader.\n\n    This creates normalized approval authority and returns its stable request id.\n    Do not use synth_city_request_context for initial-plan approval; ordinary context\n    questions are non-authoritative.\n    ",
     "inputSchema": {
@@ -1173,6 +1374,38 @@ export const manifest = [
         }
       },
       "title": "synth_city_send_messageArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_settle_accepted_revision",
+    "description": "Current Leader completes a submitted revision from a current independent ACCEPTED review.\n\n    Every required job must be successful at the exact head with GitHub Actions provenance.\n    This does not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition,\n    change policy or budgets, release a lease or approve source.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce",
+        "reason"
+      ],
+      "title": "synth_city_settle_accepted_revisionArguments",
       "type": "object"
     }
   },
@@ -1297,11 +1530,82 @@ export const manifest = [
     }
   },
   {
+    "name": "synth_city_watch_required_checks",
+    "description": "Register or clear the current head's independent reviewer for scheduled CI notices.\n\n    Only the current designated Leader may bind a current enabled team reviewer.\n    Use a full PR head SHA and current attempt revision. Repeat for each new head.\n    Pass null to clear the reviewer. Completion wakes are durable and deduplicated.\n    A watch grants no approval, acceptance, retry, lease or merge authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        },
+        "scope_revision": {
+          "title": "Scope Revision",
+          "type": "integer"
+        },
+        "head_sha": {
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "reviewer_member_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reviewer Member Id"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "dispatch_nonce",
+        "scope_revision",
+        "head_sha",
+        "reviewer_member_id"
+      ],
+      "title": "synth_city_watch_required_checksArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "synth_city_whoami",
     "description": "Register with Albiex Synth City Agent Mail and return your participant identity, role,\n    charter, repo, live status, and unread/pending inbox counts. Call this once when\n    starting coordinated work.",
     "inputSchema": {
       "properties": {},
       "title": "synth_city_whoamiArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "synth_city_withdraw_revision_review",
+    "description": "Withdraw your active negative review disposition. History is retained.",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "review_id": {
+          "title": "Review Id",
+          "type": "integer"
+        },
+        "dispatch_nonce": {
+          "title": "Dispatch Nonce",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "review_id",
+        "dispatch_nonce"
+      ],
+      "title": "synth_city_withdraw_revision_reviewArguments",
       "type": "object"
     }
   }

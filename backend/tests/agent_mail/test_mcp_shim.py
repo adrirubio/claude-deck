@@ -1221,7 +1221,7 @@ def test_upgrade_probe_refuses_actual_dispatch_including_direct_http_tools(monke
             types.CallToolRequest(method="tools/call", params=types.CallToolRequestParams(
                 name=name, arguments=arguments)))
         assert wire.root.structuredContent == denied
-        assert len(tools) == 36
+        assert len(tools) == 43
         # Every published tool is refused before validation or execution.
         for tool in tools:
             assert await shim.mcp.call_tool(tool.name, {}) == denied
@@ -1251,7 +1251,7 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     spec.loader.exec_module(shim)
     calls = []
     monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert len(asyncio.run(shim.mcp.list_tools())) == 36
+    assert len(asyncio.run(shim.mcp.list_tools())) == 43
     assert shim._ensure_registered() == {"ok": False, "error": {"code": "upgrade_probe_read_only"}}
     assert shim._state["member_id"] is None and shim._state["capability_token"] is None
     assert calls == []
@@ -1272,3 +1272,190 @@ def test_upgrade_probe_lists_tools_without_registration_and_cannot_call_member_t
     normal._state["closing"] = True
     assert normal.synth_city_ack_message(9) == {"ok": False, "error": {"code": "mail_generation_closing"}}
     assert normal_calls == [("POST", "/agent/register")]
+
+
+def test_required_check_watch_passes_explicit_head_reviewer_and_attempt(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    calls=[]
+    monkeypatch.setattr(shim,'_guard',lambda:None)
+    monkeypatch.setattr(shim,'_request',lambda *a,**kw:calls.append((a,kw)) or {'ok':True})
+    assert shim.synth_city_watch_required_checks(149,'fixture',0,'a'*40,45)=={'ok':True}
+    assert calls==[(('POST','/required-check-watch'),{'json':{'work_item_id':149,
+        'dispatch_nonce':'fixture','scope_revision':0,'head_sha':'a'*40,'reviewer_member_id':45}})]
+
+
+def test_head_review_tool_sends_an_explicit_verdict_and_binds_server_identity(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    calls = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs:
+        calls.append((method, path, kwargs)) or {"ok": True, "data": {"id": 1}})
+    assert shim.synth_city_record_head_review(19, "attempt", "a" * 40, "accepted", "Accepted at the exact head",
+        "https://github.com/o/r/pull/5#pullrequestreview-2")["ok"]
+    shim.synth_city_record_head_review(19, "attempt", "a" * 40, "changes_required", "Needs correction",
+        "https://github.com/o/r/pull/5#pullrequestreview-3")
+    assert [row[1] for row in calls] == ["/github-work-items/19/head-reviews"] * 2
+    assert [row[2]["json"]["verdict"] for row in calls] == ["accepted", "changes_required"]
+    for _, _, kwargs in calls:
+        assert set(kwargs["json"]) == {"dispatch_nonce", "head_sha", "verdict", "summary", "evidence_url"}
+    import inspect
+    assert inspect.signature(shim.synth_city_record_head_review).parameters["verdict"].default is inspect.Parameter.empty
+
+
+def test_scope_amendment_and_negative_review_tools_bind_server_identity(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    calls = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs:
+        calls.append((method, path, kwargs)) or {"ok": True, "data": {"id": 1}})
+    assert shim.synth_city_request_scope_amendment(19, "attempt", "workspace", "Add tests",
+        ["src/test.py"], ["edit_tests", "push_pr_head", "request_verification"], ["pytest -q"],
+        ["No live factory"], 1, {}, "lease")["ok"]
+    shim.synth_city_record_revision_review(19, 2, "attempt", "a" * 40, "Needs correction",
+        "https://github.com/o/r/pull/5#pullrequestreview-1")
+    shim.synth_city_withdraw_revision_review(19, 3, "attempt")
+    shim.synth_city_end_submitted_revision(19, 3, "attempt", "Current negative review settled")
+    shim.synth_city_record_revision_review(19, 2, "attempt", "a" * 40, "Accepted at the exact head",
+        "https://github.com/o/r/pull/5#pullrequestreview-2", verdict="accepted")
+    shim.synth_city_settle_accepted_revision(19, 4, "attempt", "Accepted review settled")
+    assert [row[1] for row in calls] == ["/github-work-items/19/scope-amendments",
+        "/github-work-items/19/revision-reviews", "/github-work-items/19/revision-reviews/3/withdraw",
+        "/github-work-items/19/submitted-revision/end", "/github-work-items/19/revision-reviews",
+        "/github-work-items/19/submitted-revision/settle-accepted"]
+    assert calls[1][2]["json"]["verdict"] == "changes_required" and calls[4][2]["json"]["verdict"] == "accepted"
+    assert calls[0][2]["json"]["phase"] == "implementation"
+    for _, _, kwargs in calls:
+        assert not {"owner_member_id", "reviewer_member_id", "leader_member_id", "origin_kind"} & kwargs["json"].keys()
+
+
+# --- #752: the reply tool with canonical thread roots and the request-routing guidance ----------
+
+def test_request_routing_guidance_applies_to_each_member_writing_style():
+    from app.services.team_communication_policy import team_communication_guidance
+    for controlled in (True, False):
+        text = team_communication_guidance(controlled)
+        assert "Send a request that needs an answer as a context request addressed directly" in text
+        assert "Do not send it as a thread reply" in text
+        assert "canonical root id of the thread" in text
+        assert "three short lines: Remaining, Estimate, Next" in text  # the existing guidance stays
+
+
+def _bridge_shim_to_the_service(shim, db, member_id, monkeypatch, seen):
+    """Route the shim's HTTP calls to the same service calls the routes make (not the HTTP layer)."""
+    import asyncio
+
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    loop = asyncio.get_running_loop()
+
+    def bridge(method, path, **kwargs):
+        async def call():
+            if method == "GET" and path.endswith("/thread"):
+                thread = await agent_mail_service.get_thread(db, int(path.split("/")[2]), for_member_id=member_id)
+                data = thread.model_dump(mode="json")
+                seen.append(data)
+                return {"ok": True, "data": data}
+            if method == "POST" and path == "/messages":
+                message = await agent_mail_service.send_message(
+                    db, MailMessageCreate(**kwargs["json"]),
+                    authenticated_sender_member_id=member_id, auto_nudge=False)
+                return {"ok": True, "data": message.model_dump(mode="json")}
+            if path.startswith("/agent/inbox"):
+                return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+            raise AssertionError((method, path, kwargs))
+        return asyncio.run_coroutine_threadsafe(call(), loop).result(timeout=20)
+
+    monkeypatch.setattr(shim, "_request", bridge)
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    shim._state["member_id"] = member_id
+
+
+async def _shim_members_and_root(db, tag, *, root_kind="context_request"):
+    from app.models.database import MailTeamMember
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    asker = MailTeamMember(identity_key=f"repo:{tag}-a", repo_id=f"{tag}-a", repo_path="/tmp/a",
+                           repo_name=f"{tag}-a", display_name=f"{tag}-a")
+    asked = MailTeamMember(identity_key=f"repo:{tag}-b", repo_id=f"{tag}-b", repo_path="/tmp/b",
+                           repo_name=f"{tag}-b", display_name=f"{tag}-b")
+    db.add_all([asker, asked])
+    await db.commit()
+    root = await agent_mail_service.send_message(db, MailMessageCreate(
+        kind=root_kind, sender_member_id=asker.id, recipient_member_id=asked.id, body_markdown="root"),
+        auto_nudge=False)
+    return asker, asked, root
+
+
+@pytest.mark.asyncio
+async def test_shim_reply_with_a_nested_id_answers_the_root_context_request(db, monkeypatch):
+    """Service-backed shim sequence (the HTTP routes are not exercised): GET returns the canonical
+    root, so a nested ORDINARY reply id still resolves the root context request."""
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage
+    from app.models.schemas import MailMessageCreate
+    from app.services.agent_mail_service import agent_mail_service
+
+    asker, asked, root = await _shim_members_and_root(db, "shimnest")
+    follow_up = await agent_mail_service.send_message(db, MailMessageCreate(
+        sender_member_id=asker.id, thread_root_id=root.id, body_markdown="follow-up"), auto_nudge=False)
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    import asyncio
+    result = await asyncio.to_thread(shim.synth_city_reply, follow_up.id, "Done.")
+    assert result["ok"] is True and result["resolved_request"] is True, result
+    assert seen[0]["root"]["id"] == root.id
+    assert (await db.get(MailMessage, root.id)).request_status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_shim_reply_in_a_thread_past_500_replies_keeps_a_canonical_root(db, monkeypatch):
+    import asyncio
+
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage
+
+    asker, asked, root = await _shim_members_and_root(db, "shimlimit")
+    db.add_all([MailMessage(kind="message", sender_member_id=asker.id, thread_root_id=root.id,
+                            body_markdown=f"r{index}", audience_type="member", audience_id=str(asked.id))
+                for index in range(501)])
+    await db.commit()
+    first_reply = (await db.scalars(MailMessage.__table__.select().with_only_columns(MailMessage.id)
+                                    .where(MailMessage.thread_root_id == root.id).limit(1))).first()
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    result = await asyncio.to_thread(shim.synth_city_reply, first_reply, "Done.")
+    assert result["ok"] is True and result["resolved_request"] is True, result
+    assert seen[0]["root"]["id"] == root.id
+    assert seen[0]["replies_complete"] is False
+    assert seen[0]["replies_incomplete_reason"] == "reply_limit"
+    assert len(seen[0]["replies"]) == 500
+
+
+@pytest.mark.asyncio
+async def test_shim_does_not_resolve_a_legacy_nested_pending_request(db, monkeypatch):
+    """Disclosed limitation: the shim only looks at the canonical root, so a legacy nested pending
+    request stays pending when answered through the shim. Only an exact API answer resolves it."""
+    import asyncio
+
+    import mcp_shim.agent_mail_server as shim
+    from app.models.database import MailMessage, MailReceipt
+
+    asker, asked, root = await _shim_members_and_root(db, "shimlegacy", root_kind="message")
+    nested = MailMessage(kind="context_request", sender_member_id=asker.id, recipient_member_id=asked.id,
+                         thread_root_id=root.id, request_status="pending", body_markdown="nested ask",
+                         audience_type="member", audience_id=str(asked.id))
+    db.add(nested)
+    await db.flush()
+    db.add_all([MailReceipt(message_id=nested.id, member_id=asker.id),
+                MailReceipt(message_id=nested.id, member_id=asked.id)])
+    await db.commit()
+    seen = []
+    _bridge_shim_to_the_service(shim, db, asked.id, monkeypatch, seen)
+    result = await asyncio.to_thread(shim.synth_city_reply, nested.id, "Plain reply.")
+    assert result["ok"] is True and result["resolved_request"] is False, result
+    assert seen[0]["root"]["id"] == root.id
+    assert (await db.get(MailMessage, nested.id)).request_status == "pending"

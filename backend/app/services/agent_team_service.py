@@ -43,15 +43,18 @@ from app.models.schemas import (
     AgentTeamSlotResponse,
     AgentTeamSlotUpdate,
 )
-from app.services import agent_mail_install_service
+from app.services import agent_mail_install_service, opencode_version
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
 from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service
 from app.services.github_recovery_gate import configured_recovery_only_attempt
 from app.services.providers import get_provider, get_providers
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+from app.services.opencode_process_identity import new_session_id as new_opencode_session_id
+from app.services.providers.opencode_cli import OpenCodeCliProvider
 from app.services.providers.launch_contract import (
     PROVIDER_CODEX_CLI,
+    PROVIDER_OPENCODE_CLI,
     launch_modes_for,
     option_keys_for,
     reasoning_efforts_for,
@@ -102,6 +105,16 @@ _BEDROCK_LAUNCH_OPTION_KEYS = {"platform", "aws_region", "aws_profile", "bedrock
 _TEAM_SLOT_UI_COLORS = {"blue", "purple", "green", "amber", "red", "cyan", "slate"}
 
 
+def _validate_ack_windows(initial, maximum):
+    from app.config import settings
+
+    AgentTeamPresetUpdate(leader_ack_timeout_seconds=initial, leader_ack_max_wait_seconds=maximum)
+    initial = initial if initial is not None else settings.github_leader_ack_timeout_seconds
+    maximum = maximum if maximum is not None else settings.github_leader_ack_max_wait_seconds
+    if maximum < initial:
+        raise ValueError("leader_ack_max_wait_seconds must be at least the effective initial window")
+
+
 class AgentTeamService:
     """Persistence and orchestration for local saved agent rosters."""
 
@@ -125,11 +138,14 @@ class AgentTeamService:
         self, db: AsyncSession, request: AgentTeamPresetCreate
     ) -> AgentTeamPresetResponse:
         name = self._clean_required(request.name, "Team name")
+        _validate_ack_windows(request.leader_ack_timeout_seconds, request.leader_ack_max_wait_seconds)
         await self._ensure_preset_name_is_unique(db, name)
         preset = AgentTeamPreset(
             name=name,
             description=self._clean_optional(request.description),
             parent_issue_url=request.parent_issue_url,
+            leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
             backlog_milestone=request.backlog_milestone,
             planned_decisions=([decision.model_dump() for decision in request.planned_decisions]
                                if request.planned_decisions is not None else None),
@@ -252,6 +268,8 @@ class AgentTeamService:
         parent_issue_url: str | None | object = _UNSET,
         backlog_milestone: str | None | object = _UNSET,
         planned_decisions: list | None | object = _UNSET,
+        leader_ack_timeout_seconds: int | None | object = _UNSET,
+        leader_ack_max_wait_seconds: int | None | object = _UNSET,
     ) -> AgentTeamPresetResponse:
         campaign_changes = {}
         if backlog_milestone is not _UNSET:
@@ -262,6 +280,13 @@ class AgentTeamService:
         if parent_issue_url is not _UNSET:
             parent_issue_url = AgentTeamPresetUpdate(parent_issue_url=parent_issue_url).parent_issue_url
         preset = await self._require_preset(db, preset_id)
+        initial = (preset.leader_ack_timeout_seconds if leader_ack_timeout_seconds is _UNSET
+                   else leader_ack_timeout_seconds)
+        maximum = (preset.leader_ack_max_wait_seconds if leader_ack_max_wait_seconds is _UNSET
+                   else leader_ack_max_wait_seconds)
+        _validate_ack_windows(initial, maximum)
+        preset.leader_ack_timeout_seconds = initial
+        preset.leader_ack_max_wait_seconds = maximum
         if parent_issue_url is not _UNSET:
             preset.parent_issue_url = parent_issue_url
         if backlog_milestone is not _UNSET:
@@ -466,6 +491,8 @@ class AgentTeamService:
             name=self._clean_required(name or f"{source.name} copy", "Team name"),
             description=source.description,
             parent_issue_url=source.parent_issue_url,
+            leader_ack_timeout_seconds=source.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=source.leader_ack_max_wait_seconds,
             backlog_milestone=source.backlog_milestone,
             planned_decisions=([dict(decision) for decision in source.planned_decisions]
                                if source.planned_decisions is not None else None),
@@ -561,6 +588,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-mail",
                 parent_issue_url=request.parent_issue_url,
+                leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+                leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
                 backlog_milestone=request.backlog_milestone,
                 planned_decisions=request.planned_decisions,
                 slots=slot_requests,
@@ -610,6 +639,8 @@ class AgentTeamService:
                 description=request.description,
                 created_by="agent-bridge",
                 parent_issue_url=request.parent_issue_url,
+                leader_ack_timeout_seconds=request.leader_ack_timeout_seconds,
+                leader_ack_max_wait_seconds=request.leader_ack_max_wait_seconds,
                 backlog_milestone=request.backlog_milestone,
                 planned_decisions=request.planned_decisions,
                 slots=slot_requests,
@@ -994,6 +1025,9 @@ class AgentTeamService:
             )
             if slot.provider == "claude-code" and options.mode != "resume":
                 options = SpawnCommandOptions(**{**options.__dict__, "session_id": str(uuid.uuid4())})
+            elif slot.provider == PROVIDER_OPENCODE_CLI and options.mode != "resume":
+                # Synth City chooses the OpenCode session id so that resume is exact (#731).
+                options = SpawnCommandOptions(**{**options.__dict__, "session_id": new_opencode_session_id()})
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -1006,7 +1040,7 @@ class AgentTeamService:
                     **({"SYNTH_CITY_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
-            if slot.provider == "claude-code" and options.session_id:
+            if slot.provider in {"claude-code", PROVIDER_OPENCODE_CLI} and options.session_id:
                 slot.launch_options = {**(slot.launch_options or {}), "session_id": options.session_id}
                 slot.launch_mode = "resume"
             elif slot.provider == "codex-cli" and options.mode != "resume":
@@ -1130,7 +1164,19 @@ class AgentTeamService:
             )
         )
 
-    def _plan_slot(
+    def _plan_slot(self, slot: AgentTeamSlot, *args: Any, **kwargs: Any) -> AgentTeamLaunchPlanItem:
+        item = self._plan_slot_item(slot, *args, **kwargs)
+        options = slot.launch_options or {}
+        bedrock_model = (
+            self._clean_optional(options.get("bedrock_model"))
+            if self._clean_optional(options.get("platform")) == PLATFORM_BEDROCK
+            else None
+        )
+        item.model = bedrock_model or self._clean_optional(options.get("model"))
+        item.reasoning_effort = self._clean_optional(options.get("reasoning_effort"))
+        return item
+
+    def _plan_slot_item(
         self,
         slot: AgentTeamSlot,
         matching_session: dict[str, Any] | None,
@@ -1170,8 +1216,30 @@ class AgentTeamService:
             reasons.append(f"Unknown provider: {slot.provider}")
             block_code = "provider_unknown"
 
+        if (
+            block_code is None
+            and slot.provider == "opencode-cli"
+            and getattr(install_status, "opencode_version_ready", False) is not True
+        ):
+            # OpenCode 2 or later only: v1 and an unknown version are refused
+            # before any reuse, adoption or spawn.
+            reasons.append(opencode_version.REASON_REQUIRED)
+            block_code = opencode_version.BLOCK_CODE
+
+        if (
+            block_code is None
+            and slot.provider == PROVIDER_OPENCODE_CLI
+            and self._truthy_launch_option((slot.launch_options or {}).get("use_last"))
+        ):
+            # A slot stored with use_last before #731 fails closed on every path,
+            # before any reuse or adoption: --continue is not an exact session.
+            reasons.append(
+                "OpenCode members resume only an exact saved session; --continue is not supported"
+            )
+            block_code = "opencode_continue_unsupported"
+
         mail_reason = self._agent_mail_ready_reason(slot.provider, install_status)
-        if mail_reason:
+        if mail_reason and mail_reason not in reasons:
             reasons.append(mail_reason)
             block_code = block_code or "agent_mail_not_configured"
 
@@ -1210,6 +1278,23 @@ class AgentTeamService:
                     block_code="unbound_pane_unverifiable",
                     warnings=warnings,
                 )
+            if slot.provider == "opencode-cli":
+                refusal = self._opencode_pane_refusal(matching_session)
+                if refusal is not None:
+                    return AgentTeamLaunchPlanItem(
+                        slot_id=slot.id,
+                        slot_name=slot.display_name,
+                        provider=slot.provider,
+                        repo_id=slot.repo_id,
+                        repo_path=slot.repo_path,
+                        repo_name=slot.repo_name,
+                        action="blocked",
+                        status="blocked",
+                        reasons=[refusal],
+                        matching_session=matching_session,
+                        block_code=opencode_version.BLOCK_CODE,
+                        warnings=warnings,
+                    )
             if unbound and not adopt_unbound_sessions:
                 return AgentTeamLaunchPlanItem(
                     slot_id=slot.id,
@@ -1247,16 +1332,14 @@ class AgentTeamService:
             block_code = (
                 "unsafe_copilot_continue"
                 if slot.provider == "copilot-cli"
-                else "unsafe_opencode_continue"
-                if slot.provider == "opencode-cli"
                 else "unsafe_codex_resume_last"
             )
 
         if block_code is None:
             validation_error = self._validate_spawn_options(slot)
             if validation_error:
-                reasons.append(validation_error)
-                block_code = "invalid_launch_options"
+                reasons.append(validation_error[0])
+                block_code = validation_error[1]
 
         if block_code:
             return AgentTeamLaunchPlanItem(
@@ -1307,7 +1390,8 @@ class AgentTeamService:
         }
 
     def _is_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
-        if slot.provider not in {"codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}:
+        # OpenCode has no --continue for members; its provider refuses a stored use_last (#731).
+        if slot.provider not in {"codex-cli", "copilot-cli", "pi-cli"}:
             return False
         if (slot.launch_mode or "plain").strip() != "resume":
             return False
@@ -1324,8 +1408,6 @@ class AgentTeamService:
         label = (
             "GitHub Copilot CLI --continue"
             if provider == "copilot-cli"
-            else "OpenCode --continue"
-            if provider == "opencode-cli"
             else "Codex resume --last"
         )
         return (
@@ -1344,11 +1426,22 @@ class AgentTeamService:
             pass
         raise ValueError("No default agent provider is available; choose a provider manually")
 
+    def _opencode_pane_refusal(self, matching_session: dict[str, Any]) -> str | None:
+        """Refuse reuse or adoption unless the pane runs the trusted OpenCode 2 binary."""
+        pid = matching_session.get("pid")
+        start = matching_session.get("pane_proc_start")
+        if not isinstance(start, str) or not str(pid or "").isdigit():
+            return opencode_version.REASON_UNKNOWN
+        gate = opencode_version.member_gate_for_pane(int(pid), start)
+        return None if gate.ready else gate.reason or opencode_version.REASON_UNKNOWN
+
     def _blocked_result_status(self, block_code: str | None) -> str:
         if block_code == "provider_unavailable":
             return "blocked_provider_unavailable"
         if block_code == "agent_mail_not_configured":
             return "blocked_agent_mail_not_configured"
+        if block_code == opencode_version.BLOCK_CODE:
+            return "blocked_opencode_version_unsupported"
         return "failed"
 
     def _reuse_group_counts(self, slots: list[AgentTeamSlot]) -> dict[tuple[str, str], int]:
@@ -1647,12 +1740,14 @@ class AgentTeamService:
             session.team_preset_id = None
             session.team_slot_id = None
 
-    def _validate_spawn_options(self, slot: AgentTeamSlot) -> str | None:
+    def _validate_spawn_options(self, slot: AgentTeamSlot) -> tuple[str, str] | None:
+        """(reason, block code) when the stored options cannot launch."""
         try:
             get_provider(slot.provider).build_spawn_command(self._spawn_options_for_slot(slot, prompt=None))
             return None
         except Exception as exc:
-            return str(exc)
+            code = exc.block_code if isinstance(exc, ProviderLaunchError) and exc.block_code else "invalid_launch_options"
+            return str(exc), code
 
     def _spawn_options_for_slot(
         self, slot: AgentTeamSlot, prompt: str | None, repo_path_override: str | None = None
@@ -1772,6 +1867,8 @@ class AgentTeamService:
             name=preset.name,
             description=preset.description,
             parent_issue_url=preset.parent_issue_url,
+            leader_ack_timeout_seconds=preset.leader_ack_timeout_seconds,
+            leader_ack_max_wait_seconds=preset.leader_ack_max_wait_seconds,
             backlog_milestone=preset.backlog_milestone,
             planned_decisions=preset.planned_decisions,
             created_by=preset.created_by,
@@ -2001,6 +2098,7 @@ class AgentTeamService:
     ) -> dict[str, Any]:
         if not value:
             return {}
+        self._refuse_unsupported_reasoning_effort(provider, value)
         if provider is not None:
             allowed = set(option_keys_for(provider))
             if not supports_bedrock(provider):
@@ -2009,6 +2107,14 @@ class AgentTeamService:
             if unknown:
                 raise ValueError(f"Unsupported launch_options for {provider}: {', '.join(unknown)}")
         return {key: option for key, option in value.items() if key in _OPTION_FIELDS}
+
+    def _refuse_unsupported_reasoning_effort(self, provider: str | None, options: dict[str, Any]) -> None:
+        """OpenCode does not list reasoning_effort, but keeps its precise refusal (#731)."""
+        if provider == PROVIDER_OPENCODE_CLI and self._clean_optional(options.get("reasoning_effort")):
+            raise ProviderLaunchError(
+                f"{provider} does not support reasoning_effort",
+                "reasoning_effort_unsupported",
+            )
 
     def _validate_slot_options(
         self,
@@ -2027,6 +2133,7 @@ class AgentTeamService:
                 f"{', '.join(unsupported_bedrock_keys)}"
             )
 
+        self._refuse_unsupported_reasoning_effort(provider, options)
         allowed_keys = set(option_keys_for(provider))
         if not supports_bedrock(provider):
             allowed_keys |= _BEDROCK_LAUNCH_OPTION_KEYS
@@ -2049,6 +2156,16 @@ class AgentTeamService:
                 raise ProviderLaunchError("Pi requires platform=openrouter", "pi_platform_unsupported")
         if platform == PLATFORM_BEDROCK and not supports_bedrock(provider):
             raise ValueError(f"{provider} does not support platform=bedrock")
+        if (
+            provider == "claude-code"
+            and platform == PLATFORM_BEDROCK
+            and self._clean_optional(options.get("model"))
+            and self._clean_optional(options.get("bedrock_model"))
+        ):
+            raise ProviderLaunchError(
+                "Set either model or bedrock_model on a Bedrock Claude Code member, not both",
+                "bedrock_model_conflict",
+            )
 
         reasoning_effort = self._clean_optional(options.get("reasoning_effort"))
         if reasoning_effort:
@@ -2069,8 +2186,15 @@ class AgentTeamService:
             value = self._clean_optional(options.get(key))
             if value and any(char in value for char in ("\n", "\r", "\x00")):
                 raise ValueError(f"launch_options.{key} must not contain control characters")
-            if value:
+            if value and not (provider == PROVIDER_OPENCODE_CLI and key == "model"):
                 self._validate_model_id(key, value)
+        if provider == PROVIDER_OPENCODE_CLI:
+            # The v2 contract: provider/model[#variant], a plain agent name, a ses… id (#731).
+            OpenCodeCliProvider().build_spawn_command(SpawnCommandOptions(
+                directory=".",
+                mode=launch_mode,
+                **{key: value for key, value in options.items() if key in _OPTION_FIELDS - {"directory", "mode"}},
+            ))
 
     def _slot_launch_warnings(self, provider: str, launch_options: dict[str, Any]) -> list[str]:
         warnings: list[str] = []

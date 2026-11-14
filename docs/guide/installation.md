@@ -2,7 +2,7 @@
 
 Albiex Synth City must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
-Claude Deck 3.0.0 includes the Overview, Work, Repositories and Harnesses pages. Older packaged releases can show the earlier configuration home page. The installation prerequisites still apply.
+Synth City includes the Overview, Work, Repositories and Harnesses pages (added in 3.0.0). Older packaged releases can show the earlier configuration home page. The installation prerequisites still apply.
 
 ## Native Installation
 
@@ -14,8 +14,10 @@ Claude Deck 3.0.0 includes the Overview, Work, Repositories and Harnesses pages.
   - Claude Code
   - Codex CLI
   - GitHub Copilot CLI
-  - OpenCode CLI
+  - OpenCode CLI 2 or later
   - Pi
+
+Synth City requires OpenCode 2 or later. It reads the version from `opencode --version` (for example `opencode v2.0.29` or `2.0.29`). With OpenCode 1, or a version it cannot read, the OpenCode harness shows a blocked configuration with the reason "OpenCode 2 or later is required", and OpenCode team members cannot launch.
 
 Pi has additional requirements:
 
@@ -120,6 +122,10 @@ The dashboard and native pages start with the code defaults in `backend/app/conf
 ## Remote Use
 
 For remote access, install and run Synth City natively on the remote host where the agents, credentials, repositories, and tmux sessions exist. Then connect from your browser over a trusted tunnel or network route.
+
+## Separate controller and agent users
+
+If the controller and the agents run as different operating-system users, the operator must set up one `sudoers` rule for the cross-user terminal attach: turn `use_pty` off for the agent `tmux` command only. Synth City does not change `sudoers`. See [What you must set up: a command-scoped `!use_pty`](/features/agent-bridge#what-you-must-set-up-a-command-scoped-use-pty) and, for the rest of this layout, [Deployment with separate controller and agent users](/features/agent-teams#deployment-with-separate-controller-and-agent-users).
 
 ## What Gets Read
 

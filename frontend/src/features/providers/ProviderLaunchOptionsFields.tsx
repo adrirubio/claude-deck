@@ -1,4 +1,5 @@
 import { ChevronDown } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -56,6 +57,8 @@ export function ProviderLaunchOptionsFields({
   descriptor,
   disabled = false,
 }: ProviderLaunchOptionsFieldsProps) {
+  // Claude Code only: the provider whose Custom model entry the user has opened. A cleared custom id keeps its input.
+  const [customEntryFor, setCustomEntryFor] = useState<string | null>(null)
   const setOption = (key: keyof SlotLaunchOptions, next: unknown) => {
     const updated = { ...value }
     if (next === '' || next === null || next === undefined || next === false) {
@@ -71,14 +74,16 @@ export function ProviderLaunchOptionsFields({
   const model = stringValue(value.model)
   const bedrockModel = stringValue(value.bedrock_model)
   const profile = stringValue(value.profile)
-  const modelOptions = descriptor?.model_options ?? []
+  const isClaude = provider === 'claude-code'
+  // The Bedrock inference profile example is a placeholder for the Bedrock model ID field, not a model to choose.
+  const modelOptions = (descriptor?.model_options ?? []).filter((option) => !(isClaude && option.value.startsWith('arn:')))
   const profileOptions = descriptor?.profile_options ?? []
   const knownModels = optionValues(modelOptions)
   const knownProfiles = new Set(profileOptions.map((option) => option.value))
-  const modelSelectValue = model && !knownModels.has(model) ? CUSTOM_SELECT_VALUE : model || DEFAULT_SELECT_VALUE
+  const customEntry = isClaude && customEntryFor === provider
+  const modelSelectValue = customEntry || (model && !knownModels.has(model)) ? CUSTOM_SELECT_VALUE : model || DEFAULT_SELECT_VALUE
   const profileSelectValue = profile && !knownProfiles.has(profile) ? CUSTOM_SELECT_VALUE : profile || DEFAULT_SELECT_VALUE
   const isCodex = provider === 'codex-cli'
-  const isClaude = provider === 'claude-code'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
   const isMuse = provider === 'muse-cli'
@@ -86,15 +91,29 @@ export function ProviderLaunchOptionsFields({
   const simpleModelKey: keyof SlotLaunchOptions = (isCodex || isClaude) && isBedrock ? 'bedrock_model' : 'model'
   const simpleModelValue = (isCodex || isClaude) && isBedrock ? bedrockModel : model
 
+  // A Claude Code member on Bedrock sets bedrock_model, on the default platform it sets model; never both.
+  const handlePlatformChange = (next: string) => {
+    const updated = { ...value }
+    if (next === 'anthropic') delete updated.platform
+    else updated.platform = next
+    if (isClaude && next === 'bedrock') delete updated.model
+    if (isClaude && next === 'anthropic') delete updated.bedrock_model
+    if (isClaude) setCustomEntryFor(null)
+    onChange(updated)
+  }
+
   const handleModelSelect = (selected: string) => {
     if (selected === DEFAULT_SELECT_VALUE) {
+      if (isClaude) setCustomEntryFor(null)
       setOption('model', '')
       return
     }
     if (selected === CUSTOM_SELECT_VALUE) {
+      if (isClaude) setCustomEntryFor(provider)
       setOption('model', model)
       return
     }
+    if (isClaude) setCustomEntryFor(null)
     setOption('model', selected)
   }
 
@@ -123,7 +142,7 @@ export function ProviderLaunchOptionsFields({
           <Label>Platform</Label>
           <Select
             value={platform}
-            onValueChange={(next) => setOption('platform', next === 'anthropic' ? '' : next)}
+            onValueChange={handlePlatformChange}
             disabled={disabled}
           >
             <SelectTrigger>
@@ -163,6 +182,13 @@ export function ProviderLaunchOptionsFields({
         </div>
       )}
 
+      {isClaude && isBedrock && model && bedrockModel && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+          <span>Model and Bedrock model ID cannot both be set on Bedrock. Clear the model.</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => setOption('model', '')} disabled={disabled}>Clear model</Button>
+        </div>
+      )}
+
       {usesSimpleModelInput && (
         <div className="grid gap-2">
           <Label htmlFor="provider-model">{(isCodex || isClaude) && isBedrock ? 'Bedrock model ID' : 'Model'}</Label>
@@ -170,13 +196,13 @@ export function ProviderLaunchOptionsFields({
             id="provider-model"
             value={simpleModelValue}
             onChange={(event) => setOption(simpleModelKey, event.target.value)}
-            placeholder={isMuse ? 'muse-wonder-1.0' : isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
+            placeholder={isMuse ? 'muse-wonder-1.0' : isOpenCode ? 'provider/model or provider/model#variant' : isCodex && isBedrock ? 'openai.gpt-5.5' : isClaude && isBedrock ? 'arn:aws:bedrock:...' : 'Default'}
             disabled={disabled}
           />
         </div>
       )}
 
-      {isCodex && !isBedrock && (
+      {(isCodex || isClaude) && !isBedrock && (
         <div className="grid gap-2">
           <Label>Model</Label>
           <Select value={modelSelectValue} onValueChange={handleModelSelect} disabled={disabled}>
@@ -198,7 +224,10 @@ export function ProviderLaunchOptionsFields({
           {modelSelectValue === CUSTOM_SELECT_VALUE && (
             <Input
               value={model}
-              onChange={(event) => setOption('model', event.target.value)}
+              onChange={(event) => {
+                if (isClaude) setCustomEntryFor(provider)
+                setOption('model', event.target.value)
+              }}
               placeholder="model name"
               disabled={disabled}
             />
@@ -263,9 +292,13 @@ export function ProviderLaunchOptionsFields({
         <p className="text-xs text-muted-foreground">OpenCode TUI launches cannot pin reasoning effort.</p>
       )}
 
+      {isOpenCode && isBedrock && (
+        <p className="text-xs text-muted-foreground">On Bedrock, use an amazon-bedrock/ model.</p>
+      )}
+
       {(isCopilot || isOpenCode) && (
         <div className="grid gap-2">
-          <Label htmlFor="provider-agent">Custom agent</Label>
+          <Label htmlFor="provider-agent">{isOpenCode ? 'Default agent' : 'Custom agent'}</Label>
           <Input
             id="provider-agent"
             value={stringValue(value.agent)}
@@ -296,6 +329,20 @@ export function ProviderLaunchOptionsFields({
               ))}
             </SelectContent>
           </Select>
+        </div>
+      )}
+
+      {isOpenCode && (
+        <div className="grid gap-1">
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={boolValue(value.skip_permissions)}
+              onCheckedChange={(checked) => setOption('skip_permissions', checked === true)}
+              disabled={disabled}
+            />
+            Auto-approve permissions (--auto)
+          </label>
+          <p className="ml-6 text-xs text-muted-foreground">Deny rules still apply.</p>
         </div>
       )}
 

@@ -2,8 +2,20 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 
-def test_discover_agent_sessions_returns_mixed_providers():
+
+@pytest.fixture
+def opencode_member_argv(monkeypatch):
+    # OpenCode discovery needs the pane process's readable argv (#731). Give the
+    # synthetic PID 444 an explicit member argv so the test never reads host /proc.
+    from app.services import opencode_process_identity
+
+    argv = {444: ["/usr/local/bin/opencode", "/repo/d", "--standalone", "--session", "ses_fixture"]}
+    monkeypatch.setattr(opencode_process_identity, "read_argv", lambda pid: argv.get(pid))
+
+
+def test_discover_agent_sessions_returns_mixed_providers(opencode_member_argv):
     from app.services.agent_bridge.discovery import discover_agent_sessions
 
     tmux_output = "\n".join([
@@ -30,7 +42,7 @@ def test_discover_agent_sessions_returns_mixed_providers():
     assert sessions[3]["provider_display_name"] == "OpenCode CLI"
 
 
-def test_discover_agent_sessions_can_filter_provider():
+def test_discover_agent_sessions_can_filter_provider(opencode_member_argv):
     from app.services.agent_bridge.discovery import discover_agent_sessions
 
     tmux_output = "\n".join([

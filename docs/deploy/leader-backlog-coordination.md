@@ -75,6 +75,15 @@ several repositories. Keep release publication under the configured review gate.
 
 ## Leader protocol
 
+Plan approval uses an activity-aware, bounded wait. A healthy Leader can finish
+a long turn before reading a pending plan; it need not keep turns short to avoid
+the initial five-minute reminder. That reminder and the Supervisor's system
+notice preserve the pending request and builder lease. Authenticated bound
+activity may extend the wait to the fixed maximum, but never approves work.
+The Leader must still record an explicit decision for the current request.
+See [Leader plan-approval wait](../autonomy.md#leader-plan-approval-wait) for
+global defaults, validated per-team overrides, inactive grace and the hard cap.
+
 The scheduler observes the assigned issues by number, independently of the
 dispatch label. It sends bounded Agent Mail requests on meaningful issue,
 work-state, resource, routing and policy changes, after resume/restart, and on a
@@ -317,3 +326,17 @@ For #436, refresh the Leader connection again so its assessment tool exposes the
 optional `snapshot_token` argument. The compatibility migration adds policy and
 assessment revisions plus an accepted-token digest. It preserves existing Mail
 linkage, counters, assessments and all dispatch authority.
+
+### Scheduled required-check handoff
+
+When assigning independent review, register the reviewer through
+`synth_city_watch_required_checks` with the current work item, dispatch nonce,
+revision, full PR head and reviewer member ID. Repeat on a changed head. Clear the
+binding with a null reviewer when the assignment ends. Albiex Synth City schedules one durable
+completion notice per attempt revision/head and recipient; the Leader does not
+need to promise a manual CI watch. Success routes to the Leader and reviewer;
+failure routes to the owner and Leader. Preserve the current approval and merge
+policy. If wake confirmation is missing, reconcile the next actor using current
+head evidence. A same-head rerun updates the check view without another completion
+event. Advisory `team_idle` in the summary/check-in means the Leader should inspect
+the named work and last recorded actor; it authorizes no retry or recovery action.

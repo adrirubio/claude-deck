@@ -39,7 +39,10 @@ _SUFFIXES = {
     "prepare_operator_action_contexts", "prepare_work_remaining_summary", "render_github_summary",
     "reply", "report_backlog_assessment", "report_dispatch_status", "report_owner_followup",
     "request_context", "request_continuation", "request_work_item_approval", "retry_work_item",
-    "send_message", "supervisor_checkin", "update_team_campaign", "update_team_parent_issue", "whoami",
+    "send_message", "supervisor_checkin", "update_team_campaign", "update_team_parent_issue",
+    "watch_required_checks", "whoami",
+    "request_scope_amendment", "record_revision_review", "withdraw_revision_review",
+    "end_submitted_revision", "settle_accepted_revision", "record_head_review",
 }
 
 
@@ -357,7 +360,7 @@ async def _protocol(entry, provider):
                     initialized = await session.initialize()
                     tools = await session.list_tools()
                     if initialized.serverInfo.name != a.NEW or {tool.name for tool in tools.tools} != {
-                            "synth_city_" + suffix for suffix in _SUFFIXES} or len(tools.tools) != 36:
+                            "synth_city_" + suffix for suffix in _SUFFIXES} or len(tools.tools) != 43:
                         raise a.Incomplete("protocol_unverified")
 
 

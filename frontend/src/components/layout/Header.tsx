@@ -1,14 +1,18 @@
 import { Terminal, AlertCircle, Server } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
 import { useInstanceDocumentTitle } from "@/hooks/useInstanceDocumentTitle";
 import { useProviderContext } from "@/contexts/ProviderContext";
 import { getInstanceAccentClasses } from "@/lib/instanceAccent";
+import { MODAL_SIZES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { harnessSummary } from "./harnessSummary";
+
+const CLI_WARNING_LABEL = "Container cannot see host agent CLIs";
 
 export function Header() {
   const { theme } = useTheme();
@@ -36,16 +40,16 @@ export function Header() {
 
   return (
     <header className={cn("border-b border-t-4 bg-background", instance ? accentClasses.headerBorder : "border-t-transparent")}>
-      <div className="flex min-h-16 flex-wrap items-center justify-between gap-2 px-3 py-2 md:px-6">
-        <div className="flex items-center gap-3">
+      <div className="flex min-h-16 items-center justify-between gap-2 px-3 py-2 md:px-6">
+        <div className="flex shrink-0 items-center gap-3">
           <img
             src={theme === "light" ? "/albiex-logo-compact.svg" : "/albiex-logo-compact-dark.svg"}
             alt="Albiex Synth City"
-            className="h-10 w-auto"
+            className="h-10 w-auto shrink-0"
           />
-          <p className="text-xs text-muted-foreground">Your local agent command centre</p>
+          <p className="hidden text-xs text-muted-foreground sm:block">Your local agent command centre</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-2">
           {!status && (
             // Reserve the badge space so the header does not shift when the status loads.
             <span aria-hidden="true" className="inline-block h-5.5 w-32" />
@@ -55,7 +59,7 @@ export function Header() {
               {instance && (
                 <Badge
                   variant="outline"
-                  className={cn("gap-1 text-xs max-w-48 truncate", accentClasses.badge)}
+                  className={cn("min-w-0 gap-1 text-xs max-w-48 truncate", accentClasses.badge)}
                   title={instanceTitle}
                 >
                   <Server className="h-3 w-3 shrink-0" />
@@ -80,18 +84,37 @@ export function Header() {
                 </Link>
               )}
               {status.environment?.agent_cli_warning && (
-                <Badge
-                  variant="outline"
-                  className="gap-1 text-xs border-destructive/40 text-destructive max-w-88"
-                  title={status.environment.agent_cli_warning}
-                >
-                  <AlertCircle className="h-3 w-3 shrink-0" />
-                  <span className="truncate">Container cannot see host agent CLIs</span>
-                </Badge>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <button
+                      type="button"
+                      title={status.environment.agent_cli_warning}
+                      aria-label={`${CLI_WARNING_LABEL}. ${status.environment.agent_cli_warning}`}
+                      className="inline-flex shrink-0 max-w-88 rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:min-w-0 sm:shrink"
+                    >
+                      <Badge
+                        variant="outline"
+                        className="min-w-0 gap-1 text-xs border-destructive/40 text-destructive"
+                      >
+                        <AlertCircle className="h-3 w-3 shrink-0" />
+                        <span className="hidden truncate sm:inline">{CLI_WARNING_LABEL}</span>
+                      </Badge>
+                    </button>
+                  </DialogTrigger>
+                  <DialogContent className={MODAL_SIZES.SM}>
+                    {/* Side padding keeps the title clear of the close button and its focus ring. */}
+                    <DialogHeader className="px-5">
+                      <DialogTitle>{CLI_WARNING_LABEL}</DialogTitle>
+                      <DialogDescription>{status.environment.agent_cli_warning}</DialogDescription>
+                    </DialogHeader>
+                  </DialogContent>
+                </Dialog>
               )}
             </>
           )}
-          <ThemeToggle />
+          <div className="shrink-0">
+            <ThemeToggle />
+          </div>
         </div>
       </div>
     </header>

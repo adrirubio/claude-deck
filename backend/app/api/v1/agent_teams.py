@@ -42,6 +42,9 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.models.schemas import (
+    GithubScopeAmendmentCreate, GithubRevisionReviewCreate, GithubRevisionReviewWithdraw,
+    GithubSubmittedRevisionEnd, GithubRevisionReviewResponse,
+    GithubHeadReviewCreate, GithubHeadReviewResponse,
     AgentTeamActivityResponse,
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
@@ -93,6 +96,7 @@ from app.services.agent_mail_service import (
     agent_mail_service,
 )
 from app.services.agent_activity_service import observe_team
+from app.services.sqlite_busy_retry import SqliteBusyExhausted, is_sqlite_busy, retry_when_busy
 from app.services.github_approval_service import (
     CONTINUABLE_ESCALATIONS,
     ActiveCancellationNoticeError,
@@ -567,6 +571,10 @@ def _scope_revision_response(
         revision=revision.revision,
         owner_slot_id=revision.owner_slot_id,
         owner_member_id=revision.owner_member_id,
+        origin_kind=revision.origin_kind,
+        amendment_base_paths=revision.amendment_base_paths,
+        amendment_added_paths=revision.amendment_added_paths,
+        previous_scope_revision=revision.previous_scope_revision,
         phase=revision.phase,
         execution_target=revision.execution_target,
         summary=revision.summary,
@@ -1477,6 +1485,9 @@ async def report_dispatch_status(
     }
 
 
+_CONTINUATION_REQUEST_ROUTE = "POST /github-work-items/{item_id}/continuation-requests"
+
+
 @router.post(
     "/github-work-items/{item_id}/continuation-requests",
     response_model=GithubContinuationRequestResponse,
@@ -1504,7 +1515,9 @@ async def request_github_work_item_continuation(
     committed_request: tuple[int, int] | None = None
     try:
         revision, approval, _created = (
-            await github_approval_service.create_continuation_request(
+            await (github_approval_service.create_scope_amendment_request
+                   if isinstance(request, GithubScopeAmendmentCreate)
+                   else github_approval_service.create_continuation_request)(
                 db,
                 item,
                 scope,
@@ -1528,6 +1541,9 @@ async def request_github_work_item_continuation(
             )
         )
         committed_request = (approval.id, revision.id)
+        if isinstance(request, GithubScopeAmendmentCreate) and not _created and approval.status != "pending":
+            return GithubContinuationRequestResponse(
+                approval=_approval_authority_response(approval), revision=_scope_revision_response(revision))
         async with github_approval_service.continuation_transport_lock(approval.id):
             if await github_approval_service.expire_continuation_if_needed(
                 db,
@@ -1535,13 +1551,30 @@ async def request_github_work_item_continuation(
                 revision,
             ):
                 raise GithubApprovalError("continuation_request_expired")
-            _root, linked = (
-                await github_approval_service.ensure_continuation_request_message(
+            async def renew_context_before_a_retry():
+                # Anything may change while an attempt waits out a lock: read the rows again and repeat the same
+                # expiry and pending checks as above, so the notice's own attempt, participant and status
+                # checks run against current rows. A refusal here stops the retry before any notice.
+                await db.refresh(item)
+                await db.refresh(approval)
+                await db.refresh(revision)
+                if await github_approval_service.expire_continuation_if_needed(db, approval, revision):
+                    raise GithubApprovalError("continuation_request_expired")
+                if approval.status != "pending":
+                    raise GithubApprovalError("request_not_pending")
+
+            # The notice is an "ensure": it sends with a fixed delivery key and links with a guarded update, so
+            # repeating it after a lock changes nothing twice. The nudge below is not repeated.
+            _root, linked = await retry_when_busy(
+                db,
+                lambda: github_approval_service.ensure_continuation_request_message(
                     db,
                     item,
                     approval,
                     revision,
-                )
+                ),
+                route=_CONTINUATION_REQUEST_ROUTE,
+                prepare=renew_context_before_a_retry,
             )
             if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
@@ -1560,16 +1593,27 @@ async def request_github_work_item_continuation(
                     outcome="applied",
                     reason="continuation request notice delivered",
                 )
-                await github_approval_service.nudge_pending_continuation_leader(
-                    db,
-                    approval,
-                    revision,
-                    cooldown=timedelta(
-                        seconds=(
-                            settings.github_continuation_leader_nudge_cooldown_seconds
-                        )
-                    ),
-                )
+                try:
+                    await github_approval_service.nudge_pending_continuation_leader(
+                        db,
+                        approval,
+                        revision,
+                        cooldown=timedelta(
+                            seconds=(
+                                settings.github_continuation_leader_nudge_cooldown_seconds
+                            )
+                        ),
+                    )
+                except OperationalError as exc:
+                    if not is_sqlite_busy(exc):
+                        raise
+                    # The request and its notice are saved; the nudge is advisory and the recovery path nudges
+                    # a pending request again. It is not repeated here.
+                    logger.warning("sqlite_busy route=%s nudge skipped after the notice was saved",
+                                   _CONTINUATION_REQUEST_ROUTE)
+                    await db.rollback()
+                    await db.refresh(approval)
+                    await db.refresh(revision)
         return GithubContinuationRequestResponse(
             approval=_approval_authority_response(approval),
             revision=_scope_revision_response(revision),
@@ -1605,6 +1649,21 @@ async def request_github_work_item_continuation(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    except SqliteBusyExhausted as exc:
+        # The request is saved and only its notice is unsettled: say so, and let the same request be repeated.
+        if committed_request is not None:
+            try:
+                await _observe_committed_request_notice(
+                    db, committed_request, actor=request_actor, scope_id=request_scope_id,
+                    item_id=item_id, outcome="uncertain",
+                    reason="continuation request notice unsettled after commit")
+            except OperationalError as observe_exc:
+                if not is_sqlite_busy(observe_exc):
+                    raise
+                logger.warning("sqlite_busy route=%s the unsettled-notice fact could not be written",
+                               _CONTINUATION_REQUEST_ROUTE)
+        raise HTTPException(status_code=503, detail="database_busy_request_saved",
+                            headers={"Retry-After": "2"}) from exc
     except Exception:
         if committed_request is not None:
             # R07: a transport failure after the request commit is uncertain;
@@ -2377,7 +2436,8 @@ async def update_preset(
             autonomy_enabled=request.autonomy_enabled,
             **({"parent_issue_url": request.parent_issue_url}
                if "parent_issue_url" in request.model_fields_set else {}),
-            **{field: getattr(request, field) for field in ("backlog_milestone", "planned_decisions")
+            **{field: getattr(request, field) for field in ("backlog_milestone", "planned_decisions",
+                    "leader_ack_timeout_seconds", "leader_ack_max_wait_seconds")
                if field in request.model_fields_set},
         )
     except ValueError as exc:
@@ -3315,6 +3375,7 @@ async def read_activation_readiness(
         if len(sessions) > 8:
             return False, "context_limit", member.id, None, None
         qualifying = []
+        skipped_dead = 0
         for session in sessions:
             if not session.wake_enabled:
                 continue
@@ -3323,6 +3384,16 @@ async def read_activation_readiness(
             if session.last_seen_at is None or session.last_seen_at < heartbeat_cutoff:
                 continue
             if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+                continue
+            # One strict liveness observation per candidate, reused by the lifetime check below.
+            # A restart leaves the old pane's session `connected` until its heartbeat expires, and
+            # its binding row is gone. A pane that is CONFIRMED dead (False) is skipped here, before
+            # the binding lookup, so it cannot refuse the slot. Unknown (None) is never skipped:
+            # it still refuses below. Two live candidates still refuse as ambiguous.
+            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
+            pane_alive = pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start)
+            if pane_alive is False:
+                skipped_dead += 1
                 continue
             binding = (await db.scalars(
                 select(AgentPaneBinding).where(
@@ -3340,8 +3411,7 @@ async def read_activation_readiness(
             # Strict native identity: confirm the pane process start-time
             # lifetime before and after a bounded command read. One probe per
             # candidate, capped by the bounded session query.
-            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
-            if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
+            if pane_alive is not True:
                 return False, "native_lifetime", member.id, None, None
             # Actual native provider/agent identity from the preserved
             # argument vector. argv[0] must be the registered executable;
@@ -3381,6 +3451,18 @@ async def read_activation_readiness(
                     return False, "native_identity", member.id, None, None
             elif not (argv0 == marker or argv0 == slot.provider):
                 return False, "native_identity", member.id, None, None
+            if slot.provider == "opencode-cli":
+                # The exact v2 member for the slot's saved session, on OpenCode 2:
+                # `opencode <dir> --standalone --session <id>`, never --continue
+                # or the shared service (#731).
+                from app.services import opencode_version
+                from app.services.opencode_process_identity import parse_member_argv
+                opencode_member = parse_member_argv(argv)
+                if (opencode_member is None
+                        or opencode_member.session_id != (slot.launch_options or {}).get("session_id")
+                        or not opencode_version.member_gate_for_pane(
+                            session.bound_pane_pid, session.bound_pane_proc_start).ready):
+                    return False, "native_identity", member.id, None, None
             # Authenticated MCP process: when the session process differs
             # from the pane process it must not be confirmed dead. This is the
             # separate current process check, not connected or heartbeat
@@ -3454,6 +3536,10 @@ async def read_activation_readiness(
                             and bool(_re_aux.search(
                                 r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
                         )
+                    elif slot.provider == "opencode-cli":
+                        # Only the member's own private server, never the shared service.
+                        from app.services.opencode_process_identity import is_private_server_argv
+                        aux_identity = is_private_server_argv(argv)
                     else:
                         aux_identity = aux_name == marker or aux_name == slot.provider
                     if not aux_identity:
@@ -3482,7 +3568,8 @@ async def read_activation_readiness(
             # silently.
             return False, "ambiguous", member.id, None, None
         if not qualifying:
-            return False, "stale", member.id, None, None
+            # Every candidate was a confirmed dead pane: the lifetime refusal, not a stale heartbeat.
+            return False, "native_lifetime" if skipped_dead else "stale", member.id, None, None
         return True, None, member.id, qualifying[0].id, observed_tick
 
     async def identity_signature(slot: AgentTeamSlot) -> tuple:
@@ -3678,3 +3765,116 @@ async def launch_preset(
         raise HTTPException(status_code=409, detail=detail) from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+
+@router.post('/github-work-items/{item_id}/scope-amendments', response_model=GithubContinuationRequestResponse)
+async def request_github_scope_amendment(item_id: int, request: GithubScopeAmendmentCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    """Explicit entry point: clients cannot select the persisted authority origin."""
+    return await request_github_work_item_continuation(item_id, request, session, db)
+
+
+def _revision_review_response(fact):
+    return GithubRevisionReviewResponse(**{key: getattr(fact, key)
+        for key in GithubRevisionReviewResponse.model_fields})
+
+
+@router.post('/github-work-items/{item_id}/revision-reviews', response_model=GithubRevisionReviewResponse)
+async def record_github_revision_review(item_id: int, request: GithubRevisionReviewCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import record_revision_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await record_revision_review(db, item, revision_number=request.revision,
+            dispatch_nonce=request.dispatch_nonce, head_sha=request.head_sha,
+            reviewer_member_id=session.member_id, verdict=request.verdict, summary=request.summary,
+            evidence_url=request.evidence_url, actor=_session_actor(session))
+        return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/head-reviews', response_model=GithubHeadReviewResponse)
+async def record_github_head_review(item_id: int, request: GithubHeadReviewCreate,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    """Record an explicit accepted or changes_required verdict for the PR's exact current head (#904)."""
+    from app.services.github_head_acceptance_service import record_head_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await record_head_review(db, item, dispatch_nonce=request.dispatch_nonce, head_sha=request.head_sha,
+            reviewer_member_id=session.member_id, verdict=request.verdict, summary=request.summary,
+            evidence_url=request.evidence_url, actor=_session_actor(session))
+        return GithubHeadReviewResponse(**{key: getattr(fact, key) for key in GithubHeadReviewResponse.model_fields})
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/revision-reviews/{review_id}/withdraw', response_model=GithubRevisionReviewResponse)
+async def withdraw_github_revision_review(item_id: int, review_id: int, request: GithubRevisionReviewWithdraw,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import withdraw_revision_review
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        fact = await withdraw_revision_review(db, item, review_id=review_id,
+            reviewer_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce, actor=_session_actor(session))
+        return _revision_review_response(fact)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/submitted-revision/settle-accepted', response_model=GithubScopeRevisionResponse)
+async def settle_github_accepted_revision(item_id: int, request: GithubSubmittedRevisionEnd,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import settle_accepted_revision
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        revision = await settle_accepted_revision(db, item, review_id=request.review_id,
+            leader_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason, actor=_session_actor(session))
+        return _scope_revision_response(revision)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post('/github-work-items/{item_id}/submitted-revision/end', response_model=GithubScopeRevisionResponse)
+async def end_github_submitted_revision(item_id: int, request: GithubSubmittedRevisionEnd,
+    session: MailAgentSession | None = Depends(mail_session), db: AsyncSession = Depends(get_db)):
+    from app.services.github_terminal_revision_service import end_submitted_revision
+    if session is None:
+        raise HTTPException(status_code=401, detail='session_token_required')
+    require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='work_item_not_found')
+    try:
+        revision = await end_submitted_revision(db, item, review_id=request.review_id,
+            leader_member_id=session.member_id, dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason, actor=_session_actor(session))
+        return _scope_revision_response(revision)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

@@ -190,3 +190,95 @@ External broadcasts require `audience_type` and `audience_id`. Supported scoped 
 ```
 
 Receipt recipients are snapshotted when the message is stored. A keyed replay uses those receipts, not current membership. Existing messages retain their historical receipts and have no inferred audience.
+
+## Healthy scope amendments and submitted review settlement
+
+These routes use the `/api/v1/agent-teams` prefix and current member session authentication.
+The owner requests `POST /github-work-items/{id}/scope-amendments` with the same normalized
+proposal fields as a continuation, with `phase: implementation`. The server assigns immutable
+`origin_kind: scope_amendment`; ordinary continuations retain their escalation and PR requirements.
+The corresponding MCP tool is `synth_city_request_scope_amendment`.
+
+A healthy amendment works before a PR exists. It reads the assigned branch's committed head
+and tree without discarding held edits. Its path baseline must come from structured approved
+initial-plan metadata or the preceding approved implementation revision. Legacy plans without
+verifiable structured paths are refused; prose does not establish authority. Each attempt allows
+at most three approved amendments (`amendment_count_limit`), eight amendment requests of any
+outcome (`amendment_request_limit`) and sixteen cumulative normalized unique added file paths
+(`amendment_added_path_limit`). Only an amendment the Leader approved counts toward the three, so a
+rejected proposal does not spend the owner's correction budget; it does count toward the eight
+requests, and its added paths and removed paths do not refund the path limit. Existing stricter
+path, command, revision and failed-head limits still apply. Exact current-round replays consume no
+additional unit.
+
+Amendments reuse `synth_city_decide_continuation` and `synth_city_ack_continuation` for the
+current Leader decision and separate delivered owner activation. Requesting an amendment stops
+existing source authority until that round is approved and acknowledged. The attempt, lease,
+held edits and budget history remain bound; no retry, merge or lease release is granted.
+
+For a submitted implementation revision, the current Leader first assigns an independent reviewer
+for the exact attempt/revision/head through `synth_city_watch_required_checks`. That assignment
+identifies the reviewer; CI success alone is never review authority. The assigned reviewer calls
+`synth_city_record_revision_review`, or `POST /github-work-items/{id}/revision-reviews`, with
+`dispatch_nonce`, `revision`, a full `head_sha`, `summary`, and a GitHub `evidence_url` linking the
+source review. The optional `verdict` is `changes_required` (the default) or `accepted`. Reviewer
+identity comes from the authenticated session. A superseding disposition retains history; the reviewer may explicitly withdraw through
+`synth_city_withdraw_revision_review` / `POST /github-work-items/{id}/revision-reviews/{review_id}/withdraw`.
+
+The current Leader settles an active negative fact through `synth_city_end_submitted_revision`
+or `POST /github-work-items/{id}/submitted-revision/end`, supplying `review_id`, `dispatch_nonce`
+and `reason`. The server rechecks reviewer assignment, source head, current sessions, owner,
+Leader, policy, lease and pause/HOLD fences after external reads. It supersedes the submitted
+revision and clears owner acknowledgement without escalating or splitting the issue. Source work
+is stopped until a fresh bounded amendment, approval and owner activation. This action does not
+approve the source or satisfy independent acceptance, CI, human review or merge policy.
+
+An independent `accepted` fact for the exact submitted head is settled by the current Leader, who must
+differ from the owner, through `synth_city_settle_accepted_revision` or
+`POST /github-work-items/{id}/submitted-revision/settle-accepted`, supplying `review_id`,
+`dispatch_nonce` and `reason`. The server rereads every required job of the delivery policy for that
+head and refuses unless each is successful with GitHub Actions provenance. It also rechecks the open
+PR head, reviewer assignment, owner, Leader, lease, nonce and pause/HOLD fences after that read, and
+refuses while a negative fact or a pending approval exists. It consumes the fact and marks the revision
+completed. The item status, counters, budgets, approval rounds and lease do not change. This action does
+not mark the PR ready, merge, lift a pause or HOLD, waive a prohibition, change policy or budgets,
+release a lease or approve source.
+
+Operator cancellation also accepts submitted revisions, and exhausted diagnostics after exact
+baseline-tree restoration. A restoration commit may have a different SHA. An already charged
+failed head still requires restoration; cancelling preserves budget history and the lease.
+Closed, unmerged submitted PRs on escalated attempts are superseded by bounded verification;
+that observation grants neither retry nor lease release. Cancelled or timed-out check runs remain
+visible and inconclusive, consume no product-failure unit, and cannot satisfy required CI.
+A real failed check in the same observation still charges the head once.
+
+
+### Continuation phases
+
+A continuation or amendment request names one phase. The Leader's decision prompt and the recovery proposal
+prompt use this wording:
+
+> Temporary diagnostic changes (instrumentation, hosted log collection, probe edits) use phase `diagnostic` and must be reverted with `revert_diagnostic_changes`. Any change that stays in the PR, including re-adding tests or code, uses phase `implementation` and includes `push_pr_head` plus `request_verification`.
+
+- **Example, `diagnostic`:** add a temporary log line to a probe script and read the hosted run's output. The PR returns to its approved baseline with `revert_diagnostic_changes` before the attempt can continue.
+- **Example, `implementation`:** re-add a test that an earlier revision removed. The test is a permanent change, so the revision allows `push_pr_head` and `request_verification`, and the test stays in the PR.
+
+### Reviewer verdict for the exact head and the auto-merge gate
+
+`synth_city_record_head_review`, or `POST /github-work-items/{id}/head-reviews`, records an explicit
+`accepted` or `changes_required` verdict for the pull request's exact current head. The verdict is
+required and is never inferred from the summary. The request carries the attempt nonce, the 40-character
+head, the verdict, a summary and the link to the source review on this pull request. It covers initial
+attempts and scoped correction heads alike, and it does not replace the revision-review tools or the
+Leader's settlement of a submitted revision.
+
+The recording member comes from the authenticated session. It must be, at that moment, the current
+member of an enabled slot of this team whose role is `verifier`, and it must not be the owner or the
+Leader. A newer fact for the same head supersedes older ones, and an identical replay returns the
+existing fact. A fact grants no source, readiness or merge authority.
+
+With `merge_policy` set to `auto`, a code item merges automatically only when the latest active fact for
+the pull request's current head is `accepted` and its reviewer still qualifies when the gate runs. This
+check does not depend on a required-check watch. The review hold label still blocks first, and the
+gate runs again at the merge boundary. The work view shows the state through the item's status note:
+`Waiting for reviewer acceptance at <sha>`, `Head changed since acceptance (accepted at <sha>, head is <sha>)`, `Reviewer requires changes at <sha>` or `Reviewer accepted head <sha>`.

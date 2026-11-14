@@ -1471,7 +1471,7 @@
             "Exact session selector",
             "Matching project/workspace",
             "Current binding and approved recovery authority",
-            "Latest/continue is not exact resume; same-repository ambiguity blocks launch"
+            "A saved ses… id launched with --standalone --session; --continue is refused"
           ],
           "evidence": [
             "backend/app/services/providers/opencode_cli.py",
@@ -1528,7 +1528,7 @@
         "resume": {
           "state": "write_capable",
           "label": "Resume Sessions",
-          "reason": "OpenCode continue and session flags are available."
+          "reason": "OpenCode 2 members resume their exact saved session with --session; Albiex Synth City chooses the id at first launch."
         },
         "fork": {
           "state": "unsupported",
@@ -1558,7 +1558,7 @@
         "agents": {
           "state": "read_only",
           "label": "Agents",
-          "reason": "OpenCode agents can be selected at launch but not edited in this build."
+          "reason": "An OpenCode default agent can be chosen at launch through the member's config, but not edited in this build."
         },
         "skills": {
           "state": "unsupported",

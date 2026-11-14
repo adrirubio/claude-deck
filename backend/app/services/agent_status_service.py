@@ -41,7 +41,8 @@ class AgentStatusService:
         # Native reads can await. Reload session facts before the final projection.
         sessions = list((await db.scalars(select(MailAgentSession).where(
             MailAgentSession.member_id.in_(ids)).execution_options(populate_existing=True))).all())
-        return self._project(members, slots, sessions, native, utc_now())
+        # Mail and bridge views show the OpenCode 2 refusal; factory reads stay probe-free.
+        return self._project(members, slots, sessions, native, utc_now(), check_opencode=True)
 
     async def for_snapshot(self, db, members, slots, sessions, bindings, lifecycles, *, now=None):
         """Reuse the factory read snapshot. Native observations do not save identity."""
@@ -65,10 +66,12 @@ class AgentStatusService:
         return self._project(members, {slot.id: slot for slot in slots}, sessions,
                              {entry.slot_id: entry for entry in observations}, now)
 
-    def _project(self, members, slots, sessions, native, now):
+    def _project(self, members, slots, sessions, native, now, *, check_opencode=False):
         from app.services.agent_mail_service import (
-            MCP_HEARTBEAT_TTL_SECONDS, TMUX_WAKE_PROVIDERS, MailWakeError, agent_mail_service,
+            MCP_HEARTBEAT_TTL_SECONDS, TMUX_WAKE_PROVIDERS, AgentMailService, MailWakeError,
+            agent_mail_service,
         )
+        from app.services.opencode_version import BLOCK_CODE as OPENCODE_VERSION_CODE
 
         naive_now = now.replace(tzinfo=None)
         member_counts = {}
@@ -118,11 +121,14 @@ class AgentStatusService:
                               and s.capability_token_hash is not None
                               and s.last_seen_at >= naive_now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
                               and s.bound_pane_pid is not None and s.bound_pane_proc_start is not None]
-                agent_mail_service._nudge_from_sessions(observed_sessions, registered, member, naive_now)
+                target = agent_mail_service._nudge_from_sessions(observed_sessions, registered, member, naive_now)
+                if check_opencode and getattr(target, "provider", None) == "opencode-cli":
+                    AgentMailService._require_opencode_2_pane(target)
             except MailWakeError as error:
                 status.wake_state = "cannot_wake"
                 status.wake_reason = error.code if error.code in {
-                    "wake_target_unbound", "wake_target_stale", "wake_target_ambiguous", "wake_opted_out"
+                    "wake_target_unbound", "wake_target_stale", "wake_target_ambiguous", "wake_opted_out",
+                    OPENCODE_VERSION_CODE,
                 } else "observation_unavailable"
             else:
                 status.wake_state = "can_wake"

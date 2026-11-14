@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import enum
+import asyncio
 import hmac
 import logging
 import secrets
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, and_, cast, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,11 +25,14 @@ from app.models.database import (
     MailReceipt,
     MailMessage,
     MailTeamMember,
+    MailAgentSession,
+    MailPaneLifecycle,
     TeamGithubScope,
 )
 from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
+from app.services.continuation_phase_guidance import PHASE_GUIDANCE
 from app.services.agent_team_service import agent_team_service
 from app.services.team_communication_policy import (
     HUMAN_REVIEW_SUMMARY_GUIDANCE,
@@ -44,6 +48,7 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_client import github_client
+from app.services.github_dispatch_priority import dispatch_order_key, priority_from_labels
 from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
@@ -54,6 +59,7 @@ from app.services.github_workspace_service import (
 )
 
 LEASE_RELEASE_REMINDER_CAP = 4
+_DATETIME_TYPE = datetime
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _LAUNCH_FAILED_STATUSES = {
@@ -61,6 +67,7 @@ _LAUNCH_FAILED_STATUSES = {
     "blocked",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "blocked_opencode_version_unsupported",
     "skipped_disabled",
 }
 _ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref")
@@ -77,7 +84,7 @@ def _item_identity(item: GithubWorkItem) -> tuple:
 
 def _identity_value_clause(column, value):
     clause = column == value
-    if isinstance(value, datetime) and value.microsecond == 0:
+    if isinstance(value, _DATETIME_TYPE) and value.microsecond == 0:
         # Legacy SQLite rows can store CURRENT_TIMESTAMP without a fraction.
         # The DateTime bind uses .000000. Accept the equivalent representation
         # only for an exact whole second; do not round nonzero microseconds.
@@ -154,8 +161,31 @@ PENDING_REASONS = frozenset(
         "queued_ambiguous_sessions",
         "queued_no_workspace",
         "queued_auth_mode_unresolved",
+        "no_eligible_owner",
     }
 )
+
+NO_ELIGIBLE_OWNER_NOTE = (
+    "No eligible owner: no enabled implementer slot matches this issue. "
+    "The Leader and coordinator slots never own an item."
+)
+
+
+_ROLE_TRIM = " \t\r\n"
+
+
+def _ineligible_owner(slot: AgentTeamSlot, leader_slot_id: int | None) -> bool:
+    """The Leader approves every plan, and a coordinator never builds, so neither may own an item."""
+    return slot.id == leader_slot_id or (slot.role or "").strip(_ROLE_TRIM).lower() == "coordinator"
+
+
+def _eligible_owner_condition(preset_id: int):
+    """The same rule as _ineligible_owner, for a conditional write against the current rows."""
+    leader_id = select(AgentTeamPreset.leader_slot_id).where(AgentTeamPreset.id == preset_id).scalar_subquery()
+    return and_(
+        AgentTeamSlot.id.is_distinct_from(leader_id),
+        func.lower(func.trim(func.coalesce(AgentTeamSlot.role, ""), _ROLE_TRIM)) != "coordinator",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +382,122 @@ class GithubDispatchService:
             return RetryEligibility(False, "pr_preserved")
         return RetryEligibility(True)
 
+    async def _activate_scope_amendment(self, db, item, scope, revision, *, owner_id, owner_slot_id, lease_token, actor):
+        request = await db.get(GithubApprovalRequest, revision.approval_request_id)
+        if not request:
+            raise ValueError("continuation_not_approved")
+        github_approval_service.verify_amendment_binding(request, revision)
+        context, owner, leader, workspace = await github_approval_service.healthy_scope_context(db, item, scope)
+        await github_approval_service.bind_actor_session(db, context, actor)
+        if (owner.id != owner_id or owner.team_slot_id != owner_slot_id
+                or request.owner_member_id != owner_id or request.leader_member_id != leader.id
+                or request.approval_round != item.approval_round_count or request.status != "approved"
+                or workspace.id != revision.expected_workspace_id
+                or not hmac.compare_digest(lease_token, workspace.lease_token)
+                or not github_approval_service.lease_token_matches(lease_token, revision.expected_lease_token_hash)):
+            raise ValueError("stale_amendment_context")
+        if revision.status == "active" and item.active_scope_revision == revision.revision and item.ack_received_at:
+            return False
+        if (revision.status != "approved" or not revision.delivery_message_id or not revision.delivered_at
+                or not request.decision_message_id or revision.expires_at is not None
+                and revision.expires_at <= datetime.utcnow()
+                or item.active_scope_revision != revision.previous_scope_revision):
+            raise ValueError("continuation_not_approved")
+        delivery = await db.get(MailMessage, revision.delivery_message_id)
+        if not delivery or not github_approval_service.matches_linked_continuation_delivery_message(
+                request, revision, delivery, delivery_key=f"github-scope:{revision.id}:delivery"):
+            raise ValueError("continuation_delivery_link_mismatch")
+        guards = github_approval_service.amendment_revision_conditions(revision)
+        previous = None
+        previous_status = None
+        if revision.previous_scope_revision:
+            previous = await db.scalar(select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision.previous_scope_revision))
+            if not previous or previous.status not in {"active", "completed", "superseded"}:
+                raise ValueError("amendment_prior_revision_unsettled")
+            previous_status = previous.status
+        base = await github_approval_service.amendment_base_paths(db, item, owner, leader)
+        if base != revision.amendment_base_paths:
+            raise ValueError("amendment_baseline_unverifiable")
+        head, tree = await github_approval_service.amendment_head(scope, item, workspace)
+        if head != revision.baseline_head_sha or tree != revision.baseline_tree_sha:
+            raise ValueError("amendment_head_changed")
+        await github_approval_service.claim_healthy_scope_context(db, context)
+        await github_approval_service.validate_amendment_budget(db, item, scope, revision)
+        if revision.expires_at is not None and revision.expires_at <= datetime.utcnow():
+            await db.rollback()
+            raise ValueError("continuation_request_expired")
+        if previous is not None:
+            old_result = await db.execute(update(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.id == previous.id,
+                GithubAttemptScopeRevision.status == previous_status,
+                GithubAttemptScopeRevision.owner_member_id == owner_id,
+                GithubAttemptScopeRevision.owner_slot_id == owner_slot_id,
+                GithubAttemptScopeRevision.allowed_paths == revision.amendment_base_paths,
+            ).values(status="superseded").execution_options(synchronize_session=False))
+            if old_result.rowcount != 1:
+                await db.rollback()
+                raise ValueError("stale_amendment_context")
+        now = datetime.utcnow()
+        new_result = await db.execute(update(GithubAttemptScopeRevision).where(*guards,
+            exists(select(GithubApprovalRequest.id).where(
+                GithubApprovalRequest.id == request.id, GithubApprovalRequest.status == "approved",
+                GithubApprovalRequest.request_fingerprint == request.request_fingerprint,
+                GithubApprovalRequest.approval_round == context["approval_round_count"],
+                GithubApprovalRequest.decision_message_id == request.decision_message_id,
+            )),
+        ).values(status="active", acknowledged_at=now).execution_options(synchronize_session=False))
+        values = dict(active_scope_revision=revision.revision, attempt_phase=revision.phase,
+            dispatch_status="dispatched", ack_received_at=now, ack_approver_member_id=leader.id,
+            ack_approval_round=request.approval_round, ack_enforcement_epoch=1,
+            ack_evidence_message_id=request.decision_message_id,
+            continuation_activated_at=now, continuation_nudged_at=None, last_nudge_at=None,
+            status_note=f"Active scope amendment revision {revision.revision}: {revision.summary}", updated_at=now)
+        item_result = await db.execute(update(GithubWorkItem).where(
+            *github_approval_service.healthy_scope_conditions(context)).values(
+                active_scope_revision=values["active_scope_revision"], attempt_phase=values["attempt_phase"],
+                dispatch_status="dispatched", ack_received_at=values["ack_received_at"],
+                ack_approver_member_id=values["ack_approver_member_id"],
+                ack_approval_round=values["ack_approval_round"], ack_enforcement_epoch=values["ack_enforcement_epoch"],
+                ack_evidence_message_id=values["ack_evidence_message_id"],
+                continuation_activated_at=values["continuation_activated_at"],
+                continuation_nudged_at=None, last_nudge_at=None, status_note=values["status_note"], updated_at=now)
+            .execution_options(synchronize_session=False))
+        workspace_result = await db.execute(update(GithubWorkspace).where(
+            GithubWorkspace.id == context["workspace_id"],
+            GithubWorkspace.leased_item_id == item.id, GithubWorkspace.scope_id == scope.id,
+            GithubWorkspace.lease_token == lease_token, GithubWorkspace.leased_at == context["leased_at"],
+        ).values(lease_last_owner_contact_at=now, updated_at=now).execution_options(synchronize_session=False))
+        receipt_result = await db.execute(update(MailReceipt).where(
+            MailReceipt.message_id == revision.delivery_message_id, MailReceipt.member_id == owner_id,
+        ).values(read_at=func.coalesce(MailReceipt.read_at, now), acked_at=func.coalesce(MailReceipt.acked_at, now))
+            .execution_options(synchronize_session=False))
+        if (new_result.rowcount != 1 or item_result.rowcount != 1
+                or workspace_result.rowcount != 1 or receipt_result.rowcount != 1):
+            await db.rollback()
+            raise ValueError("stale_amendment_context")
+        from app.services import factory_audit_service as audit
+        await audit.record_event(db, event_kind="continuation_owner_ack",
+            source="github_dispatch_service._activate_scope_amendment", occurred_at=now,
+            actor=actor or audit.derive_actor(actor_kind="member", member_id=owner_id),
+            scope_id=scope.id, item_id=item.id, revision_id=revision.id, request_id=request.id,
+            before_values={"status": "approved"}, after_values={"status": "active", "origin_kind": "scope_amendment"},
+            action_outcome="applied", sanitized_reason="scope amendment acknowledged",
+            operation_id=f"continuation_owner_ack:revision:{revision.id}",
+            correlation_id=f"continuation_owner_ack:revision:{revision.id}")
+        final_context = dict(context)
+        final_context.update({key: value for key, value in values.items() if key in context})
+        await github_approval_service.claim_healthy_scope_context(db, final_context)
+        if revision.expires_at is not None and revision.expires_at <= datetime.utcnow():
+            await db.rollback()
+            raise ValueError("continuation_request_expired")
+        await db.commit()
+        await db.refresh(item)
+        await db.refresh(revision)
+        return True
+
     async def activate_continuation_revision(
         self,
         db: AsyncSession,
@@ -402,6 +548,10 @@ class GithubDispatchService:
             revision.expected_lease_token_hash,
         ):
             raise ValueError("workspace_lease_changed")
+        if revision.origin_kind == "scope_amendment":
+            return await self._activate_scope_amendment(db, item, scope, revision,
+                owner_id=authenticated_owner_member_id, owner_slot_id=authenticated_owner_slot_id,
+                lease_token=lease_token, actor=actor)
         if (
             revision.status == "active"
             and item.active_scope_revision == revision.revision
@@ -804,10 +954,13 @@ class GithubDispatchService:
         classify=None,
         leader_slot_id: int | None = None,
     ) -> tuple[int | None, str]:
-        enabled = [slot for slot in preset_slots if slot.enabled]
+        enabled = [
+            slot for slot in preset_slots
+            if slot.enabled and not _ineligible_owner(slot, leader_slot_id)
+        ]
         enabled.sort(key=lambda slot: slot.position)
         if not enabled:
-            return None, "leader_fallback"
+            return None, "no_eligible_owner"
 
         issue_label_set = set(issue_labels)
         for slot in enabled:
@@ -821,8 +974,7 @@ class GithubDispatchService:
             if chosen is not None:
                 return chosen, "classified"
 
-        leader = next((slot for slot in enabled if slot.id == leader_slot_id), None)
-        return (leader.id, "leader_fallback") if leader is not None else (None, "leader_unavailable")
+        return None, "no_eligible_owner"
 
     async def slot_is_busy(
         self, db: AsyncSession, slot_id: int, *, exclude_item_id: int | None = None,
@@ -862,7 +1014,8 @@ class GithubDispatchService:
             return False
         if owner_slot_id is not None:
             owner = await db.get(AgentTeamSlot, owner_slot_id, populate_existing=True)
-            if owner is None or not owner.enabled or owner.preset_id != scope.preset_id:
+            if (owner is None or not owner.enabled or owner.preset_id != scope.preset_id
+                    or _ineligible_owner(owner, preset.leader_slot_id)):
                 return False
         if require_autonomy:
             from app.services.github_coordination_service import hold_code
@@ -900,7 +1053,7 @@ class GithubDispatchService:
             AgentTeamPreset.autonomy_enabled.is_(True) if require_autonomy else True,
         )) & exists(select(AgentTeamSlot.id).where(
             AgentTeamSlot.id == identity[3], AgentTeamSlot.preset_id == scope.preset_id,
-            AgentTeamSlot.enabled.is_(True),
+            AgentTeamSlot.enabled.is_(True), _eligible_owner_condition(scope.preset_id),
         )) & exists(select(GithubWorkspace.id).where(
             GithubWorkspace.id == acquisition[0], GithubWorkspace.scope_id == scope.id,
             GithubWorkspace.leased_item_id == acquisition[1],
@@ -945,6 +1098,12 @@ class GithubDispatchService:
             or scope.preset_id != preset_id or owner is None or not owner.enabled
             or owner.preset_id != preset_id):
             item.pending_reason = "leader_unavailable"
+            await db.commit()
+            return False
+        preset = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
+        if _ineligible_owner(owner, preset.leader_slot_id if preset else None):
+            item.pending_reason = "no_eligible_owner"
+            item.status_note = NO_ELIGIBLE_OWNER_NOTE
             await db.commit()
             return False
         if await self.slot_is_busy(db, owner_slot_id, exclude_item_id=item_id):
@@ -1067,9 +1226,17 @@ class GithubDispatchService:
                 select(GithubWorkItem).where(
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status == "pending",
-                ).order_by(GithubWorkItem.created_at, GithubWorkItem.id)
+                ).order_by(GithubWorkItem.issue_number, GithubWorkItem.id)
             )
         ).scalars().all()
+
+        # The scheduler re-reads pending issues after the watcher poll. Use those
+        # labels when present, including removal, before ranking this batch.
+        for item in pending:
+            if item.issue_number in issue_labels_by_number:
+                item.dispatch_priority = priority_from_labels(issue_labels_by_number[item.issue_number])
+        pending.sort(key=dispatch_order_key)
+        await db.commit()
 
         for item in pending:
             pending_identity = _item_identity(item)
@@ -1129,7 +1296,10 @@ class GithubDispatchService:
                     leader_slot_id=preset.leader_slot_id if preset else None,
                 )
             if owner_slot_id is None:
-                await self._escalate_current_item(db, item, pending_identity, "plan_blocked")
+                await self._update_current_item(
+                    db, item, pending_identity, pending_reason="no_eligible_owner",
+                    status_note=NO_ELIGIBLE_OWNER_NOTE,
+                )
                 await db.commit()
                 continue
             owner_slot = slots_by_id.get(owner_slot_id)
@@ -1785,6 +1955,8 @@ class GithubDispatchService:
             f"{before}. A rejection opens the next round automatically; revise the "
             "plan and call `synth_city_request_work_item_approval` again with the same work "
             "item and nonce. Do not report `revision_requested`."
+            " Bound Leader activity can extend a pending request to a finite maximum. "
+            "A reminder does not interrupt a running turn, and activity does not approve work."
         )
         if item is not None and item.issue_type == "code":
             report += "\n\n" + self.review_rework_guidance(item)
@@ -1837,6 +2009,13 @@ class GithubDispatchService:
             "- Track review disposition by full PR head SHA. A changed head needs "
             "fresh independent review and CI; an older acceptance or ready state "
             "does not accept it."
+            "\n- When assigning independent review, register the reviewer with "
+            "synth_city_watch_required_checks(work_item_id, dispatch_nonce, scope_revision, "
+            "head_sha=<full current SHA>, reviewer_member_id=<current team reviewer>). "
+            "Register again for each changed head; pass null to clear the assignment. "
+            "Albiex Synth City schedules deduplicated completion Mail and session wakes. "
+            "Read the current check view if a wake is unconfirmed; arrange the next actor. "
+            "A watch grants no acceptance or merge authority."
             "\n\nUNFINISHED OWNER WORK (leader duty):\n"
             "- Record the remaining authorized task and its next trigger before ending your turn. "
             "When backlog coordination is enabled, read synth_city_get_backlog_coordination. "
@@ -2584,7 +2763,9 @@ class GithubDispatchService:
         )
         if not enabled:
             return
-        leader = enabled[0]
+        preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
+        leader = next((slot for slot in enabled if preset is not None
+                       and slot.id == preset.leader_slot_id), enabled[0])
 
         if wake_state_by_slot is None:
             from app.services.agent_mail_service import agent_mail_service
@@ -2641,17 +2822,7 @@ class GithubDispatchService:
             if not self._ack_satisfied(item):
                 request = await github_approval_service.pending_initial_for_attempt(db, item)
                 if request is not None:
-                    overdue = datetime.utcnow() - request.created_at > timedelta(
-                        seconds=self._ack_deadline_seconds(item)
-                    )
-                    if not overdue:
-                        continue
-                    if item.last_nudge_at is None or item.last_nudge_at < request.created_at:
-                        await self._nudge_leader_for_ack(db, item, leader)
-                    elif datetime.utcnow() - item.last_nudge_at > timedelta(
-                        seconds=settings.github_nudge_grace_seconds
-                    ):
-                        await self.escalate(db, item, "leader_ack_timeout", initial_request=request)
+                    await self._monitor_leader_ack(db, scope, item, leader, request)
                     continue
             from app.services.factory_delivery_policy import effective_policy
             from app.services.native_owner_contact import contact_context, refresh_contact_context, renew_native_owner_contact
@@ -3260,11 +3431,7 @@ class GithubDispatchService:
                     "Do not edit, build, push, or report completion yet. Then call "
                     "`synth_city_request_continuation` with the smallest exact paths, actions, "
                     "commands, execution target, failed-head budget, and tool fallbacks "
-                    "needed for the next step. Use phase `diagnostic` for evidence "
-                    "collection, temporary hosted instrumentation, hosted log collection, "
-                    "or restoration work, and include `revert_diagnostic_changes`. Use "
-                    "phase `implementation` only for a bounded fix, with both "
-                    "`push_pr_head` and `request_verification`. Wait for Leader approval "
+                    f"needed for the next step. {PHASE_GUIDANCE} Wait for Leader approval "
                     "and acknowledge the delivered revision before acting."
                 ),
                 payload={
@@ -3292,10 +3459,7 @@ class GithubDispatchService:
                     f"message for work item {item.id}, and execute that instruction "
                     "now. Perform read-only diagnosis and call "
                     "`synth_city_request_continuation` with the smallest bounded proposal. "
-                    "Use `diagnostic` with `revert_diagnostic_changes` for evidence, "
-                    "temporary instrumentation, hosted logs, or restoration. Use "
-                    "`implementation` only for a bounded fix and include "
-                    "`push_pr_head` plus `request_verification`. "
+                    f"{PHASE_GUIDANCE} "
                     "Do not edit, build, push, release, retry, or report status or "
                     "completion before Leader approval. Stop after submitting the "
                     "proposal."
@@ -3558,39 +3722,223 @@ class GithubDispatchService:
             return False
         return True
 
-    def _ack_deadline_seconds(self, item: GithubWorkItem) -> int:
-        base = settings.github_leader_ack_timeout_seconds
+    def _ack_deadline_seconds(self, item: GithubWorkItem, preset: AgentTeamPreset | None = None,
+                              *, maximum: bool = False) -> int:
+        field = "leader_ack_max_wait_seconds" if maximum else "leader_ack_timeout_seconds"
+        base = getattr(preset, field, None) if preset is not None else None
+        if base is None:
+            base = getattr(settings, "github_" + field)
         if item.issue_type == "design":
             return base * settings.github_design_ack_multiplier
         return base
 
-    async def _nudge_leader_for_ack(
-        self, db: AsyncSession, item: GithubWorkItem, leader: AgentTeamSlot
-    ) -> None:
-        member = await self._slot_member(db, leader.id)
-        item.last_nudge_at = datetime.utcnow()
-        if member is not None:
-            from app.services.agent_mail_service import agent_mail_service
+    async def _leader_is_active(self, db: AsyncSession, preset_id: int,
+                                member_id: int, slot_id: int, fresh_seconds: int,
+                                *, fence: list) -> bool:
+        """Bounded, read-only native/MCP evidence; never use display projections."""
+        from app.services import agent_activity_service as activity
+        from app.utils.peer_process import pane_is_alive_strict
 
-            await agent_mail_service.send_direct_message(
-                db,
-                recipient_member_id=member.id,
-                subject=f"Ack needed: issue #{item.issue_number}",
-                body_markdown=(
-                    f"The owner is waiting on your explicit decision for issue "
-                    f"#{item.issue_number} ({item.issue_title}). Review the plan, then "
-                    f"call `synth_city_approve_work_item(work_item_id={item.id}, "
-                    f'dispatch_nonce="{item.dispatch_nonce}", decision="approved", '
-                    "reason=...)` or use `decision=\"rejected\"`. A prose reply does not "
-                    "approve the work."
-                ),
-                payload={
-                    "kind": "github_dispatch_ack_nudge",
-                    "work_item_id": item.id,
-                    "issue_number": item.issue_number,
-                },
-            )
+        try:
+            inputs = await activity._team_inputs(db, preset_id, max_rows=128)
+            entry = next((row for row in inputs if row[0] == slot_id), None)
+            if entry is None or len(entry[3]) != 1 or entry[4]:
+                return False
+            binding = entry[3][0]
+            sessions = list((await db.scalars(select(MailAgentSession).where(
+                MailAgentSession.member_id == member_id,
+                MailAgentSession.team_preset_id == preset_id,
+                MailAgentSession.team_slot_id == slot_id,
+                MailAgentSession.provider == entry[1],
+                MailAgentSession.source == "mcp", MailAgentSession.closed_at.is_(None),
+                MailAgentSession.mailbox_status == "connected",
+                MailAgentSession.capability_token_hash.is_not(None),
+                MailAgentSession.bound_pane_pid == binding.pane_pid,
+                MailAgentSession.bound_pane_proc_start == binding.pane_start,
+                MailAgentSession.cwd == binding.cwd,
+            ).limit(2).execution_options(populate_existing=True))).all())
+            if len(sessions) != 1:
+                return False
+            session = sessions[0]
+            session_identity = (session.id, session.last_seen_at, session.capability_token_hash)
+            now = datetime.utcnow()
+            observed = await asyncio.wait_for(activity._bounded_native_read(
+                lambda: activity._observe(*entry, now.replace(tzinfo=timezone.utc))), timeout=2.0)
+            refreshed = await activity._team_inputs(db, preset_id, max_rows=128)
+            if next((row for row in refreshed if row[0] == slot_id), None) != entry:
+                return False
+            await db.refresh(session)
+            if session_identity != (session.id, session.last_seen_at, session.capability_token_hash):
+                return False
+            if pane_is_alive_strict(binding.pane_pid, binding.pane_start) is not True:
+                return False
+            if observed.waiting_input is not None or observed.state == "stopped":
+                return False
+            recent = now - timedelta(seconds=fresh_seconds) <= session.last_seen_at <= now
+            observed_at = observed.observed_at
+            if observed_at is not None and observed_at.tzinfo is not None:
+                observed_at = observed_at.astimezone(timezone.utc).replace(tzinfo=None)
+            native = observed.state == "working" and observed_at is not None and observed_at <= now
+            if not (native or recent):
+                return False
+            # The final write also fences the authenticated process and registration.
+            fence.extend([
+                exists(select(AgentPaneBinding.id).where(
+                    AgentPaneBinding.id == binding.binding_id,
+                    AgentPaneBinding.preset_id == preset_id, AgentPaneBinding.slot_id == slot_id,
+                    AgentPaneBinding.pane_pid == binding.pane_pid,
+                    AgentPaneBinding.pane_proc_start == binding.pane_start)),
+                ~exists(select(MailPaneLifecycle.pane_pid).where(
+                    MailPaneLifecycle.pane_pid == binding.pane_pid,
+                    MailPaneLifecycle.pane_proc_start == binding.pane_start,
+                    MailPaneLifecycle.retired_at.is_not(None))),
+                exists(select(MailAgentSession.id).where(
+                    MailAgentSession.id == session.id, MailAgentSession.member_id == member_id,
+                    MailAgentSession.team_preset_id == preset_id, MailAgentSession.team_slot_id == slot_id,
+                    MailAgentSession.source == "mcp", MailAgentSession.provider == entry[1],
+                    MailAgentSession.closed_at.is_(None), MailAgentSession.mailbox_status == "connected",
+                    MailAgentSession.bound_pane_pid == binding.pane_pid,
+                    MailAgentSession.bound_pane_proc_start == binding.pane_start,
+                    MailAgentSession.cwd == binding.cwd,
+                    MailAgentSession.capability_token_hash == session_identity[2])),
+            ])
+            return True
+        except (ValueError, OSError, TimeoutError):
+            return False
+
+    async def _monitor_leader_ack(self, db: AsyncSession, scope: TeamGithubScope,
+                                  item: GithubWorkItem, leader: AgentTeamSlot,
+                                  request: GithubApprovalRequest) -> None:
+        from app.services.github_coordination_service import hold_code
+        from app.services.native_owner_contact import contact_context, refresh_contact_context
+
+        if hold_code():
+            return
+        await db.refresh(scope)
+        preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
+        if (preset is None or not preset.autonomy_enabled or not scope.enabled
+                or not leader.enabled or preset.leader_slot_id != leader.id):
+            return
+        initial = self._ack_deadline_seconds(item, preset)
+        maximum = max(initial, self._ack_deadline_seconds(item, preset, maximum=True))
+        now = datetime.utcnow()
+        elapsed = (now - request.created_at).total_seconds()
+        if elapsed < initial:
+            return
+        preset_fields = ("leader_slot_id", "supervisor_actor_id", "autonomy_enabled",
+                         "leader_ack_timeout_seconds", "leader_ack_max_wait_seconds")
+        expected_preset = tuple(getattr(preset, field) for field in preset_fields)
+        expected_scope = (scope.enabled, scope.preset_id)
+        expected_leader = (leader.enabled, leader.provider, dict(leader.launch_options or {}))
+        expected_item = _item_identity(item)
+        expected_request = (request.id, request.created_at, request.request_fingerprint)
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        expected_contact = contact_context(item, workspace)
+        fence = []
+        active = False
+        if elapsed < maximum and request.leader_activity_extended_at is None:
+            active = await self._leader_is_active(db, preset.id, request.leader_member_id,
+                                                  leader.id, initial, fence=fence)
+        if not await refresh_contact_context(db, item, workspace, None, expected_contact):
+            return
+        await db.refresh(preset)
+        await db.refresh(scope)
+        await db.refresh(leader)
+        current = await github_approval_service.pending_initial_for_attempt(db, item)
+        if (hold_code() or not preset.autonomy_enabled or not scope.enabled
+                or _item_identity(item) != expected_item
+                or tuple(getattr(preset, field) for field in preset_fields) != expected_preset
+                or (scope.enabled, scope.preset_id) != expected_scope
+                or (leader.enabled, leader.provider, leader.launch_options or {}) != expected_leader
+                or current is None
+                or (current.id, current.created_at, current.request_fingerprint) != expected_request):
+            return
+        request = current
+        # Acquire the item write fence before changing request state or sending Mail.
+        guard = [
+            _item_identity_clause(expected_item),
+            GithubWorkItem.approval_round_count == request.approval_round,
+            GithubWorkItem.active_scope_revision == 0, GithubWorkItem.pr_number.is_(None),
+            GithubWorkItem.ack_received_at == item.ack_received_at,
+            GithubWorkItem.last_nudge_at == item.last_nudge_at,
+            exists(select(AgentTeamPreset.id).where(AgentTeamPreset.id == preset.id,
+                AgentTeamPreset.autonomy_enabled.is_(True), *(
+                _identity_value_clause(getattr(AgentTeamPreset, field), value)
+                for field, value in zip(preset_fields, expected_preset)))),
+            exists(select(TeamGithubScope.id).where(TeamGithubScope.id == scope.id,
+                TeamGithubScope.enabled.is_(True), TeamGithubScope.preset_id == expected_scope[1])),
+            exists(select(AgentTeamSlot.id).where(AgentTeamSlot.id == leader.id,
+                AgentTeamSlot.preset_id == preset.id, AgentTeamSlot.enabled == expected_leader[0],
+                AgentTeamSlot.provider == expected_leader[1], AgentTeamSlot.launch_options == expected_leader[2])),
+            *fence,
+        ]
+        if workspace is not None:
+            guard.append(exists(select(GithubWorkspace.id).where(
+                GithubWorkspace.id == workspace.id, GithubWorkspace.leased_item_id == item.id,
+                *(_identity_value_clause(getattr(GithubWorkspace, field), getattr(workspace, field))
+                  for field in ("scope_id", "lease_token", "leased_at", "path", "leased_owner_pid",
+                                "leased_owner_proc_start", "enabled")))))
+        else:
+            guard.append(~exists(select(GithubWorkspace.id).where(GithubWorkspace.leased_item_id == item.id)))
+        locked = await db.execute(update(GithubWorkItem).where(*guard).values(
+            updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+        if locked.rowcount != 1 or hold_code():
+            return
+        # The existing timeout CAS revalidates participants, round and pending status.
+        reminded = request.leader_ack_reminded_at
+        if reminded is None and item.last_nudge_at is not None and item.last_nudge_at >= request.created_at:
+            reminded = item.last_nudge_at  # A pre-upgrade reminder already spent its grace.
+        if elapsed >= maximum or (reminded is not None and not active
+                and request.leader_activity_extended_at is None
+                and now - reminded > timedelta(seconds=settings.github_nudge_grace_seconds)):
+            await self.escalate(db, item, "leader_ack_timeout", initial_request=request)
+            return
+        conditions = (
+            GithubApprovalRequest.id == request.id, GithubApprovalRequest.status == "pending",
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.request_kind == "initial_plan", GithubApprovalRequest.scope_revision_id.is_(None),
+            GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+            GithubApprovalRequest.approval_round == item.approval_round_count,
+            GithubApprovalRequest.created_at == expected_request[1],
+            GithubApprovalRequest.request_fingerprint == expected_request[2],
+            GithubApprovalRequest.owner_member_id == request.owner_member_id,
+            GithubApprovalRequest.leader_member_id == request.leader_member_id,
+        )
+        if active and request.leader_activity_extended_at is None:
+            await db.execute(update(GithubApprovalRequest).where(*conditions,
+                GithubApprovalRequest.leader_activity_extended_at.is_(None)).values(
+                    leader_activity_extended_at=now).execution_options(synchronize_session=False))
+        claim = await db.execute(update(GithubApprovalRequest).where(*conditions,
+            GithubApprovalRequest.leader_ack_reminded_at.is_(None)).values(
+                leader_ack_reminded_at=reminded or now).execution_options(synchronize_session=False))
+        if claim.rowcount != 1 or reminded is not None:
+            return
+        item.last_nudge_at = now
+        await agent_mail_service.send_message(db, MailMessageCreate(
+            recipient_member_id=request.leader_member_id, audience_type="member",
+            audience_id=str(request.leader_member_id), subject=f"Ack needed: issue #{item.issue_number}",
+            body_markdown=(f"The owner is waiting for your explicit plan decision on issue #{item.issue_number}. "
+                f"Read the approval request, then call `synth_city_approve_work_item(work_item_id={item.id}, "
+                f'dispatch_nonce="{item.dispatch_nonce}", decision="approved", reason=...)` '
+                'or use `decision="rejected"`. '
+                "Bound activity can preserve this pending request until its finite maximum; activity and prose do not approve work."),
+            payload={"kind": "github_dispatch_ack_nudge", "work_item_id": item.id,
+                     "issue_number": item.issue_number}),
+            sender_type="system", commit=False, auto_nudge=False,
+            delivery_key=f"leader-ack-reminder:{request.id}")
+        if preset.supervisor_actor_id is not None:
+            db.add(MailMessage(kind="message",
+                audience_type="team_preset", audience_id=str(preset.id), subject="Leader approval waiting",
+                body_markdown=(f"Issue #{item.issue_number} is waiting for an explicit Leader plan decision. "
+                    "A reminder was sent. The request, builder lease and workspace remain intact during this soft wait. "
+                    f"The initial window is {initial} seconds and the maximum is {maximum} seconds from the request; "
+                    "inactive requests can expire after reminder grace. This notice grants no approval or recovery authority."),
+                payload={"notice": "leader_ack_wait", "work_item_id": item.id,
+                         "approval_request_id": request.id, "leader_slot_id": leader.id,
+                         "supervisor_actor_id": preset.supervisor_actor_id},
+                delivery_key=f"leader-ack-supervisor:{request.id}"))
         await db.commit()
+        await agent_mail_service.auto_nudge_members(db, [request.leader_member_id])
 
     async def _nudge_owner_for_brief(
         self, db: AsyncSession, item: GithubWorkItem

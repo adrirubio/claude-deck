@@ -18,6 +18,41 @@ from app.database import (
 
 
 @pytest.mark.asyncio
+async def test_leader_ack_wait_columns_are_additive_and_repeat_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            expected = {
+                "agent_team_presets": ("leader_ack_timeout_seconds", "leader_ack_max_wait_seconds"),
+                "github_approval_requests": ("leader_ack_reminded_at", "leader_activity_extended_at"),
+            }
+            for table, names in expected.items():
+                columns = await _sqlite_columns(conn, table)
+                for name in names:
+                    if name in columns:
+                        await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
+            await conn.execute(text("INSERT INTO agent_team_presets "
+                "(name, description, created_at, updated_at, autonomy_enabled) "
+                "VALUES ('Existing wait team', 'Keep this row.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"))
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            for table, names in expected.items():
+                assert set(names) <= await _sqlite_columns(conn, table)
+            row = (await conn.execute(text("SELECT description, leader_ack_timeout_seconds, "
+                "leader_ack_max_wait_seconds FROM agent_team_presets"))).one()
+            assert tuple(row) == ("Keep this row.", None, None)
+            await conn.execute(text("UPDATE agent_team_presets SET leader_ack_timeout_seconds=600, "
+                "leader_ack_max_wait_seconds=3600"))
+            await _run_sqlite_compat_migrations(conn)
+            assert (await conn.execute(text("SELECT leader_ack_timeout_seconds, "
+                "leader_ack_max_wait_seconds FROM agent_team_presets"))).one() == (600, 3600)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", [
     ("supervisor_actor_id", "supervisor_checked_at", "supervisor_next_check_at", "supervisor_note",
      "supervisor_grace_seconds", "supervisor_observed_status"),
@@ -1655,6 +1690,38 @@ async def test_input_wait_latch_migrates_without_changing_pane_identity():
 
 
 @pytest.mark.asyncio
+async def test_opencode_wait_fence_columns_are_additive_and_keep_existing_waits():
+    # #732: the OpenCode wait fence adds two columns; legacy rows and existing waits are untouched.
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP TABLE agent_pane_bindings"))
+            await conn.execute(text("CREATE TABLE agent_pane_bindings (id INTEGER PRIMARY KEY, pane_pid INTEGER NOT NULL, "
+                "pane_proc_start VARCHAR NOT NULL, slot_id INTEGER, preset_id INTEGER, tmux_target VARCHAR, "
+                "created_at DATETIME NOT NULL, waiting_input_reason VARCHAR, waiting_input_started_at DATETIME, "
+                "waiting_input_observed_at DATETIME, waiting_input_notice_id INTEGER, UNIQUE(pane_pid, pane_proc_start))"))
+            await conn.execute(text("INSERT INTO agent_pane_bindings (id, pane_pid, pane_proc_start, slot_id, preset_id, created_at, "
+                "waiting_input_reason, waiting_input_started_at, waiting_input_observed_at) VALUES (1, 41000, '27', 3, 7, "
+                "CURRENT_TIMESTAMP, 'question', '2026-11-13 08:00:00.000000', '2026-11-13 08:00:01.000000')"))
+            before = (await conn.execute(text("SELECT * FROM agent_pane_bindings WHERE id = 1"))).mappings().one()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                assert {"opencode_wait_generation", "opencode_wait_uncertain"} <= await _sqlite_columns(conn, "agent_pane_bindings")
+                after = (await conn.execute(text("SELECT * FROM agent_pane_bindings WHERE id = 1"))).mappings().one()
+                assert all(after[key] == value for key, value in before.items())
+                assert (after["opencode_wait_generation"], after["opencode_wait_uncertain"]) == (None, 0)
+            await conn.execute(text("UPDATE agent_pane_bindings SET opencode_wait_generation = 1763020800000, "
+                                    "opencode_wait_uncertain = 1 WHERE id = 1"))
+            await _run_sqlite_compat_migrations(conn)
+            row = (await conn.execute(text("SELECT opencode_wait_generation, opencode_wait_uncertain "
+                                           "FROM agent_pane_bindings WHERE id = 1"))).one()
+            assert tuple(row) == (1763020800000, 1)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
@@ -1676,5 +1743,53 @@ async def test_reminder_columns_preserve_legacy_lease_and_repeat_safely():
             await conn.execute(text("UPDATE github_workspaces SET lease_release_reminder_count=4"))
             await _run_sqlite_compat_migrations(conn)
             assert await conn.scalar(text("SELECT lease_release_reminder_count FROM github_workspaces")) == 4
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_required_check_tables_are_additive_and_restart_preserves_records():
+    engine=create_async_engine('sqlite+aiosqlite:///:memory:')
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("INSERT INTO agent_team_presets (id,name,description,created_at,updated_at,autonomy_enabled) "
+                "VALUES (1,'Existing','Keep original facts',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)"))
+            await conn.execute(text("INSERT INTO github_team_progress (preset_id,fingerprint,last_progress_at,items) "
+                "VALUES (1,'semantic',CURRENT_TIMESTAMP,'{}')"))
+            for _ in range(2):
+                await conn.run_sync(Base.metadata.create_all)
+                await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text('SELECT description FROM agent_team_presets WHERE id=1'))=='Keep original facts'
+            assert await conn.scalar(text('SELECT fingerprint FROM github_team_progress WHERE preset_id=1'))=='semantic'
+            for table in ('github_required_check_watches','github_required_check_recipients','github_team_progress'):
+                assert await _sqlite_columns(conn,table)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_priority_migration_is_additive_and_repeats_safely():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if "dispatch_priority" in await _sqlite_columns(conn, "github_work_items"):
+                await conn.execute(text("ALTER TABLE github_work_items DROP COLUMN dispatch_priority"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
+                "dispatch_status, issue_type, retry_count, approval_round_count, active_scope_revision, "
+                "attempt_phase, diagnostic_retry_count, created_at, updated_at) VALUES "
+                "(1, 1, 5, 'Existing', 'url', CURRENT_TIMESTAMP, 'verifying', 'code', 7, 2, 1, "
+                "'diagnostic', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            before = dict((await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one())
+            await _run_sqlite_compat_migrations(conn)
+            assert "dispatch_priority" in await _sqlite_columns(conn, "github_work_items")
+            after = (await conn.execute(text("SELECT * FROM github_work_items"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["dispatch_priority"] is None
+            await conn.execute(text("UPDATE github_work_items SET dispatch_priority=3 WHERE id=1"))
+            await _run_sqlite_compat_migrations(conn)
+            assert await conn.scalar(text("SELECT dispatch_priority FROM github_work_items WHERE id=1")) == 3
     finally:
         await engine.dispose()

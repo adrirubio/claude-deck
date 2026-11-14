@@ -140,6 +140,7 @@ INSTALL_FIELDS = {
     "codex_cli_available": bool, "codex_mcp_installed": bool, "codex_hooks_missing": list,
     "copilot_cli_available": bool, "copilot_mcp_installed": bool, "copilot_hooks_missing": list,
     "opencode_cli_available": bool, "opencode_mcp_installed": bool, "opencode_plugin_events_missing": list,
+    "opencode_version_ready": bool,
     "pi_mail_ready": bool,
 }
 
@@ -232,7 +233,10 @@ def operations(provider_id):
         result["resume_exact"].conditions += ["Exact full ID or project-local session file and matching header", "No foreign or guessed session"]
         result["execution_controls"] = wire.Operation(state="unsupported", reason="Albiex Synth City does not provide a Pi sandbox or native permission-enforcement controls.", evidence=sources, conditions=["Pi integration must not imply added isolation"])
     elif provider_id in {"copilot-cli", "opencode-cli"}:
-        result["resume_exact"].conditions.append("Latest/continue is not exact resume; same-repository ambiguity blocks launch")
+        if provider_id == "opencode-cli":
+            result["resume_exact"].conditions.append("A saved ses… id launched with --standalone --session; --continue is refused")
+        else:
+            result["resume_exact"].conditions.append("Latest/continue is not exact resume; same-repository ambiguity blocks launch")
         result["execution_controls"].state = "unknown"
         result["execution_controls"].reason = "Provider integration or CLI flags do not establish a verified execution-isolation guarantee."
     else:

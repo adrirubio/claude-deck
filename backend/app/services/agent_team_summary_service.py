@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from mcp_shim.work_remaining_protocol import MAX_AGE
 
 from app.models.database import (
@@ -23,7 +24,7 @@ from app.services.agent_team_campaign_service import agent_team_campaign_service
 from app.services import required_ci_attention
 from app.services.agent_team_supervisor_service import observe_supervisor, supervisor_observation
 
-_ACTORS = ("owner", "leader", "operator", "controller")
+_ACTORS = ("owner", "leader", "operator", "controller", "reviewer")
 _KINDS = {"review_pr", "merge_pr", "inspect_attempt", "inspect_checkpoint", "milestone_acceptance",
           "pilot_decision", "scope_clarification", "provide_evidence"}
 _STATES = {"requested", "context_pending", "waiting_for_prerequisites", "historical", "resolved",
@@ -104,23 +105,42 @@ class AgentTeamSummaryService:
                     and len(scope_rows) <= 32 and len(approvals) <= 64)
         scopes = [SimpleNamespace(**row._mapping) for row in scope_rows[:32]]
         attention, human_actions, actors, observations = [], [], set(), []
-        waiting_input, native_fence = None, {}
+        waiting_input, native_fence, native_known = None, {}, False
+        native_states, native_ok = {}, False
         expires = [started + timedelta(seconds=15)]
         hold = hold_code()
         if hold:
             attention.append(TeamSummaryAttention(code=hold))
             actors.add("operator")
 
-        async def bounded(read):
-            remaining = deadline - asyncio.get_running_loop().time()
+        # The stall signal keeps its own five-second native-plus-mail budget, counted from here and
+        # capped by this summary's earlier deadline; the native await itself stops at it. The
+        # summary's other reads keep the full window.
+        from app.services.mail_request_stall_service import mail_request_stall_service
+        stall_deadline = min(deadline, asyncio.get_running_loop().time() + mail_request_stall_service.deadline_seconds)
+
+        async def bounded(read, limit=None):
+            remaining = (deadline if limit is None else min(deadline, limit)) - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError
             return await asyncio.wait_for(read(), timeout=remaining)
 
+        # The identity baseline is taken BEFORE the native await, inside the stall budget. A failed
+        # capture stays None (untrusted): the stall view never takes a replacement baseline.
+        try:
+            native_baseline = await bounded(
+                lambda: mail_request_stall_service._coherent_snapshot(db, preset_id), stall_deadline)
+        except (TimeoutError, OSError, ValueError, OperationalError):
+            native_baseline = None
+            if db.in_transaction():
+                await db.rollback()
+
         try:
             from app.services.agent_activity_service import observe_team, _team_inputs
             native = await bounded(lambda: observe_team(db, preset_id, include_agent_status=False,
-                persist_identities=False, max_input_rows=256, input_fence=native_fence))
+                persist_identities=False, max_input_rows=256, input_fence=native_fence), stall_deadline)
+            native_known = all(entry.state != "unknown" for entry in native.slots)
+            native_states = {entry.slot_id: entry.state for entry in native.slots}
             waiting_input = [TeamWaitingInput(slot_id=entry.slot_id, reason=entry.waiting_input.reason)
                 for entry in native.slots if entry.waiting_input is not None]
             expires.append(_utc(native.valid_until))
@@ -176,6 +196,8 @@ class AgentTeamSummaryService:
             native_current = {entry[0]: entry for entry in await bounded(lambda: _team_inputs(db, preset_id, 256))}
             if native_current != native_fence:
                 waiting_input = None
+            else:
+                native_ok = True
         except (TimeoutError, OSError, ValueError):
             waiting_input = None
             complete = False
@@ -216,6 +238,34 @@ class AgentTeamSummaryService:
                 boundary += timedelta(seconds=supervisor["grace_seconds"])
             if boundary > now:
                 expires.append(boundary)
+        from app.services.github_team_idle_service import github_team_idle_service
+        try:
+            idle = await bounded(lambda: github_team_idle_service.observe(db, preset_id, now=now,
+                coverage_complete=complete and waiting_input is not None and native_known,
+                external_wait=bool(waiting_input) or any(a.state not in {"resolved", "historical"}
+                                                        for a in human_actions)))
+            if await self._snapshot(db, preset_id) != final or hold_code() != hold:
+                idle = []
+            for entry in idle:
+                attention.append(TeamSummaryAttention(code="team_idle", **entry))
+                actors.add("leader")
+        except (TimeoutError, OSError, ValueError):
+            if db.in_transaction():
+                await db.rollback()
+        # Unanswered explicit requests (#752): its own bounded, read-only view. It reuses the native
+        # observation above and its fence; a changed context is not a stable observation. It never
+        # adds a next actor and does not change team_idle.
+        stall = await mail_request_stall_service.observe(db, preset_id, now=now, native_states=native_states,
+                                                         native_ok=native_ok and not changed,
+                                                         deadline=stall_deadline, native_fence=native_fence,
+                                                         native_baseline=native_baseline)
+        for entry in stall.items:
+            attention.append(TeamSummaryAttention(code="unanswered_request", request_id=entry.request_id,
+                requester=entry.requester, recipient=entry.recipient, unanswered_seconds=entry.unanswered_seconds))
+        if not stall.complete:
+            attention.append(TeamSummaryAttention(code="unanswered_request_incomplete",
+                coverage_reason=stall.reason, omitted_count=stall.omitted_count or None))
+        supervisor["unanswered_requests"] = stall
         campaign = await self.campaign.summary(db, preset_id, human_actions if not changed else ())
         unreadable = []
         for item in final[2][:self.item_limit]:
