@@ -417,6 +417,427 @@ def set_instance(root, ident, net, user):
         json.dump(data, out)
     os.replace(path + ".tmp", path)
 
+# --- OpenCode stub-only configuration (#912) -------------------------------------------
+# An OpenCode member in the kit must reach only the kit stub. Before launch the kit adds
+# one stub provider to the config the Agent Mail install wrote in the kit HOME, keeping
+# the install entries, and proves the result before any pane starts. The SHA-256 of the
+# written config is recorded, so any later change to it is refused.
+KIT_PROVIDER = "kitstub"
+KIT_MODEL = "stub"
+KIT_ADAPTER = "@ai-sdk/openai-compatible"
+KIT_BACKEND_URL = "http://127.0.0.1:18780"
+MAIL_SERVER = "albiex-synth-city-mail"
+PYTHON_NAME = re.compile(r"python(3(\.[0-9]+)?)?")
+DENY_RULE = {"action": "question", "resource": "*", "effect": "deny"}
+
+def _opencode_path(root):
+    # Every component from the root down must be a plain directory of this root: a
+    # symlinked home, .config or opencode could lead the write out of the kit.
+    real = os.path.realpath(root)
+    here = real
+    for part in ("home", ".config", "opencode"):
+        here = os.path.join(here, part)
+        try:
+            info = os.lstat(here)
+        except OSError:
+            die(2, "refused: the kit HOME has no OpenCode config directory")
+        if not stat.S_ISDIR(info.st_mode):
+            die(2, "refused: a component of the OpenCode config path is not a plain directory")
+    if os.path.lexists(os.path.join(here, "opencode.jsonc")):
+        die(2, "refused: an opencode.jsonc config cannot be merged safely")
+    path = os.path.join(here, "opencode.json")
+    try:
+        info = os.lstat(path)
+    except OSError:
+        die(2, "refused: the Agent Mail install wrote no plain OpenCode config")
+    if not stat.S_ISREG(info.st_mode):
+        die(2, "refused: the Agent Mail install wrote no plain OpenCode config")
+    return path
+
+def _stub_hostport(stub_url):
+    match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})", stub_url)
+    if not match:
+        die(2, "refused: the stub URL must be http://127.0.0.1:<port>")
+    return "127.0.0.1:" + match.group(1)
+
+def _opencode_read(path):
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        doc = json.loads(raw)
+    except (OSError, ValueError):
+        die(2, "refused: the OpenCode config is not readable JSON")
+    if not isinstance(doc, dict):
+        die(2, "refused: the OpenCode config is not a JSON object")
+    return raw, doc
+
+def _opencode_load(path):
+    return _opencode_read(path)[1]
+
+def _mail_entry_ok(doc):
+    # The install entry must be usable: the kit backend Mail shim, local, enabled, direct tools.
+    mcp = doc.get("mcp")
+    servers = mcp.get("servers") if isinstance(mcp, dict) else None
+    entry = servers.get(MAIL_SERVER) if isinstance(servers, dict) else None
+    if not isinstance(entry, dict):
+        return False
+    command = entry.get("command")
+    environment = entry.get("environment")
+    return (entry.get("type") == "local" and entry.get("enabled", True) is True and entry.get("codemode") is False
+            and _mail_command_ok(command)
+            and isinstance(environment, dict) and environment.get("SYNTH_CITY_URL") == KIT_BACKEND_URL
+            and environment.get("SYNTH_CITY_PROVIDER") == "opencode-cli")
+
+def _mail_command_ok(command):
+    # Exactly [the kit backend s interpreter, the Mail shim installed from this checkout]. The
+    # interpreter must resolve to the one the kit backend runs (an alias of it is accepted);
+    # a name alone proves nothing (a python3 link to another program has the same name).
+    repo = os.environ.get("RUNTIME_KIT_REPO_ROOT", "")
+    trusted = os.environ.get("RUNTIME_KIT_PYTHON", "")
+    shim = os.path.join(repo, "backend", "mcp_shim", "agent_mail_server.py")
+    if not (repo and os.path.isabs(repo) and os.path.isfile(shim) and trusted and os.path.isabs(trusted)):
+        return False
+    if not (isinstance(command, list) and len(command) == 2 and all(isinstance(item, str) and item for item in command)):
+        return False
+    interpreter, script = command
+    return (os.path.isabs(interpreter) and os.path.realpath(interpreter) == os.path.realpath(trusted)
+            and PYTHON_NAME.fullmatch(os.path.basename(os.path.realpath(interpreter))) is not None
+            and os.path.isfile(interpreter) and os.access(interpreter, os.X_OK)
+            and os.path.isabs(script) and os.path.realpath(script) == os.path.realpath(shim))
+
+def _denied(doc):
+    return isinstance(doc.get("permissions"), list) and DENY_RULE in doc["permissions"]
+
+def _digest_path(root):
+    # The proof lives in this root s own state directory, a plain directory, never a link.
+    state = os.path.join(os.path.realpath(root), "state")
+    try:
+        info = os.lstat(state)
+    except OSError:
+        die(2, "refused: the kit has no state directory")
+    if not stat.S_ISDIR(info.st_mode):
+        die(2, "refused: the kit state directory is not a plain directory")
+    path = os.path.join(state, "opencode-config.sha256")
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return path
+    except OSError:
+        die(2, "refused: the OpenCode config proof cannot be read")
+    if not stat.S_ISREG(info.st_mode):
+        die(2, "refused: the OpenCode config proof is not a plain file")
+    return path
+
+_fdopen = os.fdopen
+
+class _Kept(OSError):
+    """A temporary file that failed and could not be removed either: it is kept and named."""
+    def __init__(self, path):
+        super().__init__("kept " + path)
+        self.path = path
+
+def _remove(path):
+    # Remove a temporary file of this run; return its path when it had to be kept.
+    try:
+        if os.path.lexists(path):
+            os.unlink(path)
+        return None
+    except OSError:
+        return path
+
+def _stage(directory, text):
+    # A new private file holding the whole text; a failed write removes it before raising,
+    # or raises _Kept naming it when it cannot be removed.
+    temp = os.path.join(directory, ".opencode-" + os.urandom(8).hex())
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with _fdopen(fd, "w") as handle:
+            handle.write(text)
+    except BaseException as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if _remove(temp):
+            raise _Kept(temp) from exc
+        raise
+    return temp
+
+def opencode_config(root, stub_url):
+    hostport = _stub_hostport(stub_url)
+    path = _opencode_path(root)
+    doc = _opencode_load(path)
+    if not (_mail_entry_ok(doc) and _denied(doc)):
+        die(2, "refused: the OpenCode config lacks a usable Agent Mail entry or the question-deny rule")
+    if set(doc.get("provider") or {}) - {KIT_PROVIDER}:
+        die(2, "refused: the OpenCode config already names another provider")
+    doc["provider"] = {KIT_PROVIDER: {
+        "npm": KIT_ADAPTER, "name": "isolated runtime kit stub",
+        "options": {"baseURL": "http://" + hostport + "/v1"},
+        "models": {KIT_MODEL: {"name": "kit stub model"}}}}
+    doc["enabled_providers"] = [KIT_PROVIDER]
+    doc["model"] = KIT_PROVIDER + "/" + KIT_MODEL
+    doc["autoupdate"] = False
+    doc["share"] = "disabled"
+    text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    # Stage both files completely, then commit the proof and the config by atomic renames.
+    # A failure before the config rename leaves the config and any earlier proof as they were.
+    digest = _digest_path(root)
+    with open(path, "rb") as handle:
+        before = handle.read()
+    earlier = None
+    if os.path.lexists(digest):
+        with open(digest) as handle:
+            earlier = handle.read()
+    temps, kept = [], []
+    proof_changed = False
+    try:
+        temps.append(_stage(os.path.dirname(path), text))
+        temps.append(_stage(os.path.dirname(digest), hashlib.sha256(text.encode()).hexdigest() + "\n"))
+        _replace(temps[1], digest)
+        temps.pop()
+        proof_changed = True
+        _replace(temps[0], path)
+        temps.pop()
+    except OSError as exc:
+        if isinstance(exc, _Kept):
+            kept.append(exc.path)
+        kept += [temp for temp in temps if _remove(temp)]
+        restored = not proof_changed
+        if proof_changed:
+            # The config rename failed after the proof was replaced: put the earlier proof
+            # back, or remove the new one.
+            restore = None
+            try:
+                if earlier is None:
+                    os.unlink(digest)
+                else:
+                    restore = _stage(os.path.dirname(digest), earlier)
+                    _replace(restore, digest)
+                    restore = None
+                restored = True
+            except OSError as again:
+                if isinstance(again, _Kept):
+                    kept.append(again.path)
+                if restore is not None and _remove(restore):
+                    kept.append(restore)
+        with open(path, "rb") as handle:
+            config_changed = handle.read() != before
+        if config_changed or not restored or kept:
+            # Never reported as an unchanged refusal: say exactly what is not as it was.
+            problems = []
+            if config_changed:
+                problems.append("the OpenCode config changed")
+            if not restored:
+                problems.append("its earlier proof could not be restored")
+            if kept:
+                problems.append("temporary files were kept: " + ", ".join(sorted(os.path.relpath(item, os.path.realpath(root)) for item in kept)))
+            die(1, "incomplete: " + "; ".join(problems))
+        die(2, "refused: the OpenCode config could not be written; it is unchanged")
+    return opencode_check(root, stub_url)
+
+def _opencode_summary(root, stub_url):
+    hostport = _stub_hostport(stub_url)
+    raw, doc = _opencode_read(_opencode_path(root))
+    try:
+        with open(_digest_path(root)) as handle:
+            recorded = handle.read().strip()
+    except OSError:
+        recorded = None
+    providers = doc.get("provider")
+    stub = providers.get(KIT_PROVIDER) if isinstance(providers, dict) else None
+    options = stub.get("options") if isinstance(stub, dict) else None
+    models = stub.get("models") if isinstance(stub, dict) else None
+    summary = {"providers": sorted(providers) if isinstance(providers, dict) else [],
+               "enabled_providers": doc.get("enabled_providers"), "model": doc.get("model"),
+               "base_url": hostport if isinstance(options, dict) and options.get("baseURL") == "http://" + hostport + "/v1" else None,
+               "mail_entry": _mail_entry_ok(doc), "question_denied": _denied(doc)}
+    ok = (summary["providers"] == [KIT_PROVIDER] and summary["enabled_providers"] == [KIT_PROVIDER]
+          and summary["model"] == KIT_PROVIDER + "/" + KIT_MODEL and summary["base_url"] is not None
+          and isinstance(models, dict) and sorted(models) == [KIT_MODEL] and stub.get("npm") == KIT_ADAPTER
+          and doc.get("autoupdate") is False and doc.get("share") == "disabled"
+          and summary["mail_entry"] and summary["question_denied"]
+          and recorded == hashlib.sha256(raw).hexdigest())
+    return summary, ok
+
+def opencode_check(root, stub_url):
+    summary, ok = _opencode_summary(root, stub_url)
+    if not ok:
+        die(2, "refused: the OpenCode config is not the proved stub-only config: " + json.dumps(summary, sort_keys=True))
+    _write_out(json.dumps(summary, sort_keys=True) + "\n")
+    return summary
+
+def kit_provider(root):
+    # The provider that decides the OpenCode proof: the up marker, the launched slot and the
+    # registered session must all agree. A missing or different value is refused.
+    import sqlite3
+    real = os.path.realpath(root)
+    try:
+        with open(os.path.join(real, "state", "provider")) as handle:
+            marker = handle.read().strip()
+        with open(os.path.join(real, "state", "launch.json")) as handle:
+            slot_id = int(json.load(handle)["slot_id"])
+        db = sqlite3.connect("file:" + os.path.join(real, "kit.db") + "?mode=ro", uri=True)
+        try:
+            slot = db.execute("SELECT provider FROM agent_team_slots WHERE id = ?", (slot_id,)).fetchone()
+            session = db.execute("SELECT provider FROM mail_agent_sessions WHERE team_slot_id = ? AND closed_at IS NULL "
+                                 "ORDER BY id DESC LIMIT 1", (slot_id,)).fetchone()
+        finally:
+            db.close()
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        die(2, "refused: the kit provider cannot be proved from its records")
+    if slot is None or session is None or not marker or not (marker == slot[0] == session[0]):
+        die(2, "refused: the provider marker, the launched slot and the registered session disagree")
+    _write_out(marker + "\n")
+    return marker
+
+def opencode_final(root, stub_url, captured):
+    # At the end of capture: the same provider, and a config proof byte-identical to the captured one.
+    if kit_provider(root) != "opencode-cli":
+        die(2, "refused: the kit provider changed during capture")
+    summary, ok = _opencode_summary(root, stub_url)
+    try:
+        with open(captured) as handle:
+            earlier = handle.read()
+    except OSError:
+        die(2, "refused: the captured OpenCode proof is missing")
+    if not ok or json.dumps(summary, sort_keys=True) + "\n" != earlier:
+        die(2, "refused: the OpenCode config changed during capture")
+
+# --- Scripted stub (#912) ----------------------------------------------------------------
+# up copies a stub script into this root s state before the stub starts, so the stub serves
+# exactly the bytes that were validated; status proves the copy against its recorded digest.
+STUB_SCRIPT_MAX = 64 << 10
+_write = os.write
+
+def _read_bounded(path, what):
+    # No link is followed and nothing blocks: a FIFO, device or directory is refused by fstat
+    # before any read, and at most one byte past the limit is read.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        die(2, "refused: the " + what + " cannot be opened: " + (exc.strerror or "error"))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            die(2, "refused: the " + what + " is not a regular file")
+        chunks, size = [], 0
+        while size <= STUB_SCRIPT_MAX:
+            chunk = os.read(fd, STUB_SCRIPT_MAX + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > STUB_SCRIPT_MAX:
+        die(2, "refused: the " + what + " is larger than 64 KiB")
+    return data
+
+def _validate_stub_script(data):
+    # The stub s own validator decides, on exactly these bytes (held in memory, never re-read).
+    import importlib.util
+    path = os.path.join(os.environ.get("RUNTIME_KIT_REPO_ROOT", ""), "scripts", "runtime-kit", "stub_provider.py")
+    spec = importlib.util.spec_from_file_location("kit_stub_provider", path)
+    if spec is None or spec.loader is None or not os.path.isfile(path):
+        die(1, "failed: the stub provider cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    fd = os.memfd_create("stub-script")
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        try:
+            module.load_script("/proc/self/fd/%d" % fd)
+        except module.ScriptError as exc:
+            die(2, "refused: the stub script was not accepted: " + str(exc))
+    finally:
+        os.close(fd)
+
+def _stub_files(root):
+    state = os.path.join(os.path.realpath(root), "state")
+    try:
+        info = os.lstat(state)
+    except OSError:
+        die(2, "refused: the stub script needs this kit s state directory")
+    if not stat.S_ISDIR(info.st_mode):
+        die(2, "refused: the stub script needs a plain state directory, not a link")
+    return os.path.join(state, "stub-script.json"), os.path.join(state, "stub-script.sha256")
+
+def _remove_own(path, created):
+    # Remove a file of this run only while it is still the file this run created.
+    try:
+        now = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat.S_ISREG(now.st_mode) or (now.st_dev, now.st_ino) != (created.st_dev, created.st_ino):
+        return False
+    try:
+        os.unlink(path)
+        return True
+    except OSError:
+        return False
+
+def _write_new(path, data):
+    # A new private file holding data; on a failed write it is removed while still this
+    # run s own, or raises _Kept naming it.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    created = os.fstat(fd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[_write(fd, view):]
+    except BaseException as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if not _remove_own(path, created):
+            raise _Kept(path) from exc
+        raise
+    os.close(fd)
+    return created
+
+def stub_script_check_source(source):
+    _validate_stub_script(_read_bounded(source, "stub script"))
+
+def stub_script(root, source):
+    copy, digest = _stub_files(root)
+    data = _read_bounded(source, "stub script")
+    _validate_stub_script(data)
+    if os.path.lexists(copy) or os.path.lexists(digest):
+        die(2, "refused: this root already holds a stub script copy")
+    sha = hashlib.sha256(data).hexdigest()
+    try:
+        created = _write_new(copy, data)
+        try:
+            _write_new(digest, (sha + "\n").encode())
+        except BaseException:
+            if not _remove_own(copy, created):
+                raise _Kept(copy)
+            raise
+    except _Kept as exc:
+        die(1, "incomplete: the stub script copy failed and " + exc.path + " was kept")
+    except OSError as exc:
+        die(2, "refused: the stub script copy could not be written (" + (exc.strerror or "error") + "); nothing was kept")
+    print(sha)
+
+def stub_script_verify(root):
+    copy, digest = _stub_files(root)
+    present = [os.path.lexists(copy), os.path.lexists(digest)]
+    if not any(present):
+        return
+    if not all(present):
+        die(2, "refused: the stub script copy or its digest is missing")
+    data = _read_bounded(copy, "stub script copy")
+    recorded = _read_bounded(digest, "stub script digest").decode(errors="replace").strip()
+    if hashlib.sha256(data).hexdigest() != recorded:
+        die(2, "refused: the stub script copy does not match its recorded digest")
+    print(recorded)
+
 def main():
     command, root, *rest = sys.argv[1:]
     if command == "instance":
@@ -446,13 +867,27 @@ def main():
         record(root, rest[0], rest[1])
     elif command == "set-instance":
         set_instance(root, *rest)
+    elif command == "opencode-config":
+        opencode_config(root, rest[0])
+    elif command == "opencode-check":
+        opencode_check(root, rest[0])
+    elif command == "kit-provider":
+        kit_provider(root)
+    elif command == "opencode-final":
+        opencode_final(root, rest[0], rest[1])
+    elif command == "stub-script-check-source":
+        stub_script_check_source(root)
+    elif command == "stub-script":
+        stub_script(root, rest[0])
+    elif command == "stub-script-verify":
+        stub_script_verify(root)
     else:
         die(2, "unknown helper command")
 
 if __name__ == "__main__":
     main()
 '
-kitpy() { python3 -I -c "$KITPY" "$@"; }
+kitpy() { RUNTIME_KIT_REPO_ROOT="$REPO_ROOT" RUNTIME_KIT_PYTHON="${KIT_PYTHON:-}" python3 -I -c "$KITPY" "$@"; }
 
 verify() { # name -> pid of this instance's live process for that role; refuses otherwise
   local out code=0
@@ -546,12 +981,14 @@ if [[ "$COMMAND" == _kitpy ]]; then  # the helper, for the kit's own tests
   exit $?
 fi
 
-ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT"
+ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT" STUB_SCRIPT=""
+KIT_STUB_PORT=18781 KIT_STUB_URL="http://127.0.0.1:18781"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root) ROOT_ARG="$2"; shift 2 ;;
     --provider) PROVIDER="$2"; shift 2 ;;
     --cli) CLI="$2"; shift 2 ;;
+    --stub-script) STUB_SCRIPT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     --timeout) EXEC_TIMEOUT="$2"; shift 2 ;;
     --) shift; break ;;
@@ -559,6 +996,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ -z "$STUB_SCRIPT" || "$COMMAND" == up || "$COMMAND" == _up ]] || refuse "--stub-script is only for up"
 [[ -n "$ROOT_ARG" ]] || refuse "--root is required"
 mkdir -p "$(dirname "$ROOT_ARG")"
 ROOT="$(cd "$(dirname "$ROOT_ARG")" && pwd)/$(basename "$ROOT_ARG")"
@@ -600,6 +1038,9 @@ up() {
   local binary
   binary="$(provider_binary "$PROVIDER")" || refuse "unknown provider '$PROVIDER'"
   [[ -n "$CLI" && -x "$CLI" ]] || refuse "--cli must be an executable"
+  if [[ -n "$STUB_SCRIPT" ]]; then  # #912: checked before the root, its marker or its state exist
+    kitpy stub-script-check-source "$STUB_SCRIPT" || refuse "the stub script was not accepted; nothing was created"
+  fi
   if [[ -e "$ROOT" && -n "$(ls -A "$ROOT")" && ! -f "$ROOT/$MARKER" ]]; then
     refuse "$ROOT is not empty and has no $MARKER file"
   fi
@@ -613,6 +1054,7 @@ up() {
   if [[ -z "$python" ]]; then
     if [[ -x "$REPO_ROOT/backend/venv/bin/python" ]]; then python="$REPO_ROOT/backend/venv/bin/python"; else python="$(command -v python3)"; fi
   fi
+  KIT_PYTHON="$python"  # the backend's interpreter: the only one the OpenCode Mail entry may name
   # The real tmux executable, never a launcher script (a launcher can force a shared
   # team socket). RUNTIME_KIT_TMUX overrides; otherwise the first ELF tmux on PATH.
   local tmux_bin="" candidate
@@ -633,6 +1075,16 @@ up() {
   local ready="$ROOT/state/run-$instance"
   mkdir -p "$ready"
   trap up_cleanup_on_failure EXIT
+  if [[ -n "$STUB_SCRIPT" ]]; then  # #912: the stub serves only this private, validated copy
+    local copied=0
+    kitpy stub-script "$ROOT" "$STUB_SCRIPT" >/dev/null || copied=$?
+    case "$copied" in
+      0) ;;
+      1) incomplete "the stub script copy did not finish cleanly (see above); the root is kept" ;;
+      2) refuse "the stub script copy was not accepted" ;;
+      *) fail "the stub script helper failed (exit $copied)" ;;
+    esac
+  fi
 
   # Binaries: the CLI under test under its provider name; every other harness name
   # resolves to a fake, so no host CLI can start; gh is disabled; tmux is pinned.
@@ -645,7 +1097,7 @@ up() {
   printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$tmux_bin" "$ROOT/t/s" >"$ROOT/bin/tmux"
   chmod 755 "$ROOT/bin/gh" "$ROOT/bin/tmux"
 
-  local port=18780 stub_port=18781
+  local port=18780 stub_port="$KIT_STUB_PORT"
   CLEAN_ENV=(
     "PATH=$ROOT/bin:/usr/local/bin:/usr/bin:/bin"
     "HOME=$ROOT/home" "USER=${USER:-kit}" "LOGNAME=${USER:-kit}"
@@ -706,13 +1158,14 @@ up() {
   in_ns "$ROOT/bin/tmux" kill-session -t '=kit-probe'
 
   # --- Stub model provider -------------------------------------------------------------
+  local stub_args=(); if [[ -f "$ROOT/state/stub-script.json" && ! -L "$ROOT/state/stub-script.json" ]]; then stub_args=(--script "$ROOT/state/stub-script.json"); fi
   if [[ "${RUNTIME_KIT_TEST_FAULT:-}" == stub_ignores_term ]]; then  # a recorded child that ignores TERM
     spawn stub "$ROOT/logs/stub.log" python3 -c \
       "import runpy, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name=chr(95) * 2 + chr(109) + chr(97) + chr(105) + chr(110) + chr(95) * 2)" \
-      "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+      "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl" "${stub_args[@]}"
   else
     spawn stub "$ROOT/logs/stub.log" \
-      python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+      python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl" "${stub_args[@]}"
   fi
   local stub_ready=$((SECONDS + STUB_DEADLINE))
   until in_ns python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$stub_port/health', timeout=1)" 2>/dev/null; do
@@ -748,10 +1201,10 @@ up() {
 
   # --- Team slot, real launch, Agent Mail registration --------------------------------
   git -C "$ROOT/home/work" init -q 2>/dev/null || true
-  local launch
-  launch="$(in_ns "$python" -I - "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" <<'PY'
+  local launch launch_py
+  launch_py="$(cat <<'PY'
 import json, sys, urllib.error, urllib.request
-port, token_file, provider, work = sys.argv[1:5]
+port, token_file, provider, work, phase = sys.argv[1:6]
 token = open(token_file).read().strip()
 def call(method, path, body=None):
     request = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1{path}", method=method,
@@ -764,10 +1217,14 @@ def call(method, path, body=None):
         sys.exit(f"{method} {path}: HTTP {exc.code}: {exc.read()[:400].decode(errors='replace')}")
 install = {"claude-code": "claude-code", "codex-cli": "codex", "copilot-cli": "copilot",
            "opencode-cli": "opencode", "muse-cli": "muse"}.get(provider)
-if install:  # the provider's normal Agent Mail install, written into the kit HOME
-    call("POST", f"/agent-mail/install/{install}/apply", {"confirmed": True})
-preset = call("POST", "/agent-teams/presets", {"name": "runtime-kit", "slots": [
-    {"display_name": "kit member", "provider": provider, "repo_path": work}]})
+if phase == "install":
+    if install:  # the provider's normal Agent Mail install, written into the kit HOME
+        call("POST", f"/agent-mail/install/{install}/apply", {"confirmed": True})
+    sys.exit(0)
+slot = {"display_name": "kit member", "provider": provider, "repo_path": work}
+if provider == "opencode-cli":  # the product's own per-member config then pins the stub provider too
+    slot["launch_options"] = {"model": "kitstub/stub"}
+preset = call("POST", "/agent-teams/presets", {"name": "runtime-kit", "slots": [slot]})
 slot_id = preset["slots"][0]["id"]
 plan = call("POST", f"/agent-teams/presets/{preset['id']}/plan-launch", {"skip_plan_confirmation": True})
 blocked = [item for item in plan.get("items", []) if item.get("blocked") or item.get("block_code")]
@@ -777,7 +1234,24 @@ if blocked:
 result = call("POST", f"/agent-teams/presets/{preset['id']}/launch", {"skip_plan_confirmation": True})
 print(json.dumps({"preset_id": preset["id"], "slot_id": slot_id, "launch": result.get("status")}))
 PY
-  )" || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"
+  )"
+  printf '%s\n' "$PROVIDER" >"$ROOT/state/provider"
+  in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" install \
+    || fail "the Agent Mail install through the isolated backend failed (see $ROOT/logs/backend.log)"
+  # #912: an OpenCode member reaches only the kit stub. Proved before any pane starts.
+  # The helper's outcome is kept: 1 (incomplete, something is not as it was) stays exit 1.
+  if [[ "$PROVIDER" == opencode-cli ]]; then
+    local setup=0
+    kitpy opencode-config "$ROOT" "$KIT_STUB_URL" >/dev/null || setup=$?
+    case "$setup" in
+      0) ;;
+      1) incomplete "the OpenCode config setup did not finish cleanly (see above); the root is kept" ;;
+      2) refuse "the OpenCode config could not be proved stub-only" ;;
+      *) fail "the OpenCode config helper failed (exit $setup)" ;;
+    esac
+  fi
+  launch="$(in_ns "$python" -I -c "$launch_py" "$port" "$ROOT/state/operator-token" "$PROVIDER" "$ROOT/home/work" launch)" \
+    || fail "the team launch through the isolated backend failed (see $ROOT/logs/backend.log)"
   echo "$launch" >"$ROOT/state/launch.json"
 
   # The launched pane is the CLI: record it at once (parent = the recorded tmux server),
@@ -859,12 +1333,14 @@ lines = open(os.path.join(root, "run/ns.txt")).read().split()
 launch = json.load(open(os.path.join(root, "state/launch.json")))
 procs = json.load(open(os.path.join(root, "state/processes.json")))
 log = os.path.join(root, "run/stub-requests.jsonl")
+digest = os.path.join(root, "state/stub-script.sha256")
 pane_pid, _, pane_command = pane.partition(" ")
 print(json.dumps({
     "root": root, "net_namespace": lines[0], "links": lines[1:], "uid": os.getuid(), "gid": os.getgid(),
     "preset_id": launch["preset_id"], "slot_id": launch["slot_id"],
     "pane_pid": int(pane_pid) if pane_pid else None, "pane_command": pane_command,
     "registration": json.loads(reg), "stub_requests": sum(1 for _ in open(log)) if os.path.exists(log) else 0,
+    "stub_script_sha256": open(digest).read().strip() if os.path.isfile(digest) and not os.path.islink(digest) else None,
     "pids": {name: entry["pid"] for name, entry in procs.items() if name != "launcher"},
 }))
 PY
@@ -883,8 +1359,12 @@ status() {
   if [[ -z "$python" ]]; then
     if [[ -x "$REPO_ROOT/backend/venv/bin/python" ]]; then python="$REPO_ROOT/backend/venv/bin/python"; else python="$(command -v python3)"; fi
   fi
+  KIT_PYTHON="$python"  # the backend's interpreter: the only one the OpenCode Mail entry may name
   backend_healthy "$python" || incomplete "the isolated backend does not report this run as healthy"
   registration_row >/dev/null || incomplete "no registered session with a pane binding"
+  # The provider that decides the OpenCode proof is bound to the launch and the registration.
+  kitpy kit-provider "$ROOT" >/dev/null || refuse "the kit provider cannot be proved; nothing was written"
+  kitpy stub-script-verify "$ROOT" >/dev/null || refuse "the stub script copy cannot be proved; nothing was written"
 
   # Build the whole attempt, summary included, beside the published evidence; publish it
   # only when everything succeeded, by atomically swapping the evidence link.
@@ -912,6 +1392,17 @@ capture_evidence() { # dir: every evidence file and the summary; fails without p
   in_ns sh -c 'printf "{\"net\": \"%s\", \"user\": \"%s\"}\n" "$(readlink /proc/self/ns/net)" "$(readlink /proc/self/ns/user)"' \
     | python3 -I -c 'import json,sys,os; d=json.load(sys.stdin); d["host_net"]=os.readlink("/proc/self/ns/net"); d["host_user"]=os.readlink("/proc/self/ns/user"); print(json.dumps(d))' >"$ev/namespaces.json" || return 1
   in_ns ip -o link | awk -F': ' '{print $2}' >"$ev/links.txt" || return 1
+  local opencode=() provider stub_files=() stub_sha
+  provider="$(kitpy kit-provider "$ROOT")" || return 1
+  stub_sha="$(kitpy stub-script-verify "$ROOT")" || return 1  # #912: the copy the stub serves
+  if [[ -n "$stub_sha" ]]; then
+    printf '%s\n' "$stub_sha" >"$ev/stub-script.sha256" || return 1
+    stub_files=(stub-script.sha256)
+  fi
+  if [[ "$provider" == opencode-cli ]]; then  # #912: still the proved stub-only config
+    kitpy opencode-check "$ROOT" "$KIT_STUB_URL" >"$ev/opencode-config.json" || return 1
+    opencode=(opencode-config.json)
+  fi
   python3 -I - "$ROOT/state/processes.json" >"$ev/processes.txt" <<'PY' || return 1
 import json, sys
 for name, entry in json.load(open(sys.argv[1])).items():
@@ -943,8 +1434,18 @@ PY
   for name in outer inner tmux stub backend cli; do
     kitpy verify "$ROOT" "$name" >/dev/null 2>&1 || return 1
   done
+  # The provider and the config are proved again: a change during capture publishes nothing.
+  # Each verifier is a checked assignment, so a refusal is never compared as empty output.
+  local final_provider final_sha
+  final_provider="$(kitpy kit-provider "$ROOT")" || return 1
+  [[ "$final_provider" == "$provider" ]] || return 1
+  final_sha="$(kitpy stub-script-verify "$ROOT")" || return 1
+  [[ "$final_sha" == "$stub_sha" ]] || return 1
+  if ((${#opencode[@]})); then
+    kitpy opencode-final "$ROOT" "$KIT_STUB_URL" "$ev/opencode-config.json" || return 1
+  fi
   (cd "$ev" && sha256sum namespaces.json links.txt processes.txt pane.json registration.json \
-    environment-names.json stub-requests.jsonl summary.json >MANIFEST.sha256) || return 1
+    environment-names.json stub-requests.jsonl summary.json "${opencode[@]}" "${stub_files[@]}" >MANIFEST.sha256) || return 1
 }
 
 # --- exec --------------------------------------------------------------------------------
@@ -1030,11 +1531,13 @@ deadline_for() {
     down) echo "$DOWN_DEADLINE" ;;
   esac
 }
+STUB_ARGS=()
+[[ -z "$STUB_SCRIPT" ]] || STUB_ARGS=(--stub-script "$STUB_SCRIPT")
 case "$COMMAND" in
   up | status | down)
     set +e
     timeout -k 5 "$(deadline_for "$COMMAND")" "$SELF" "_$COMMAND" --root "$ROOT" --provider "$PROVIDER" --cli "$CLI" \
-      $( ((KEEP)) && echo --keep )
+      "${STUB_ARGS[@]}" $( ((KEEP)) && echo --keep )
     status=$?
     if [[ $status -eq 124 || $status -eq 137 ]]; then
       echo "isolated-runtime-kit: failed: deadline: $COMMAND did not finish in $(deadline_for "$COMMAND") s" >&2

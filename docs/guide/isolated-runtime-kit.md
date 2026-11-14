@@ -16,6 +16,14 @@ scripts/isolated-runtime-kit.sh down   --root /tmp/kit [--keep]
 - **A stub model provider** (`scripts/runtime-kit/stub_provider.py`) on `127.0.0.1`. It answers the OpenAI-compatible chat API with a fixed reply, and its log keeps a hash of each request, never prompt text.
 - **The CLI under test.** It's installed under its provider's binary name, for example `claude` for `claude-code`. Every other harness name resolves to a fake, so no host CLI can start, and `gh` is disabled. The kit then installs Agent Mail for the provider, creates a team preset with one slot and launches it through the normal launch API. That writes the real pane binding; the CLI then registers from its pane through the normal Agent Mail endpoint.
 
+**Scripted stub replies.** Run on its own, the stub also takes `--script FILE`: a JSON list of 1 to 64 turns, at most 64 KiB, each exactly `{"text": "..."}` or `{"tool_call": {"name": "...", "arguments": {...}}}`. It serves them in order, one per chat completion, as plain JSON or as a `stream: true` event stream; a tool call comes back as an OpenAI `tool_calls` reply with `finish_reason: "tool_calls"`. After the last turn, the fixed reply resumes. A malformed script is refused (exit 2) before the stub listens, including one with a non-finite number (`NaN`, `Infinity`, `-Infinity`, or an exponent too large for a float, such as `1e400`) or nesting too deep to decode. With a script, each log entry adds the turn index and the reply kind (`text`, `tool_call` or `fallback`), still without prompt or argument text. A scripted reply proves only what the stub sends, not what a provider CLI does with it.
+
+**Passing a script to the kit.** `up --stub-script FILE` starts the kit's stub with that script; `status`, `exec` and `down` refuse the option (exit 2).
+- **Before anything is created,** `up` opens `FILE` without following a link and without blocking, requires a regular file of at most 64 KiB, and runs the stub's own script check on those bytes. Any failure refuses (exit 2) before the root, its marker or its state exist.
+- **A private copy.** `up` then writes the same bytes to `state/stub-script.json` (mode 0600, a new file in the root's own plain state directory) and their SHA-256 to `state/stub-script.sha256`, and starts the stub with `--script` naming that copy. If a write fails, `up` removes only a file it can still prove it created; a replaced file, or one whose identity it can't read, is kept, and `up` fails as incomplete, naming it.
+- **Proved by `status`.** Before it writes anything, `status` refuses (exit 2) unless both files are absent, or both are regular files whose digest matches. A run with a script adds `stub-script.sha256` to the evidence and its manifest, and `summary.json` gains `stub_script_sha256` (null without a script). The digest is checked again after capture; a change publishes nothing.
+- `down` removes the copy with the root.
+
 `up` prints one JSON line: the namespace, the links, the uid, the pane, the registration and binding read from the kit's database, the stub request count, and the kit's process ids. It never prints a token.
 
 ## Commands
@@ -84,13 +92,32 @@ The kit refuses, with exit 2, when:
 
 **Namespace entry is two-step.** The kit enters through the outer anchor, which owns the network namespace, and then the inner one. A single `nsenter` into the inner anchor is refused by the kernel. Before it enters a namespace, the kit proves both anchors as described in [Ownership and cleanup](#ownership-and-cleanup).
 
+## OpenCode members
+
+For `--provider opencode-cli`, `up` pins the member to the kit's stub model before any pane starts:
+- **Stub-only config.** After the Agent Mail install has written the kit HOME's `opencode.json`, `up` adds exactly one provider, `kitstub` (OpenAI-compatible, `baseURL` `http://127.0.0.1:18781/v1`, one model `stub`). It sets `enabled_providers` to `["kitstub"]`, `model` to `kitstub/stub`, and turns autoupdate and sharing off. The install's Agent Mail entry (`mcp.servers.albiex-synth-city-mail`) and its question-deny rule are kept.
+- **The slot model.** The kit's team slot launches with the model `kitstub/stub`, so the product's own per-member config (`OPENCODE_CONFIG_CONTENT`) also limits `enabled_providers` to `kitstub`.
+- **Proof before launch.** `up` reads the config back and refuses (exit 2) before the launch unless all of these hold:
+  - the only provider is `kitstub`, with the adapter `@ai-sdk/openai-compatible` and its `baseURL` on `127.0.0.1`;
+  - `enabled_providers` is exactly `["kitstub"]` and the model is `kitstub/stub`;
+  - autoupdate is off and sharing is disabled;
+  - the install's Mail entry is usable: local, enabled, `codemode` off, provider `opencode-cli` and the kit's own backend URL. Its command must be exactly two items: an absolute path that resolves to the kit backend's own Python interpreter (an alias of it is accepted; a different program named `python3` is not), then this checkout's `backend/mcp_shim/agent_mail_server.py`;
+  - the deny rule is present.
+
+  It also refuses an `opencode.jsonc` (comments can't be merged safely), a missing or non-object config, a config that already names another provider, and any symlinked or non-directory component of `home/.config/opencode`. A refusal changes nothing, inside or outside the kit.
+- **Any later change is refused.** `up` records the SHA-256 of the config it wrote in `state/opencode-config.sha256`. A config with any other bytes no longer counts as proved. `state/` must be a plain directory of the root and the proof a plain file. `up` stages the new config and proof completely and commits each by an atomic rename, proof first, so a hard-linked proof is replaced, never written through. If the config can't be committed, the earlier proof is restored and the config is left unchanged (exit 2). A failed or partial write removes its own temporary file. If the earlier proof can't be restored, or a temporary file can't be removed, `up` stops as incomplete (exit 1) and names what is not as it was, including every temporary file it kept; it never reports that as an unchanged refusal. `up` keeps that outcome: an incomplete setup ends `up` with exit 1, keeping the root, and only an unchanged refusal ends it with exit 2.
+- **The provider is proved from records.** `status` uses the OpenCode proof when the provider recorded by `up`, the launched slot's provider and the registered session's provider all agree. If the marker is missing or any of them disagree, `status` refuses before writing anything.
+- **Evidence.** `status` proves the config again and publishes `opencode-config.json` in the manifest. It holds the provider ids, `enabled_providers`, the model, the stub's host and port, and whether the Mail entry is usable and the deny rule present; nothing else. At the end of capture, `status` proves the provider and the config once more. A change during capture fails `status`, and the published evidence stays unchanged.
+
+**Limits.** The fake CLI is not OpenCode, so the product's OpenCode 2 gate refuses its Agent Mail registration and `up` with the fake stops at registration. That the stub-only config holds for a real OpenCode member, and that no hosted fallback happens, is proved only by a run of the real OpenCode CLI inside the kit; that run is a separate, approved phase.
+
 ## Using it for a live check
 
 1. Write the check as commands run with `exec`, or let the CLI under test act from its pane.
 2. Run `up`, then `status`, and keep the printed summary and the evidence manifest as the check's evidence.
 3. Run `down` and keep its result as proof of cleanup.
 
-The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake provider CLI (`scripts/runtime-kit/fake_cli.sh`) through these steps.
+The end-to-end test `backend/tests/test_isolated_runtime_kit.py` runs a fake provider CLI (`scripts/runtime-kit/fake_cli.sh`) through these steps. Its tests that start a namespace, backend or CLI are **opt-in**: they run only with `SYNTH_CITY_KIT_RUNTIME=1` and otherwise skip with "kit runtime tests are opt-in", so a broad `-k` filter or a full local run never starts a runtime by accident. Without the flag, every kit command in the tests also runs with a `PATH` whose `setsid`, `unshare` and `nsenter` refuse, so even a regressed refusal can't start an anchor. The model and refusal tests run everywhere.
 
 ## Limits
 
