@@ -88,7 +88,7 @@ pydantic-settings==2.14.1
     #   mcp
 pygments==2.20.0
     # via pytest
-pyjwt==2.13.0
+pyjwt==2.15.1
     # via
     #   claude-code-registry-backend
     #   mcp
