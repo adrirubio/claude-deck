@@ -174,6 +174,10 @@ class GithubWatcherService:
         )
         for issue in labeled:
             await self._upsert_item(db, scope, issue)
+        # The admitted items are durable before any per-item completion runs: a later
+        # rollback can then only discard that completion's own work, and the poll time
+        # below is never written over upserts that were thrown away.
+        await db.commit()
         await self._recheck_active_items(db, scope, client)
         await self._reconcile_closed_issues(
             db,
@@ -270,28 +274,44 @@ class GithubWatcherService:
             [issue_number for _item_id, issue_number in pending],
         )
         for item_id, issue_number in pending:
-            item = await db.get(GithubWorkItem, item_id, populate_existing=True)
-            if item is None or item.dispatch_status not in _ACTIVE_STATUSES:
-                continue
-            issue = current.get(issue_number)
-            if issue is not None and issue.get("state") == "closed":
-                # T01: active work completes only when no continuing authority
-                # exists at the terminal write.
-                await self._complete_and_notify(
-                    db, scope, item,
-                    fact_source="github_watcher_service._recheck_active_items", issue=issue,
-                    guard_continuation=True)
-                continue
-            still_labeled = issue is not None and any(
-                label["name"] == scope.dispatch_label for label in issue.get("labels", [])
+            await self._isolated(db, scope, item_id,
+                                 lambda item_id=item_id, issue_number=issue_number:
+                                 self._recheck_one(db, scope, current, item_id, issue_number))
+
+    async def _isolated(self, db: AsyncSession, scope: TeamGithubScope, item_id: int, work) -> None:
+        """Run one item's work so its failure never aborts the poll or discards another item's work."""
+        try:
+            await work()
+        except Exception:
+            logger.warning("Completion failed for work item %s; the poll continues with the other items",
+                           item_id, exc_info=True)
+            await db.rollback()
+            await db.refresh(scope)
+
+    async def _recheck_one(self, db: AsyncSession, scope: TeamGithubScope, current: dict,
+                           item_id: int, issue_number: int) -> None:
+        item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+        if item is None or item.dispatch_status not in _ACTIVE_STATUSES:
+            return
+        issue = current.get(issue_number)
+        if issue is not None and issue.get("state") == "closed":
+            # T01: active work completes only when no continuing authority
+            # exists at the terminal write.
+            await self._complete_and_notify(
+                db, scope, item,
+                fact_source="github_watcher_service._recheck_active_items", issue=issue,
+                guard_continuation=True)
+            return
+        still_labeled = issue is not None and any(
+            label["name"] == scope.dispatch_label for label in issue.get("labels", [])
+        )
+        if not still_labeled:
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "dispatch_label_removed",
+                "The dispatch label was removed from the issue.",
             )
-            if not still_labeled:
-                await github_dispatch_service.escalate(
-                    db,
-                    item,
-                    "dispatch_label_removed",
-                    "The dispatch label was removed from the issue.",
-                )
 
     async def _reconcile_closed_issues(
         self,
@@ -363,11 +383,12 @@ class GithubWatcherService:
                 # A30/T01: a changed attempt or any continuation keeps the item.
                 # The terminal claim below rechecks the same conditions at write.
                 continue
-            await self._complete_and_notify(
-                db, scope, item,
-                fact_source="github_watcher_service._reconcile_closed_issues", issue=issue,
-                closed_unmerged=proof is not None, pull_proof=proof,
-                guard_continuation=True)
+            await self._isolated(db, scope, item_id, lambda item=item, issue=issue, proof=proof:
+                self._complete_and_notify(
+                    db, scope, item,
+                    fact_source="github_watcher_service._reconcile_closed_issues", issue=issue,
+                    closed_unmerged=proof is not None, pull_proof=proof,
+                    guard_continuation=True))
 
     async def _prove_closed_unmerged(
         self,

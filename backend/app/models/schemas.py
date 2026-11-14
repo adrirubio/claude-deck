@@ -15,6 +15,27 @@ class TerminalRevisionReconcileRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=240)
 
 
+class FinalizeMergedRequest(BaseModel):
+    """One operator request about a merge the poll cannot settle.
+
+    ``dry_run`` (the default is false) reads fresh merge evidence and returns it with the context digest, and
+    changes nothing. A real finalize requires the digest, an operation id and a reason; a missing one is
+    refused here, before any mutation.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    dry_run: bool = False
+    operation_id: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+    expected_context_sha256: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    reason: Optional[str] = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def _a_real_finalize_names_everything(self):
+        if not self.dry_run and None in (self.operation_id, self.expected_context_sha256, self.reason):
+            raise ValueError("a finalize requires expected_context_sha256, operation_id and reason")
+        return self
+
+
 class ConfigFile(BaseModel):
     """Represents a configuration file."""
 
