@@ -1584,6 +1584,12 @@ def _with_stub(module, tmp_path, script, check):
         server.close()
 
 
+def _strict_json(text):
+    def refuse(constant):
+        raise AssertionError(f"served arguments are not strict JSON: {constant}")
+    return json.loads(text, parse_constant=refuse)
+
+
 def _check_json_turns(server):
     first, call, last, after = (server.chat() for _ in range(4))
     assert first["choices"][0]["message"] == {"role": "assistant", "content": "first"}
@@ -1593,6 +1599,7 @@ def _check_json_turns(server):
     assert message["role"] == "assistant" and message.get("content") is None
     assert message["tool_calls"] == [{"id": "call_stub_1", "type": "function",
                                       "function": {"name": "read", "arguments": '{"filePath": "README.md"}'}}]
+    assert _strict_json(message["tool_calls"][0]["function"]["arguments"]) == {"filePath": "README.md"}
     assert last["choices"][0]["message"]["content"] == "last"
     assert after["choices"][0]["message"]["content"] == "stub reply from the isolated runtime kit"  # script ended
 
@@ -1633,6 +1640,15 @@ def test_stub_script_log_keeps_turn_and_kind_but_no_text(tmp_path):
     _with_stub(_stub_module(), tmp_path, STUB_SCRIPT, _check_log)
 
 
+def test_stub_script_serves_finite_number_arguments_as_strict_json(tmp_path):
+    script = [{"tool_call": {"name": "read", "arguments": {"limit": 1.5e308, "offset": -0.0, "n": 3}}}]
+
+    def check(server):
+        arguments = server.chat()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        assert _strict_json(arguments) == {"limit": 1.5e308, "offset": -0.0, "n": 3}
+    _with_stub(_stub_module(), tmp_path, script, check)
+
+
 def test_stub_script_absent_keeps_the_default_replies_and_log(tmp_path):
     def check(server):
         plain, chunks = server.chat(), server.chat(stream=True)
@@ -1658,6 +1674,10 @@ def _bad_scripts():
         "tool_extra_key": json.dumps([{"tool_call": {"name": "read", "arguments": {}, "id": "x"}}]),
         "tool_no_name": json.dumps([{"tool_call": {"name": "", "arguments": {}}}]),
         "tool_arguments_not_object": json.dumps([{"tool_call": {"name": "read", "arguments": "{}"}}]),
+        "nan_argument": '[{"tool_call": {"name": "read", "arguments": {"x": NaN}}}]',
+        "infinity_argument": '[{"tool_call": {"name": "read", "arguments": {"x": Infinity}}}]',
+        "neg_infinity_argument": '[{"tool_call": {"name": "read", "arguments": {"x": [-Infinity]}}}]',
+        "deep_nesting": b"[" * 10000 + b"0" + b"]" * 9999,  # 20,000 bytes: within the size limit
     }
 
 
@@ -1665,7 +1685,8 @@ def _bad_scripts():
 def test_stub_script_refuses_a_malformed_script_before_serving(tmp_path, case, capsys):
     module = _stub_module()
     path = tmp_path / "stub-script.json"
-    path.write_text(_bad_scripts()[case])
+    content = _bad_scripts()[case]
+    path.write_bytes(content if isinstance(content, bytes) else content.encode())
     with pytest.raises(module.ScriptError):
         module.load_script(path)
     bound = []
@@ -1686,6 +1707,7 @@ _STUB_CONTROLS = {
     "no_tool_call_branch": ('if "tool_call" in turn:', 'if "tool_call_removed" in turn:'),
     "sse_tool_call_as_text": ('{"tool_calls": [dict(call, index=0)]}', '{"content": "text"}'),
     "no_validation": ("def load_script(path", "def _unchecked(path"),
+    "no_constant_check": ("json.loads(raw, parse_constant=_refuse_constant)", "json.loads(raw)"),
 }
 
 
@@ -1708,9 +1730,9 @@ def test_stub_script_controls_are_caught(tmp_path, control):
             _with_stub(module, work, STUB_SCRIPT, check)
         except (AssertionError, KeyError, TypeError, IndexError, OSError):
             failed.append(name)
-    if control == "no_validation":
+    if control in ("no_validation", "no_constant_check"):
         path = tmp_path / "bad.json"
-        path.write_text(_bad_scripts()["extra_key"])
+        path.write_text(_bad_scripts()["extra_key" if control == "no_validation" else "nan_argument"])
         try:
             module.load_script(path)
         except module.ScriptError:

@@ -45,6 +45,10 @@ def _valid_turn(turn) -> bool:
             and call["name"] != "" and isinstance(call["arguments"], dict))
 
 
+def _refuse_constant(name: str):
+    raise ScriptError(f"the script holds a non-finite number ({name})")
+
+
 def load_script(path: Path | str) -> list[dict]:
     """Read and check a script: 1 to 64 turns, at most 64 KiB, each exactly one known kind."""
     try:
@@ -54,7 +58,11 @@ def load_script(path: Path | str) -> list[dict]:
     if len(raw) > MAX_SCRIPT_BYTES:
         raise ScriptError("the script is larger than 64 KiB")
     try:
-        turns = json.loads(raw)
+        turns = json.loads(raw, parse_constant=_refuse_constant)
+    except RecursionError as exc:  # the decoder's own depth limit; the limit itself is unchanged
+        raise ScriptError("the script's nesting is too deep") from exc
+    except ScriptError:
+        raise
     except ValueError as exc:
         raise ScriptError("the script is not JSON") from exc
     if not isinstance(turns, list) or not 1 <= len(turns) <= MAX_TURNS:
@@ -131,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
             if "tool_call" in turn:
                 call = {"id": f"call_stub_{index}", "type": "function",
                         "function": {"name": turn["tool_call"]["name"],
-                                     "arguments": json.dumps(turn["tool_call"]["arguments"])}}
+                                     "arguments": json.dumps(turn["tool_call"]["arguments"], allow_nan=False)}}
             else:
                 text = turn.get("text", REPLY)
         finish = "tool_calls" if call else "stop"
