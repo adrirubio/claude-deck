@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Operator commands for the isolated product factory. Never print credentials."""
-import argparse,datetime,json,os,pathlib,pwd,re,subprocess,sys,urllib.request
+import argparse,datetime,json,os,pathlib,pwd,re,subprocess,sys,tempfile,urllib.request
 BASE=pathlib.Path('/opt/albiex-synth-city-product');STATE=BASE/'state';WORK=pathlib.Path('/home/deckproductctl/work');URL='http://127.0.0.1:8011';ENV=BASE/'controller/backend/.env'
 def cfg():return dict(l.split('=',1) for l in ENV.read_text().splitlines() if '=' in l)
 def api(method,path,body=None):
@@ -8,6 +8,42 @@ def api(method,path,body=None):
  with urllib.request.urlopen(req,timeout=120) as r:return json.load(r)
 def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def store(p,data):p.write_text(json.dumps(data,indent=2)+'\n')
+# The controller .env is root-controlled. The secret goes into a fresh 0600 file made beside it, owned like the
+# original before any secret byte is written, then replaces the original in one step: a failure leaves it untouched.
+def write_secret(path,text):
+ path=pathlib.Path(path)
+ if path.is_symlink():sys.exit('Refusing to write credentials through a symlink.')
+ st=path.stat();fd,tmp=tempfile.mkstemp(dir=str(path.parent),prefix='.'+path.name+'.')
+ try:
+  os.fchown(fd,st.st_uid,st.st_gid)
+  with os.fdopen(fd,'w') as f:f.write(text);f.flush();os.fsync(f.fileno())
+  os.replace(tmp,path)
+ except BaseException:
+  try:os.unlink(tmp)
+  except FileNotFoundError:pass
+  raise
+# The agent users own their home directories, so root never writes there. This runs AS the agent user, reads the
+# file from stdin (never argv or the environment), refuses a symlinked directory, secures the directory first,
+# writes a new 0600 file with O_EXCL and renames it over hosts.yml, so an existing file or a planted link is
+# replaced and never receives the secret.
+HOSTS_WRITER='''import os,sys
+d,name=sys.argv[1],sys.argv[2]
+os.umask(0o077)
+os.makedirs(d,mode=0o700,exist_ok=True)
+dfd=os.open(d,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+os.fchmod(dfd,0o700)
+view=memoryview(sys.stdin.buffer.read())
+tmp='.%s.%d.tmp'%(name,os.getpid())
+fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=dfd)
+try:
+ while view:view=view[os.write(fd,view):]
+ os.fsync(fd);os.close(fd)
+ os.rename(tmp,name,src_dir_fd=dfd,dst_dir_fd=dfd)
+except BaseException:
+ try:os.unlink(tmp,dir_fd=dfd)
+ except FileNotFoundError:pass
+ raise
+'''
 def status():
  p=api('GET','/agent-teams/presets/1');s=api('GET','/agent-teams/presets/1/github-scopes')['scopes'][0]
  sup=json.loads((STATE/'supervisor-state.json').read_text()) if (STATE/'supervisor-state.json').exists() else {}
@@ -22,12 +58,11 @@ elif args.command=='configure-ambient-github':
  if not args.confirm:sys.exit('Use --confirm to choose your existing juanrubio GitHub login for ambient factory authentication. Its token retains the permissions of that login.')
  secret=subprocess.run(['sudo','-H','-u','juan','/usr/bin/gh','auth','token','--hostname','github.com','--user','juanrubio'],check=True,capture_output=True,text=True,cwd='/tmp').stdout.strip()
  if not secret:sys.exit('GitHub credential unavailable')
- doc=ENV.read_text();doc=re.sub(r'^GITHUB_TOKEN=.*$',lambda _: 'GITHUB_TOKEN='+secret,doc,flags=re.M);ENV.write_text(doc);ENV.chmod(0o600)
+ doc=ENV.read_text();doc=re.sub(r'^GITHUB_TOKEN=.*$',lambda _: 'GITHUB_TOKEN='+secret,doc,flags=re.M);write_secret(ENV,doc)
  # Separate credential files for this factory, not copies of Tizonia configuration.
  for name in ['deckproduct','deckproductctl']:
-  u=pwd.getpwnam(name);folder=pathlib.Path(u.pw_dir)/'.config/gh';folder.mkdir(parents=True,exist_ok=True)
-  file=folder/'hosts.yml';file.write_text('github.com:\n    user: juanrubio\n    git_protocol: https\n    oauth_token: '+secret+'\n');file.chmod(0o600)
-  for parent in [folder.parent,folder,file]:os.chown(parent,u.pw_uid,u.pw_gid)
+  u=pwd.getpwnam(name);folder=pathlib.Path(u.pw_dir)/'.config/gh'
+  subprocess.run(['sudo','-H','-u',name,'/usr/bin/python3','-c',HOSTS_WRITER,str(folder),'hosts.yml'],input='github.com:\n    user: juanrubio\n    git_protocol: https\n    oauth_token: '+secret+'\n',check=True,capture_output=True,text=True,cwd='/tmp')
   subprocess.run(['sudo','-H','-u',name,'/usr/bin/gh','auth','setup-git'],check=True,capture_output=True,text=True,cwd='/tmp')
  subprocess.run(['systemctl','restart','albiex-synth-city-product.service'],check=True)
  manifest=json.loads((STATE/'preparation.json').read_text());manifest['github_auth']='ambient_existing_juanrubio_login';store(STATE/'preparation.json',manifest);print('Ambient GitHub credentials configured privately; autonomy remains unchanged.')
