@@ -1182,6 +1182,8 @@ REFUSAL_ONLY = {  # run everywhere: each is refused by argument or root checks b
     "test_kit_refuses_a_foreign_synth_city_or_mail_credential",
     "test_kit_refuses_a_root_it_does_not_own",
     "test_status_on_an_invalid_root_writes_nothing",
+    "test_stub_script_kit_up_refuses_a_malformed_script_before_creating_anything",  # #912 A1b
+    "test_stub_script_kit_status_refuses_the_option",
 }
 
 
@@ -1750,3 +1752,272 @@ def test_stub_script_controls_are_caught(tmp_path, control):
             failed.append("validation")
     assert failed, f"control {control} was not caught"
     assert STUB.read_text().count(old) == 1  # the control changed only its own copy
+
+
+# --- The kit passes a scripted stub (#912 A1b) ---------------------------------------------
+# up copies a validated script into its own state, the stub is started with that copy, and
+# status proves the copy against its recorded digest. Model tests run the kit helper in
+# process; the step tests run single extracted steps of up with a mocked kitpy. No kit starts.
+def _stub_kit(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNTIME_KIT_REPO_ROOT", str(REPO))
+    root = tmp_path / "kit"
+    (root / "state").mkdir(parents=True)
+    return _helper_module(), root
+
+
+def _helper_call(module, command, *args):
+    try:
+        module[command](*map(str, args))
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def _stub_source(tmp_path, case):
+    path = tmp_path / "source.json"
+    if case == "missing":
+        return path
+    if case == "symlink":
+        real = tmp_path / "real.json"
+        real.write_text(json.dumps(STUB_SCRIPT))
+        path.symlink_to(real)
+    elif case == "directory":
+        path.mkdir()
+    elif case == "fifo":
+        os.mkfifo(path)
+    elif case == "oversized":
+        path.write_text(json.dumps([{"text": "x" * (64 << 10)}]))
+    else:
+        content = _bad_scripts()[{"nan": "nan_argument", "extra_key": "extra_key",
+                                  "overflow": "exponent_overflow"}.get(case, case)] if case != "valid" else (
+            json.dumps(STUB_SCRIPT))
+        path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    return path
+
+
+SOURCE_REFUSALS = ["missing", "symlink", "directory", "fifo", "oversized", "nan", "extra_key", "overflow",
+                   "deep_nesting"]
+
+
+@pytest.mark.parametrize("case", SOURCE_REFUSALS)
+def test_stub_script_source_is_refused_without_blocking(tmp_path, monkeypatch, case):
+    import threading
+    module, _root = _stub_kit(tmp_path, monkeypatch)
+    source = _stub_source(tmp_path, case)
+    result = []
+
+    def check():
+        try:
+            result.append(_helper_call(module, "stub_script_check_source", source))
+        except Exception as exc:  # reported as a failure of this test, not a thread warning
+            result.append(exc)
+    worker = threading.Thread(target=check, daemon=True)
+    worker.start()
+    worker.join(10)
+    assert not worker.is_alive(), "the source check blocked"  # a FIFO must not block the open or a read
+    assert result == [2]
+
+
+def test_stub_script_source_accepts_a_valid_script(tmp_path, monkeypatch):
+    module, _root = _stub_kit(tmp_path, monkeypatch)
+    assert _helper_call(module, "stub_script_check_source", _stub_source(tmp_path, "valid")) == 0
+
+
+def test_stub_script_copy_is_private_and_recorded(tmp_path, monkeypatch, capsys):
+    import hashlib
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    source = _stub_source(tmp_path, "valid")
+    assert _helper_call(module, "stub_script", root, source) == 0
+    copy, digest = root / "state" / "stub-script.json", root / "state" / "stub-script.sha256"
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert copy.read_bytes() == source.read_bytes()
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600 and stat.S_IMODE(digest.stat().st_mode) == 0o600
+    assert digest.read_text() == expected + "\n"
+    assert capsys.readouterr().out.strip() == expected
+    assert _helper_call(module, "stub_script_verify", root) == 0
+    assert capsys.readouterr().out.strip() == expected
+
+
+@pytest.mark.parametrize("case", ["existing_copy", "existing_digest", "state_symlink", "no_state", "nan"])
+def test_stub_script_copy_refusals_keep_what_is_there(tmp_path, monkeypatch, case):
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    source = _stub_source(tmp_path, "nan" if case == "nan" else "valid")
+    state = root / "state"
+    if case == "existing_copy":
+        (state / "stub-script.json").write_text("other")
+    elif case == "existing_digest":
+        (state / "stub-script.sha256").write_text("other")
+    elif case in ("state_symlink", "no_state"):
+        state.rmdir()
+        if case == "state_symlink":
+            (tmp_path / "elsewhere").mkdir()
+            state.symlink_to(tmp_path / "elsewhere")
+    before = {p.name: p.read_bytes() for p in state.iterdir()} if state.is_dir() else None
+    assert _helper_call(module, "stub_script", root, source) == 2
+    after = {p.name: p.read_bytes() for p in state.iterdir()} if state.is_dir() else None
+    assert after == before
+    if case == "state_symlink":
+        assert list((tmp_path / "elsewhere").iterdir()) == []
+
+
+@pytest.mark.parametrize("failing", [1, 2])  # the copy write, or the digest write after the copy
+def test_stub_script_failed_write_removes_only_its_own_files(tmp_path, monkeypatch, capsys, failing):
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    calls = []
+
+    def write(fd, data):
+        calls.append(fd)
+        if len(calls) == failing:
+            raise OSError(28, "No space left on device")
+        return os.write(fd, data)
+    module["_write"] = write
+    assert _helper_call(module, "stub_script", root, _stub_source(tmp_path, "valid")) == 2
+    assert list((root / "state").iterdir()) == []
+    err = capsys.readouterr().err
+    assert "nothing was kept" in err and "incomplete" not in err
+
+
+@pytest.mark.parametrize("change", ["replaced_file", "replaced_symlink", "uncertain"])
+def test_stub_script_failed_write_keeps_a_replaced_or_uncertain_file(tmp_path, monkeypatch, capsys, change):
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    state = root / "state"
+    copy = state / "stub-script.json"
+
+    def write(fd, data):
+        if change == "replaced_file":
+            copy.unlink()
+            copy.write_text("someone else")
+        elif change == "replaced_symlink":
+            copy.unlink()
+            copy.symlink_to(tmp_path / "anything")
+        else:
+            state.chmod(0o600)  # the identity can no longer be read
+        raise OSError(5, "Input/output error")
+    module["_write"] = write
+    try:
+        code = _helper_call(module, "stub_script", root, _stub_source(tmp_path, "valid"))
+    finally:
+        state.chmod(0o700)
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "incomplete" in err and str(copy) in err
+    assert os.path.lexists(copy)
+    if change == "replaced_file":
+        assert copy.read_text() == "someone else"
+
+
+@pytest.mark.parametrize("tamper", ["changed_copy", "copy_symlink", "digest_missing", "copy_missing",
+                                    "digest_symlink"])
+def test_stub_script_verify_refuses_an_unproved_copy(tmp_path, monkeypatch, tamper):
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    assert _helper_call(module, "stub_script", root, _stub_source(tmp_path, "valid")) == 0
+    copy, digest = root / "state" / "stub-script.json", root / "state" / "stub-script.sha256"
+    if tamper == "changed_copy":
+        copy.chmod(0o600)
+        copy.write_text(json.dumps([{"text": "changed"}]))
+    elif tamper in ("copy_symlink", "digest_symlink"):
+        target = copy if tamper == "copy_symlink" else digest
+        saved = tmp_path / "saved"
+        target.rename(saved)
+        target.symlink_to(saved)
+    elif tamper == "digest_missing":
+        digest.unlink()
+    else:
+        copy.unlink()
+    assert _helper_call(module, "stub_script_verify", root) == 2
+
+
+def test_stub_script_verify_without_a_script_passes_and_prints_nothing(tmp_path, monkeypatch, capsys):
+    module, root = _stub_kit(tmp_path, monkeypatch)
+    assert _helper_call(module, "stub_script_verify", root) == 0
+    assert capsys.readouterr().out == ""
+
+
+def _kit_step(start: str, end: str, body: list[str]) -> subprocess.CompletedProcess:
+    """One extracted step of up, with the kit's real refuse/incomplete/fail; nothing starts."""
+    script = KIT.read_text()
+    reporters = "\n".join(line for line in script.splitlines()
+                          if line.startswith(("refuse() {", "fail() {", "incomplete() {")))
+    first = script.index(start)
+    step = script[first:script.index(end, first)]
+    program = "\n".join([reporters, *body[:-1], "step() {", step, body[-1], "}", "step", "echo continued"])
+    return subprocess.run(["bash", "-c", program], capture_output=True, text=True, timeout=10,
+                          env={"PATH": "/usr/bin:/bin"})
+
+
+@pytest.mark.parametrize("helper, code, prefix", [(0, 0, None), (1, 1, "incomplete:"), (2, 2, "refused:"),
+                                                  (7, 1, "failed:")])
+def test_stub_script_up_copy_step_keeps_the_helper_outcome(helper, code, prefix):
+    result = _kit_step("  if [[ -n \"$STUB_SCRIPT\" ]]; then  # #912: the stub serves only this private",
+                       "\n  fi\n", [f"kitpy() {{ echo 'helper: details' >&2; return {helper}; }}",
+                                    "ROOT=/nonexistent/kit STUB_SCRIPT=/nonexistent/script.json", "  fi"])
+    assert result.returncode == code, result.stderr
+    if prefix is None:
+        assert result.stdout.strip() == "continued"
+    else:
+        assert "continued" not in result.stdout and f"isolated-runtime-kit: {prefix}" in result.stderr
+
+
+@pytest.mark.parametrize("with_copy", [True, False])
+def test_stub_script_spawn_passes_the_copy_only_when_it_exists(tmp_path, with_copy):
+    root = tmp_path / "kit"
+    (root / "state").mkdir(parents=True)
+    if with_copy:
+        (root / "state" / "stub-script.json").write_text("[]")
+    result = _kit_step("  local stub_args=()", "\n", [f"ROOT={root}",
+                       '  printf "<%s>" "${stub_args[@]}"; echo'])
+    expected = f"<--script><{root}/state/stub-script.json>" if with_copy else "<>"
+    assert result.returncode == 0 and result.stdout.splitlines()[0] == expected, result.stderr
+
+
+def test_stub_script_kit_up_refuses_a_malformed_script_before_creating_anything(tmp_path):
+    source = _stub_source(tmp_path, "nan")
+    result = _kit("up", "--root", str(tmp_path / "kit"), "--provider", "claude-code", "--cli", str(FAKE_CLI),
+                  "--stub-script", str(source))
+    assert result.returncode == 2 and "refused: the stub script was not accepted" in result.stderr
+    assert "non-finite" in result.stderr  # the stub's own validator decided
+    assert not (tmp_path / "kit").exists()
+
+
+def test_stub_script_kit_status_refuses_the_option(tmp_path):
+    root = tmp_path / "kit"
+    root.mkdir()
+    result = _kit("status", "--root", str(root), "--stub-script", str(_stub_source(tmp_path, "valid")))
+    assert result.returncode == 2 and "only for up" in result.stderr
+    assert list(root.iterdir()) == []
+
+
+# Mutation controls for A1b: each mutated copy of the kit must make a named test fail.
+_KIT_STUB_CONTROLS = {
+    "no_regular_file_check": ("        if not stat.S_ISREG(os.fstat(fd).st_mode):\n",
+                              "        if False:\n"),
+    "no_status_digest_check": ("    if hashlib.sha256(data).hexdigest() != recorded:\n", "    if False:\n"),
+    "spawn_ignores_the_copy": ('stub_args=(--script "$ROOT/state/stub-script.json")', "stub_args=()"),
+    "no_source_validation": ("def _validate_stub_script(data):\n", "def _validate_stub_script(data):\n    return\n"),
+    "no_cleanup_identity_check": ("(now.st_dev, now.st_ino) != (created.st_dev, created.st_ino)", "False"),
+}
+
+
+@pytest.mark.parametrize("control", sorted(_KIT_STUB_CONTROLS))
+def test_stub_script_kit_controls_are_caught(tmp_path, monkeypatch, capsys, control):
+    import hashlib
+    real = KIT
+    before = hashlib.sha256(real.read_bytes()).hexdigest()
+    old, new = _KIT_STUB_CONTROLS[control]
+    _opencode_control(tmp_path, monkeypatch, old, new)
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises((AssertionError, OSError)):
+        if control == "no_regular_file_check":
+            test_stub_script_source_is_refused_without_blocking(work, monkeypatch, "directory")
+        elif control == "no_status_digest_check":
+            test_stub_script_verify_refuses_an_unproved_copy(work, monkeypatch, "changed_copy")
+        elif control == "spawn_ignores_the_copy":
+            monkeypatch.setitem(globals(), "KIT", Path(os.environ["RUNTIME_KIT_SCRIPT_UNDER_TEST"]))
+            test_stub_script_spawn_passes_the_copy_only_when_it_exists(work, True)
+        elif control == "no_source_validation":
+            test_stub_script_source_is_refused_without_blocking(work, monkeypatch, "nan")
+        else:
+            test_stub_script_failed_write_keeps_a_replaced_or_uncertain_file(work, monkeypatch, capsys,
+                                                                              "replaced_file")
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == before  # only the mutated copy changed

@@ -704,6 +704,140 @@ def opencode_final(root, stub_url, captured):
     if not ok or json.dumps(summary, sort_keys=True) + "\n" != earlier:
         die(2, "refused: the OpenCode config changed during capture")
 
+# --- Scripted stub (#912) ----------------------------------------------------------------
+# up copies a stub script into this root s state before the stub starts, so the stub serves
+# exactly the bytes that were validated; status proves the copy against its recorded digest.
+STUB_SCRIPT_MAX = 64 << 10
+_write = os.write
+
+def _read_bounded(path, what):
+    # No link is followed and nothing blocks: a FIFO, device or directory is refused by fstat
+    # before any read, and at most one byte past the limit is read.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        die(2, "refused: the " + what + " cannot be opened: " + (exc.strerror or "error"))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            die(2, "refused: the " + what + " is not a regular file")
+        chunks, size = [], 0
+        while size <= STUB_SCRIPT_MAX:
+            chunk = os.read(fd, STUB_SCRIPT_MAX + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > STUB_SCRIPT_MAX:
+        die(2, "refused: the " + what + " is larger than 64 KiB")
+    return data
+
+def _validate_stub_script(data):
+    # The stub s own validator decides, on exactly these bytes (held in memory, never re-read).
+    import importlib.util
+    path = os.path.join(os.environ.get("RUNTIME_KIT_REPO_ROOT", ""), "scripts", "runtime-kit", "stub_provider.py")
+    spec = importlib.util.spec_from_file_location("kit_stub_provider", path)
+    if spec is None or spec.loader is None or not os.path.isfile(path):
+        die(1, "failed: the stub provider cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    fd = os.memfd_create("stub-script")
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        try:
+            module.load_script("/proc/self/fd/%d" % fd)
+        except module.ScriptError as exc:
+            die(2, "refused: the stub script was not accepted: " + str(exc))
+    finally:
+        os.close(fd)
+
+def _stub_files(root):
+    state = os.path.join(os.path.realpath(root), "state")
+    try:
+        info = os.lstat(state)
+    except OSError:
+        die(2, "refused: the stub script needs this kit s state directory")
+    if not stat.S_ISDIR(info.st_mode):
+        die(2, "refused: the stub script needs a plain state directory, not a link")
+    return os.path.join(state, "stub-script.json"), os.path.join(state, "stub-script.sha256")
+
+def _remove_own(path, created):
+    # Remove a file of this run only while it is still the file this run created.
+    try:
+        now = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat.S_ISREG(now.st_mode) or (now.st_dev, now.st_ino) != (created.st_dev, created.st_ino):
+        return False
+    try:
+        os.unlink(path)
+        return True
+    except OSError:
+        return False
+
+def _write_new(path, data):
+    # A new private file holding data; on a failed write it is removed while still this
+    # run s own, or raises _Kept naming it.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    created = os.fstat(fd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[_write(fd, view):]
+    except BaseException as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if not _remove_own(path, created):
+            raise _Kept(path) from exc
+        raise
+    os.close(fd)
+    return created
+
+def stub_script_check_source(source):
+    _validate_stub_script(_read_bounded(source, "stub script"))
+
+def stub_script(root, source):
+    copy, digest = _stub_files(root)
+    data = _read_bounded(source, "stub script")
+    _validate_stub_script(data)
+    if os.path.lexists(copy) or os.path.lexists(digest):
+        die(2, "refused: this root already holds a stub script copy")
+    sha = hashlib.sha256(data).hexdigest()
+    try:
+        created = _write_new(copy, data)
+        try:
+            _write_new(digest, (sha + "\n").encode())
+        except BaseException:
+            if not _remove_own(copy, created):
+                raise _Kept(copy)
+            raise
+    except _Kept as exc:
+        die(1, "incomplete: the stub script copy failed and " + exc.path + " was kept")
+    except OSError as exc:
+        die(2, "refused: the stub script copy could not be written (" + (exc.strerror or "error") + "); nothing was kept")
+    print(sha)
+
+def stub_script_verify(root):
+    copy, digest = _stub_files(root)
+    present = [os.path.lexists(copy), os.path.lexists(digest)]
+    if not any(present):
+        return
+    if not all(present):
+        die(2, "refused: the stub script copy or its digest is missing")
+    data = _read_bounded(copy, "stub script copy")
+    recorded = _read_bounded(digest, "stub script digest").decode(errors="replace").strip()
+    if hashlib.sha256(data).hexdigest() != recorded:
+        die(2, "refused: the stub script copy does not match its recorded digest")
+    print(recorded)
+
 def main():
     command, root, *rest = sys.argv[1:]
     if command == "instance":
@@ -741,6 +875,12 @@ def main():
         kit_provider(root)
     elif command == "opencode-final":
         opencode_final(root, rest[0], rest[1])
+    elif command == "stub-script-check-source":
+        stub_script_check_source(root)
+    elif command == "stub-script":
+        stub_script(root, rest[0])
+    elif command == "stub-script-verify":
+        stub_script_verify(root)
     else:
         die(2, "unknown helper command")
 
@@ -841,13 +981,14 @@ if [[ "$COMMAND" == _kitpy ]]; then  # the helper, for the kit's own tests
   exit $?
 fi
 
-ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT"
+ROOT_ARG="" PROVIDER="" CLI="" KEEP=0 EXEC_TIMEOUT="$EXEC_DEFAULT" STUB_SCRIPT=""
 KIT_STUB_PORT=18781 KIT_STUB_URL="http://127.0.0.1:18781"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root) ROOT_ARG="$2"; shift 2 ;;
     --provider) PROVIDER="$2"; shift 2 ;;
     --cli) CLI="$2"; shift 2 ;;
+    --stub-script) STUB_SCRIPT="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     --timeout) EXEC_TIMEOUT="$2"; shift 2 ;;
     --) shift; break ;;
@@ -855,6 +996,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ -z "$STUB_SCRIPT" || "$COMMAND" == up || "$COMMAND" == _up ]] || refuse "--stub-script is only for up"
 [[ -n "$ROOT_ARG" ]] || refuse "--root is required"
 mkdir -p "$(dirname "$ROOT_ARG")"
 ROOT="$(cd "$(dirname "$ROOT_ARG")" && pwd)/$(basename "$ROOT_ARG")"
@@ -896,6 +1038,9 @@ up() {
   local binary
   binary="$(provider_binary "$PROVIDER")" || refuse "unknown provider '$PROVIDER'"
   [[ -n "$CLI" && -x "$CLI" ]] || refuse "--cli must be an executable"
+  if [[ -n "$STUB_SCRIPT" ]]; then  # #912: checked before the root, its marker or its state exist
+    kitpy stub-script-check-source "$STUB_SCRIPT" || refuse "the stub script was not accepted; nothing was created"
+  fi
   if [[ -e "$ROOT" && -n "$(ls -A "$ROOT")" && ! -f "$ROOT/$MARKER" ]]; then
     refuse "$ROOT is not empty and has no $MARKER file"
   fi
@@ -930,6 +1075,16 @@ up() {
   local ready="$ROOT/state/run-$instance"
   mkdir -p "$ready"
   trap up_cleanup_on_failure EXIT
+  if [[ -n "$STUB_SCRIPT" ]]; then  # #912: the stub serves only this private, validated copy
+    local copied=0
+    kitpy stub-script "$ROOT" "$STUB_SCRIPT" >/dev/null || copied=$?
+    case "$copied" in
+      0) ;;
+      1) incomplete "the stub script copy did not finish cleanly (see above); the root is kept" ;;
+      2) refuse "the stub script copy was not accepted" ;;
+      *) fail "the stub script helper failed (exit $copied)" ;;
+    esac
+  fi
 
   # Binaries: the CLI under test under its provider name; every other harness name
   # resolves to a fake, so no host CLI can start; gh is disabled; tmux is pinned.
@@ -1003,13 +1158,14 @@ up() {
   in_ns "$ROOT/bin/tmux" kill-session -t '=kit-probe'
 
   # --- Stub model provider -------------------------------------------------------------
+  local stub_args=(); if [[ -f "$ROOT/state/stub-script.json" && ! -L "$ROOT/state/stub-script.json" ]]; then stub_args=(--script "$ROOT/state/stub-script.json"); fi
   if [[ "${RUNTIME_KIT_TEST_FAULT:-}" == stub_ignores_term ]]; then  # a recorded child that ignores TERM
     spawn stub "$ROOT/logs/stub.log" python3 -c \
       "import runpy, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name=chr(95) * 2 + chr(109) + chr(97) + chr(105) + chr(110) + chr(95) * 2)" \
-      "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+      "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl" "${stub_args[@]}"
   else
     spawn stub "$ROOT/logs/stub.log" \
-      python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl"
+      python3 "$REPO_ROOT/scripts/runtime-kit/stub_provider.py" --port "$stub_port" --log "$ROOT/run/stub-requests.jsonl" "${stub_args[@]}"
   fi
   local stub_ready=$((SECONDS + STUB_DEADLINE))
   until in_ns python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$stub_port/health', timeout=1)" 2>/dev/null; do
@@ -1177,12 +1333,14 @@ lines = open(os.path.join(root, "run/ns.txt")).read().split()
 launch = json.load(open(os.path.join(root, "state/launch.json")))
 procs = json.load(open(os.path.join(root, "state/processes.json")))
 log = os.path.join(root, "run/stub-requests.jsonl")
+digest = os.path.join(root, "state/stub-script.sha256")
 pane_pid, _, pane_command = pane.partition(" ")
 print(json.dumps({
     "root": root, "net_namespace": lines[0], "links": lines[1:], "uid": os.getuid(), "gid": os.getgid(),
     "preset_id": launch["preset_id"], "slot_id": launch["slot_id"],
     "pane_pid": int(pane_pid) if pane_pid else None, "pane_command": pane_command,
     "registration": json.loads(reg), "stub_requests": sum(1 for _ in open(log)) if os.path.exists(log) else 0,
+    "stub_script_sha256": open(digest).read().strip() if os.path.isfile(digest) and not os.path.islink(digest) else None,
     "pids": {name: entry["pid"] for name, entry in procs.items() if name != "launcher"},
 }))
 PY
@@ -1206,6 +1364,7 @@ status() {
   registration_row >/dev/null || incomplete "no registered session with a pane binding"
   # The provider that decides the OpenCode proof is bound to the launch and the registration.
   kitpy kit-provider "$ROOT" >/dev/null || refuse "the kit provider cannot be proved; nothing was written"
+  kitpy stub-script-verify "$ROOT" >/dev/null || refuse "the stub script copy cannot be proved; nothing was written"
 
   # Build the whole attempt, summary included, beside the published evidence; publish it
   # only when everything succeeded, by atomically swapping the evidence link.
@@ -1233,8 +1392,13 @@ capture_evidence() { # dir: every evidence file and the summary; fails without p
   in_ns sh -c 'printf "{\"net\": \"%s\", \"user\": \"%s\"}\n" "$(readlink /proc/self/ns/net)" "$(readlink /proc/self/ns/user)"' \
     | python3 -I -c 'import json,sys,os; d=json.load(sys.stdin); d["host_net"]=os.readlink("/proc/self/ns/net"); d["host_user"]=os.readlink("/proc/self/ns/user"); print(json.dumps(d))' >"$ev/namespaces.json" || return 1
   in_ns ip -o link | awk -F': ' '{print $2}' >"$ev/links.txt" || return 1
-  local opencode=() provider
+  local opencode=() provider stub_files=() stub_sha
   provider="$(kitpy kit-provider "$ROOT")" || return 1
+  stub_sha="$(kitpy stub-script-verify "$ROOT")" || return 1  # #912: the copy the stub serves
+  if [[ -n "$stub_sha" ]]; then
+    printf '%s\n' "$stub_sha" >"$ev/stub-script.sha256" || return 1
+    stub_files=(stub-script.sha256)
+  fi
   if [[ "$provider" == opencode-cli ]]; then  # #912: still the proved stub-only config
     kitpy opencode-check "$ROOT" "$KIT_STUB_URL" >"$ev/opencode-config.json" || return 1
     opencode=(opencode-config.json)
@@ -1272,11 +1436,12 @@ PY
   done
   # The provider and the config are proved again: a change during capture publishes nothing.
   [[ "$(kitpy kit-provider "$ROOT")" == "$provider" ]] || return 1
+  [[ "$(kitpy stub-script-verify "$ROOT")" == "$stub_sha" ]] || return 1
   if ((${#opencode[@]})); then
     kitpy opencode-final "$ROOT" "$KIT_STUB_URL" "$ev/opencode-config.json" || return 1
   fi
   (cd "$ev" && sha256sum namespaces.json links.txt processes.txt pane.json registration.json \
-    environment-names.json stub-requests.jsonl summary.json "${opencode[@]}" >MANIFEST.sha256) || return 1
+    environment-names.json stub-requests.jsonl summary.json "${opencode[@]}" "${stub_files[@]}" >MANIFEST.sha256) || return 1
 }
 
 # --- exec --------------------------------------------------------------------------------
@@ -1362,11 +1527,13 @@ deadline_for() {
     down) echo "$DOWN_DEADLINE" ;;
   esac
 }
+STUB_ARGS=()
+[[ -z "$STUB_SCRIPT" ]] || STUB_ARGS=(--stub-script "$STUB_SCRIPT")
 case "$COMMAND" in
   up | status | down)
     set +e
     timeout -k 5 "$(deadline_for "$COMMAND")" "$SELF" "_$COMMAND" --root "$ROOT" --provider "$PROVIDER" --cli "$CLI" \
-      $( ((KEEP)) && echo --keep )
+      "${STUB_ARGS[@]}" $( ((KEEP)) && echo --keep )
     status=$?
     if [[ $status -eq 124 || $status -eq 137 ]]; then
       echo "isolated-runtime-kit: failed: deadline: $COMMAND did not finish in $(deadline_for "$COMMAND") s" >&2
