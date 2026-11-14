@@ -1435,8 +1435,12 @@ PY
     kitpy verify "$ROOT" "$name" >/dev/null 2>&1 || return 1
   done
   # The provider and the config are proved again: a change during capture publishes nothing.
-  [[ "$(kitpy kit-provider "$ROOT")" == "$provider" ]] || return 1
-  [[ "$(kitpy stub-script-verify "$ROOT")" == "$stub_sha" ]] || return 1
+  # Each verifier is a checked assignment, so a refusal is never compared as empty output.
+  local final_provider final_sha
+  final_provider="$(kitpy kit-provider "$ROOT")" || return 1
+  [[ "$final_provider" == "$provider" ]] || return 1
+  final_sha="$(kitpy stub-script-verify "$ROOT")" || return 1
+  [[ "$final_sha" == "$stub_sha" ]] || return 1
   if ((${#opencode[@]})); then
     kitpy opencode-final "$ROOT" "$KIT_STUB_URL" "$ev/opencode-config.json" || return 1
   fi

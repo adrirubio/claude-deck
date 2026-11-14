@@ -2021,3 +2021,119 @@ def test_stub_script_kit_controls_are_caught(tmp_path, monkeypatch, capsys, cont
             test_stub_script_failed_write_keeps_a_replaced_or_uncertain_file(work, monkeypatch, capsys,
                                                                               "replaced_file")
     assert hashlib.sha256(real.read_bytes()).hexdigest() == before  # only the mutated copy changed
+
+
+# V1 review 5901413154: the final digest check of capture must keep the verifier's status.
+# The kit's own capture_evidence and status publish block run verbatim against a temporary
+# root, with the real kit helper (stub-script-verify, publish, discard) and only the runtime
+# boundaries mocked; nothing starts and no namespace is entered.
+def _capture_harness(root: Path, case: str) -> subprocess.CompletedProcess:
+    script = KIT.read_text()
+    reporters = "\n".join(line for line in script.splitlines()
+                          if line.startswith(("refuse() {", "fail() {", "incomplete() {", "note() {")))
+    kitpy_source = script[script.index("KITPY='\n"):script.index("\n'\nkitpy()") + 2]
+    capture = script[script.index("capture_evidence() {"):script.index("\n}\n", script.index("capture_evidence() {")) + 3]
+    block_start = script.index("  local id att\n")
+    block = script[block_start:script.index("\n}\n", block_start)]
+    transition = {
+        "absent_to_invalid": 'printf "[]" >"$ROOT/state/stub-script.json"',  # a copy without its digest
+        "valid_to_tampered": 'printf "[{\\"text\\": \\"changed\\"}]" >"$ROOT/state/stub-script.json"',
+    }.get(case, ":")
+    program = "\n".join([
+        "set -euo pipefail",
+        reporters,
+        kitpy_source,
+        f'real_kitpy() {{ RUNTIME_KIT_REPO_ROOT="{REPO}" python3 -I -c "$KITPY" "$@"; }}',
+        'kitpy() { case "$1" in kit-provider) echo claude-code ;; verify|opencode-check|opencode-final) ;;'
+        ' *) real_kitpy "$@" ;; esac; }',
+        "in_ns() { echo '{\"net\": \"n\", \"user\": \"u\"}'; }",
+        "registration_row() { echo '{}'; }",
+        f"summary() {{ echo '{{}}'; {transition}; }}",
+        f'ROOT="{root}" KIT_STUB_URL=http://127.0.0.1:18781',
+        capture,
+        "status_publish() {", block, "}",
+        "status_publish",
+    ])
+    return subprocess.run(["bash", "-c", program], capture_output=True, text=True, timeout=30,
+                          env={"PATH": "/usr/bin:/bin"})
+
+
+def _capture_root(tmp_path, monkeypatch, case):
+    root = tmp_path / "kit"
+    (root / "state").mkdir(parents=True)
+    (root / "state" / "processes.json").write_text("{}")
+    previous = root / "evidence.d" / ("0" * 16)
+    previous.mkdir(parents=True)
+    (previous / "MANIFEST.sha256").write_text("previous evidence\n")
+    (root / "evidence").symlink_to("evidence.d/" + "0" * 16)
+    if case in ("valid", "valid_to_tampered"):
+        monkeypatch.setenv("RUNTIME_KIT_REPO_ROOT", str(REPO))
+        assert _helper_call(_helper_module(), "stub_script", root, _stub_source(tmp_path, "valid")) == 0
+    return root
+
+
+@pytest.mark.parametrize("case", ["absent_to_invalid", "valid_to_tampered"])
+def test_stub_script_change_during_capture_publishes_nothing(tmp_path, monkeypatch, case):
+    root = _capture_root(tmp_path, monkeypatch, case)
+    result = _capture_harness(root, case)
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert "the published evidence is unchanged" in result.stderr
+    assert os.readlink(root / "evidence") == "evidence.d/" + "0" * 16
+    assert (root / "evidence" / "MANIFEST.sha256").read_text() == "previous evidence\n"
+    assert sorted(p.name for p in (root / "evidence.d").iterdir()) == ["0" * 16]  # the new attempt is removed
+
+
+@pytest.mark.parametrize("case", ["absent", "valid"])
+def test_stub_script_capture_publishes_truthful_evidence(tmp_path, monkeypatch, case):
+    root = _capture_root(tmp_path, monkeypatch, case)
+    result = _capture_harness(root, case)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    published = root / "evidence"
+    assert os.readlink(published) != "evidence.d/" + "0" * 16
+    manifest = (published / "MANIFEST.sha256").read_text()
+    if case == "absent":
+        assert not (published / "stub-script.sha256").exists() and "stub-script.sha256" not in manifest
+    else:
+        recorded = (root / "state" / "stub-script.sha256").read_text()
+        assert (published / "stub-script.sha256").read_text() == recorded
+        assert "stub-script.sha256" in manifest
+
+
+def _final_check_step() -> subprocess.CompletedProcess:
+    """The final checks of capture alone, with a verifier that refuses and prints nothing."""
+    script = KIT.read_text()
+    start = script.index("  # The provider and the config are proved again")
+    lines = script[start:script.index("  if ((${#opencode[@]})); then", start)]
+    program = "\n".join([
+        'kitpy() { if [[ "$1" == kit-provider ]]; then echo claude-code; else return 2; fi; }',
+        "step() {", "  local provider=claude-code stub_sha=''", lines, "  echo manifest-ran", "}",
+        "step && echo step-ok || echo step-failed",
+    ])
+    return subprocess.run(["bash", "-c", program], capture_output=True, text=True, timeout=10,
+                          env={"PATH": "/usr/bin:/bin", "ROOT": "/nonexistent/kit"})
+
+
+def test_stub_script_final_check_keeps_the_verifier_status():
+    # A refusing verifier must stop capture before its manifest, even when no script was in
+    # use (an empty expected digest).
+    result = _final_check_step()
+    assert result.stdout.split() == ["step-failed"], result.stdout
+
+
+def test_stub_script_capture_status_control_is_caught(tmp_path, monkeypatch):
+    # In-memory control: restoring the comparison that discards the verifier status is caught.
+    import hashlib
+    real = KIT
+    before = hashlib.sha256(real.read_bytes()).hexdigest()
+    _opencode_control(tmp_path, monkeypatch,
+                      '  final_sha="$(kitpy stub-script-verify "$ROOT")" || return 1\n'
+                      '  [[ "$final_sha" == "$stub_sha" ]] || return 1\n',
+                      '  [[ "$(kitpy stub-script-verify "$ROOT")" == "$stub_sha" ]] || return 1\n')
+    monkeypatch.setitem(globals(), "KIT", Path(os.environ["RUNTIME_KIT_SCRIPT_UNDER_TEST"]))
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises(AssertionError):
+        test_stub_script_change_during_capture_publishes_nothing(work, monkeypatch, "absent_to_invalid")
+    with pytest.raises(AssertionError):
+        test_stub_script_final_check_keeps_the_verifier_status()
+    assert hashlib.sha256(real.read_bytes()).hexdigest() == before
