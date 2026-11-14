@@ -14,9 +14,18 @@ import shlex
 from sqlalchemy import select
 
 from app.models.database import AgentTeamSlot, GithubWorkspace, TeamGithubScope
-from app.services.github_workspace_service import github_workspace_service
+from app.services.github_workspace_service import RESERVATION_MARKER, github_workspace_service
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+_WORKSPACE_MESSAGES = {
+    "path_missing": "The registered checkout does not exist, so it is not usable capacity.",
+    "path_is_symlink": "The registered path is a symbolic link, so it is not usable capacity.",
+    "git_owner_differs": "git refused the checkout: the owner differs, so it is not usable capacity.",
+    "not_a_git_checkout": "The registered path is not a git checkout, so it is not usable capacity.",
+    "not_a_worktree_root": "The registered path is not the root of a linked worktree, so it is not usable capacity.",
+    "different_repository": "The registered checkout belongs to a different repository than the scope.",
+}
 
 _MESSAGES = {
     "path_missing": "The slot's repository path does not exist.",
@@ -110,14 +119,35 @@ async def build_readiness(db, scope: TeamGithubScope, runner=None) -> dict:
         .where(AgentTeamSlot.preset_id == scope.preset_id, AgentTeamSlot.enabled.is_(True))
         .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
     )).scalars().all()
-    dispatchable = sum(1 for r in rows if r.kind == "worktree" and r.dispatchable and r.enabled)
+    scope_repo = scope.repo_path if scope.repo_path and os.path.isdir(scope.repo_path) else None
+    scope_common = await github_workspace_service.scope_common_dir(scope_repo, runner) if scope_repo else None
+    entries, dispatchable = [], 0
+    for r in rows:
+        status, code, message = "not_dispatchable", None, None
+        if r.provision_error == RESERVATION_MARKER and not r.enabled:
+            status, message = "provisioning", "Being provisioned by a worker; not usable yet."
+        elif r.kind == "worktree" and r.dispatchable and r.enabled:
+            if scope_common is None:
+                status, code, message = "unavailable", "scope_identity_unavailable", "The scope checkout's identity could not be read."
+            else:
+                state = await github_workspace_service.workspace_state(r.path, scope_common, runner)
+                if state == "ok":
+                    status = "ok"
+                    dispatchable += 1
+                else:
+                    status, code, message = "unavailable", state, _WORKSPACE_MESSAGES.get(state, state)
+        entries.append({"path": r.path, "kind": r.kind, "lease_state": _lease_state(r),
+                        "dispatchable": r.dispatchable, "enabled": r.enabled,
+                        "status": status, "code": code, "message": message})
 
     slot_results, controller, native, unsafe = [], [], [], []
     seen_controller, seen_native = set(), set()
 
     def add(paths: list, seen: set, path: str, label: str) -> None:
-        if _CONTROL.search(path):
-            unsafe.append({"display_name": label, "reason": "The path contains control characters and is not listed."})
+        # A quoted '*' is still a wildcard to git (a trailing "/*" trusts everything below it),
+        # so such a path is reported, never emitted. Only absolute paths are exact entries.
+        if _CONTROL.search(path) or "*" in path or not os.path.isabs(path):
+            unsafe.append({"display_name": label, "reason": "The path is not an exact absolute path (control characters, '*' or relative) and is not listed."})
         elif path and path not in seen:
             seen.add(path)
             paths.append(_entry(path))
@@ -129,7 +159,7 @@ async def build_readiness(db, scope: TeamGithubScope, runner=None) -> dict:
         slot_results.append(check)
         add(controller, seen_controller, slot.repo_path, slot.display_name)
     for row in rows:
-        if row.kind == "worktree" and row.enabled:
+        if row.kind == "worktree" and row.enabled and row.provision_error != RESERVATION_MARKER:
             add(native, seen_native, row.path, "dispatch workspace")
     return {
         "scope_id": scope.id,
@@ -137,11 +167,7 @@ async def build_readiness(db, scope: TeamGithubScope, runner=None) -> dict:
         "target": scope.max_concurrent_dispatched,
         "dispatchable_workspaces": dispatchable,
         "shortfall": max(0, scope.max_concurrent_dispatched - dispatchable),
-        "workspaces": [
-            {"path": r.path, "kind": r.kind, "lease_state": _lease_state(r),
-             "dispatchable": r.dispatchable, "enabled": r.enabled}
-            for r in rows
-        ],
+        "workspaces": entries,
         "slots": slot_results,
         "safe_directory": {"controller": controller, "native": native},
         "unsafe_paths": unsafe,

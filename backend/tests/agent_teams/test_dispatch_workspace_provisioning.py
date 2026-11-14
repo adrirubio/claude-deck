@@ -9,6 +9,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select, update
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -25,6 +26,7 @@ from app.models.database import (
 from app.services import github_workspace_readiness as readiness
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_workspace_service import GithubWorkspaceService, github_workspace_service
+from app.models.schemas import TeamGithubScopeUpdate
 from app.utils.repo_utils import derive_repo_identity
 from tests.agent_teams.test_github_dispatch_service import _team
 
@@ -187,24 +189,6 @@ async def test_a_registered_path_whose_directory_is_gone_is_not_recreated(db, re
 
 
 @pytest.mark.asyncio
-async def test_a_path_registered_by_someone_else_first_is_skipped_not_failed(db, repo):
-    _, scope = await _scope(db, repo, concurrency=1)
-    real = GithubWorkspaceService()._run_git
-    taken = str(repo.parent / "dispatch-1")
-    raced = []
-
-    async def racing(args):
-        if "worktree" in args and taken in args and not raced:
-            raced.append(True)
-            db.add(GithubWorkspace(scope_id=scope.id, path=taken, kind="worktree", dispatchable=False, enabled=True))
-            await db.commit()
-        return await real(args)
-
-    report = await GithubWorkspaceService(runner=racing).ensure_dispatch_workspaces(db, scope)
-    assert raced and report.failures == [] and report.created == [str(repo.parent / "dispatch-2")]
-
-
-@pytest.mark.asyncio
 async def test_a_leased_workspace_counts_toward_the_target(db, repo):
     _, scope = await _scope(db, repo, concurrency=2)
     service = GithubWorkspaceService()
@@ -280,6 +264,335 @@ async def test_concurrent_requests_provision_exactly_the_target(tmp_path):
     assert sorted(p.name for p in repo.parent.iterdir() if p.name.startswith("dispatch-")) == [
         "dispatch-1", "dispatch-2", "dispatch-3"]
     await engine.dispose()
+
+
+# ---- review findings: workers, reconfiguration, races, capacity, containment ---------------------
+
+
+async def _file_db(tmp_path, name="w.db"):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / name}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.mark.asyncio
+async def test_independent_workers_do_not_exceed_the_target(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    engine, maker = await _file_db(tmp_path)
+    async with maker() as setup:
+        _, scope = await _scope(setup, repo, concurrency=1)
+        scope_id = scope.id
+    created, second_done = asyncio.Event(), asyncio.Event()
+    real = GithubWorkspaceService()._run_git
+
+    async def slow_first(args):
+        result = await real(args)
+        if "worktree" in args and "add" in args:
+            created.set()
+            await asyncio.wait_for(second_done.wait(), 10)
+        return result
+
+    async def first():
+        async with maker() as session:
+            return await GithubWorkspaceService(runner=slow_first).ensure_dispatch_workspaces(
+                session, await session.get(TeamGithubScope, scope_id))
+
+    async def second():
+        await asyncio.wait_for(created.wait(), 10)
+        try:
+            async with maker() as session:
+                return await GithubWorkspaceService().ensure_dispatch_workspaces(
+                    session, await session.get(TeamGithubScope, scope_id))
+        finally:
+            second_done.set()
+
+    first_report, second_report = await asyncio.gather(first(), second())
+    async with maker() as session:
+        rows = await _rows(session, scope_id)
+    await engine.dispose()
+    assert [r.path for r in rows] == [str(repo.parent / "dispatch-1")] and rows[0].dispatchable and rows[0].enabled
+    assert second_report.created == [] and first_report.created == [str(repo.parent / "dispatch-1")]
+    assert sorted(p.name for p in repo.parent.iterdir() if p.name.startswith("dispatch-")) == ["dispatch-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["repo_path", "base_ref"])
+async def test_a_scope_reconfigured_mid_flight_never_binds_the_old_checkout(tmp_path, monkeypatch, change):
+    from app.api.v1 import agent_teams as api
+
+    repo = _make_repo(tmp_path / "repo")
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = _make_repo(other_root / "repo")
+    engine, maker = await _file_db(tmp_path)
+    async with maker() as setup:
+        _, scope = await _scope(setup, repo, concurrency=1)
+        scope.enabled = False
+        await setup.commit()
+        scope_id = scope.id
+    created, changed = asyncio.Event(), asyncio.Event()
+    real = GithubWorkspaceService()._run_git
+
+    async def delayed(args):
+        result = await real(args)
+        if "worktree" in args and "add" in args and not created.is_set():
+            created.set()
+            await asyncio.wait_for(changed.wait(), 10)
+        return result
+
+    async def no_sync(*_a):
+        return None
+
+    monkeypatch.setattr(api, "_sync_github_jobs", no_sync)
+
+    async def provision():
+        async with maker() as session:
+            return await GithubWorkspaceService(runner=delayed).ensure_dispatch_workspaces(
+                session, await session.get(TeamGithubScope, scope_id))
+
+    async def reconfigure():
+        await asyncio.wait_for(created.wait(), 10)
+        try:
+            async with maker() as session:
+                if change == "repo_path":
+                    response = await api.update_github_scope(
+                        scope_id, TeamGithubScopeUpdate(repo_path=str(other)), _operator=None, db=session)
+                    assert response.repo_path == str(other)
+                else:
+                    await session.execute(update(TeamGithubScope).where(TeamGithubScope.id == scope_id)
+                                          .values(base_ref="refs/heads/elsewhere"))
+                    await session.commit()
+        finally:
+            changed.set()
+
+    report, _ = await asyncio.gather(provision(), reconfigure())
+    async with maker() as session:
+        rows = await _rows(session, scope_id)
+    await engine.dispose()
+    assert rows == [] and report.created == []
+    assert [f.code for f in report.failures] == ["scope_changed_during_provisioning"]
+    assert not (repo.parent / "dispatch-1").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", ["clean_worktree", "empty_directory", "symlink", "populated_directory"])
+async def test_a_path_that_appears_after_the_guard_is_never_adopted_or_written(db, repo, tmp_path, variant):
+    _, scope = await _scope(db, repo, concurrency=1)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious").write_text("data")
+    service = GithubWorkspaceService()
+
+    def appear(path):
+        if variant == "clean_worktree":
+            _git("-C", str(repo), "worktree", "add", "--detach", path, "master")
+        elif variant == "empty_directory":
+            os.mkdir(path)
+        elif variant == "symlink":
+            os.symlink(outside, path)
+        else:
+            os.mkdir(path)
+            Path(path, "theirs").write_text("keep")
+
+    victim = repo.parent / "dispatch-1"
+    first_call = {"done": False}
+    original = service._create_workspace
+
+    async def once(db_, reservation, *a, **k):
+        if not first_call["done"]:
+            first_call["done"] = True
+            appear(reservation.path)
+        return await original(db_, reservation, *a, **k)
+
+    service._create_workspace = once
+    report = await service.ensure_dispatch_workspaces(db, scope)
+    assert str(victim) not in [r.path for r in await _rows(db, scope.id)]
+    assert report.created == [str(repo.parent / "dispatch-2")] and report.failures == []
+    assert victim.exists() or victim.is_symlink()
+    if variant == "empty_directory":
+        assert victim.is_dir() and list(victim.iterdir()) == []
+    if variant == "populated_directory":
+        assert (victim / "theirs").read_text() == "keep"
+    if variant == "symlink":
+        assert victim.is_symlink() and (outside / "precious").read_text() == "data"
+        assert sorted(p.name for p in outside.iterdir()) == ["precious"]
+    if variant == "clean_worktree":
+        assert (victim / ".git").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_target_lowered_mid_flight_does_not_enable_the_excess_workspace(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    engine, maker = await _file_db(tmp_path)
+    async with maker() as setup:
+        _, scope = await _scope(setup, repo, concurrency=2)
+        scope_id = scope.id
+    created, changed = asyncio.Event(), asyncio.Event()
+    real = GithubWorkspaceService()._run_git
+
+    async def delayed(args):
+        result = await real(args)
+        if "worktree" in args and "add" in args and not created.is_set():
+            created.set()
+            await asyncio.wait_for(changed.wait(), 10)
+        return result
+
+    async def provision():
+        async with maker() as session:
+            return await GithubWorkspaceService(runner=delayed).ensure_dispatch_workspaces(
+                session, await session.get(TeamGithubScope, scope_id))
+
+    async def lower_target():
+        await asyncio.wait_for(created.wait(), 10)
+        try:
+            async with maker() as session:
+                session.add(GithubWorkspace(scope_id=scope_id, path=str(tmp_path / "manual"), kind="worktree",
+                                            dispatchable=True, enabled=True))
+                await session.execute(update(TeamGithubScope).where(TeamGithubScope.id == scope_id)
+                                      .values(max_concurrent_dispatched=1))
+                await session.commit()
+        finally:
+            changed.set()
+
+    report, _ = await asyncio.gather(provision(), lower_target())
+    async with maker() as session:
+        rows = await _rows(session, scope_id)
+    await engine.dispose()
+    assert [f.code for f in report.failures] == ["target_reduced_during_provisioning"] and report.created == []
+    assert [r.path for r in rows] == [str(tmp_path / "manual")]
+    assert not (repo.parent / "dispatch-1").exists()
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_reservation_stops_counting_and_keeps_its_row_and_files(db, repo):
+    _, scope = await _scope(db, repo, concurrency=1)
+    stale = repo.parent / "dispatch-1"
+    stale.mkdir()
+    (stale / "partial").write_text("x")
+    db.add(GithubWorkspace(scope_id=scope.id, path=str(stale), kind="worktree", dispatchable=False, enabled=False,
+                           provision_error="provisioning", created_at=datetime(2020, 1, 1)))
+    await db.commit()
+    report = await GithubWorkspaceService().ensure_dispatch_workspaces(db, scope)
+    assert report.created == [str(repo.parent / "dispatch-2")]
+    old = next(r for r in await _rows(db, scope.id) if r.path == str(stale))
+    assert old.provision_error.startswith("abandoned") and not old.enabled and (stale / "partial").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_checkout_swapped_for_a_link_after_creation_is_reported_and_left_alone(db, repo, tmp_path):
+    _, scope = await _scope(db, repo, concurrency=1)
+    real = GithubWorkspaceService()._run_git
+    victim = repo.parent / "dispatch-1"
+    moved = tmp_path / "moved-away"
+
+    async def swapping(args):
+        result = await real(args)
+        if "worktree" in args and "add" in args and not moved.exists():
+            os.rename(victim, moved)
+            os.symlink(moved, victim)
+        return result
+
+    report = await GithubWorkspaceService(runner=swapping).ensure_dispatch_workspaces(db, scope)
+    assert report.created == [] and [f.code for f in report.failures] == ["workspace_path_changed"]
+    assert moved.is_dir() and (moved / ".git").exists() and victim.is_symlink()
+    rows = await _rows(db, scope.id)
+    assert len(rows) == 1 and not rows[0].enabled and not rows[0].dispatchable and "changed" in rows[0].provision_error
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_only_a_checkout_this_call_created_and_can_still_identify(repo, tmp_path):
+    from app.services.github_workspace_service import _Reservation
+
+    service = GithubWorkspaceService()
+    ours = repo.parent / "dispatch-1"
+    claim = service._claim_directory(str(ours))
+    _git("-C", str(repo), "worktree", "add", "--detach", "--force", str(ours), "master")
+    res = _Reservation(1, 1, str(ours), str(repo), (str(repo), "master", "o", "repo"))
+    assert await service._discard_created(res, claim) is True and not ours.exists()
+    # The same path swapped for a link to somebody else's checkout is left alone.
+    theirs = _make_repo(tmp_path / "theirs")
+    claim = service._claim_directory(str(ours))
+    os.rmdir(ours)
+    os.symlink(theirs, ours)
+    assert await service._discard_created(res, claim) is False
+    assert ours.is_symlink() and (theirs / ".git").exists()
+    # The same path re-created as someone else's real worktree of the same repository is left alone too.
+    ours.unlink()
+    _git("-C", str(repo), "worktree", "prune")
+    claim = service._claim_directory(str(ours))
+    os.rmdir(ours)
+    _git("-C", str(repo), "worktree", "add", "--detach", str(ours), "master")
+    assert await service._discard_created(res, claim) is False
+    assert (ours / ".git").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_scope_checkout_outside_the_home_directory_is_refused_before_any_filesystem_or_git_call(db, repo):
+    _, scope = await _scope(db, repo, concurrency=1)
+    scope.repo_path = "/usr"
+    await db.commit()
+    runner = RecordingRunner()
+    report = await GithubWorkspaceService(runner=runner).ensure_dispatch_workspaces(db, scope)
+    assert [f.code for f in report.failures] == ["scope_checkout_outside_home"]
+    assert runner.calls == [] and await _rows(db, scope.id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_missing_enabled_workspace_is_unavailable_capacity_not_ready(db, repo):
+    _, scope = await _scope(db, repo, concurrency=1)
+    gone = repo.parent / "dispatch-1"
+    db.add(GithubWorkspace(scope_id=scope.id, path=str(gone), kind="worktree", dispatchable=True, enabled=True))
+    await db.commit()
+    before = [(r.id, r.path, r.enabled, r.dispatchable, r.leased_item_id) for r in await _rows(db, scope.id)]
+    report = await GithubWorkspaceService().ensure_dispatch_workspaces(db, scope)
+    assert report.created == [] and [f.code for f in report.failures] == ["workspace_unavailable"]
+    assert report.failures[0].path == str(gone) and not gone.exists()
+    assert [(r.id, r.path, r.enabled, r.dispatchable, r.leased_item_id) for r in await _rows(db, scope.id)] == before
+    result = await readiness.build_readiness(db, scope)
+    assert result["shortfall"] == 1 and result["dispatchable_workspaces"] == 0
+    assert result["workspaces"][0]["status"] == "unavailable" and result["workspaces"][0]["code"] == "path_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_of_another_repository_is_unavailable_capacity(db, repo, tmp_path):
+    _, scope = await _scope(db, repo, concurrency=1)
+    stranger = _make_repo(tmp_path / "stranger")
+    _git("-C", str(stranger), "worktree", "add", "--detach", str(tmp_path / "dispatch-1"), "master")
+    db.add(GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "dispatch-1"), kind="worktree",
+                           dispatchable=True, enabled=True))
+    await db.commit()
+    result = await readiness.build_readiness(db, scope)
+    assert result["shortfall"] == 1 and result["workspaces"][0]["code"] == "different_repository"
+    report = await GithubWorkspaceService().ensure_dispatch_workspaces(db, scope)
+    assert [f.code for f in report.failures] == ["workspace_unavailable"] and report.created == []
+
+
+@pytest.mark.asyncio
+async def test_an_in_flight_reservation_is_reported_as_provisioning(db, repo):
+    _, scope = await _scope(db, repo, concurrency=1)
+    db.add(GithubWorkspace(scope_id=scope.id, path=str(repo.parent / "dispatch-1"), kind="worktree",
+                           dispatchable=False, enabled=False, provision_error="provisioning"))
+    await db.commit()
+    result = await readiness.build_readiness(db, scope)
+    assert result["workspaces"][0]["status"] == "provisioning" and result["shortfall"] == 1
+    note = await GithubWorkspaceService().no_workspace_note(db, scope)
+    assert "still being provisioned" in note
+    report = await GithubWorkspaceService().ensure_dispatch_workspaces(db, scope)
+    assert report.created == [] and report.existing == 0 and len(await _rows(db, scope.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_literal_star_directory_is_never_emitted_as_a_safe_directory_entry(db, client, repo, tmp_path):
+    preset, scope = await _scope(db, repo, concurrency=1)
+    star = _make_repo(tmp_path / "*")
+    mid = _make_repo(tmp_path / "a*b")
+    await _slot(db, preset.id, star, "ffffffffffffffff", name="Star")
+    await _slot(db, preset.id, mid, "gggggggggggggggg", name="Mid")
+    body = (await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/workspace-readiness", headers=HEADERS)).json()
+    commands = [e["command"] for e in body["safe_directory"]["controller"] + body["safe_directory"]["native"]]
+    assert all("*" not in c for c in commands)
+    assert sorted(u["display_name"] for u in body["unsafe_paths"]) == ["Mid", "Star"]
 
 
 # ---- scope create and update ----------------------------------------------------------------

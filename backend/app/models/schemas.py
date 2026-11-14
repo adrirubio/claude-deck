@@ -2752,6 +2752,9 @@ class WorkspaceReadinessWorkspace(BaseModel):
     lease_state: str
     dispatchable: bool
     enabled: bool
+    status: str = "ok"
+    code: Optional[str] = None
+    message: Optional[str] = None
 
 
 class WorkspaceReadinessSlot(BaseModel):
