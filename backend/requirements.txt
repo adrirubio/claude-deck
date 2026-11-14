@@ -156,7 +156,7 @@ uvicorn==0.48.0
     # via
     #   claude-code-registry-backend
     #   mcp
-uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
+uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn
 watchfiles==1.2.0
     # via uvicorn
