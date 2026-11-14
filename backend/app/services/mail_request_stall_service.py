@@ -20,7 +20,7 @@ import asyncio
 import inspect
 from datetime import datetime, timezone
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import aliased
 
@@ -29,7 +29,8 @@ from app.models.database import MailExternalActor, MailMessage, MailTeamMember
 from app.models.schemas import MAIL_REQUEST_KINDS, UnansweredRequestItem, UnansweredRequestView
 from app.services.factory_audit_service import sanitize_text
 
-CANDIDATE_LIMIT = 64          # one query reads 65 rows; a 65th row means "more than we evaluate"
+CANDIDATE_LIMIT = 64          # unresolved candidates evaluated; a 65th unresolved one means "more than we evaluate"
+CANDIDATE_PAGE = CANDIDATE_LIMIT + 1    # roots per keyset page; paging continues past answered roots
 ENTRY_LIMIT = 16
 REPLY_QUERY_LIMIT = 33        # per candidate; reaching it without a match is a sentinel, not "no reply"
 REPLY_ROW_BUDGET = 256        # total reply rows read in one observation
@@ -137,9 +138,14 @@ class MailRequestStallService:
             func.json_extract(MailMessage.payload, "$.approval_request_id").is_(None),
         )
 
-    async def _candidates(self, db, preset_id):
+    async def _candidates(self, db, preset_id, after=None):
+        """One keyset page of pending roots, oldest first, strictly after the cursor ``after``.
+
+        ``after`` is the (created_at, id) of the last root of the previous page. Returns the rows and
+        whether the page was full (more roots may follow).
+        """
         reply = aliased(MailMessage)
-        rows = (await db.execute(
+        query = (
             select(MailMessage.id, MailMessage.kind, MailMessage.created_at, MailMessage.recipient_member_id,
                    MailMessage.sender_member_id, MailMessage.sender_actor_id,
                    MailTeamMember.display_name.label("recipient_name"),
@@ -151,10 +157,14 @@ class MailRequestStallService:
                    ~exists().where(reply.sender_member_id == MailMessage.recipient_member_id,
                                    reply.thread_root_id == MailMessage.id, reply.id > MailMessage.id,
                                    reply.kind.in_(("message", "answer")),
-                                   func.json_extract(reply.payload, "$.resolves_request_id").is_(None)))
-            .order_by(MailMessage.created_at.asc(), MailMessage.id.asc())
-            .limit(CANDIDATE_LIMIT + 1))).all()
-        return rows[:CANDIDATE_LIMIT], len(rows) > CANDIDATE_LIMIT
+                                   func.json_extract(reply.payload, "$.resolves_request_id").is_(None))))
+        if after is not None:
+            created_at, last_id = after
+            query = query.where(or_(MailMessage.created_at > created_at,
+                                    and_(MailMessage.created_at == created_at, MailMessage.id > last_id)))
+        rows = (await db.execute(query.order_by(MailMessage.created_at.asc(), MailMessage.id.asc())
+                                 .limit(CANDIDATE_PAGE))).all()
+        return rows, len(rows) >= CANDIDATE_PAGE
 
     async def _nested_ambiguous(self, db, preset_id, now, threshold_seconds) -> bool:
         from datetime import timedelta
@@ -293,42 +303,64 @@ class MailRequestStallService:
     async def _observe(self, db, preset_id, now, native_states, native_ok,
                        native_fence=None, native_baseline=_UNSET) -> UnansweredRequestView:
         threshold = int(settings.mail_request_unanswered_seconds)
-        candidates, over_limit = await self._candidates(db, preset_id)
+        page, more = await self._candidates(db, preset_id)
         reasons: set[str] = set()
-        if over_limit:
-            reasons.add("candidate_limit")
         if await self._nested_ambiguous(db, preset_id, now, threshold):
             reasons.add("ambiguous_legacy_request")
-        before = await self._signatures(db, {row.recipient_member_id for row in candidates})
+        before = dict(await self._signatures(db, {row.recipient_member_id for row in page}))
         # None is a failed early capture: untrusted, and never replaced by a baseline taken now.
         baseline = (await self._coherent_snapshot(db, preset_id)) if native_baseline is _UNSET else native_baseline
 
-        qualified = []
-        for row in candidates:
-            if (now - row.created_at).total_seconds() < threshold:
+        # Candidates are examined oldest first, page after page. A root proven answered is dropped: it is
+        # neither evaluated nor counted. Every other examined root is unresolved, and the first
+        # CANDIDATE_LIMIT of them are evaluated; one more means more than we evaluate.
+        proven, cache, counter, rows_left, unresolved = [], {}, [0], REPLY_ROW_BUDGET, 0
+        examining = True
+        while examining and page:
+            for row in page:
+                if counter[0] + 1 > ANCESTRY_READ_BUDGET:
+                    reasons.add("candidate_limit")    # history beyond the shared budget was not examined
+                    examining = False
+                    break
+                counter[0] += 1                       # examining a candidate is one read, charged first
+                found = []                            # (reason, proven) once this candidate is unresolved
+                if (now - row.created_at).total_seconds() < threshold:
+                    found.append((None, False))
+                elif baseline is None or baseline[1].get(row.slot_id, (None,))[0] != row.recipient_member_id:
+                    # No trusted baseline, or the slot's native state describes another member.
+                    found.append(("native_unknown", False))
+                else:
+                    state = native_states.get(row.slot_id) if native_ok and row.slot_id is not None else None
+                    if state == "working":
+                        found.append((None, False))
+                    elif state != "idle":
+                        found.append(("native_unknown", False))    # stopped, unknown, missing binding, failed read
+                    else:
+                        cleared, is_proven, used = await self._legacy_reply_clears(db, row, rows_left, cache, counter)
+                        rows_left -= used
+                        if cleared:
+                            continue
+                        found.append((None if is_proven else "reply_scan_limit", is_proven))
+                if unresolved >= CANDIDATE_LIMIT:
+                    reasons.add("candidate_limit")    # the sentinel: not evaluated
+                    examining = False
+                    break
+                unresolved += 1
+                reason, is_proven = found[0]
+                if reason:
+                    reasons.add(reason)
+                if is_proven:
+                    proven.append(row)
+            else:
+                if not more:
+                    break
+                last = page[-1]
+                page, more = await self._candidates(db, preset_id, (last.created_at, last.id))
+                for member_id, signature in (await self._signatures(
+                        db, {row.recipient_member_id for row in page})).items():
+                    before.setdefault(member_id, signature)
                 continue
-            if baseline is None or baseline[1].get(row.slot_id, (None,))[0] != row.recipient_member_id:
-                # No trusted baseline, or the slot's native state describes another member.
-                reasons.add("native_unknown")
-                continue
-            state = native_states.get(row.slot_id) if native_ok and row.slot_id is not None else None
-            if state == "working":
-                continue
-            if state != "idle":
-                reasons.add("native_unknown")    # stopped, unknown, missing binding or a failed read
-                continue
-            qualified.append(row)
-
-        proven, cache, counter, rows_left = [], {}, [0], REPLY_ROW_BUDGET
-        for row in qualified:
-            cleared, is_proven, used = await self._legacy_reply_clears(db, row, rows_left, cache, counter)
-            rows_left -= used
-            if cleared:
-                continue
-            if not is_proven:
-                reasons.add("reply_scan_limit")
-                continue
-            proven.append(row)
+            break
 
         # A binding that changed during the reads is not a stable observation.
         after = await self._signatures(db, {row.recipient_member_id for row in proven})

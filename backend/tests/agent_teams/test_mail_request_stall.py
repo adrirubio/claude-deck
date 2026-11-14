@@ -1281,6 +1281,216 @@ async def test_a_keyed_answer_at_depth_never_clears(db):
     assert ids(view) == [request.id] and view.complete is True
 
 
+# --- paging past requests that are provably answered (F4, revision E) --------------------------------
+
+async def answered_roots(db, people, count, *, depth=1, first_age=THRESHOLD + 20000):
+    """``count`` old roots to people[1], each answered only through a legacy nested reply (oldest first)."""
+    roots = []
+    for index in range(count):
+        root = await add_request(db, people[0], people[1], age=first_age - index)
+        await db.flush()
+        await reply_chain(db, root, people, depth, bottom=people[1])
+        roots.append(root)
+    return roots
+
+
+def record_cost(service):
+    """Reads (examinations and probes, as the shared counter holds them) and rows spent by the proofs."""
+    spent = {"reads": 0, "rows": 0}
+    original = service._legacy_reply_clears
+
+    async def wrapped(db_, candidate, rows_left, cache, counter):
+        result = await original(db_, candidate, rows_left, cache, counter)
+        spent["reads"] = counter[0]
+        spent["rows"] += result[2]
+        return result
+
+    service._legacy_reply_clears = wrapped
+    return spent
+
+
+@pytest.mark.asyncio
+async def test_legacy_cleared_rows_still_do_not_hide_new_request(db):
+    team, people = await make_team(db)
+    await answered_roots(db, people, 64)
+    newer = await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert ids(view) == [newer.id] and view.complete is True and view.reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered", [64, 100, 127])
+async def test_the_listing_is_complete_exactly_while_the_shared_cost_fits(db, answered):
+    team, people = await make_team(db)
+    await answered_roots(db, people, answered)
+    newer = await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    service = MailRequestStallService()
+    spent = record_cost(service)
+    view = await observe(db, team, states(people), service=service)
+    assert spent == {"reads": 3 * answered + 2, "rows": 2 * answered}          # the cost model, as measured
+    assert ids(view) == [newer.id] and view.complete is True and view.reason is None
+
+
+@pytest.mark.asyncio
+async def test_history_beyond_the_row_budget_is_incomplete_and_the_newer_request_is_not_claimed(db):
+    team, people = await make_team(db)
+    await answered_roots(db, people, 128)                 # 256 rows: the whole row budget
+    await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    service = MailRequestStallService()
+    spent = record_cost(service)
+    view = await observe(db, team, states(people), service=service)
+    assert spent["rows"] == 256 and spent["reads"] == 3 * 128 + 1     # its probe is refused before any query
+    assert view.items == [] and view.complete is False and view.reason == "reply_scan_limit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answered,complete", [(12, True), (13, False)])
+async def test_deep_legacy_chains_are_paged_past_until_the_row_budget_is_spent(db, answered, complete):
+    team, people = await make_team(db)
+    await answered_roots(db, people, answered, depth=20)             # 21 probes and 21 rows per root
+    newer = await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.complete is complete
+    assert (ids(view) == [newer.id] and view.reason is None) if complete else (
+        view.items == [] and view.reason == "reply_scan_limit")
+
+
+@pytest.mark.asyncio
+async def test_candidates_that_do_not_qualify_keep_their_reasons_after_answered_ones(db):
+    team, people = await make_team(db)
+    await answered_roots(db, people, 70)
+    await add_request(db, people[0], people[2], age=THRESHOLD + 5)      # addressee stopped
+    await add_request(db, people[0], people[1], age=10)                 # too young
+    await db.commit()
+    view = await observe(db, team, states(people, p2="stopped"))
+    assert view.items == [] and view.complete is False and view.reason == "native_unknown"
+    quiet = await observe(db, team, states(people))
+    assert [quiet.complete, quiet.reason] == [True, None]               # the same view with the addressee idle
+
+
+@pytest.mark.asyncio
+async def test_every_examined_candidate_is_charged_a_read_even_when_it_does_not_qualify(db, monkeypatch):
+    from app.services import mail_request_stall_service as module
+
+    monkeypatch.setattr(module, "ANCESTRY_READ_BUDGET", 5)
+    team, people = await make_team(db)
+    for index in range(10):
+        await add_request(db, people[0], people[1], age=10 + index)     # too young: no proof, still examined
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.items == [] and view.complete is False and view.reason == "candidate_limit"
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_read_budget_with_candidates_unexamined_is_never_complete(db, monkeypatch):
+    from app.services import mail_request_stall_service as module
+
+    monkeypatch.setattr(module, "ANCESTRY_READ_BUDGET", 10)
+    team, people = await make_team(db)
+    await answered_roots(db, people, 8)
+    await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.items == [] and view.complete is False and view.reason == "candidate_limit"
+
+
+@pytest.mark.asyncio
+async def test_an_answered_candidate_is_never_the_sentinel_but_an_unanswered_one_is(db):
+    team, people = await make_team(db)
+    for index in range(64):
+        await add_request(db, people[0], people[2], age=THRESHOLD + 10000 + index)   # working: unresolved
+    await answered_roots(db, people, 1, first_age=THRESHOLD + 5)                      # the 65th: answered
+    await db.commit()
+    view = await observe(db, team, states(people, p2="working"))
+    assert [view.complete, view.reason, view.items] == [True, None, []]
+    await add_request(db, people[0], people[1], age=THRESHOLD + 1)                    # now a 66th, unanswered
+    await db.commit()
+    again = await observe(db, team, states(people, p2="working"))
+    assert again.complete is False and again.reason == "candidate_limit"
+
+
+@pytest.mark.asyncio
+async def test_exactly_the_first_sixty_four_unresolved_candidates_are_evaluated(db):
+    team, people = await make_team(db)
+    await answered_roots(db, people, 5)
+    for index in range(66):
+        await add_request(db, people[0], people[1], age=THRESHOLD + 1000 - index)
+    await db.commit()
+    view = await observe(db, team, states(people))
+    assert view.reason == "candidate_limit" and not view.complete
+    assert len(view.items) == 16 and view.omitted_count == 64 - 16        # the 65th and 66th were not evaluated
+
+
+async def candidate_pages(service):
+    pages = []
+    original = service._candidates
+
+    async def spy(db_, preset_id, *args, **kwargs):
+        rows, more = await original(db_, preset_id, *args, **kwargs)
+        pages.append([row.id for row in rows])
+        return rows, more
+
+    service._candidates = spy
+    return pages
+
+
+@pytest.mark.asyncio
+async def test_pages_follow_one_keyset_cursor_and_no_candidate_is_examined_twice(db):
+    team, people = await make_team(db)
+    roots = await answered_roots(db, people, 70)
+    newer = await add_request(db, people[0], people[1], age=THRESHOLD + 1)
+    await db.commit()
+    service = MailRequestStallService()
+    pages = await candidate_pages(service)
+    view = await observe(db, team, states(people), service=service)
+    flat = [request_id for page in pages for request_id in page]
+    assert [len(page) for page in pages] == [65, 6]
+    assert flat == [root.id for root in roots] + [newer.id]               # oldest first, each exactly once
+    assert ids(view) == [newer.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+async def test_rows_that_share_a_timestamp_across_a_page_boundary_are_neither_skipped_nor_repeated(db):
+    team, people = await make_team(db)
+    stamp = datetime.utcnow()
+    roots = []
+    for _ in range(70):
+        root = await add_request(db, people[0], people[1], age=THRESHOLD + 50, base=stamp)
+        await db.flush()
+        await reply_chain(db, root, people, 1, bottom=people[1])
+        roots.append(root)
+    newer = await add_request(db, people[0], people[1], age=THRESHOLD + 50, base=stamp)
+    await db.commit()
+    service = MailRequestStallService()
+    pages = await candidate_pages(service)
+    view = await observe(db, team, states(people), service=service)
+    assert [request_id for page in pages for request_id in page] == [root.id for root in roots] + [newer.id]
+    assert ids(view) == [newer.id] and view.complete is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", [1, 2, 3, 65])
+async def test_the_page_size_never_changes_the_view(db, monkeypatch, page):
+    from app.services import mail_request_stall_service as module
+
+    team, people = await make_team(db)
+    await answered_roots(db, people, 4)
+    first = await add_request(db, people[0], people[1], age=THRESHOLD + 90)
+    await add_request(db, people[0], people[2], age=THRESHOLD + 80)      # stopped addressee: a reason
+    await add_request(db, people[0], people[1], age=10)                  # too young
+    last = await add_request(db, people[0], people[1], age=THRESHOLD + 5)
+    await db.commit()
+    expected = await observe(db, team, states(people, p2="stopped"))
+    monkeypatch.setattr(module, "CANDIDATE_PAGE", page)
+    view = await observe(db, team, states(people, p2="stopped"))
+    assert ids(expected) == [first.id, last.id] and expected.reason == "native_unknown"
+    assert (ids(view), view.complete, view.reason) == (ids(expected), expected.complete, expected.reason)
+
+
 # --- privacy, order, repetition ---------------------------------------------------------------
 
 @pytest.mark.asyncio

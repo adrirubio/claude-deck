@@ -196,11 +196,17 @@ The names are display names only. A subject, a body or a payload is never shown.
   member, including the requester, never clears it. Approval requests have their own timeout
   flow and are not listed. A working member is active, so its requests are not listed.
 - The view says when it is **incomplete**, with a fixed reason: `candidate_limit` (more than 64
-  pending requests), `native_unknown` (a member's activity is unknown, stopped or could not be
+  unresolved requests, or older history than the budget below was not examined), `native_unknown` (a member's activity is unknown, stopped or could not be
   read in time), `ambiguous_legacy_request` (an older request nested inside a thread cannot be
   matched to a reply), `reply_scan_limit` (the reply check reached its bound) or `entry_limit`
   (more than 16 unanswered requests; the count of those not listed is shown). A truncated or
   unproven view is never shown as complete.
+- Requests are examined oldest first, page after page, and a request that is provably answered,
+  including one answered only through an older nested reply in its own thread, is skipped without
+  counting. The first 64 requests that are not provably answered are evaluated, and a 65th means
+  `candidate_limit`. All of the reading shares one budget: 256 reply rows, 512 reads (each examined
+  request is one read) and five seconds. History beyond that budget is reported as incomplete,
+  never as complete, and it is not claimed to have been examined.
 - The signal grants no authority and does not change `team_idle` or the next actor.
 
 ### Thread view limits
