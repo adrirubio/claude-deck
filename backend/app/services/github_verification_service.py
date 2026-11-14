@@ -105,6 +105,8 @@ class GithubVerificationService:
     def __init__(self) -> None:
         self._pr_ready_locks: dict[int, asyncio.Lock] = {}
         self._escalated_merge_cursors: dict[int, int] = {}
+        # Inconsistent continuation states already logged in this process, so a stuck item logs once per state.
+        self._logged_inconsistent: set[tuple] = set()
 
     @staticmethod
     def _changed_tree_paths(
@@ -1043,11 +1045,11 @@ class GithubVerificationService:
                     revision = await self._active_scope_revision(db, item)
                     if item.active_scope_revision > 0:
                         if revision is None:
-                            logger.warning(
-                                "Skipping continuation verification for work item %s: "
-                                "active continuation revision is inconsistent",
-                                item.id,
-                            )
+                            settled = await self._settled_revision(db, item)
+                            if settled is not None:
+                                await self._observe_settled_revision(db, scope, item, client, settled)
+                            else:
+                                self._log_inconsistent_once(item)
                             continue
                         if revision.phase == "diagnostic":
                             if item.dispatch_status != "dispatched":
@@ -1370,6 +1372,72 @@ class GithubVerificationService:
             await db.rollback()
             await db.refresh(scope)
 
+    async def _settled_revision(
+        self, db: AsyncSession, item: GithubWorkItem,
+    ) -> GithubAttemptScopeRevision | None:
+        """The positively settled implementation revision a verifying item is still on, if it is one.
+
+        Positive settlement completes the revision and leaves the item on it. Such an item waits for its PR to
+        merge, so it is not inconsistent. Any other state is.
+        """
+        if item.dispatch_status != "verifying" or item.active_scope_revision <= 0 or item.pr_number is None:
+            return None
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision)
+                .where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == item.active_scope_revision,
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if (
+            revision is None
+            or revision.status != "completed"
+            or revision.phase != "implementation"
+            or item.attempt_phase != revision.phase
+            or revision.completed_at is None
+            or not revision.submitted_head_sha
+        ):
+            return None
+        return revision
+
+    def _log_inconsistent_once(self, item: GithubWorkItem) -> None:
+        key = (item.id, item.dispatch_nonce, item.active_scope_revision, item.dispatch_status, item.attempt_phase)
+        if key in self._logged_inconsistent:
+            return
+        self._logged_inconsistent.add(key)
+        logger.warning(
+            "Skipping continuation verification for work item %s: active continuation revision is inconsistent "
+            "(logged once for this state)",
+            item.id,
+        )
+
+    async def _observe_settled_revision(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        revision: GithubAttemptScopeRevision,
+    ) -> None:
+        """A positively settled revision waits for its PR: record a merge, escalate a closed PR, else do nothing."""
+        pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        verdict = self._classify_pull(pull)
+        if verdict == "merged" and pull.get("merged") is True:
+            expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=item.dispatch_base_ref)
+            self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
+            await self._settle_merged_submitted(
+                db, scope, item, client, revision, pull,
+                source="github_verification_service._observe_settled_revision")
+            return
+        if verdict == "closed_unmerged":
+            pr_number = item.pr_number
+            await github_dispatch_service.escalate_without_notification(
+                db, item, "pr_closed_unmerged", f"PR #{pr_number} was closed without being merged.")
+
     async def _settle_merged_submitted(
         self,
         db: AsyncSession,
@@ -1381,11 +1449,12 @@ class GithubVerificationService:
         *,
         source: str,
     ) -> None:
-        """A PR merged while a revision is submitted: settle it only at a head someone submitted or accepted.
+        """A PR merged while a revision is submitted or positively settled: settle only at a head someone submitted or accepted.
 
-        The merged head must equal the submitted revision's head or the head of an active accepted review.
-        Then the revision completes and the item is merged. Any other merged head escalates with a note naming
-        both heads and records no merge. Everything the decision rests on is captured before the awaited reads.
+        The merged head must equal the revision's submitted head or the head of an active accepted review.
+        Then a submitted revision completes (a settled one already is, and keeps its status, its time and its
+        one outcome record) and the item is merged. Any other merged head escalates with a note naming
+        both heads and records no merge; a settled revision stays as it was. Everything the decision rests on is captured before the awaited reads.
         The PR is read again and must pass the full identity check; then the terminal writer is taken and the
         captured item, scope and exact revision must still be what they were, so BOTH outcomes are fenced and a
         lost fence changes nothing. The verified final response is the one that is recorded.
@@ -1419,25 +1488,31 @@ class GithubVerificationService:
         if ({name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY} != item_before
                 or {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY} != scope_before
                 or {column.name: getattr(revision, column.name) for column in revision.__table__.columns} != revision_before
-                or revision.status != "submitted"):
+                or revision.status not in ("submitted", "completed")):
             raise TerminalRevisionContextChanged("terminal_revision_context_changed")
+        settled = revision.status == "completed"
         authorized = head == revision.submitted_head_sha or bool(await db.scalar(select(exists().where(
             GithubHeadReview.work_item_id == item_id, GithubHeadReview.dispatch_nonce == nonce,
             GithubHeadReview.pr_number == pr_number, GithubHeadReview.head_sha == head,
             GithubHeadReview.verdict == "accepted", GithubHeadReview.status == "active"))))
         outcome = "completed" if authorized else "superseded"
-        values = {"status": outcome, "completed_at": datetime.utcnow()} if authorized else {"status": outcome}
+        # A settled revision is only fenced here: its status and time stay exactly as the settlement left them.
+        values = (
+            {"status": "completed"} if settled
+            else {"status": outcome, "completed_at": datetime.utcnow()} if authorized else {"status": outcome}
+        )
         claim = await db.execute(update(GithubAttemptScopeRevision).where(
             GithubAttemptScopeRevision.id == revision.id,
             GithubAttemptScopeRevision.work_item_id == item_id,
             GithubAttemptScopeRevision.dispatch_nonce == nonce,
             GithubAttemptScopeRevision.revision == item.active_scope_revision,
-            GithubAttemptScopeRevision.status == "submitted",
+            GithubAttemptScopeRevision.status == ("completed" if settled else "submitted"),
         ).values(**values).execution_options(synchronize_session=False))
         if claim.rowcount != 1:
             raise TerminalRevisionContextChanged("terminal_revision_context_changed")
         await db.refresh(revision)
-        await self._record_revision_outcome(db, item, revision, outcome, source=source)
+        if not settled:
+            await self._record_revision_outcome(db, item, revision, outcome, source=source)
         if not authorized:
             await github_dispatch_service.escalate_without_notification(
                 db, item, "continuation_invalid_state",
