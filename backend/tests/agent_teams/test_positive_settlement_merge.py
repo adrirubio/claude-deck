@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+import httpx
 import pytest
 from sqlalchemy import func, select, update
 
@@ -151,3 +152,143 @@ async def test_a_change_during_the_awaited_pr_read_settles_nothing(twin, change)
     await _tick(db, scope, client, item, revision)
     assert item.dispatch_status != "merged"
     assert await _outcome_events(db, revision_id) == 0
+
+
+# --- V1 review 5903551697: identity, fences, unreadable reads and poll isolation ---
+
+OPEN = dict(state="open", merged=False, merged_at=None)
+CLOSED = dict(state="closed", merged=False, merged_at=None)
+
+
+def _quiet(caplog):
+    return [r for r in caplog.records if r.name == LOGGER and r.levelno >= logging.INFO]
+
+
+async def _unchanged(db, item, revision):
+    await db.refresh(item)
+    await db.refresh(revision)
+    return (item.dispatch_status, item.status_note, item.updated_at, item.escalation_reason, revision.status,
+            revision.completed_at)
+
+
+@pytest.mark.asyncio
+async def test_a_closed_response_cannot_escalate_an_attempt_that_replaced_the_settled_one_during_the_read(twin):
+    db, maker = twin
+    scope, item, revision, client = await _settled(db, pull=CLOSED)
+    item_id, original = item.id, client.get_pull
+
+    async def racing(*args):
+        async with maker() as other:  # a new attempt replaces the settled one while GitHub is awaited
+            await other.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(
+                dispatch_nonce="new-attempt", dispatch_status="dispatched", status_note="new attempt healthy"))
+            await other.commit()
+        return await original(*args)
+
+    client.get_pull = racing
+    await _tick(db, scope, client, item, revision)
+    assert (item.dispatch_nonce, item.dispatch_status, item.status_note) == ("new-attempt", "dispatched", "new attempt healthy")
+
+
+@pytest.mark.asyncio
+async def test_a_closed_response_for_another_pr_cannot_escalate_the_item(db):
+    scope, item, revision, client = await _settled(db, pull=CLOSED)
+    client.pull["number"] = 999
+    before = await _unchanged(db, item, revision)
+    await _tick(db, scope, client, item, revision)
+    assert await _unchanged(db, item, revision) == before and item.dispatch_status == "verifying"
+
+
+@pytest.mark.asyncio
+async def test_a_closed_pr_that_reads_open_on_the_second_read_escalates_nothing(db):
+    scope, item, revision, client = await _settled(db, pull=CLOSED)
+    original, calls = client.get_pull, []
+
+    async def flipping(*args):
+        calls.append(1)
+        pull = await original(*args)
+        return pull if len(calls) == 1 else dict(pull, **OPEN)
+
+    client.get_pull = flipping
+    before = await _unchanged(db, item, revision)
+    await _tick(db, scope, client, item, revision)
+    assert len(calls) == 2 and await _unchanged(db, item, revision) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pull", [OPEN, MERGED, CLOSED])
+@pytest.mark.parametrize("failing_read", [1, 2])
+async def test_an_unreadable_pr_changes_nothing_and_logs_nothing_then_recovers_without_a_stale_note(
+        db, caplog, pull, failing_read):
+    scope, item, revision, client = await _settled(db, pull=pull)
+    original, calls = client.get_pull, []
+
+    async def failing(*args):
+        calls.append(1)
+        if len(calls) == failing_read:
+            raise httpx.ConnectError("isolated unavailable")
+        return await original(*args)
+
+    client.get_pull = failing
+    before = await _unchanged(db, item, revision)
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        await _tick(db, scope, client, item, revision)
+        if pull is OPEN or failing_read == 1:  # a failed first read leaves nothing to compare
+            assert await _unchanged(db, item, revision) == before
+        client.get_pull = original
+        for _ in range(2):
+            await _tick(db, scope, client, item, revision)
+    assert _quiet(caplog) == []
+    assert item.status_note is None or "failed" not in (item.status_note or "")
+    if pull is OPEN:
+        assert await _unchanged(db, item, revision) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pull", [MERGED, CLOSED])
+async def test_a_foreign_or_malformed_first_response_is_contained_and_logged_once(db, caplog, fresh_log_memory, pull):
+    scope, item, revision, client = await _settled(db, pull=pull)
+    client.pull["base"] = dict(client.pull["base"], repo={"full_name": "foreign/repo"})
+    before = await _unchanged(db, item, revision)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        for _ in range(3):
+            await _tick(db, scope, client, item, revision)  # must not raise out of process_scope
+    assert await _unchanged(db, item, revision) == before and item.dispatch_status == "verifying"
+    assert len([r for r in _quiet(caplog) if r.levelno == logging.WARNING]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_settled_item_does_not_stop_the_other_items_of_the_poll(db, fresh_log_memory):
+    scope, item, revision, client = await _settled(db, pull=MERGED)
+    client.pull["base"] = dict(client.pull["base"], repo={"full_name": "foreign/repo"})
+    other = GithubWorkItem(scope_id=scope.id, issue_number=77, issue_title="other", issue_url="u",
+                           github_updated_at=datetime.utcnow(), dispatch_status="verifying", pr_number=77,
+                           dispatch_nonce="attempt-77", dispatch_head_ref="deck/other", dispatch_base_ref="release/v4.1",
+                           owner_slot_id=item.owner_slot_id)
+    db.add(other)
+    await db.commit()
+    seen, original = [], client.get_pull
+
+    async def spying(owner, repo, number):
+        seen.append(number)
+        return await original(owner, repo, number)
+
+    client.get_pull = spying
+    await _tick(db, scope, client, item, revision)
+    assert 77 in seen, "the poll stopped at the failing settled item"
+
+
+@pytest.mark.asyncio
+async def test_the_settlement_event_and_time_survive_the_merge_and_a_repeat_poll(db):
+    scope, item, revision, client = await _settled(db)
+    event = FactoryAuditEvent(event_kind="revision_outcome", source="settlement-fixture", occurred_at=SETTLED_AT,
+                              actor_kind="system", revision_id=revision.id, item_id=item.id,
+                              after_values={"outcome": "completed"})
+    db.add(event)
+    await db.commit()
+    event_id = event.id
+    await _tick(db, scope, client, item, revision)
+    await _tick(db, scope, client, item, revision)  # the item is terminal now: a repeat poll must not touch anything
+    assert item.dispatch_status == "merged" and revision.completed_at == SETTLED_AT
+    assert await _outcome_events(db, revision.id) == 1
+    await db.refresh(event)
+    assert (event.id, event.occurred_at, event.after_values) == (event_id, SETTLED_AT, {"outcome": "completed"})

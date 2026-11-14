@@ -1404,15 +1404,22 @@ class GithubVerificationService:
             return None
         return revision
 
-    def _log_inconsistent_once(self, item: GithubWorkItem) -> None:
-        key = (item.id, item.dispatch_nonce, item.active_scope_revision, item.dispatch_status, item.attempt_phase)
+    @staticmethod
+    def _state_snapshot(item: GithubWorkItem) -> tuple:
+        return (item.id, item.dispatch_nonce, item.active_scope_revision, item.dispatch_status, item.attempt_phase)
+
+    def _log_inconsistent_once(
+        self, item: GithubWorkItem | None, reason: str | None = None, *, snapshot: tuple | None = None,
+    ) -> None:
+        """Log one warning per (item, attempt, revision, status, phase). A snapshot survives a rollback."""
+        snapshot = snapshot or self._state_snapshot(item)
+        key = (*snapshot, reason is not None)
         if key in self._logged_inconsistent:
             return
         self._logged_inconsistent.add(key)
         logger.warning(
-            "Skipping continuation verification for work item %s: active continuation revision is inconsistent "
-            "(logged once for this state)",
-            item.id,
+            "Skipping continuation verification for work item %s: %s (logged once for this state)",
+            snapshot[0], reason or "active continuation revision is inconsistent",
         )
 
     async def _observe_settled_revision(
@@ -1423,20 +1430,77 @@ class GithubVerificationService:
         client: GithubClient,
         revision: GithubAttemptScopeRevision,
     ) -> None:
-        """A positively settled revision waits for its PR: record a merge, escalate a closed PR, else do nothing."""
-        pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
-        verdict = self._classify_pull(pull)
-        if verdict == "merged" and pull.get("merged") is True:
-            expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=item.dispatch_base_ref)
-            self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
-            await self._settle_merged_submitted(
-                db, scope, item, client, revision, pull,
-                source="github_verification_service._observe_settled_revision")
-            return
-        if verdict == "closed_unmerged":
-            pr_number = item.pr_number
-            await github_dispatch_service.escalate_without_notification(
-                db, item, "pr_closed_unmerged", f"PR #{pr_number} was closed without being merged.")
+        """A positively settled revision waits for its PR: record a merge, escalate a closed PR, else do nothing.
+
+        Everything here is contained to this item. A GitHub read that fails changes nothing and logs nothing: the
+        item simply waits for the next poll. A first response that fails the identity check changes nothing and
+        logs one warning per state. Both outcomes then take the same fences: the PR is read again, must pass the
+        identity check again, and the terminal writer is taken before the captured item, scope and revision are
+        compared again.
+        """
+        snapshot = self._state_snapshot(item)  # a rollback expires the item
+        try:
+            pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+            verdict = self._classify_pull(pull)
+            if verdict == "merged" and pull.get("merged") is True:
+                await self._verify_settled_pull(scope, item, client, pull)
+                await self._settle_merged_submitted(
+                    db, scope, item, client, revision, pull,
+                    source="github_verification_service._observe_settled_revision")
+            elif verdict == "closed_unmerged":
+                await self._escalate_settled_closed(db, scope, item, client, revision)
+        except TerminalRevisionContextChanged:
+            raise  # the caller rolls back and records that the attempt changed
+        except httpx.HTTPError:
+            await db.rollback()
+            await db.refresh(scope)
+        except ValueError as exc:
+            await db.rollback()
+            await db.refresh(scope)
+            self._log_inconsistent_once(None, f"a PR response failed the identity check ({exc})", snapshot=snapshot)
+
+    async def _verify_settled_pull(
+        self, scope: TeamGithubScope, item: GithubWorkItem, client: GithubClient, pull: dict,
+    ) -> None:
+        """The PR response must be this item's PR in this scope and base; otherwise ValueError."""
+        if self._pull_number(pull) != item.pr_number:
+            raise ValueError("the PR number does not match the tracked PR")
+        expected_base = await self.normalize_base_ref(scope, client, token=None, base_ref=item.dispatch_base_ref)
+        self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
+
+    async def _escalate_settled_closed(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        revision: GithubAttemptScopeRevision,
+    ) -> None:
+        """A settled revision's PR closed without a merge: escalate, fenced like the merge.
+
+        What the decision rests on is captured before the awaited read. The PR is read again and must still be
+        this PR, closed without a merge, and pass the identity check. Then the terminal writer is taken and the
+        captured item, scope and revision must be unchanged, so a lost fence changes nothing.
+        """
+        item_before = {name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY}
+        scope_before = {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY}
+        revision_before = {column.name: getattr(revision, column.name) for column in revision.__table__.columns}
+        pr_number = item.pr_number
+        current = await client.get_pull(scope.repo_owner, scope.repo_name, int(pr_number))
+        if self._classify_pull(current) != "closed_unmerged" or self._pull_number(current) != pr_number:
+            return  # the next poll reads the new state
+        await self._verify_settled_pull(scope, item, client, current)
+        await lock_terminal_transition(db, item)
+        await db.refresh(item)
+        await db.refresh(scope)
+        await db.refresh(revision)
+        if ({name: getattr(item, name) for name in _SETTLEMENT_ITEM_IDENTITY} != item_before
+                or {name: getattr(scope, name) for name in _SETTLEMENT_SCOPE_IDENTITY} != scope_before
+                or {column.name: getattr(revision, column.name) for column in revision.__table__.columns} != revision_before
+                or revision.status != "completed"):
+            raise TerminalRevisionContextChanged("terminal_revision_context_changed")
+        await github_dispatch_service.escalate_without_notification(
+            db, item, "pr_closed_unmerged", f"PR #{pr_number} was closed without being merged.")
 
     async def _settle_merged_submitted(
         self,
