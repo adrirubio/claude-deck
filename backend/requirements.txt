@@ -56,7 +56,7 @@ httpx==0.28.1
     #   mcp
 httpx-sse==0.4.3
     # via mcp
-idna==3.16
+idna==3.20
     # via
     #   anyio
     #   httpx
