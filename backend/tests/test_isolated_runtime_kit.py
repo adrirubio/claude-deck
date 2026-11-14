@@ -1641,11 +1641,15 @@ def test_stub_script_log_keeps_turn_and_kind_but_no_text(tmp_path):
 
 
 def test_stub_script_serves_finite_number_arguments_as_strict_json(tmp_path):
-    script = [{"tool_call": {"name": "read", "arguments": {"limit": 1.5e308, "offset": -0.0, "n": 3}}}]
+    script = [{"tool_call": {"name": "read", "arguments": {"limit": 1.5e308, "low": -1.5e308, "offset": -0.0,
+                                                            "tiny": 0.0, "n": 3}}}]
+    path = tmp_path / "underflow.json"  # 1e-400 underflows to 0.0: finite, so it is kept
+    path.write_text('[{"tool_call": {"name": "read", "arguments": {"tiny": 1e-400}}}]')
+    assert _stub_module().load_script(path) == [{"tool_call": {"name": "read", "arguments": {"tiny": 0.0}}}]
 
     def check(server):
         arguments = server.chat()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
-        assert _strict_json(arguments) == {"limit": 1.5e308, "offset": -0.0, "n": 3}
+        assert _strict_json(arguments) == {"limit": 1.5e308, "low": -1.5e308, "offset": -0.0, "tiny": 0.0, "n": 3}
     _with_stub(_stub_module(), tmp_path, script, check)
 
 
@@ -1678,6 +1682,9 @@ def _bad_scripts():
         "infinity_argument": '[{"tool_call": {"name": "read", "arguments": {"x": Infinity}}}]',
         "neg_infinity_argument": '[{"tool_call": {"name": "read", "arguments": {"x": [-Infinity]}}}]',
         "deep_nesting": b"[" * 10000 + b"0" + b"]" * 9999,  # 20,000 bytes: within the size limit
+        "exponent_overflow": '[{"tool_call": {"name": "read", "arguments": {"nested": [1e400]}}}]',
+        "neg_exponent_overflow": '[{"tool_call": {"name": "read", "arguments": {"deep": {"x": [-1e400]}}}}]',
+        "huge_integer": '[{"tool_call": {"name": "read", "arguments": {"n": %s}}}]' % ("9" * 5000),  # digit limit
     }
 
 
@@ -1707,7 +1714,8 @@ _STUB_CONTROLS = {
     "no_tool_call_branch": ('if "tool_call" in turn:', 'if "tool_call_removed" in turn:'),
     "sse_tool_call_as_text": ('{"tool_calls": [dict(call, index=0)]}', '{"content": "text"}'),
     "no_validation": ("def load_script(path", "def _unchecked(path"),
-    "no_constant_check": ("json.loads(raw, parse_constant=_refuse_constant)", "json.loads(raw)"),
+    "no_constant_check": ("parse_constant=_refuse_constant", "parse_constant=None"),
+    "no_float_check": ("parse_float=_finite_float", "parse_float=None"),
 }
 
 
@@ -1730,9 +1738,10 @@ def test_stub_script_controls_are_caught(tmp_path, control):
             _with_stub(module, work, STUB_SCRIPT, check)
         except (AssertionError, KeyError, TypeError, IndexError, OSError):
             failed.append(name)
-    if control in ("no_validation", "no_constant_check"):
+    if control in ("no_validation", "no_constant_check", "no_float_check"):
         path = tmp_path / "bad.json"
-        path.write_text(_bad_scripts()["extra_key" if control == "no_validation" else "nan_argument"])
+        path.write_text(_bad_scripts()[{"no_validation": "extra_key", "no_constant_check": "nan_argument",
+                                        "no_float_check": "exponent_overflow"}[control]])
         try:
             module.load_script(path)
         except module.ScriptError:

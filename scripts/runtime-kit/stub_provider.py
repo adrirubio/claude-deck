@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 import threading
 import time
@@ -49,6 +50,13 @@ def _refuse_constant(name: str):
     raise ScriptError(f"the script holds a non-finite number ({name})")
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # an exponent too large for a float, such as 1e400
+        raise ScriptError(f"the script holds a non-finite number ({text})")
+    return value
+
+
 def load_script(path: Path | str) -> list[dict]:
     """Read and check a script: 1 to 64 turns, at most 64 KiB, each exactly one known kind."""
     try:
@@ -58,7 +66,7 @@ def load_script(path: Path | str) -> list[dict]:
     if len(raw) > MAX_SCRIPT_BYTES:
         raise ScriptError("the script is larger than 64 KiB")
     try:
-        turns = json.loads(raw, parse_constant=_refuse_constant)
+        turns = json.loads(raw, parse_constant=_refuse_constant, parse_float=_finite_float)
     except RecursionError as exc:  # the decoder's own depth limit; the limit itself is unchanged
         raise ScriptError("the script's nesting is too deep") from exc
     except ScriptError:
