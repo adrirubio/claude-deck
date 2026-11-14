@@ -125,7 +125,7 @@ For remote access, install and run Synth City natively on the remote host where 
 
 ## Separate controller and agent users
 
-If the controller and the agents run as different operating-system users, the operator must set up one `sudoers` rule for the cross-user terminal attach: turn `use_pty` off for the agent `tmux` command only. Synth City does not change `sudoers`. See [What you must set up: a command-scoped `!use_pty`](/features/agent-bridge#what-you-must-set-up-a-command-scoped-use_pty) and, for the rest of this layout, [Deployment with separate controller and agent users](/features/agent-teams#deployment-with-separate-controller-and-agent-users).
+If the controller and the agents run as different operating-system users, the operator must set up one `sudoers` rule for the cross-user terminal attach: turn `use_pty` off for the agent `tmux` command only. Synth City does not change `sudoers`. See [What you must set up: a command-scoped `!use_pty`](/features/agent-bridge#what-you-must-set-up-a-command-scoped-use-pty) and, for the rest of this layout, [Deployment with separate controller and agent users](/features/agent-teams#deployment-with-separate-controller-and-agent-users).
 
 ## What Gets Read
 
