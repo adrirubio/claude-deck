@@ -2733,6 +2733,66 @@ class TeamGithubScopeUpdate(BaseModel):
     enabled: Optional[bool] = None
 
 
+class WorkspaceProvisioningFailure(BaseModel):
+    path: str
+    code: str
+    reason: str
+
+
+class WorkspaceProvisioningReport(BaseModel):
+    target: int
+    existing: int = 0
+    created: List[str] = Field(default_factory=list)
+    failures: List[WorkspaceProvisioningFailure] = Field(default_factory=list)
+
+
+class WorkspaceReadinessWorkspace(BaseModel):
+    path: str
+    kind: str
+    lease_state: str
+    dispatchable: bool
+    enabled: bool
+    status: str = "ok"
+    code: Optional[str] = None
+    message: Optional[str] = None
+
+
+class WorkspaceReadinessSlot(BaseModel):
+    slot_id: int
+    display_name: str
+    repo_path: str
+    status: str
+    code: Optional[str] = None
+    message: Optional[str] = None
+
+
+class SafeDirectoryEntry(BaseModel):
+    path: str
+    command: str
+
+
+class SafeDirectoryReport(BaseModel):
+    controller: List[SafeDirectoryEntry] = Field(default_factory=list)
+    native: List[SafeDirectoryEntry] = Field(default_factory=list)
+
+
+class WorkspaceReadinessUnsafePath(BaseModel):
+    display_name: str
+    reason: str
+
+
+class WorkspaceReadinessResponse(BaseModel):
+    scope_id: int
+    repo_path: str
+    target: int
+    dispatchable_workspaces: int
+    shortfall: int
+    workspaces: List[WorkspaceReadinessWorkspace] = Field(default_factory=list)
+    slots: List[WorkspaceReadinessSlot] = Field(default_factory=list)
+    safe_directory: SafeDirectoryReport = Field(default_factory=SafeDirectoryReport)
+    unsafe_paths: List[WorkspaceReadinessUnsafePath] = Field(default_factory=list)
+
+
 class TeamGithubScopeResponse(BaseModel):
     id: int
     preset_id: int
@@ -2767,6 +2827,7 @@ class TeamGithubScopeResponse(BaseModel):
     last_polled_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    workspace_provisioning: Optional[WorkspaceProvisioningReport] = None
 
 
 class TeamGithubScopeListResponse(BaseModel):

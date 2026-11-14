@@ -80,6 +80,9 @@ from app.models.schemas import (
     GithubWorkspaceForceReleaseRequest,
     GithubWorkspaceForceReleaseResponse,
     GithubWorkspaceListResponse,
+    WorkspaceProvisioningFailure,
+    WorkspaceProvisioningReport,
+    WorkspaceReadinessResponse,
     GithubWorkspaceResponse,
     MailMessageCreate,
     TeamGithubScopeCreate,
@@ -307,6 +310,7 @@ from app.services.github_app_auth_service import (
     GithubAppUnconfigured,
     github_app_auth_service,
 )
+from app.services import github_workspace_readiness
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceCredentialRevokeError,
@@ -462,8 +466,41 @@ def _scope_auth_configured(scope: TeamGithubScope) -> bool:
     )
 
 
-def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
+async def _provision_dispatch_workspaces(
+    db: AsyncSession, scope: TeamGithubScope
+) -> WorkspaceProvisioningReport:
+    """Provision after the scope is saved; a failure is reported and never undoes the scope."""
+    target = scope.max_concurrent_dispatched
+    try:
+        report = await github_workspace_service.ensure_dispatch_workspaces(db, scope)
+    except Exception as exc:
+        await db.rollback()
+        await db.refresh(scope)
+        logger.warning("Dispatch workspace provisioning failed: %s", type(exc).__name__)
+        return WorkspaceProvisioningReport(
+            target=target,
+            failures=[WorkspaceProvisioningFailure(
+                path="", code="provisioning_error",
+                reason="Provisioning failed unexpectedly; see the controller log.",
+            )],
+        )
+    return WorkspaceProvisioningReport(
+        target=report.target,
+        existing=report.existing,
+        created=list(report.created),
+        failures=[
+            WorkspaceProvisioningFailure(path=f.path, code=f.code, reason=f.reason)
+            for f in report.failures
+        ],
+    )
+
+
+def _scope_response(
+    scope: TeamGithubScope,
+    workspace_provisioning: WorkspaceProvisioningReport | None = None,
+) -> TeamGithubScopeResponse:
     return TeamGithubScopeResponse(
+        workspace_provisioning=workspace_provisioning,
         id=scope.id,
         preset_id=scope.preset_id,
         repo_owner=scope.repo_owner,
@@ -2561,8 +2598,9 @@ async def create_github_scope(
         raise HTTPException(status_code=409, detail="GitHub scope already exists for this repo") from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    provisioning = await _provision_dispatch_workspaces(db, scope)
     await _sync_github_jobs(db)
-    return _scope_response(scope)
+    return _scope_response(scope, provisioning)
 
 
 @router.patch("/github-scopes/{scope_id}", response_model=TeamGithubScopeResponse)
@@ -2577,6 +2615,7 @@ async def update_github_scope(
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     try:
         observed_configuration = _scope_configuration(observed)
+        previous_concurrency = observed.max_concurrent_dispatched
         proposed_owner = _clean_repo_part(request.repo_owner, "Repo owner") if request.repo_owner is not None else observed.repo_owner
         proposed_repo = _clean_repo_part(request.repo_name, "Repo name") if request.repo_name is not None else observed.repo_name
         identity_change = (
@@ -2673,8 +2712,11 @@ async def update_github_scope(
         raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    provisioning = None
+    if scope.max_concurrent_dispatched > previous_concurrency:
+        provisioning = await _provision_dispatch_workspaces(db, scope)
     await _sync_github_jobs(db)
-    return _scope_response(scope)
+    return _scope_response(scope, provisioning)
 
 
 @router.patch(
@@ -2803,6 +2845,21 @@ async def list_github_workspaces(
     return GithubWorkspaceListResponse(
         workspaces=[_workspace_response(workspace) for workspace in workspaces]
     )
+
+
+@router.get(
+    "/github-scopes/{scope_id}/workspace-readiness",
+    response_model=WorkspaceReadinessResponse,
+)
+async def get_github_workspace_readiness(
+    scope_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    return await github_workspace_readiness.build_readiness(db, scope)
 
 
 @router.post(

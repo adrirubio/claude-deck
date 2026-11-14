@@ -9,12 +9,15 @@ import re
 import secrets
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+import stat
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import exists, select, update
+from sqlalchemy import delete, exists, func, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -64,6 +67,61 @@ def _redact_git_diagnostic(value: str) -> str:
     return re.sub(r"(--lease(?:=|\s+))[^\s'\"]+", r"\1<redacted>", value)
 
 
+# Dispatch workspaces are created only as these direct siblings of the scope checkout.
+MAX_WORKSPACE_NAME_SEARCH = 64
+MAX_PROVISIONED_PER_CALL = 64
+# provision_error marker of a reservation row while a worker is creating its checkout.
+RESERVATION_MARKER = "provisioning"
+RESERVATION_STALE_SECONDS = 900
+
+
+def _contained_path(path: str | None) -> str | None:
+    """The resolved path when it lies strictly inside the home directory, else None.
+
+    Checked before any filesystem or git call that takes a scope path, which comes from a
+    request. Scope paths are saved under the home directory already; this re-proves it where
+    the path is used.
+    """
+    if not path or "\x00" in path:
+        return None
+    resolved = os.path.realpath(path)
+    home = os.path.realpath(os.path.expanduser("~"))
+    if resolved.startswith(home + os.sep):
+        return resolved
+    return None
+
+
+@dataclass(frozen=True)
+class _Reservation:
+    row_id: int
+    scope_id: int
+    path: str
+    repo_path: str
+    snapshot: tuple
+_PROVISION_REASON_LIMIT = 300
+
+
+def _provision_reason(value: str) -> str:
+    """One short line for an operator: redacted, no control characters, bounded."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    return _redact_git_diagnostic(" ".join(text.split()))[:_PROVISION_REASON_LIMIT]
+
+
+@dataclass(frozen=True)
+class ProvisionFailure:
+    path: str
+    code: str
+    reason: str
+
+
+@dataclass
+class ProvisioningReport:
+    target: int
+    existing: int = 0
+    created: list[str] = field(default_factory=list)
+    failures: list[ProvisionFailure] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class WorktreeConfigSnapshot:
     values: dict[str, tuple[str, ...]]
@@ -106,6 +164,7 @@ class GithubWorkspaceService:
     def __init__(self, runner=None):
         self._runner = runner or self._run_git
         self._config_locks: dict[int, asyncio.Lock] = {}
+        self._provision_locks: dict[int, asyncio.Lock] = {}
 
     def config_lock(self, workspace_id: int) -> asyncio.Lock:
         return self._config_locks.setdefault(workspace_id, asyncio.Lock())
@@ -1324,6 +1383,355 @@ class GithubWorkspaceService:
         await db.commit()
         await db.refresh(workspace)
         return workspace
+
+    async def ensure_dispatch_workspaces(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> ProvisioningReport:
+        """Make `max_concurrent_dispatched` dispatchable worktrees exist for the scope.
+
+        One `dispatch-N` direct sibling of the scope checkout at a time, in three phases so
+        no database lock is held during filesystem work. Each phase takes the SQLite writer
+        through the scope row, as scope updates do, so it is serialized with scope changes
+        and with other workers:
+          1. reserve: re-read the scope and the rows, count configured capacity and in-flight
+             reservations, and insert a disabled reservation row for the next free name;
+          2. create: claim the directory with an exclusive `mkdir` (an existing entry of any
+             kind is never adopted or written), `git worktree add` into it, and re-verify it;
+          3. finalize: re-read the scope; if its checkout, base, name or target changed,
+             remove only what this call created, otherwise make the row dispatchable.
+        Manual adoption stays in `register_workspace`; an existing row is never changed.
+        """
+        report = ProvisioningReport(target=scope.max_concurrent_dispatched)
+        scope_id = scope.id
+        await self._report_unavailable(db, scope, report)
+        first = True
+        try:
+            for _ in range(min(report.target, MAX_PROVISIONED_PER_CALL) + MAX_WORKSPACE_NAME_SEARCH):
+                try:
+                    step = await self._reserve_workspace(db, scope_id, report, first)
+                except OperationalError:
+                    await db.rollback()
+                    report.failures.append(
+                        ProvisionFailure("", "database_busy", "The database was busy; try again."))
+                    break
+                first = False
+                if step is None:
+                    break
+                if step == "retry":
+                    continue
+                if await self._create_workspace(db, step, report) == "failed":
+                    break
+        finally:
+            # Rollbacks above expire the caller's scope; hand it back readable.
+            try:
+                await db.refresh(scope)
+            except Exception:
+                pass
+        return report
+
+    async def _lock_scope(self, db: AsyncSession, scope_id: int) -> TeamGithubScope | None:
+        """Take the SQLite writer through the scope row, then read the scope fresh."""
+        result = await db.execute(
+            update(TeamGithubScope)
+            .where(TeamGithubScope.id == scope_id)
+            .values(id=TeamGithubScope.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return None
+        return (await db.execute(
+            select(TeamGithubScope)
+            .where(TeamGithubScope.id == scope_id)
+            .execution_options(populate_existing=True)
+        )).scalar_one()
+
+    async def scope_common_dir(self, repo_path: str, runner=None) -> str | None:
+        code, output = await (runner or self._runner)(
+            ["-C", repo_path, "rev-parse", "--path-format=absolute", "--git-common-dir"]
+        )
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if code != 0 or not lines:
+            return None
+        return os.path.realpath(lines[0])
+
+    async def workspace_state(self, path: str, scope_common: str, runner=None) -> str:
+        """"ok", or the reason a registered workspace is not usable capacity."""
+        if not path or not os.path.lexists(path):
+            return "path_missing"
+        if os.path.islink(path):
+            return "path_is_symlink"
+        if not os.path.isdir(path):
+            return "path_missing"
+        code, output = await (runner or self._runner)(
+            ["-C", path, "rev-parse", "--path-format=absolute", "--git-dir",
+             "--git-common-dir", "--show-toplevel"]
+        )
+        if code != 0:
+            return "git_owner_differs" if "dubious ownership" in output.lower() else "not_a_git_checkout"
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if len(lines) != 3:
+            return "not_a_git_checkout"
+        git_dir, common, top = (os.path.realpath(line) for line in lines)
+        if common != scope_common:
+            return "different_repository"
+        if top != os.path.realpath(path) or git_dir == common:
+            return "not_a_worktree_root"
+        return "ok"
+
+    async def _report_unavailable(
+        self, db: AsyncSession, scope: TeamGithubScope, report: ProvisioningReport
+    ) -> None:
+        """Name configured workspaces whose checkout is missing or foreign. Their rows stay as
+        they are: they are neither recreated nor adopted, and they are not usable capacity."""
+        repo_real = _contained_path(scope.repo_path)
+        if repo_real is None or not os.path.isdir(repo_real):
+            return
+        rows = (await db.execute(
+            select(GithubWorkspace).where(
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.kind == "worktree",
+                GithubWorkspace.dispatchable.is_(True),
+                GithubWorkspace.enabled.is_(True),
+            ).order_by(GithubWorkspace.id)
+        )).scalars().all()
+        if not rows:
+            return
+        common = await self.scope_common_dir(repo_real)
+        if common is None:
+            return
+        for row in rows:
+            state = await self.workspace_state(row.path, common)
+            if state != "ok":
+                report.failures.append(ProvisionFailure(
+                    row.path, "workspace_unavailable",
+                    f"The registered workspace is not usable ({state}); its row is unchanged.",
+                ))
+
+    async def _reserve_workspace(self, db, scope_id: int, report: ProvisioningReport, first: bool):
+        """Phase 1. Returns a reservation, "retry", or None when done or stopped."""
+        scope = await self._lock_scope(db, scope_id)
+        if scope is None:
+            await db.rollback()
+            report.failures.append(ProvisionFailure("", "scope_not_found", "The scope no longer exists."))
+            return None
+        report.target = scope.max_concurrent_dispatched
+        scope_repo_path = scope.repo_path
+        repo_real = _contained_path(scope_repo_path)
+        if repo_real is None:
+            await db.rollback()
+            code = "scope_checkout_outside_home" if scope_repo_path else "scope_checkout_missing"
+            report.failures.append(ProvisionFailure(
+                scope_repo_path or "", code,
+                "The scope checkout is not inside the home directory, so nothing was created."
+                if scope_repo_path else "The scope has no checkout path.",
+            ))
+            return None
+        if not os.path.isdir(repo_real):
+            await db.rollback()
+            report.failures.append(ProvisionFailure(
+                scope_repo_path, "scope_checkout_missing",
+                "The scope checkout does not exist, so no dispatch workspace was created.",
+            ))
+            return None
+        rows = (await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope_id)
+        )).scalars().all()
+        now = datetime.utcnow()
+        inflight = 0
+        for row in rows:
+            if row.provision_error == RESERVATION_MARKER and not row.enabled:
+                if (now - row.created_at).total_seconds() > RESERVATION_STALE_SECONDS:
+                    # A worker that died mid-provisioning: stop counting it, keep row and files.
+                    row.provision_error = "abandoned: provisioning did not finish"
+                else:
+                    inflight += 1
+        configured = sum(
+            1 for row in rows if row.kind == "worktree" and row.dispatchable and row.enabled
+        )
+        if first:
+            report.existing = configured
+        if configured + inflight >= report.target:
+            await db.commit()
+            return None
+        taken = {row.path for row in rows}
+        root = os.path.dirname(repo_real)
+        for number in range(1, MAX_WORKSPACE_NAME_SEARCH + 1):
+            candidate = os.path.join(root, f"dispatch-{number}")
+            if candidate in taken or os.path.lexists(candidate):
+                continue
+            row = GithubWorkspace(
+                scope_id=scope_id, path=candidate, kind="worktree", dispatchable=False,
+                enabled=False, provision_error=RESERVATION_MARKER,
+            )
+            db.add(row)
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                return "retry"
+            return _Reservation(
+                row.id, scope_id, candidate, repo_real,
+                (scope.repo_path, scope.base_ref, scope.repo_owner, scope.repo_name),
+            )
+        await db.rollback()
+        report.failures.append(ProvisionFailure(
+            root, "no_free_workspace_name",
+            f"No free dispatch-N name among the first {MAX_WORKSPACE_NAME_SEARCH} under {root}.",
+        ))
+        return None
+
+    @staticmethod
+    def _claim_directory(path: str) -> tuple[int, int] | None:
+        """Create the directory exclusively. None when anything already exists there."""
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            return None
+        info = os.lstat(path)
+        return info.st_dev, info.st_ino
+
+    @staticmethod
+    def _is_claimed(path: str, claim: tuple[int, int]) -> bool:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        return stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == claim
+
+    def _remove_claim_if_empty(self, path: str, claim: tuple[int, int]) -> None:
+        try:
+            if self._is_claimed(path, claim) and not os.listdir(path):
+                os.rmdir(path)
+        except OSError:
+            pass
+
+    async def _release_reservation(self, db: AsyncSession, row_id: int) -> None:
+        try:
+            await db.execute(delete(GithubWorkspace).where(
+                GithubWorkspace.id == row_id,
+                GithubWorkspace.provision_error == RESERVATION_MARKER,
+                GithubWorkspace.enabled.is_(False),
+            ))
+            await db.commit()
+        except OperationalError:
+            await db.rollback()
+
+    async def _disable_reservation(self, db: AsyncSession, row_id: int, reason: str) -> None:
+        try:
+            await db.execute(update(GithubWorkspace).where(
+                GithubWorkspace.id == row_id,
+                GithubWorkspace.provision_error == RESERVATION_MARKER,
+            ).values(enabled=False, dispatchable=False, provision_error=reason[:200]))
+            await db.commit()
+        except OperationalError:
+            await db.rollback()
+
+    async def _verify_created(self, res: "_Reservation", claim: tuple[int, int]) -> str | None:
+        """None when the path is still the directory this call made, a linked worktree of the scope's repository."""
+        if not self._is_claimed(res.path, claim):
+            return "the path is no longer the directory this call created"
+        common = await self.scope_common_dir(res.repo_path)
+        if common is None or await self.workspace_state(res.path, common) != "ok":
+            return "the new checkout is not a worktree of the scope's repository"
+        return None
+
+    async def _discard_created(self, res: "_Reservation", claim: tuple[int, int]) -> bool:
+        """Remove only a worktree this call created and can still identify. True when it is gone."""
+        if not self._is_claimed(res.path, claim):
+            return not os.path.lexists(res.path)
+        common = await self.scope_common_dir(res.repo_path)
+        if common is not None and await self.workspace_state(res.path, common) == "ok":
+            await self._runner(["-C", res.repo_path, "worktree", "remove", "--force", res.path])
+        self._remove_claim_if_empty(res.path, claim)
+        return not os.path.lexists(res.path)
+
+    async def _create_workspace(self, db: AsyncSession, res: "_Reservation", report: ProvisioningReport) -> str:
+        """Phases 2 and 3. "created", "skipped" (the name was not ours to take) or "failed"."""
+        try:
+            claim = self._claim_directory(res.path)
+        except OSError as exc:
+            await self._release_reservation(db, res.row_id)
+            report.failures.append(ProvisionFailure(
+                res.path, "provision_failed", _provision_reason(str(exc)) or type(exc).__name__))
+            return "failed"
+        if claim is None:
+            await self._release_reservation(db, res.row_id)
+            return "skipped"
+        try:
+            await self._provision_worktree(
+                SimpleNamespace(repo_path=res.repo_path, base_ref=res.snapshot[1]), res.path)
+        except Exception as exc:
+            self._remove_claim_if_empty(res.path, claim)
+            await self._release_reservation(db, res.row_id)
+            report.failures.append(ProvisionFailure(
+                res.path, "provision_failed", _provision_reason(str(exc)) or type(exc).__name__))
+            return "failed"
+        problem = await self._verify_created(res, claim)
+        if problem is not None:
+            await self._disable_reservation(db, res.row_id, f"workspace_path_changed: {problem}")
+            report.failures.append(ProvisionFailure(res.path, "workspace_path_changed", problem))
+            return "failed"
+        try:
+            scope = await self._lock_scope(db, res.scope_id)
+            stale = None
+            if scope is None:
+                stale = ("scope_changed_during_provisioning", "The scope no longer exists.")
+            elif (scope.repo_path, scope.base_ref, scope.repo_owner, scope.repo_name) != res.snapshot:
+                stale = ("scope_changed_during_provisioning",
+                         "The scope's checkout, base or name changed while provisioning.")
+            else:
+                others = (await db.execute(
+                    select(func.count()).select_from(GithubWorkspace).where(
+                        GithubWorkspace.scope_id == res.scope_id,
+                        GithubWorkspace.id != res.row_id,
+                        GithubWorkspace.kind == "worktree",
+                        GithubWorkspace.dispatchable.is_(True),
+                        GithubWorkspace.enabled.is_(True),
+                    ))).scalar_one()
+                if others >= scope.max_concurrent_dispatched:
+                    stale = ("target_reduced_during_provisioning",
+                             "The scope's concurrency was lowered while provisioning.")
+            if stale is None:
+                updated = await db.execute(update(GithubWorkspace).where(
+                    GithubWorkspace.id == res.row_id,
+                    GithubWorkspace.provision_error == RESERVATION_MARKER,
+                ).values(enabled=True, dispatchable=True, provision_error=None, updated_at=datetime.utcnow()))
+                if updated.rowcount == 1:
+                    await db.commit()
+                    report.created.append(res.path)
+                    return "created"
+                stale = ("workspace_reservation_lost", "The reservation was removed while provisioning.")
+            await db.rollback()
+        except OperationalError:
+            await db.rollback()
+            stale = ("database_busy", "The database was busy while finishing; the new checkout was discarded.")
+        gone = await self._discard_created(res, claim)
+        if gone:
+            await self._release_reservation(db, res.row_id)
+        else:
+            await self._disable_reservation(db, res.row_id, f"{stale[0]}: the new checkout could not be removed")
+        report.failures.append(ProvisionFailure(res.path, stale[0], stale[1]))
+        return "failed"
+
+    async def no_workspace_note(self, db: AsyncSession, scope: TeamGithubScope) -> str | None:
+        """Why a dispatch found no workspace, or None when the cause is not one of these."""
+        rows = (await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id)
+        )).scalars().all()
+        if not rows:
+            return (
+                "No dispatchable workspace is registered for this scope. Synth City provisions dispatch "
+                "workspaces when a scope is created or its concurrency rises; see "
+                f"GET /api/v1/agent-teams/github-scopes/{scope.id}/workspace-readiness."
+            )
+        if any(row.provision_error == RESERVATION_MARKER and not row.enabled for row in rows):
+            return "Dispatch workspaces are still being provisioned for this scope."
+        usable = [row for row in rows if row.enabled and row.dispatchable]
+        if not usable:
+            return f"All {len(rows)} workspace(s) are disabled or not dispatchable."
+        if all(row.leased_item_id is not None for row in usable):
+            return f"All {len(usable)} dispatchable workspace(s) are leased by other items."
+        return None
 
     async def _probe_identity(self, path: str) -> tuple[str, str, str] | None:
         return_code, output = await self._runner(
