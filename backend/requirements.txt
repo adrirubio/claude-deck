@@ -66,7 +66,7 @@ jsonschema==4.26.0
     # via mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
-mcp==1.29.0
+mcp==2.3.0
     # via claude-code-registry-backend
 packaging==26.3
     # via pytest
