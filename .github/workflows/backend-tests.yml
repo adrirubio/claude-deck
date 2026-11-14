@@ -65,7 +65,17 @@ jobs:
       - name: Run the full backend suite
         if: steps.changes.outputs.run_suites != 'false'
         working-directory: backend
-        run: python -m pytest tests -q --tb=short --ignore=tests/test_cc_bridge_real_sudo.py
+        # The 30 slowest tests go to the log. The JUnit file keeps the time of every test case (#866).
+        run: python -m pytest tests -q --tb=short --ignore=tests/test_cc_bridge_real_sudo.py --durations=30 --durations-min=1.0 --junitxml=backend-junit.xml
+      - name: Keep the backend test timings
+        # Runs after a failed suite too, so a failing run still keeps the timings pytest wrote.
+        if: always() && steps.changes.outputs.run_suites != 'false'
+        uses: actions/upload-artifact@v5
+        with:
+          name: backend-test-timings
+          path: backend/backend-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check the active factory fixtures
         if: steps.changes.outputs.run_suites != 'false'
         run: python scripts/factory-fixtures.py --check
