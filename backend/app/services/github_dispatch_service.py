@@ -50,6 +50,7 @@ from app.services.github_approval_service import (
 from app.services.github_client import github_client
 from app.services.github_dispatch_priority import dispatch_order_key, priority_from_labels
 from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
+from app.services import github_workspace_readiness
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceConfigError,
@@ -1328,7 +1329,7 @@ class GithubDispatchService:
                     f"No dispatch worktree is available; skipped {skipped_primary} "
                     "dispatchable primary workspace(s)."
                     if skipped_primary
-                    else item.status_note
+                    else await self._no_workspace_note(db, scope, owner_slot, item.status_note)
                 )
                 await self._update_current_item(
                     db, item, start_identity, dispatch_status="pending", pending_reason="queued_no_workspace",
@@ -2071,6 +2072,20 @@ class GithubDispatchService:
             item.brief_delivery_nudge_count = None
         except Exception:
             logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
+
+    async def _no_workspace_note(self, db, scope, owner_slot, fallback):
+        """Say why no workspace was free, and when the owner slot's repository is the cause."""
+        note = await github_workspace_service.no_workspace_note(db, scope)
+        if note is None:
+            return fallback
+        if owner_slot is not None:
+            try:
+                check = await github_workspace_readiness.check_slot_identity(db, scope, owner_slot)
+            except Exception:
+                check = None
+            if check is not None and check["status"] == "mismatch":
+                note += f" Owner slot {owner_slot.display_name}: {check['message']}"
+        return note
 
     async def _session_ambiguity_note(
         self, db: AsyncSession, owner_slot_id: int

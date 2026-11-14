@@ -9,12 +9,13 @@ import re
 import secrets
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -64,6 +65,32 @@ def _redact_git_diagnostic(value: str) -> str:
     return re.sub(r"(--lease(?:=|\s+))[^\s'\"]+", r"\1<redacted>", value)
 
 
+# Dispatch workspaces are created only as these direct siblings of the scope checkout.
+MAX_WORKSPACE_NAME_SEARCH = 64
+_PROVISION_REASON_LIMIT = 300
+
+
+def _provision_reason(value: str) -> str:
+    """One short line for an operator: redacted, no control characters, bounded."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    return _redact_git_diagnostic(" ".join(text.split()))[:_PROVISION_REASON_LIMIT]
+
+
+@dataclass(frozen=True)
+class ProvisionFailure:
+    path: str
+    code: str
+    reason: str
+
+
+@dataclass
+class ProvisioningReport:
+    target: int
+    existing: int = 0
+    created: list[str] = field(default_factory=list)
+    failures: list[ProvisionFailure] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class WorktreeConfigSnapshot:
     values: dict[str, tuple[str, ...]]
@@ -106,6 +133,7 @@ class GithubWorkspaceService:
     def __init__(self, runner=None):
         self._runner = runner or self._run_git
         self._config_locks: dict[int, asyncio.Lock] = {}
+        self._provision_locks: dict[int, asyncio.Lock] = {}
 
     def config_lock(self, workspace_id: int) -> asyncio.Lock:
         return self._config_locks.setdefault(workspace_id, asyncio.Lock())
@@ -1324,6 +1352,86 @@ class GithubWorkspaceService:
         await db.commit()
         await db.refresh(workspace)
         return workspace
+
+    async def ensure_dispatch_workspaces(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> ProvisioningReport:
+        """Make `max_concurrent_dispatched` dispatchable worktrees exist for the scope.
+
+        Creates only missing `dispatch-N` direct siblings of the scope checkout, through
+        `register_workspace`, so its path, identity and adoption guards apply. An existing
+        row is never changed, and an existing path (directory, file or link) is never
+        adopted or written. The search for a free name is bounded, the first failure stops
+        the run, and requests for one scope are serialized so a repeat or a concurrent
+        call adds nothing.
+        """
+        scope_id = scope.id
+        report = ProvisioningReport(target=scope.max_concurrent_dispatched)
+        async with self._provision_locks.setdefault(scope_id, asyncio.Lock()):
+            if not scope.repo_path or not os.path.isdir(scope.repo_path):
+                report.failures.append(ProvisionFailure(
+                    scope.repo_path or "", "scope_checkout_missing",
+                    "The scope checkout does not exist, so no dispatch workspace was created.",
+                ))
+                return report
+            root = os.path.dirname(os.path.realpath(scope.repo_path))
+            rows = (await db.execute(
+                select(GithubWorkspace).where(GithubWorkspace.scope_id == scope_id)
+            )).scalars().all()
+            taken = {row.path for row in rows}
+            report.existing = sum(
+                1 for row in rows if row.kind == "worktree" and row.dispatchable and row.enabled
+            )
+            missing = report.target - report.existing
+            number = 0
+            while missing > 0:
+                number += 1
+                if number > MAX_WORKSPACE_NAME_SEARCH:
+                    report.failures.append(ProvisionFailure(
+                        root, "no_free_workspace_name",
+                        f"No free dispatch-N name among the first {MAX_WORKSPACE_NAME_SEARCH} under {root}.",
+                    ))
+                    break
+                candidate = os.path.join(root, f"dispatch-{number}")
+                if candidate in taken or os.path.lexists(candidate):
+                    continue
+                try:
+                    await self.register_workspace(
+                        db, scope, candidate, kind="worktree", dispatchable=True, enabled=True
+                    )
+                except IntegrityError:
+                    # Another process registered this path first; it is not ours to take.
+                    await db.rollback()
+                    await db.refresh(scope)
+                    continue
+                except Exception as exc:
+                    await db.rollback()
+                    await db.refresh(scope)
+                    report.failures.append(ProvisionFailure(
+                        candidate, "provision_failed", _provision_reason(str(exc)) or type(exc).__name__,
+                    ))
+                    break
+                report.created.append(candidate)
+                missing -= 1
+        return report
+
+    async def no_workspace_note(self, db: AsyncSession, scope: TeamGithubScope) -> str | None:
+        """Why a dispatch found no workspace, or None when the cause is not one of these."""
+        rows = (await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id)
+        )).scalars().all()
+        if not rows:
+            return (
+                "No dispatchable workspace is registered for this scope. Synth City provisions dispatch "
+                "workspaces when a scope is created or its concurrency rises; see "
+                f"GET /api/v1/agent-teams/github-scopes/{scope.id}/workspace-readiness."
+            )
+        usable = [row for row in rows if row.enabled and row.dispatchable]
+        if not usable:
+            return f"All {len(rows)} workspace(s) are disabled or not dispatchable."
+        if all(row.leased_item_id is not None for row in usable):
+            return f"All {len(usable)} dispatchable workspace(s) are leased by other items."
+        return None
 
     async def _probe_identity(self, path: str) -> tuple[str, str, str] | None:
         return_code, output = await self._runner(
