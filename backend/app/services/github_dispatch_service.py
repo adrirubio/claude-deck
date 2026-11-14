@@ -32,6 +32,7 @@ from app.models.database import (
 from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
+from app.services.continuation_phase_guidance import PHASE_GUIDANCE
 from app.services.agent_team_service import agent_team_service
 from app.services.team_communication_policy import (
     HUMAN_REVIEW_SUMMARY_GUIDANCE,
@@ -3430,11 +3431,7 @@ class GithubDispatchService:
                     "Do not edit, build, push, or report completion yet. Then call "
                     "`synth_city_request_continuation` with the smallest exact paths, actions, "
                     "commands, execution target, failed-head budget, and tool fallbacks "
-                    "needed for the next step. Use phase `diagnostic` for evidence "
-                    "collection, temporary hosted instrumentation, hosted log collection, "
-                    "or restoration work, and include `revert_diagnostic_changes`. Use "
-                    "phase `implementation` only for a bounded fix, with both "
-                    "`push_pr_head` and `request_verification`. Wait for Leader approval "
+                    f"needed for the next step. {PHASE_GUIDANCE} Wait for Leader approval "
                     "and acknowledge the delivered revision before acting."
                 ),
                 payload={
@@ -3462,10 +3459,7 @@ class GithubDispatchService:
                     f"message for work item {item.id}, and execute that instruction "
                     "now. Perform read-only diagnosis and call "
                     "`synth_city_request_continuation` with the smallest bounded proposal. "
-                    "Use `diagnostic` with `revert_diagnostic_changes` for evidence, "
-                    "temporary instrumentation, hosted logs, or restoration. Use "
-                    "`implementation` only for a bounded fix and include "
-                    "`push_pr_head` plus `request_verification`. "
+                    f"{PHASE_GUIDANCE} "
                     "Do not edit, build, push, release, retry, or report status or "
                     "completion before Leader approval. Stop after submitting the "
                     "proposal."
