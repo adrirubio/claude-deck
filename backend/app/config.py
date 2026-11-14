@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Application settings
     app_name: str = "Albiex Synth City"
-    app_version: str = "4.0.0"
+    app_version: str = "4.1.0"
     debug: bool = False
 
     # API settings
