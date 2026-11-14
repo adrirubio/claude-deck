@@ -29,11 +29,17 @@
 #   E2E_NO_TMUX     Set to 1 to run without a tmux server. Albiex Synth City then sees no
 #                   live sessions; journeys that need them skip. CI never sets it.
 #   E2E_SEED_NOW    ISO UTC time the seed counts from (default: this hour).
+#   E2E_BACKEND_LOG File that receives the backend's output at info level, with
+#                   access lines, so a failed run keeps diagnosis data. A relative
+#                   path is taken from the caller's directory. Default: warnings
+#                   only, on this script's standard error.
 #   PYTHON          Python with the backend requirements (default: backend/venv).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${E2E_PORT:-18765}"
+BACKEND_LOG="${E2E_BACKEND_LOG:-}"
+if [[ -n "$BACKEND_LOG" && "$BACKEND_LOG" != /* ]]; then BACKEND_LOG="$PWD/$BACKEND_LOG"; fi
 INSTANCE_URL="http://127.0.0.1:$PORT"
 NO_TMUX="${E2E_NO_TMUX:-0}"
 ROOT_MARKER=".deck-e2e-root"
@@ -236,8 +242,21 @@ run_clean "$PYTHON" "$REPO_ROOT/scripts/e2e/seed.py" --database "$DB_PATH" --roo
 
 # Not through run_clean: a backgrounded function is a subshell, and its PID
 # would not be the server's. env execs Python, so $! is the server itself.
-env -i "${CLEAN_ENV[@]}" "$PYTHON" -m uvicorn app.main:app --app-dir "$REPO_ROOT/backend" \
-  --host 127.0.0.1 --port "$PORT" --log-level warning &
+# The e2e poller and the page's route handlers reuse idle connections; uvicorn's
+# default 5 second keep-alive timeout equals the 5 second poll interval, so a
+# reused socket can be reset exactly when the next poll lands (#916). 75 seconds
+# is longer than any poll interval. This applies to the test instance only.
+LOG_LEVEL=warning
+[[ -n "$BACKEND_LOG" ]] && LOG_LEVEL=info
+SERVER_ARGS=(--host 127.0.0.1 --port "$PORT" --timeout-keep-alive 75 --log-level "$LOG_LEVEL")
+if [[ -n "$BACKEND_LOG" ]]; then
+  mkdir -p "$(dirname "$BACKEND_LOG")"
+  env -i "${CLEAN_ENV[@]}" "$PYTHON" -m uvicorn app.main:app --app-dir "$REPO_ROOT/backend" \
+    "${SERVER_ARGS[@]}" >> "$BACKEND_LOG" 2>&1 &
+else
+  env -i "${CLEAN_ENV[@]}" "$PYTHON" -m uvicorn app.main:app --app-dir "$REPO_ROOT/backend" \
+    "${SERVER_ARGS[@]}" &
+fi
 backend_pid=$!
 echo "e2e-instance: root=$ROOT port=$PORT pid=$backend_pid" >&2
 wait "$backend_pid"

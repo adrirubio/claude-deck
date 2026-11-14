@@ -1,5 +1,6 @@
 import type { Page, Response } from '@playwright/test'
 import { expect, test } from '../support/guard'
+import { summaryRoute, type FlickerPhase } from '../support/route-fetch'
 
 // #698: a routine background refresh must not change a Factory screen. The
 // shared read store polls every 5 seconds. With data already shown, nothing
@@ -242,18 +243,9 @@ for (const screen of SCREENS) {
 // the real summaries, so the completion lands exactly on the first measured poll.
 test('@active Overview re-watches when a summary completes on the first measured poll', async ({ page }) => {
   test.setTimeout(240_000)
-  let measured = false
-  await page.route('**/api/v1/agent-teams/presets/*/summary', async route => {
-    const response = await route.fetch()
-    if (measured) {
-      await route.fulfill({ response })
-      return
-    }
-    const body = await response.json() as Record<string, unknown>
-    body.human_actions = []
-    body.attention = []
-    body.reminder_attention = []
-    await route.fulfill({ response, json: body })
-  })
-  await expectNoFlicker(page, SCREENS[0], () => { measured = true })
+  // One reset of the summary read is retried before the measured windows only
+  // (#916). In the measured windows a reset fails the journey.
+  const phase: FlickerPhase = { measured: false }
+  await page.route('**/api/v1/agent-teams/presets/*/summary', summaryRoute(phase))
+  await expectNoFlicker(page, SCREENS[0], () => { phase.measured = true })
 })
