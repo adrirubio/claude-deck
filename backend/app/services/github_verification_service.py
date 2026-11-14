@@ -2128,7 +2128,7 @@ class GithubVerificationService:
         if acceptance_note is not None:
             await self._record_readiness_hold(db, item, acceptance_note)
             return
-        approval_reason = await self._approval_gate_reason(db, scope, item)
+        approval_reason = await self._approval_gate_reason(db, scope, item, acceptance_identity)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
                 db,
@@ -2205,7 +2205,7 @@ class GithubVerificationService:
         if acceptance_note is not None:
             await self._record_readiness_hold(db, item, acceptance_note)
             return
-        approval_reason = await self._approval_gate_reason(db, scope, item)
+        approval_reason = await self._approval_gate_reason(db, scope, item, acceptance_identity)
         if approval_reason is not None:
             await self._fallback_to_human_merge(
                 db, item, "Auto-merge blocked: distinct current-round leader approval is "
@@ -2350,20 +2350,38 @@ class GithubVerificationService:
         db: AsyncSession,
         scope: TeamGithubScope,
         item: GithubWorkItem,
+        identity=None,
     ) -> str | None:
+        """Why the Leader approval does not authorize this merge, or ``None`` when it does.
+
+        The approval and owner columns and the preset's Leader slot are read fresh with column-level queries, so a
+        change committed by another connection while GitHub was awaited is seen at the merge boundary. ``identity``
+        is the (PR number, dispatch nonce, scope id) the operation started with.
+        """
         if not settings.mail_capability_tokens_required:
             return "capability token enforcement is disabled"
-        if item.ack_enforcement_epoch != 1:
+        fresh = (await db.execute(select(
+            GithubWorkItem.ack_enforcement_epoch, GithubWorkItem.ack_approval_round,
+            GithubWorkItem.approval_round_count, GithubWorkItem.ack_approver_member_id,
+            GithubWorkItem.owner_slot_id, GithubWorkItem.pr_number, GithubWorkItem.dispatch_nonce,
+            GithubWorkItem.scope_id).where(GithubWorkItem.id == item.id))).one_or_none()
+        if fresh is None:
+            return "the work item could not be read"
+        if identity is not None and (fresh.pr_number, fresh.dispatch_nonce, fresh.scope_id) != tuple(identity):
+            await db.refresh(item)
+            return "the pull request or attempt changed during verification"
+        if fresh.ack_enforcement_epoch != 1:
             return "approval was not recorded under enforced identity"
-        if item.ack_approval_round != item.approval_round_count:
+        if fresh.ack_approval_round != fresh.approval_round_count:
             return "approval is missing or belongs to a stale round"
-        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader_slot_id = (await db.execute(select(AgentTeamPreset.leader_slot_id)
+            .where(AgentTeamPreset.id == scope.preset_id))).scalar_one_or_none()
         leader_slot = (
             await db.execute(
                 select(AgentTeamSlot)
                 .where(
                     AgentTeamSlot.preset_id == scope.preset_id,
-                    AgentTeamSlot.id == (preset.leader_slot_id if preset else None),
+                    AgentTeamSlot.id == leader_slot_id,
                     AgentTeamSlot.enabled.is_(True),
                 )
             )
@@ -2371,12 +2389,13 @@ class GithubVerificationService:
         if leader_slot is None:
             return "no enabled leader slot exists"
         leader_member = await github_dispatch_service._slot_member(db, leader_slot.id)
-        if leader_member is None or item.ack_approver_member_id != leader_member.id:
+        if leader_member is None or fresh.ack_approver_member_id != leader_member.id:
             return "approver is not the current designated leader"
-        owner_member = await github_dispatch_service._owner_member(db, item)
+        owner_member = (await github_dispatch_service._slot_member(db, fresh.owner_slot_id)
+                        if fresh.owner_slot_id is not None else None)
         if owner_member is None:
             return "current owner is not registered"
-        if owner_member.id == item.ack_approver_member_id:
+        if owner_member.id == fresh.ack_approver_member_id:
             return "owner and approver are not distinct"
         return None
 
